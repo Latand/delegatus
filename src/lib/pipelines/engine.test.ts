@@ -4846,6 +4846,9 @@ test("an exhausted false park ingests its live host's late verdict without a dup
   });
 
   await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  // Settlement releases the lease before the next scheduled activation.
+  await tickPipelines([], h.ports);
 
   const recovered = loadPipelines()[0]!;
   expect(recovered.cursor).toEqual({

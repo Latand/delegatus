@@ -52,7 +52,7 @@ async function pullRequestOf(worktreeDir: string, branch: string, exec: ExecPort
   if (listed.code !== 0) return { pullRequest: null, pullRequestState: "unknown" };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(listed.stdout.trim() || "[]");
+    parsed = JSON.parse(listed.stdout.trim());
   } catch {
     return { pullRequest: null, pullRequestState: "unknown" };
   }

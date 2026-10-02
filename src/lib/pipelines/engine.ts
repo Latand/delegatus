@@ -192,6 +192,9 @@ export type StageInterruption = Pick<InterruptionObligation, "state" | "recorded
 
 export interface PipelinePorts {
   exec: ExecPort;
+  /** Controller-only: committing-stage Git settles after its lease is released. */
+  deferStageGit?: boolean;
+  reviewIngressHead?: (pipeline: Pipeline) => import("./git").PipelineGitResult | null;
   /** Asynchronous Git used only by the provisioning pre-pass. */
   provisionExec?: ProvisionExecPort;
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
@@ -1433,7 +1436,7 @@ export function defaultPipelinePorts(
       flowSnapshot = null;
       return result;
     },
-    getFlow: (id) => flows().find((flow) => flow.id === id) ?? null,
+    getFlow: (id) => loadFlows().find((flow) => flow.id === id) ?? null,
     findFlow: (implementerPath, implementerConversationId, baseRef, targetSha) => flows()
       .filter((flow) =>
         flow.baseRef === baseRef
@@ -2768,6 +2771,7 @@ async function retryTerminalStagePublication(
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
 ): Promise<void> {
+  if (ports.deferStageGit) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
     const detail = current.ok
@@ -2896,6 +2900,7 @@ async function commitPassedStage(
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
 ): Promise<void> {
+  if (ports.deferStageGit) return;
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   let result = (await commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead));
@@ -4438,7 +4443,8 @@ async function publishReviewIngressHead(
   const expected = attempt.expectedReviewHeadSha;
   if (!expected) return { ok: false, retryable: false, detail: "review-loop stage requires a verified pipeline commit" };
 
-  const local = (await currentPipelineBranchHead(pipeline, ports.exec));
+  const local = ports.deferStageGit ? ports.reviewIngressHead?.(pipeline) : await currentPipelineBranchHead(pipeline, ports.exec);
+  if (!local) return { ok: false, retryable: true, detail: "review ingress head verification pending" };
   if (!local.ok) {
     return { ok: false, retryable: false, detail: `review stage could not verify the pipeline head before publishing: ${local.error}` };
   }
@@ -5031,6 +5037,10 @@ async function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt
  * budget is spent, with the retries it made.
  */
 async function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<boolean> {
+  if (ports.deferStageGit) {
+    pipeline.stateDetail = "approved review head verification pending";
+    return false;
+  }
   const now = ports.now();
   const wait = attempt.remoteHeadWait;
   if (wait && unixMs(wait.retryAfter) > unixMs(now)) return false;
@@ -5970,6 +5980,99 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
   }
 }
 
+function reviewIngressFence(pipeline: Pipeline): string {
+  return JSON.stringify([pipeline.worktreeDir, pipeline.branch, pipeline.lastPassedCommit, pipeline.cursor?.stageId,
+    pipeline.delivery?.target, pipeline.delivery?.epoch, pipeline.delivery?.ownerId]);
+}
+
+async function collectReviewIngressHeads(ports: PipelinePorts) {
+  const observations = new Map<string, { fence: string; result: import("./git").PipelineGitResult }>();
+  for (const pipeline of loadPipelinesForProjection()) {
+    const stage = currentStage(pipeline);
+    const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+    if (!["running", "needs_decision"].includes(pipeline.state) || stage?.kind !== "review-loop"
+      || (attempt?.flowId && pipeline.cursor?.state !== "pending")
+      || (attempt?.state === "committing" && pipeline.cursor?.state !== "pending")) continue;
+    const fence = reviewIngressFence(pipeline);
+    const abort = new AbortController();
+    const revalidate = () => {
+      const current = findPipelineRecord(pipeline.id);
+      if (!current || current.state !== pipeline.state || reviewIngressFence(current) !== fence) abort.abort();
+    };
+    const watch = setInterval(revalidate, 50);
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "review ingress superseded" };
+      return await ports.exec(command, args, cwd, env, { signal: abort.signal, timeoutMs: 5_000 });
+    };
+    try {
+      const result = await currentPipelineBranchHead(pipeline, exec);
+      revalidate();
+      if (!abort.signal.aborted) observations.set(pipeline.id, { fence, result });
+    } finally { clearInterval(watch); }
+  }
+  return observations;
+}
+
+/** The committing cursor is the durable intent. Git, including commit hooks
+    and approved-review probes, runs without the shared mutation lease. Only an
+    unchanged lane and flow may adopt the result; children retain the lane lock. */
+export async function settlePendingStageGit(ports: PipelinePorts = defaultPipelinePorts()): Promise<boolean> {
+  let changed = false;
+  for (const preview of loadPipelines()) {
+    if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
+    const stage = currentStage(preview);
+    const attempt = stage ? currentAttempt(preview, stage.id) : null;
+    if (!stage || !attempt) continue;
+    const flow = stage.kind === "review-loop" && attempt.flowId ? ports.getFlow(attempt.flowId) : null;
+    const approved = stage.kind === "review-loop" && flow?.state === "approved";
+    if (preview.cursor?.state !== "committing" && !approved) continue;
+    const fingerprint = JSON.stringify(preview);
+    const flowFingerprint = JSON.stringify(flow);
+    const matches = (current: Pipeline | null) => JSON.stringify(current) === fingerprint
+      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
+    const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
+    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    const descriptor = await acquirePublicationFileLock(lock);
+    if (descriptor === null) continue;
+    const abort = new AbortController();
+    const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
+    const watch = setInterval(revalidate, 50);
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "stage settlement superseded" };
+      return await ports.exec(command, args, cwd, env, { signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : 60_000 });
+    };
+    const candidate = structuredClone(preview);
+    const candidateStage = currentStage(candidate)!;
+    const candidateAttempt = currentAttempt(candidate, candidateStage.id)!;
+    const outside = { ...ports, exec, deferStageGit: false };
+    try {
+      revalidate();
+      if (abort.signal.aborted) continue;
+      if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside);
+      else if (candidateStage.kind !== "review-loop" || await approvedReviewHeadHolds(candidate, candidateAttempt, outside)) {
+        if (candidateStage.kind === "review-loop" && candidateAttempt.state !== "committing") {
+          candidateAttempt.output = `Review loop approved after ${flow!.rounds.length} round(s).`;
+          candidateAttempt.verdict = { status: "pass", confidence: 1 };
+          candidateAttempt.state = "committing";
+          setCursorState(candidate, candidateStage.id, "committing");
+        }
+        await commitPassedStage(candidate, candidateStage, candidateAttempt, outside);
+      }
+      revalidate();
+      if (!abort.signal.aborted) await withPipelineMutation((pipelines, persist) => {
+        const current = pipelines.find((pipeline) => pipeline.id === preview.id);
+        if (!current || !matches(current)) return;
+        Object.assign(current, candidate);
+        persist([current]);
+        changed = true;
+      });
+    } finally { clearInterval(watch); fs.closeSync(descriptor); }
+  }
+  return changed;
+}
+
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
   if (tickStore.__llvPipelineTick) return { pipelines: [], changed: false };
   tickStore.__llvPipelineTick = true;
@@ -6018,6 +6121,11 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (changed) { persist([pipeline]); closedLaunchesChanged = true; }
       }
     });
+    const ingressHeads = await collectReviewIngressHeads(ports);
+    const controllerPorts: PipelinePorts = { ...ports, deferStageGit: true, reviewIngressHead: (pipeline) => {
+      const observed = ingressHeads.get(pipeline.id);
+      return observed?.fence === reviewIngressFence(pipeline) ? observed.result : null;
+    } };
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;
       await forEachCooperatively(pipelines, async (pipeline) => {
@@ -6058,7 +6166,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         }
         const recoveredLaunch = recoveredLaunches.get(pipeline.id);
         if (recoveredLaunch && stagedRecoveryMatches(pipeline, recoveredLaunch)) {
-          const receipt = ports.spawnReceipt(recoveredLaunch.launchId);
+          const receipt = controllerPorts.spawnReceipt(recoveredLaunch.launchId);
           const recovery = stagedLaunchRecovery(receipt);
           if (receipt?.state === "completed" && receipt.conversationId === recoveredLaunch.conversationId) {
             const attempt = currentAttempt(pipeline, recoveredLaunch.stageId)!;
@@ -6067,7 +6175,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             pipeline.state = "running";
             setCursorState(pipeline, recoveredLaunch.stageId, "running");
           } else if (recovery) {
-            waitForStagedLaunch(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, recoveredLaunch.stageId)!, recovery, ports);
+            waitForStagedLaunch(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, recoveredLaunch.stageId)!, recovery, controllerPorts);
           }
           persistPipeline();
           changed = true;
@@ -6075,12 +6183,12 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return;
         let pipelineChanged = false;
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
-          pipelineChanged = settleNeverStartedLaunch(pipeline, attempt, ports) || pipelineChanged;
+          pipelineChanged = settleNeverStartedLaunch(pipeline, attempt, controllerPorts) || pipelineChanged;
         }
-        pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, ports) || pipelineChanged;
-        pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, ports) || pipelineChanged;
-        pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, ports) || pipelineChanged;
-        pipelineChanged = rebindPipelineAttemptPaths(pipeline, ports) || pipelineChanged;
+        pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, controllerPorts) || pipelineChanged;
+        pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, controllerPorts) || pipelineChanged;
+        pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, controllerPorts) || pipelineChanged;
+        pipelineChanged = rebindPipelineAttemptPaths(pipeline, controllerPorts) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
@@ -6089,25 +6197,25 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           const reportedAttempt = reportedStage ? currentAttempt(pipeline, reportedStage.id) : null;
           if (pipeline.state === "needs_decision" && reportedStage?.kind === "run" && reportedAttempt?.report
             && /stage spawn|verdict|host|rate limited|stage ended before its session|stage agent exited before its session/.test(reportedAttempt.error ?? pipeline.stateDetail ?? "")) {
-            pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, ports, persistPipeline) || pipelineChanged;
+            pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, controllerPorts, persistPipeline) || pipelineChanged;
           }
-          pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
+          pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, controllerPorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
-          pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
-          pipelineChanged = await reconcileParkedDelivery(pipeline, ports) || pipelineChanged;
-          pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
-          pipelineChanged = (await reconcileBoundReviewFlow(pipeline, ports, persistPipeline)) || pipelineChanged;
+          pipelineChanged = reconcileParkedVerdictMiss(pipeline, controllerPorts) || pipelineChanged;
+          pipelineChanged = await reconcileParkedDelivery(pipeline, controllerPorts) || pipelineChanged;
+          pipelineChanged = reconcileParkedStructuredSpawn(pipeline, controllerPorts) || pipelineChanged;
+          pipelineChanged = (await reconcileBoundReviewFlow(pipeline, controllerPorts, persistPipeline)) || pipelineChanged;
         }
         if (!pipeline.closeTeardown) {
-          pipelineChanged = await reconcileUnconfirmedHosts(pipeline, ports) || pipelineChanged;
-          pipelineChanged = await reconcileTerminalStageHosts(pipeline, ports) || pipelineChanged;
+          pipelineChanged = await reconcileUnconfirmedHosts(pipeline, controllerPorts) || pipelineChanged;
+          pipelineChanged = await reconcileTerminalStageHosts(pipeline, controllerPorts) || pipelineChanged;
         }
         if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
           && pipeline.state !== "needs_review" && !pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await tickPipeline(
             pipeline,
             entries,
-            ports,
+            controllerPorts,
             persistPipeline,
             recoveryAccountingDeadline,
             provisioned,
@@ -6120,6 +6228,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       }, { batchSize: 4, timeBudgetMs: 16 });
       return { pipelines, changed };
     });
+    result.changed = await settlePendingStageGit(ports) || result.changed;
     await drainStageActivations(ports);
     result.pipelines = loadPipelines();
     /* A pass that ends on a pending cursor (a stage just passed and advanced,
@@ -6135,7 +6244,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
-      && pipeline.cursor?.state === "pending"
+      && (pipeline.cursor?.state === "pending" || pipeline.cursor?.state === "committing"
+        || pipeline.stateDetail === "approved review head verification pending")
       && !stageActivationIsWaiting(pipeline, followUpAt));
     return result;
   } catch (error) {

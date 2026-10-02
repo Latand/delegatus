@@ -93,3 +93,12 @@ test("a forge answer that is not a pull request record is read as no pull reques
     expect((await collectStageProvenance(PIPELINE, [], exec)).pullRequest).toBeNull();
   }
 });
+
+test("empty and whitespace forge answers remain unknown", async () => {
+  for (const stdout of ["", "   ", "\n"]) {
+    const { exec } = execWith({ "git status --porcelain": { stdout: "" }, "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout } });
+    expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "unknown", pullRequestState: "unknown", pullRequest: null });
+  }
+  const { exec } = execWith({ "git status --porcelain": { stdout: "" }, "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout: "[]" } });
+  expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "complete", pullRequestState: "absent" });
+});

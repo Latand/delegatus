@@ -168,12 +168,12 @@ test("stage_report durably accepts pending provenance without waiting for the fo
     if (command === "gh") await held;
     return await original(command, args, cwd);
   };
-  const reporting = h.report(1, { verdict: "pass", summary: "Checked." });
+  const pendingReport = h.report(1, { verdict: "pass", summary: "Checked." });
   try {
-    const answer = await Promise.race([reporting, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    const answer = await Promise.race([pendingReport, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
     expect(answer).not.toBeNull();
     expect(current().runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ state: "pending", head: null, pullRequest: null });
-  } finally { release(); await reporting; }
+  } finally { release(); await pendingReport; }
   await tickPipelines([], h.ports);
   expect(current().runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ state: "complete", head: HEAD });
 });

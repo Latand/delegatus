@@ -4,6 +4,8 @@ Git and GitHub commands in the Viewer use an asynchronous executor with a timeou
 
 Stage reports record the verdict, summary and report sequence before returning. Their provenance starts `pending`, with unknown head, uncommitted paths, pull request and output presence. The controller observes the checkout and forge later and records `complete` or `unknown` on that same report sequence and its journal entry. A new report, replacement attempt or moved cursor fences the observation. An empty successful forge list means `absent`; a failed or malformed answer means `unknown`.
 
+Committing-stage Git, commit hooks and approved-review head checks run after the controller releases the pipeline lease. Settlement holds an inherited lane lock and adopts its result only while the full lane and review-flow fingerprints still match. Review ingress uses observations collected before the lease.
+
 Review retries and delivery takeovers record a durable `remoteAction`. The controller runs the original Git safety checks outside the pipeline mutation lease, under an inherited kernel lock, then revalidates the stage, checkout, delivery epoch and any claimed spawn receipt before applying a result. Publication records a queued operation for the existing publication controller. A read or acknowledgement exposes pending and settled outcomes; acceptance does not claim remote publication. Pausing or replacing the lane cancels stale work, and a restart resumes durable pending work after its previous process releases the lock.
 
 `request_attention` retains its default browser-arrival contract. `waitFor: "accepted"` returns after durable acceptance with `accepted: true`, a current arrival state and `handoff: null`; callers can inspect the attention receipt for arrival later.

@@ -6,7 +6,7 @@ import path from "node:path";
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-remote-actions-"));
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord, withPipelineMutation } = await import("./store");
-const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions } = await import("./engine");
+const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, tickPipelines } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
 afterAll(() => { restore(); fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); });
@@ -128,4 +128,38 @@ test("a receipt that settles during remote verification cancels its retry", asyn
     return result;
   } });
   expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "needs_decision", remoteAction: { state: "settled", error: "remote action superseded" } });
+});
+
+for (const checkedStage of ["review", "build"]) test(`controller ${checkedStage} Git does not hold the MCP mutation lease`, async () => {
+  const lane = pipelineCorpus(2, 1)[1]!;
+  const head = "a".repeat(40);
+  lane.state = "running"; lane.closedAt = null; lane.publication = "remote-branch";
+  lane.lastPassedCommit = head;
+  lane.cursor = { stageId: checkedStage, state: "committing", input: null, activatedBy: null };
+  lane.delivery = { target: { repository: "audit-repo", remote: "origin", branch: `refs/heads/${lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: lane.id, epoch: 1, active: true, journal: [] } as never;
+  const attempt = lane.runs[checkedStage === "review" ? 1 : 0]!.attempts[0]!;
+  attempt.state = "committing"; attempt.reviewHeadSha = head; attempt.expectedReviewHeadSha = head;
+  let entered!: () => void, release!: () => void;
+  const observed = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const ports = { ...defaultPipelinePorts(), getFlow: () => null, stageHostResident: async () => false,
+    stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    paneAgentAlive: async () => false, conversationAgentActive: async () => false,
+    spawnAgent: async () => { throw new Error("test does not launch agents"); },
+    exec: async (_command: string, args: string[]) => {
+      if (checkedStage === "review" ? args.includes("ls-remote") : args[0] === "status") { entered(); await held; }
+      return { code: 0, stdout: args.includes("ls-remote") ? `${head}\trefs/heads/${lane.branch}\n`
+        : args[0] === "rev-parse" ? head : args[0] === "branch" ? lane.branch : "", stderr: "" };
+    },
+  };
+  savePipelines([lane]);
+  const controller = tickPipelines([], ports);
+  await observed;
+  const mutation = patchPipeline(lane.id, { action: "pause" }, ports);
+  try {
+    const answer = await Promise.race([mutation, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(findPipelineRecord(lane.id)!.state).toBe("paused");
+  } finally { release(); await controller; await mutation; }
 });
