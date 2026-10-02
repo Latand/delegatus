@@ -37,8 +37,6 @@ class TestResizeObserver {
 
 Object.assign(globalThis, {
   ResizeObserver: TestResizeObserver,
-  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
-  cancelAnimationFrame: (id: number) => clearTimeout(id),
   window: dom,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
@@ -381,4 +379,28 @@ test("composer follow-up stays after the answer while both echoes are pending", 
   expect(host.querySelector('[data-feed-source-id="before-follow-up"]')).toBe(row);
   expect(row.querySelector("[data-live-turn-omitted-chars]")).toBeNull();
   expect(row.compareDocumentPosition(followUp) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("one host message keeps prose before its same-timestamp tool", () => {
+  const liveTurn = projectRuntimeLiveTurnItem(null, "one-message", {
+    type: "assistant", uuid: "one-message-prose", message: { content: [
+      { type: "text", text: "First the explanation." },
+      { type: "tool_use", id: "one-message-tool", name: "Bash", input: { command: "pwd" } },
+    ] },
+  }, "completed", AT(1));
+  sessionState.session = { ...session, liveTurn };
+  expect(liveRows(render().host)).toEqual(["prose:one-message-prose", "tool:one-message-tool:run"]);
+});
+
+test("an idle broker's stranded draft leaves the rendered feed once the transcript advances", () => {
+  sessionState.session = { ...session, liveTurn: { turnId: "stranded", text: "Partial draft", items: [{
+    itemId: null, text: "Partial draft", phase: "streaming", startedAt: AT(0), completedAt: null,
+  }] } };
+  const { host, paint } = render();
+  expect(host.querySelector("[data-live-turn-caret]")).not.toBeNull();
+  sessionState.session = { ...sessionState.session, turn: "idle", liveTurn: null };
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(5), message: { content: "Later request" } })];
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBeNull();
+  expect(host.querySelector("[data-live-turn-caret]")).toBeNull();
 });

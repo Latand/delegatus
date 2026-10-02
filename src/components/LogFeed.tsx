@@ -93,7 +93,7 @@ type ConversationRow =
     }
   | { kind: "item"; live?: RuntimeLiveTurnItem; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
-  | { kind: "delta"; key: string; items: RuntimeLiveTurnItem[]; instant?: number | null; resumes?: SeatResume }
+  | { kind: "delta"; key: string; items: RuntimeLiveTurnItem[]; instant?: number | null; liveOrder?: number; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
      head's position among the transcript rows, never part of the tail. */
   | { kind: "deputy"; key: string; deputy: SeatDeputyView };
@@ -1108,7 +1108,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     adoptCanonicalAssistantClaims(tailPath, memoryKey);
     publishCanonicalAssistantClaims(memoryKey, feed.items);
   }, [tailPath, memoryKey, feed.items]);
-  const assistantHandoff = useAssistantHandoff(memoryKey, runtimeLiveTurn, feed.items, assistantClaims);
+  const assistantHandoff = useAssistantHandoff(memoryKey, runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn);
   const visibleLiveTurnItems = useMemo(
     () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn).filter(item => item.tool || !item.text.trim()),
     [runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn],
@@ -1398,7 +1398,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         const tail = liveTurnTail(visibleLiveTurnItems);
         if (tail.earlier) rows.push({ kind: "delta", key: "delta-earlier", items: [{ itemId: null, text: "", phase: "awaiting-echo", startedAt: null, completedAt: null, omittedItems: tail.earlier }] });
         for (const [index, item] of tail.rows.entries()) rows.push({ kind: "delta", key: `delta:${item.itemId ?? index}`,
-          items: [item], instant: Date.parse(item.startedAt ?? item.completedAt ?? "") || null });
+          items: [item], liveOrder: item.itemId ? assistantHandoff.liveOrder.get(item.itemId) : undefined, instant: Date.parse(item.startedAt ?? item.completedAt ?? "") || null });
       }
       else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
     }

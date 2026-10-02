@@ -71,3 +71,23 @@ test("idless echoes own a single occurrence even when a later answer repeats the
   expect(state.bindings.size).toBe(1);
   expect(rows([echo, later, second], state).map(row => row.key)).toEqual(["assistant-pending:0", "later", "second"]);
 });
+
+test("same-instant prose and tools preserve the host's source order", () => {
+  const prose = live("awaiting-echo").items![0];
+  const tool = { ...prose, itemId: "tool", text: "", tool: { name: "Bash", engine: "claude" as const, status: "ok" as const, args: { command: "pwd" } } };
+  const toolRow = { kind: "delta", key: "tool", instant: Date.parse(prose.startedAt!), liveOrder: 1 };
+  for (const first of [true, false]) {
+    const state = projectAssistantHandoff(null, { turnId: "turn", text: prose.text, items: first ? [prose, tool] : [tool, prose] }, [], claims);
+    const result = mergeAssistantRows([{ ...toolRow, liveOrder: first ? 1 : 0 }], state,
+      ({ key }) => ({ kind: "item", key, instant: Date.parse(prose.startedAt!), liveOrder: first ? 0 : 1 }));
+    expect(result.map(row => row.kind)).toEqual(first ? ["item", "delta"] : ["delta", "item"]);
+  }
+});
+
+test("idle turns fence stranded streaming drafts while completed replies await their own echo", () => {
+  const streaming = live("streaming", null);
+  const state = projectAssistantHandoff(null, streaming, [], claims, "running");
+  expect(projectAssistantHandoff(state, null, [later], claims, "unknown").pending).toHaveLength(1);
+  expect(projectAssistantHandoff(state, null, [later], claims, "idle").pending).toEqual([]);
+  expect(projectAssistantHandoff(null, live("awaiting-echo"), [later], claims, "idle").pending).toHaveLength(1);
+});
