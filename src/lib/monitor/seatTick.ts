@@ -1363,8 +1363,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     })
     .filter(item => !item.itemVersion || !shownItems.has(item.itemVersion)
       // A newly owed settlement remains deliverable even if its PR was shown.
-      || (item.laneAnnouncement && !input.state.announcedLanes.includes(item.laneAnnouncement))
-      || (item.kind === "pipeline" && settledDeploys.length > 0 && seatPausedLanes(input).some(lane => lane.id === item.id)));
+      || (item.laneAnnouncement && !input.state.announcedLanes.includes(item.laneAnnouncement)));
   const forReason = (kind: SeatTickWakeReasonKind): SeatTickItem[] => all.filter(item => {
     switch (kind) {
       case "unmerged-pr": return item.kind === "pull-request";
@@ -2107,7 +2106,12 @@ function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | 
     : kind === "pull-request" ? input.pullRequests.find(row => `#${row.number}` === item.id)
     : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && input.state.stalledSeen.includes(pipeline.id) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
     : ownLane ?? item.label;
-  return `${hash([kind, item.id])}@${hash(source)}`;
+  // A settlement's resume instruction can outlive the deploy's own showing.
+  // Keep its identity in each paused lane's version after the source drops it.
+  const resumeAfter = pipeline?.pausedBy === "seat"
+    ? seatSettledDeploys(input).at(-1)?.deploymentId ?? input.state.announcedDeploys?.at(-1) ?? null
+    : null;
+  return `${hash([kind, item.id])}@${hash([source, resumeAfter])}`;
 }
 
 /** Replace the prior version of an item; retain a bounded recent history.

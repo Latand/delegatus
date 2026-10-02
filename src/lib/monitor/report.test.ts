@@ -25,7 +25,8 @@ test("a wake says why, lists the items, and names the mandate section holding it
   const text = seatTickWakeMessage({
     project: PROJECT,
     reasons: [{ kind: "stalled", detail: "pipeline pipeline_a1 stage review is parked" }],
-    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — parked" }],
+    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — parked" },
+      { kind: "signal", id: "deploy", label: "the last deployment ended rolled-back" }],
     deferred: 2,
     signals: [{ id: "deploy", label: "the last deployment ended rolled-back" }],
   });
@@ -45,7 +46,8 @@ test("a wake says why, lists the items, and names the mandate section holding it
   const named = seatTickWakeMessage({
     project: PROJECT,
     reasons: [{ kind: "stalled", detail: "pipeline pipeline_a1 stage review is parked" }],
-    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — parked" }],
+    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — parked" },
+      { kind: "signal", id: "deploy", label: "the last deployment ended rolled-back" }],
     deferred: 2,
     signals: [{ id: "deploy", label: "the last deployment ended rolled-back" }],
     mandateCarriesContract: true,
@@ -170,7 +172,8 @@ function wake(prompt?: string | null): string {
   return seatTickWakeMessage({
     project: PROJECT,
     reasons: [{ kind: "interval", detail: "the wake interval elapsed while work is open" }],
-    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — running" }],
+    items: [{ kind: "pipeline", id: "pipeline_a1", label: "ship the exporter — running" },
+      { kind: "signal", id: "deploy", label: "the last deployment ended rolled-back" }],
     deferred: 0,
     signals: [{ id: "deploy", label: "the last deployment ended rolled-back" }],
     ...(prompt === undefined ? {} : { monitorPrompt: prompt }),

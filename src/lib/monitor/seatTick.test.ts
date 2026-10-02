@@ -1827,3 +1827,40 @@ test("a later deploy settlement re-offers unchanged seat-paused lanes", () => {
   expect(decision.verdict.kind).toBe("wake");
   expect(decision.verdict.kind === "wake" && decision.verdict.items.map(item => item.id)).toEqual(["deploy-next", paused.id]);
 });
+
+test("a later task revision cannot render a previously delivered signal again", () => {
+  const signals = [{ id: "capacity", label: "capacity needs attention" }];
+  const first = seatTickDecision(input({ tasks: [card()], signals }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  const text = seatTickWakeMessage({ project: PROJECT, ...first.verdict, signals });
+  expect(text).toContain(signals[0]!.label);
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const next = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, signals,
+    tasks: [card({ updatedAt: new Date(NOW + MINUTE).toISOString() })] }));
+  expect(next.verdict.kind).toBe("wake");
+  if (next.verdict.kind !== "wake") return;
+  expect(next.verdict.items.map(item => item.kind)).toEqual(["task"]);
+  expect(seatTickWakeMessage({ project: PROJECT, ...next.verdict, signals })).not.toContain(signals[0]!.label);
+});
+
+test("later deploy resume instructions drain every previously shown paused lane", () => {
+  const pipelines = Array.from({ length: 5 }, (_, i) => lane({ id: `paused-${i}`, pausedBy: "seat", state: "inert" }));
+  const first = seatTickDecision(input({ pipelines }));
+  expect(first.verdict.kind).toBe("wake");
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const settlement = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, pipelines,
+    settledDeploys: [{ deploymentId: "deploy-next", phase: "succeeded", sha: "b".repeat(40), error: null, settledAt: new Date(NOW + MINUTE).toISOString() }] }));
+  expect(settlement.verdict.kind).toBe("wake");
+  if (settlement.verdict.kind !== "wake") return;
+  expect(settlement.verdict.items.map(item => item.id)).toEqual(["deploy-next", ...pipelines.slice(0, 4).map(row => row.id)]);
+  expect(settlement.verdict.deferred).toBe(1);
+  const landed = seatTickWakeCommit(settlement.state, plan(settlement.verdict, "fp-1", 0), NOW + 90 * MINUTE);
+  // Production removes the deploy from its source once this landing announces it.
+  const next = seatTickDecision(input({ now: NOW + 180 * MINUTE, state: landed, pipelines, settledDeploys: [] }));
+  expect(next.verdict.kind).toBe("wake");
+  if (next.verdict.kind !== "wake") return;
+  expect(next.verdict.items.map(item => item.id)).toEqual([pipelines[4]!.id]);
+  const finished = seatTickWakeCommit(next.state, plan(next.verdict, "fp-1", 0), NOW + 180 * MINUTE);
+  expect(seatTickDecision(input({ now: NOW + 270 * MINUTE, state: finished, pipelines })).verdict.kind).toBe("quiet");
+});

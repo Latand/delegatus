@@ -305,8 +305,9 @@ export function seatTickWakeMessage(input: {
   if (input.skippedChildren && input.skippedChildren.unchanged > 0) {
     lines.push(`(${input.skippedChildren.unchanged} spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)`);
   }
-  if (input.signals.length > 0) {
-    lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));
+  const signals = input.signals.filter(signal => input.items.some(item => item.kind === "signal" && item.id === signal.id));
+  if (signals.length > 0) {
+    lines.push("", "Signals:", ...signals.map((signal) => `- ${signal.label}`));
   }
   return boundedSeatTickMessage(lines, [
     ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
