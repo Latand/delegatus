@@ -23,7 +23,7 @@ test("held review flows stop blocking deployment while admitted reviewers and re
   const withFlows = { ...p, flows: () => [{ id: "review-flow", state, mode,
     rounds: [{ spawnStartedAt: state === "spawning" && started ? "started" : null,
       relayStartedAt: state === "relaying" && started ? "started" : null, relayedAt: null }] }] as never };
-  for (state of ["spawning", "relaying"]) {
+  for (state of ["spawning", "relaying"] as const) {
     expect((await probeQuiet(snapshot, withFlows, NOW, true)).quiet).toBe(true);
     expect((await probeQuiet(snapshot, withFlows, NOW, false)).quiet).toBe(false);
     started = true;
