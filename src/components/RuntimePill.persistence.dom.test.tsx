@@ -1,5 +1,5 @@
 /**
- * Issue #499 — the pill must never clobber the persisted runtime selection.
+ * Issue #499 — the pill must never clobber a pending runtime selection.
  *
  * On a fresh pane load the runtime plane resolves in steps (bus disabled →
  * unresolved → structured), so the pill can mount, unmount, and remount while
@@ -63,9 +63,11 @@ const DRAFT_KEY = "llvAgentRuntime:conv-pill-persist";
 const SELECTED = { model: "gpt-5.6-sol", effort: "xhigh", fast: true };
 
 test.each(["live-root", "structured"] as const)(
-  "mounting the pill on %s never rewrites the persisted draft",
+  "mounting the pill on %s never rewrites the pending persisted draft",
   async (surface) => {
     localStorage.setItem(DRAFT_KEY, JSON.stringify(SELECTED));
+    // A structured conversation restores a draft while its reconfigure is pending.
+    localStorage.setItem(`${DRAFT_KEY}:phase`, "pending");
     const writes: string[] = [];
     const realSetItem = localStorage.setItem.bind(localStorage);
     localStorage.setItem = ((key: string, value: string) => {

@@ -257,11 +257,10 @@ test("a terminal direct group rides the phone as a tappable collapsed verdict ch
   await settle();
 
   /* Collapsed by default after the final verdict: one chip carrying the
-     rounds count and the verdict, tall enough for a 390px thumb (h-12 =
-     48px ≥ the 44px target). */
+     rounds count and the verdict, tall enough for a 390px thumb. */
   const collapsed = dom.document.querySelector("[data-review-deck-collapsed]") as HTMLButtonElement | null;
   expect(collapsed).not.toBeNull();
-  expect(collapsed!.className).toContain("h-12");
+  expect(Number.parseFloat(collapsed!.style.height)).toBeGreaterThanOrEqual(44);
   expect(collapsed!.textContent).toContain("2 rounds");
   expect(collapsed!.textContent).toContain("APPROVE");
   expect(collapsed!.getAttribute("aria-expanded")).toBe("false");

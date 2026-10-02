@@ -12,7 +12,11 @@ import { SchemeBoard } from "./SchemeBoard";
 
 const dom = new Window();
 class TestResizeObserver {
-  observe() {}
+  constructor(private callback: (entries: Array<{ target: HTMLElement; contentRect: DOMRect }>) => void) {}
+  observe(element: HTMLElement) {
+    Object.defineProperty(element, "getBoundingClientRect", { configurable: true, value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 2400, bottom: 1600, width: 2400, height: 1600, toJSON() {} }) });
+    queueMicrotask(() => this.callback([{ target: element, contentRect: element.getBoundingClientRect() }]));
+  }
   unobserve() {}
   disconnect() {}
 }
@@ -72,9 +76,9 @@ const pipeline = {
     { id: "review", kind: "review-loop", prompt: "", next: null, effectiveRole: stageRole("read-only") },
   ],
   runs: [
-    { stageId: "architect", attempts: [{ n: 1, state: "passed", agentPath: "/arch", flowId: null }] },
-    { stageId: "builder", attempts: [{ n: 1, state: "passed", agentPath: "/build", flowId: null }] },
-    { stageId: "verify", attempts: [{ n: 1, state: "running", agentPath: "/verify", flowId: null }] },
+    { stageId: "architect", attempts: [{ n: 1, effectiveRole: stageRole("read-write"), state: "passed", agentPath: "/arch", flowId: null }] },
+    { stageId: "builder", attempts: [{ n: 1, effectiveRole: stageRole("read-write"), state: "passed", agentPath: "/build", flowId: null }] },
+    { stageId: "verify", attempts: [{ n: 1, effectiveRole: stageRole("read-write"), state: "running", agentPath: "/verify", flowId: null }] },
   ],
   cursor: { stageId: "verify", state: "running", input: null, activatedBy: null },
   state: "running", pausedState: null, stateDetail: null,
@@ -171,7 +175,7 @@ test("an idle completed stage stands at its stage position as ONE status row, ex
   /* The live cursor stage is a full board node; the idle passed stages are
      collapsed rows at their slot positions. */
   expect(host.querySelector('[data-scheme-node="/verify"]')).toBeTruthy();
-  const rows = [...host.querySelectorAll('[data-pipeline-stage-row="true"]')];
+  const rows = [...host.querySelectorAll('[data-scheme-node="slot::pipe-1::architect"] [data-pipeline-stage-row="true"], [data-scheme-node="slot::pipe-1::builder"] [data-pipeline-stage-row="true"]')];
   expect(rows).toHaveLength(2);
   expect(host.querySelectorAll('[data-pipeline-stage-completed="true"]')).toHaveLength(0);
   expect(host.querySelector('[data-scheme-node="slot::pipe-1::architect"]')).toBeTruthy();

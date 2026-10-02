@@ -11,6 +11,7 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import { act } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -18,7 +19,11 @@ import type { FileEntry } from "@/lib/types";
 
 const dom = new Window();
 class TestResizeObserver {
-  observe() {}
+  constructor(private callback: (entries: Array<{ target: HTMLElement; contentRect: DOMRect }>) => void) {}
+  observe(element: HTMLElement) {
+    Object.defineProperty(element, "getBoundingClientRect", { configurable: true, value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 2400, bottom: 1600, width: 2400, height: 1600, toJSON() {} }) });
+    queueMicrotask(() => this.callback([{ target: element, contentRect: element.getBoundingClientRect() }]));
+  }
   unobserve() {}
   disconnect() {}
 }
@@ -36,6 +41,7 @@ class TestResizeObserver {
 const requestFrame = (callback: FrameRequestCallback) => dom.setTimeout(() => callback(0), 0);
 function bindDomGlobals() {
   Object.assign(globalThis, {
+    IS_REACT_ACT_ENVIRONMENT: true,
     window: dom,
     document: dom.document,
     navigator: dom.navigator,
@@ -127,23 +133,24 @@ const builder = entry({
 /** The true chain, top-down: an index further left is further up the lineage. */
 const CHAIN = ["/coordinator", "/codex-session", "/orchestrator", "/builder"];
 
-function mount(files: FileEntry[]): { host: HTMLElement; render: (next: FileEntry[]) => void } {
+async function mount(files: FileEntry[], omitted: string[] = [], focus: string | null = null): Promise<{ host: HTMLElement; render: (next: FileEntry[], folded?: string[], selected?: string | null) => Promise<void> }> {
   const host = dom.document.createElement("div") as unknown as HTMLElement;
   dom.document.body.append(host as never);
   const root = createRoot(host);
   roots.add(root);
-  const render = (next: FileEntry[]) =>
+  const render = async (next: FileEntry[], folded = omitted, selected = focus) => {
+    await act(async () => {
     flushSync(() =>
       root.render(
         <SchemeBoard
           project="lineage"
-          groups={buildBranchGroups(next, "lineage")}
+          groups={buildBranchGroups(next, "lineage", folded.length ? { keepExpandedPaths: new Set(next.map(file => file.path).filter(path => !folded.includes(path))) } : {})}
           manual={[]}
           files={next}
           flows={[]}
           tasks={[]}
           drafts={[]}
-          focus={null}
+          focus={selected}
           onSelect={() => {}}
           onClose={() => {}}
           onDraftClose={() => {}}
@@ -151,7 +158,13 @@ function mount(files: FileEntry[]): { host: HTMLElement; render: (next: FileEntr
         />,
       ),
     );
-  render(files);
+    await new Promise(resolve => setTimeout(resolve, 25));
+    });
+  };
+  await act(async () => {
+    await render(files);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  });
   return { host, render };
 }
 
@@ -167,27 +180,28 @@ const nodePaths = (host: HTMLElement): string[] =>
 
 const nodeAt = (host: HTMLElement, path: string) => host.querySelector(`[data-scheme-node="${path}"]`)!;
 
-test("a transcript pointer naming a descendant never draws the builder as its coordinator's parent", () => {
+test("a transcript pointer naming a descendant never draws the builder as its coordinator's parent", async () => {
   /* The reported frame, reduced to what the board could see: the codex session
      carried a pointer to the builder BELOW it, and both real parents were off
      the window. */
   const files = [{ ...builder, parent: null }, { ...codexSession, parent: "/builder" }];
-  const { host } = mount(files);
+  const { host, render } = await mount(files);
 
   expect(nodePaths(host).sort()).toEqual(["/builder", "/codex-session"]);
   expect(drawnEdges(host)).not.toContainEqual(["/builder", "/codex-session"]);
   expect(drawnEdges(host)).toEqual([]);
   /* Neither card claims the other: each says its own parent is off the board. */
   for (const path of ["/builder", "/codex-session"]) {
+    await render(files, [], path);
     expect(nodeAt(host, path).getAttribute("data-scheme-node-host")).toBeNull();
     expect(nodeAt(host, path).querySelector("[data-scheme-ancestry-chip]")?.getAttribute("aria-label"))
       .toBe("Parent conversation is not on this board");
   }
 });
 
-test("an ancestor the board does not draw is marked on the edge and on the card", () => {
+test("an ancestor the board does not draw is marked on the edge and on the card", async () => {
   const quiet = { ...orchestrator, activity: "idle" as const };
-  const { host } = mount([coordinator, codexSession, quiet, builder]);
+  const { host } = await mount([coordinator, codexSession, quiet, builder], [quiet.path], "/builder");
 
   expect(nodePaths(host)).not.toContain("/orchestrator");
   expect(drawnEdges(host)).toContainEqual(["/codex-session", "/builder"]);
@@ -198,8 +212,8 @@ test("an ancestor the board does not draw is marked on the edge and on the card"
   expect(nodeAt(host, "/builder").getAttribute("data-scheme-node-host")).toBe("/codex-session");
 });
 
-test("the whole chain reads coordinator → codex session → orchestrator → builder, in DOM order too", () => {
-  const { host } = mount([coordinator, codexSession, orchestrator, builder]);
+test("the whole chain reads coordinator → codex session → orchestrator → builder, in DOM order too", async () => {
+  const { host } = await mount([coordinator, codexSession, orchestrator, builder]);
 
   expect(drawnEdges(host).sort()).toEqual([
     ["/codex-session", "/orchestrator"],
@@ -212,12 +226,12 @@ test("the whole chain reads coordinator → codex session → orchestrator → b
   expect(host.querySelectorAll("[data-scheme-ancestry-chip]")).toHaveLength(0);
 });
 
-test("the drawn hierarchy holds while the intermediate ancestor moves between live, stalled and idle", () => {
-  const { host, render } = mount([coordinator, codexSession, orchestrator, builder]);
+test("the drawn hierarchy holds while the intermediate ancestor moves between live, stalled and idle", async () => {
+  const { host, render } = await mount([coordinator, codexSession, orchestrator, builder]);
   const seen: string[] = [];
 
   for (const activity of ["stalled", "idle", "live", "recent", "idle"] as const) {
-    render([coordinator, codexSession, { ...orchestrator, activity }, builder]);
+    await render([coordinator, codexSession, { ...orchestrator, activity }, builder], activity === "idle" ? ["/orchestrator"] : []);
     /* Whatever the board can draw, every arrow leaves a genuine ancestor of the
        card it enters — no frame turns a descendant into a spawner. */
     for (const [from, to] of drawnEdges(host)) {
