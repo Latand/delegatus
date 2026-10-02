@@ -80,6 +80,7 @@ const { resetManagerIdentityForTest } = await import("./voice/managerIdentity");
 const { viewBus } = await import("@/hooks/viewPresenceBus");
 const { addTaskChip, readTaskChips, resetTaskChipsForTests } = await import("./orchestrator/taskChips");
 
+const { publishSeatProject, resetSeatDeputiesForTests, seatDeputiesFor } = await import("./orchestrator/seatDeputies");
 const realFetch = globalThis.fetch;
 let roots: Root[] = [];
 /** What `/api/runtime/send` answers: the route's pre-enqueue refusal when set. */
@@ -120,6 +121,7 @@ beforeEach(() => {
   installTmuxComposerRuntimeForTests({
     useRuntimeView: (file) => file.conversationId === COMPOSING || file.conversationId === WORKER ? structuredView(file.conversationId) : null,
   });
+  resetSeatDeputiesForTests();
   sent = [];
   refuseSends = false;
   resetManagerIdentityForTest();
@@ -132,6 +134,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  resetSeatDeputiesForTests();
   resetTmuxComposerRuntimeForTests();
   for (const root of roots) await act(async () => root.unmount());
   roots = [];
@@ -428,3 +431,38 @@ test("a seat rotation is observed after the identity TTL even when the chip list
     expect(readTaskChips("atlas")).toBe(captured);
   } finally { timer.mockRestore(); }
 });
+
+
+for (const refused of [false, true]) {
+  test(`parallel ask carries task references and ${refused ? "restores a refused snapshot" : "keeps later chips"}`, async () => {
+    installTmuxComposerRuntimeForTests({ useRuntimeView: (file) => ({ ...structuredView(file.conversationId!), session: { ...structuredView(file.conversationId!).session, turn: "running" } }) as RuntimeSessionView });
+    publishSeatProject(COMPOSING, "atlas");
+    let resolveGhost!: (response: Response) => void;
+    let ask: { text: string } | null = null;
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      if (String(input) === "/api/orchestrator/ghost") {
+        ask = JSON.parse(String(init?.body)) as { text: string };
+        return new Promise<Response>((resolve) => { resolveGhost = resolve; });
+      }
+      return fetchBefore(input as RequestInfo, init);
+    }) as typeof fetch;
+    const host = await mountComposer();
+    await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Fix __init__.py (#42)" }); appendComposerDraft(COMPOSING, "start this one"); });
+    await act(async () => { host.querySelector("textarea")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, shiftKey: true, bubbles: true }) as unknown as Event); });
+    expect(ask).not.toBeNull();
+    expect(ask!.text).toContain(TASK_A);
+    expect(ask!.text).toContain('title "Fix __init__.py (#42)"');
+    expect(ask!.text).toEndWith("start this one");
+    expect(readTaskChips("atlas").map((chip) => chip.id)).toEqual([TASK_A]);
+    await act(async () => { addTaskChip("atlas", { id: TASK_B, title: "Later task" }); });
+    await act(async () => { resolveGhost(new Response(JSON.stringify(refused ? { ok: false, error: "refused" } : { ok: true, deputy: {
+      askId: "deputy_task", seatConversationId: COMPOSING, deputyConversationId: "conversation_task_deputy", ask: { text: ask!.text, images: 0, sender: null, origin: { kind: "operator" } },
+      artifactPath: "fixtures/deputy.jsonl", forkRecordCount: 0, forkBytes: 0, state: "active", startedAt: new Date().toISOString(), activatedAt: null, endedAt: null, outcome: null,
+      touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: null,
+    } }), { headers: { "content-type": "application/json" }, status: refused ? 409 : 200 })); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(readTaskChips("atlas").map((chip) => chip.id)).toEqual(refused ? [TASK_A, TASK_B] : [TASK_B]);
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe(refused ? "start this one" : "");
+    if (!refused) expect(seatDeputiesFor(COMPOSING)[0]!.ask.text).toBe(ask!.text);
+  });
+}

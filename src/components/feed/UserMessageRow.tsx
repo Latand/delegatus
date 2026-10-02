@@ -8,7 +8,7 @@ import type { MessageSender } from "@/lib/team/contract";
 import { SenderLine } from "@/components/team/SenderLine";
 
 import { ChevronUp, Layers } from "../icons";
-import { stripTaskReferencePrelude } from "@/lib/selection/selectedContext";
+import { stripTaskReferencePrelude, taskReferencesFromText } from "@/lib/selection/selectedContext";
 import { SelectedContextBadge } from "../SelectedContextBadge";
 import { TaskChipBadges } from "../orchestrator/TaskChipRow";
 import { CopyButton } from "./CopyButton";
@@ -72,7 +72,7 @@ export function UserMessageRow({
   const isMobile = useIsMobile();
   /* The seat's plain reference lines are what its record already says as chips:
      the row shows the operator's words and the chips, not both. */
-  const tasks = selectedContext?.tasks;
+  const tasks = selectedContext?.tasks ?? taskReferencesFromText(rawText);
   const text = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
   const long = text.length > LONG_MESSAGE;
   const gutter = action ?? <CopyButton text={copyText ?? text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;

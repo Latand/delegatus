@@ -14969,7 +14969,7 @@ describe("task chip native queue presentation", () => {
     const out = path.resolve(".artifacts/task-chip-native-queue");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
     const cases: Record<string, unknown>[] = [];
     try {
       for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
@@ -14978,23 +14978,28 @@ describe("task chip native queue presentation", () => {
           const panel = page.locator('[data-testid="native-queue-panel"]');
           await panel.waitFor();
           await page.evaluate(() => document.fonts.ready);
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(1000);
           for (const selector of ['[data-testid="native-queue-row"]', '[data-testid="native-queue-unresolved-row"]', '[data-testid="native-queue-refused-row"]']) {
             const row = panel.locator(selector);
             expect(await row.textContent()).not.toContain("task reference");
             expect(await row.textContent()).toContain("start this one");
             expect(await row.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
           }
+          const deputyHead = page.locator('[data-deputy-head]');
+          expect(await deputyHead.textContent()).toContain("start this one");
+          expect(await deputyHead.textContent()).not.toContain("task reference");
+          expect(await deputyHead.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          expect(await page.locator('[data-seat-deputy-chip]').getAttribute("title")).toBe("start this one");
           await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
           await panel.locator('[data-testid="native-queue-edit"]').click();
           const field = panel.locator('[data-testid="native-queue-edit-field"]');
           expect(await field.inputValue()).toBe("start this one");
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(1000);
           expect(await panel.locator('[data-testid="native-queue-row"] [data-task-badge]').count()).toBe(1);
           expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
           expect(pageErrors).toEqual([]);
           await page.screenshot({ path: path.join(out, `${locale}-${width}-edit.png`) });
-          cases.push({ locale, width, cleanPreview: true, cleanEdit: true, badge: "Fix __init__.py (#42)", overflow: false });
+          cases.push({ locale, width, cleanPreview: true, cleanEdit: true, cleanDeputy: true, badge: "Fix __init__.py (#42)", overflow: false });
         } finally { await context.close(); }
       }
     } finally { await browser.close(); server.stop(); }

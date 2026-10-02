@@ -130,3 +130,20 @@ test("a message whose text merely mentions a task id keeps its text whole", () =
   expect(html).toContain(TASK_A);
   expect(html).not.toContain("data-task-badge");
 });
+
+
+for (const engine of ["codex", "claude"] as const) {
+  test(`legacy ${engine} task references round-trip through authoritative transcript and clean badges`, () => {
+    const refs = [{ id: TASK_A, title: "Fix __init__.py (#42)" }];
+    const text = taskReferencePrelude(refs) + "\nstart this one";
+    const session = createFeedSession({ engine, fmt: engine, showSvc: false, lineFilter: "" });
+    const record = engine === "codex" ? { timestamp: "2026-10-02T09:00:00.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }
+      : { type: "user", uuid: "legacy-task", timestamp: "2026-10-02T09:00:00.000Z", message: { role: "user", content: text } };
+    const item = session.feed([JSON.stringify(record)], 0, false).items.find((row) => row.item.kind === "user")!.item;
+    const html = renderToStaticMarkup(<FeedItem item={item} />);
+    expect(html).toContain(`data-task-badge="${TASK_A}"`);
+    expect(html).toContain("Fix __init__.py (#42)");
+    expect(html).toContain("start this one");
+    expect(html).not.toContain("task reference");
+  });
+}

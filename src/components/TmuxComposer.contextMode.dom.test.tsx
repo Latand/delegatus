@@ -690,9 +690,10 @@ for (const fate of ["refused", "uncertain", "failed-operation"] as const) {
       await settle(() => press(textarea(host), "Enter"));
       await settle(() => { addTaskChip("viewer", LATER_CHIP); });
       await settle(() => releaseInjection!());
-      expect(readTaskChips("viewer")).toEqual(fate === "refused" ? [LATER_CHIP, CHIP] : [LATER_CHIP]);
-      expect(textarea(host).value).toBe(fate === "refused" ? "start this one" : "");
-      expect(contextRows()).toHaveLength(fate === "refused" ? 0 : 1);
+      expect(readTaskChips("viewer")).toEqual([LATER_CHIP]);
+      expect(textarea(host).value).toBe("");
+      expect(contextRows()).toHaveLength(1);
+      if (fate === "refused") expect(contextRows()[0]).toMatchObject({ state: "failed", text: "start this one", selectedContext: { tasks: [CHIP] } });
     } finally { await act(async () => root.unmount()); }
   });
 }
@@ -787,4 +788,21 @@ test("a fresh phone seat recovers receipt tasks even with no unsent chips to tri
     expect(textarea(host).value).toBe("start this one");
     expect(readTaskChips("viewer")).toEqual([CHIP]);
   } finally { resetManagerIdentityForTest(); await act(async () => root.unmount()); }
+});
+
+
+test("a refused task injection keeps original words and refs together when a later draft exists", async () => {
+  turn = "running"; holdInjection = true; injectAnswer = { ok: false, error: "refused" };
+  const { host, root } = await mount("viewer");
+  try {
+    await settle(() => { addTaskChip("viewer", CHIP); });
+    await type(host, "start this one");
+    await settle(() => press(textarea(host), "Enter"));
+    await type(host, "independent later words");
+    await settle(() => { addTaskChip("viewer", LATER_CHIP); });
+    await settle(() => releaseInjection!());
+    expect(textarea(host).value).toBe("independent later words");
+    expect(readTaskChips("viewer")).toEqual([LATER_CHIP]);
+    expect(contextRows()[0]).toMatchObject({ state: "failed", text: "start this one", selectedContext: { tasks: [CHIP] } });
+  } finally { await act(async () => root.unmount()); }
 });

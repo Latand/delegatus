@@ -6,6 +6,7 @@
       "width": 1440,
       "cleanPreview": true,
       "cleanEdit": true,
+      "cleanDeputy": true,
       "badge": "Fix __init__.py (#42)",
       "overflow": false
     },
@@ -14,6 +15,7 @@
       "width": 390,
       "cleanPreview": true,
       "cleanEdit": true,
+      "cleanDeputy": true,
       "badge": "Fix __init__.py (#42)",
       "overflow": false
     },
@@ -22,6 +24,7 @@
       "width": 1440,
       "cleanPreview": true,
       "cleanEdit": true,
+      "cleanDeputy": true,
       "badge": "Fix __init__.py (#42)",
       "overflow": false
     },
@@ -30,6 +33,7 @@
       "width": 390,
       "cleanPreview": true,
       "cleanEdit": true,
+      "cleanDeputy": true,
       "badge": "Fix __init__.py (#42)",
       "overflow": false
     }

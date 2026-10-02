@@ -4276,6 +4276,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       }
       const restoreDraft = !answer.ok && !operationExists && !answerLost;
       if (restoreDraft) {
+        const laterWords = payloadOwner.current === cardId ? textRef.current.trim() : sessionStorage.getItem(draftKey(cardId))?.trim();
+        const laterChips = chipProject ? readTaskChips(chipProject) : [];
+        if (chips.length && (laterWords || laterChips.length)) {
+          updateOutbox(cardId, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
+          if (payloadOwner.current === cardId) setStatus({ kind: "err", text: answer.error ?? t("inject.refused") });
+          return;
+        }
         if (!chipProject || restoreTaskChips(chipProject, chips)) withdrawContextOutbox(cardId, clientMessageId);
         else {
           updateOutbox(cardId, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
@@ -4341,6 +4348,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
     if (requestedImages.length && !attachments.validate()) return;
     const snapshotText = textRef.current;
+    const chips = chipProject ? readTaskChips(chipProject) : [];
+    const requestedTasks = taskChipRefs(chips);
     const clientRequestId = mintIdempotencyKey();
     setText("");
     void (async () => {
@@ -4351,7 +4360,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             project: seatProject,
-            text: requestedText,
+            text: [taskReferencePrelude(requestedTasks), requestedText].filter(Boolean).join("\n"),
             images: requestedImages.map((image) => ({ base64: image.base64, mime: image.mime })),
             clientRequestId,
           }),
@@ -4364,6 +4373,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const deputy = answer.ok ? parseSeatDeputyView(answer.deputy) : null;
       if (deputy) {
         publishSeatDeputy(deputy);
+        if (chipProject) settleTaskChips(chipProject, chips);
         attachments.settleDelivered(requestedImages, []);
         setStatus({ kind: "ok", text: t("composer.askInParallel") });
         return;
