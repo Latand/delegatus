@@ -19,4 +19,7 @@ aggregates, fixture dimensions, and fault attempt counts.
 The timing profile includes controlled delays for remote-command and
 browser-arrival paths. Treat those rows as harness behavior, not production
 latency. Healthy timings are local synthetic measurements and can vary with
-host load.
+host load. Both revisions receive the same generated healthy request shape:
+`list_pipelines/status-only` always sets `statusOnly:true`, allowlisted pure
+reads omit `clientRequestId`, and `create_pipeline` omits `src`. The harness
+asserts per-scenario field-set and input-token parity before printing a profile.

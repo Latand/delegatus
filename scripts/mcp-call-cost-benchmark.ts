@@ -5,6 +5,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- generated fixture records cross many domain unions. */
 const runSide = process.argv.includes('--run-side');
+const OPTIONAL_READ_KEY_TOOLS = new Set([
+ 'message_receipt', 'list_conversations', 'search_transcripts', 'get_conversation',
+ 'conversation_deliverability', 'conversation_messages', 'get_pipeline', 'board_snapshot',
+ 'list_flows', 'get_flow', 'list_pipelines', 'list_tasks', 'get_task',
+ 'deployment_status', 'resources', 'get_orchestrator', 'account_limits',
+]);
 
 async function runPair() {
  const base = process.argv[process.argv.indexOf('--base') + 1];
@@ -51,6 +57,11 @@ async function runPair() {
   const headRows = (output.head as any).profile.grouped as any[];
   if (baseRows.reduce((sum, row) => sum + row.n, 0) !== 303 || headRows.reduce((sum, row) => sum + row.n, 0) !== 303) throw new Error('Expected 303 healthy MCP calls per side');
   if ([...baseRows, ...headRows].some(row => row.ok !== row.n)) throw new Error('A healthy fixture call failed');
+  const headByKey = new Map(headRows.map(row => [row.key, row]));
+  for (const row of baseRows) {
+   const paired = headByKey.get(row.key);
+   if (!paired || paired.n !== row.n || paired.inputKeys.join(',') !== row.inputKeys.join(',') || paired.inTokP50 !== row.inTokP50) throw new Error(`Healthy request shape or input token count differs between revisions for ${row.key}`);
+  }
   const faultRows = [...(output.base as any).faults, ...(output.head as any).faults];
   if (faultRows.length !== 18 || faultRows.some(row => row.ok || row.attempts !== (row.side === 'base' ? 11 : 1))) throw new Error('Expected three failed-verdict fault scenarios, n=3 per side, with 11 to 1 HTTP attempts');
   process.stdout.write(JSON.stringify({ base: baseCommit, head, healthyCallsPerSide: 303, scenarios: baseRows.length, profiles: { base: baseRows, head: headRows }, faultRows }, null, 2) + '\n');
@@ -137,9 +148,11 @@ const listed=await client.listTools();let common=listed.tools[0]!.description??'
 const schemaCost={tools:listed.tools.length,totalTok:JSON.stringify(listed).length/4,commonPrefixChars:common.length,repeatedPrefixTok:common.length*(listed.tools.length-1)/4};
 let seq=0;const measurements:any[]=[];
 async function call(tool:string,fields:any,scenario:string){const args:any={clientRequestId:`audit-${++seq}`,...fields};
- if(candidate&&serverMod.OPTIONAL_READ_KEY_TOOLS.has(tool as any))delete args.clientRequestId;
- if(candidate&&tool==='create_pipeline')delete args.src;
- const start=performance.now();const answer:any=await runAsMcpHttpCaller({capability},()=>client.callTool({name:tool,arguments:args}));const elapsed=performance.now()-start;const result=answer.structuredContent??JSON.parse(answer.content[0].text);if(result.ok===false)console.log(JSON.stringify({refusalTool:tool,scenario,code:result.code,error:result.error}));measurements.push({tool,scenario,ms:elapsed,inTok:JSON.stringify(args).length/4,outTok:JSON.stringify(result).length/4,ok:result.ok,fieldNames:Object.keys(result)});return result;}
+ // Request shape is fixed across revisions so the profile measures server behavior,
+ // not a different caller input. The pinned base already supports these options.
+ if(OPTIONAL_READ_KEY_TOOLS.has(tool))delete args.clientRequestId;
+ if(tool==='create_pipeline')delete args.src;
+ const start=performance.now();const answer:any=await runAsMcpHttpCaller({capability},()=>client.callTool({name:tool,arguments:args}));const elapsed=performance.now()-start;const result=answer.structuredContent??JSON.parse(answer.content[0].text);if(result.ok===false)console.log(JSON.stringify({refusalTool:tool,scenario,code:result.code,error:result.error}));measurements.push({tool,scenario,ms:elapsed,inTok:JSON.stringify(args).length/4,outTok:JSON.stringify(result).length/4,ok:result.ok,inputKeys:Object.keys(args).sort(),fieldNames:Object.keys(result)});return result;}
 try{
  console.log('Profile: baseline begins');
  for(let i=0;i<20;i++){
@@ -150,7 +163,7 @@ try{
   await call('list_tasks',{project,limit:200},'limit200');
   await call('list_tasks',{project,limit:5},'limit5');
   await call('list_pipelines',{project,state:'open',limit:100},'open');
-  await call('list_pipelines',{project,state:'open',limit:100,...(candidate?{statusOnly:true}:{})},'status-only');
+  await call('list_pipelines',{project,state:'open',limit:100,statusOnly:true},'status-only');
   await call('search_transcripts',{query:'audit',project,limit:3},'indexed3');
   await call('conversation_messages',{transcriptPath:transcript,limit:10,maxChars:1200},'page10');
   await call('resources',{},'system-summary');
@@ -183,7 +196,7 @@ try{
  }
  const groups=new Map<string,any[]>();for(const m of measurements){const k=m.tool+'/'+m.scenario;if(!groups.has(k))groups.set(k,[]);groups.get(k)!.push(m);}
  const q=(a:number[],p:number)=>a.toSorted((x,y)=>x-y)[Math.max(0,Math.ceil(a.length*p)-1)];
- const grouped=[...groups].map(([key,ms])=>({key,n:ms.length,ok:ms.filter(m=>m.ok).length,p50ms:+q(ms.map(m=>m.ms),.5).toFixed(2),p95ms:+q(ms.map(m=>m.ms),.95).toFixed(2),maxMs:+Math.max(...ms.map(m=>m.ms)).toFixed(2),inTokP50:q(ms.map(m=>m.inTok),.5),outTokP50:q(ms.map(m=>m.outTok),.5)}));
+ const grouped=[...groups].map(([key,ms])=>({key,n:ms.length,ok:ms.filter(m=>m.ok).length,inputKeys:[...new Set(ms.flatMap(m=>m.inputKeys))].sort(),p50ms:+q(ms.map(m=>m.ms),.5).toFixed(2),p95ms:+q(ms.map(m=>m.ms),.95).toFixed(2),maxMs:+Math.max(...ms.map(m=>m.ms)).toFixed(2),inTokP50:q(ms.map(m=>m.inTok),.5),outTokP50:q(ms.map(m=>m.outTok),.5)}));
  if(measurements.some(m=>!m.ok))throw new Error('Measurement refused; inspect local log');
  const phases=timings.snapshot().filter(t=>t.calls).map(t=>({tool:t.toolName,calls:t.calls,phases:t.phases,outcomes:t.outcomes}));
  const output={schemaCost,seed:{tasks:107,pipelines:27,stagesPerPipeline:2,attemptsPerStage:6,transcriptMessages:1000,transcriptBytes:fs.statSync(transcript).size},transport:'MCP SDK in-memory plus loopback Viewer route handlers',grouped,phases,externalCommands:execSamples};
