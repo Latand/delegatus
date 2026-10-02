@@ -474,6 +474,8 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /** Attempt identity observed with stage liveness; refreshed sources must match it. */
+  stageAttempt?: string | null;
   /**
    * Who paused the lane, read off its pause record (#2063); absent when it is
    * not paused. `seat` is the seat this check is about: a lane it paused, for a
@@ -1259,6 +1261,8 @@ export interface SeatTickCheckInput {
    * a {@link SeatTickEvidenceGap} naming what was unreadable.
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
+  /** Ephemeral provenance for the gates and lane associations of the PR read. */
+  pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
   /** Lanes the seat itself launched whose stage has settled (#1749). Empty for
       a seat that launched nothing and for lanes some other hand created: the

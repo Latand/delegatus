@@ -197,6 +197,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
+    (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
     isEffectiveRole(attempt.effectiveRole) &&
     isNullableString(attempt.launchId) &&
@@ -1054,6 +1055,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             activatedBy: attempt.activatedBy ?? null,
             output: attempt.output ?? null,
             verdict: attempt.verdict ?? null,
+            ...(attempt.acceptedForReview === true ? { acceptedForReview: true as const } : {}),
             error: attempt.error ?? null,
             verdictRecovery: attempt.verdictRecovery ? { ...attempt.verdictRecovery } : undefined,
             ...(attempt.retiredLaunches

@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 36, and a v35 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(36);
+test("the default mandate is at version 38, and a v37 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(38);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -112,7 +112,9 @@ test("the default mandate is at version 36, and a v35 seat reads as stale", () =
   expect(orchestratorMandateStale(33)).toBe(true);
   expect(orchestratorMandateStale(34)).toBe(true);
   expect(orchestratorMandateStale(35)).toBe(true);
-  expect(orchestratorMandateStale(36)).toBe(false);
+  expect(orchestratorMandateStale(36)).toBe(true);
+  expect(orchestratorMandateStale(37)).toBe(true);
+  expect(orchestratorMandateStale(38)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -155,6 +157,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
   35: "3a35d3334e259e60d3388454068ab6ce1836fbcf8f87b05c7207e8caf626929b",
   36: "851761d46924e3c16328ea1e31f1c768ae15d1aecb48b6ab9ee1b25c2aac9749",
+  37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
+  38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -169,6 +173,9 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("needs-review → independent git show --remerge-diff review, then next batch");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("culprit → lane finding");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
@@ -747,11 +754,11 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
   expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
   /* §3 (a): the fix stage's params select its row. */
-  expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
-  /* Review of #2301: a fix round takes what names its place, an OVER-BUILT cut
-     included, and the seat is told that the rest parks the lane. */
-  expect(table).toContain("OVER-BUILT cuts included");
-  expect(table).toContain("which parks the lane: re-plan it.");
+  expect(table).toContain("- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks.");
+  expect(table).toContain("Never self-grade; fix discoveries and note out-of-spec");
+  expect(table).toContain("Fail only with blocked:true and blockedReason");
+  /* Fixers repair discoveries within the spec; reviewers grade the result. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("runtimeLine (spawn_agent: runtime)");
   expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.");
