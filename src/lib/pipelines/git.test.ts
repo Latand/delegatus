@@ -11,6 +11,7 @@ import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity"
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 
 test.each(["probe", "push-reply"] as const)("closing a lane during a real publication %s fences its outcome", async (phase) => {
   const box = await publishSandbox();
@@ -57,11 +58,13 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
 let previousState: string | undefined;
 let publicationState: string;
 beforeEach(() => {
+  closeAgentRegistryForTests();
   previousState = process.env.LLV_STATE_DIR;
   publicationState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-git-state-"));
   process.env.LLV_STATE_DIR = publicationState;
 });
 afterEach(() => {
+  closeAgentRegistryForTests();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
   fs.rmSync(publicationState, { recursive: true, force: true });

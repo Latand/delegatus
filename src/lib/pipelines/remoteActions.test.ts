@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-remote-actions-"));
+const previousState = process.env.LLV_STATE_DIR;
+const remoteState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-remote-actions-"));
+process.env.LLV_STATE_DIR = remoteState;
+const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+closeAgentRegistryForTests();
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord, withPipelineMutation } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
@@ -12,7 +16,12 @@ const { realExec } = await import("@/lib/workflows/provision");
 const { publishPipelineBranch } = await import("./git");
 const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
-afterAll(() => { restore(); fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); });
+afterAll(() => {
+  restore(); closeAgentRegistryForTests();
+  if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousState;
+  fs.rmSync(remoteState, { recursive: true, force: true });
+});
 const HEAD = "a".repeat(40);
 
 test("a queued publication is superseded by a pause before execution", async () => {
