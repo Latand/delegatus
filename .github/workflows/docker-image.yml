@@ -21,7 +21,6 @@ on:
       - 'scripts/runtime-host-viewer-adapter.ts'
       - 'scripts/runtime-host-healthcheck.ts'
       - 'scripts/published-image-entrypoint.sh'
-      - '.github/workflows/docker-image.yml'
   push:
     branches: [main]
     tags: ["v*"]
