@@ -805,7 +805,7 @@ describe("#1695 K1+K2 kanban board", () => {
       }
 
       /* + Task and + Agent (#1695 K9a): the new task is an inline card at the top of Inbox and lands there, the
-         bar's + Agent opens a draft on a card of its own, and a card's + Agent opens one on that card. Each draft
+         bar's + Agent opens a draft on a card of its own in Assigned, where its launch lands, and a card's + Agent opens one on that card. Each draft
          pane stays inside its card at reading width, and nothing pushes the page sideways. */
       const create = await openFixture(browser, base, VIEWPORTS[1], "light");
       try {
@@ -851,7 +851,7 @@ describe("#1695 K1+K2 kanban board", () => {
 
         if (composerFirst.column !== "inbox" || !composerFirst.first || !composerFirst.focused) failures.push(`k9a: the new task card ${JSON.stringify(composerFirst)}`);
         if (creates.length !== 1 || creates[0]!.placement !== "unplaced" || creates[0]!.clientRequestId !== "present") failures.push(`k9a: + Task wrote ${JSON.stringify(creates)}`);
-        if (barDraft.column !== "inbox" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
+        if (barDraft.column !== "assigned" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
         if (!cardDraft.inside || cardDraft.paneWidth > 780 || cardDraft.prompt !== "Repair old links in the release notes") failures.push(`k9a: the card's draft ${JSON.stringify(cardDraft)}`);
         if (pageOverflow > 0) failures.push(`k9a: the page scrolls sideways by ${pageOverflow} px`);
         if (create.pageErrors.length) failures.push(`k9a: page errors ${create.pageErrors.join(" | ")}`);

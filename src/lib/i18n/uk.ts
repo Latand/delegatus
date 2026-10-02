@@ -3765,6 +3765,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.openAgents.show": { one: "Показати відкритого агента", few: "Показати {count} відкритих агентів", many: "Показати {count} відкритих агентів", other: "Показати {count} відкритих агентів" },
   "kanban.openAgents.jump": "Перейти до {name}: {role}, {state}",
   "kanban.openAgents.close": "Закрити {name}",
+  "kanban.openAgents.draft": "Новий агент",
+  "kanban.openAgents.draftState": "ще не надіслано",
   "kanban.openAgents.closeAll": "Закрити всі",
   "kanban.openAgents.shortcut": "Alt+J — наступний агент, Alt+K — попередній",
   "kanban.readerClose": "Закрити розмову, картка лишається",

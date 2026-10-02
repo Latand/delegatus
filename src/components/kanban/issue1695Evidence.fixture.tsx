@@ -2166,6 +2166,8 @@ function launchAdvance() {
   if (index >= 0) tasks[index] = placeholder;
   else tasks.push(placeholder);
 }
+/* Nothing waits on the operator, so the phone's own fallback focus has no reason to leave the launched conversation. */
+if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: null, pendingQuestion: null });
 Object.assign(window, { launchRun });
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */

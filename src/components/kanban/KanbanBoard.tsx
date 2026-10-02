@@ -41,7 +41,7 @@ import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./Kanban
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
-import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
+import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
@@ -53,7 +53,8 @@ import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kan
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
-import { cycleOpenAgent, openAgents } from "./openAgents";
+import { LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
+import { cycleOpenAgent, draftAgents, openAgents } from "./openAgents";
 import { OPEN_AGENTS_SHORTCUT, OpenAgentsList, OpenAgentsRail } from "./OpenAgentsRail";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
@@ -537,7 +538,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
   /* The agents open on the board, for the rail at its side. */
-  const railAgents = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const railAgents = useMemo(
+    () => [...openAgents(t, readerViews, openReaders, props.now), ...draftAgents(t, [...cardsById.values()])],
+    [t, readerViews, openReaders, props.now, cardsById],
+  );
   const railKeysRef = useRef<readonly string[]>([]);
   railKeysRef.current = railAgents.map((agent) => agent.key);
   const railShown = railAgents.length > 0;
@@ -2176,6 +2180,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const readerViewsRef = useRef(readerViews);
   readerViewsRef.current = readerViews;
   const jumpToAgent = useCallback((key: string) => {
+    if (key.startsWith("draft::")) {
+      const id = key.slice("draft::".length);
+      const holder = [...cardsByIdRef.current.values()].find((card) => card.drafts.includes(id));
+      if (holder) revealCard(holder.id, null, false, `[data-kanban-draft="${cssEscape(id)}"] textarea`);
+      return;
+    }
     const view = readerViewsRef.current.find((candidate) => candidate.readerKey === key);
     if (!view) return;
     /* The agent's column widens as its Widen button would widen it, unless it
@@ -2185,11 +2195,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (status && widthControlsRef.current) widenIfNarrowRef.current(status);
     setFullReader((current) => (current && current !== key ? null : current));
     openReaderFor(view.file);
-  }, [openReaderFor]);
-  const closeFromRail = useCallback((key: string) => closeReaderFor(key, false), [closeReaderFor]);
+  }, [openReaderFor, revealCard]);
+  const closeFromRail = useCallback((key: string) => {
+    if (key.startsWith("draft::")) draftCloseRef.current?.(key.slice("draft::".length));
+    else closeReaderFor(key, false);
+  }, [closeReaderFor]);
   const closeAllAgents = useCallback(() => {
     const keys = new Set(railKeysRef.current);
-    for (const key of keys) disown(key);
+    for (const key of keys) {
+      if (key.startsWith("draft::")) draftCloseRef.current?.(key.slice("draft::".length));
+      else disown(key);
+    }
     setFullReader((current) => (current && keys.has(current) ? null : current));
     memory.update((readers) => readers.filter((reader) => !keys.has(reader.key)));
     menu.close(false);
@@ -2390,6 +2406,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* So does one holding an agent draft, and Inbox while `+ Task` composes in it. */
   for (const card of cardsById.values()) {
     if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
+    /* A draft in Assigned holds the width its launched conversation will need. */
+    if (card.drafts.length && card.status === "assigned" && !collapsed.has(card.id)) agentStatuses.add("assigned");
   }
   if (composingTask) readingStatuses.add("inbox");
   const wideShelf = widthControls ? wideColumns.wide : null;
@@ -2399,7 +2417,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   if (mode !== "tabs") {
     for (const status of KANBAN_STATUSES) {
       if (status === (wideShelf ?? "assigned") || readingStatuses.has(status)) continue;
-      if (model.columns[status].cards.length || (status === "inbox" && (model.unlinked.length || composingTask))) continue;
+      if (model.columns[status].cards.length || (status === "inbox" && (model.unlinked.some((card) => !holdsOnlyDrafts(card)) || composingTask))) continue;
       stripStatuses.add(status);
     }
   }
@@ -2446,12 +2464,52 @@ export function KanbanBoard(props: KanbanBoardProps) {
   draftCloseRef.current = props.onDraftClose;
   const draftSpawnedRef = useRef(props.onDraftSpawned);
   draftSpawnedRef.current = props.onDraftSpawned;
+  const restoreRef = useRef(props.onRestoreConversation);
+  restoreRef.current = props.onRestoreConversation;
   const draftActions = useMemo<KanbanDraftActions>(() => ({
     project,
     files,
     onClose: (id) => draftCloseRef.current?.(id),
-    onSpawned: (id, file) => draftSpawnedRef.current?.(id, file),
+    /* The draft stays until the card its launch becomes is on the board: the
+       swap is one commit, so nothing is drawn between the two. */
+    onSpawned: (id, file) => {
+      if (!restoreRef.current) {
+        draftSpawnedRef.current?.(id, file);
+        return;
+      }
+      /* The pane reports the same adoption on every poll until it is gone. */
+      if (launching.current.has(id) || launchedDrafts.current.has(id)) return;
+      const since = launchClockMs();
+      /* The conversation joins the board (so its task's card can be drawn)
+         without a reader: the reader opens in the card, after the swap. */
+      restoreRef.current(file);
+      launching.current.set(id, { file, since });
+      setLaunchTick((tick) => tick + 1);
+    },
   }), [project, files]);
+  const launching = useRef(new Map<string, { file: FileEntry; since: number }>());
+  const launchedDrafts = useRef(new Set<string>());
+  const [launchTick, setLaunchTick] = useState(0);
+  /* A launch the board never shows a card for (a refused task write) still ends. */
+  useEffect(() => {
+    if (!launching.current.size) return;
+    const timer = setTimeout(() => setLaunchTick((tick) => tick + 1), LAUNCH_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [launchTick]);
+  useLayoutEffect(() => {
+    for (const [id, entry] of launching.current) {
+      const identity = conversationIdentity(entry.file);
+      const landed = [...cardsById.values()].some((card) => card.task && (
+        card.members.some((member) => conversationIdentity(member.file) === identity)
+        || card.task.assignments.some((assignment) => assignment.conversationId === entry.file.conversationId)
+      ));
+      if (!landed && Date.now() - entry.since < LAUNCH_HOLD_MS) continue;
+      launching.current.delete(id);
+      launchedDrafts.current.add(id);
+      draftCloseRef.current?.(id);
+      openReaderFor(files.find((file) => conversationIdentity(file) === identity) ?? entry.file);
+    }
+  });
 
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
@@ -2921,9 +2979,10 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   if (status === "assigned") while (split > 0 && shown[split - 1]!.idle) split -= 1;
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
-  const unlinked = status === "inbox" ? model.unlinkedShown : [];
+  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !holdsOnlyDrafts(card)) : [];
+  const drafting = status === "assigned" ? model.unlinkedShown.filter(holdsOnlyDrafts) : [];
   const unboundRemote = status === "inbox" ? remoteAgents.filter((row) => !row.task) : [];
-  const empty = shown.length === 0 && unlinked.length === 0 && unboundRemote.length === 0 && !newTask;
+  const empty = shown.length === 0 && unlinked.length === 0 && drafting.length === 0 && unboundRemote.length === 0 && !newTask;
   /* This column holds the wide share, or gave it to a widened shelf. */
   const isWide = widths ? (widths.wide ? widths.wide === status : status === "assigned") : false;
   const gaveShare = widths !== null && widths.wide !== null && status === "assigned";
@@ -3004,6 +3063,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
             <span>{emptyFiltered ? emptyFiltered.body : t(`kanban.empty.${status}.body`)}</span>
           </div>
         ) : null}
+        {drafting.map(renderCard)}
         {active.map(renderCard)}
         {idle.length ? (
           <>

@@ -1,0 +1,53 @@
+{
+  "label": "after",
+  "limit": 0.1,
+  "readings": [
+    {
+      "viewport": "desktop-1440",
+      "cls": 0.0001,
+      "shifts": 3,
+      "largest": [
+        {
+          "at": 7918,
+          "value": 0.0001,
+          "sources": [
+            "SPAN.inline-flex.max-w-full"
+          ]
+        },
+        {
+          "at": 841,
+          "value": 0,
+          "sources": [
+            "BUTTON.or-close-all"
+          ]
+        },
+        {
+          "at": 7890,
+          "value": 0,
+          "sources": [
+            "BUTTON.or-close-all",
+            "SPAN.or-names"
+          ]
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "viewport": "phone-390",
+      "cls": 0.0113,
+      "shifts": 1,
+      "largest": [
+        {
+          "at": 779,
+          "value": 0.0113,
+          "sources": [
+            "SPAN.inline-flex.max-w-full",
+            "SPAN.inline-flex.min-w-0",
+            "SPAN.inline-flex.min-w-0"
+          ]
+        }
+      ],
+      "pageErrors": []
+    }
+  ]
+}

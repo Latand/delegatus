@@ -3851,6 +3851,8 @@ export const en = {
   "kanban.openAgents.show": { one: "Show the open agent", other: "Show the {count} open agents" },
   "kanban.openAgents.jump": "Go to {name}: {role}, {state}",
   "kanban.openAgents.close": "Close {name}",
+  "kanban.openAgents.draft": "New agent",
+  "kanban.openAgents.draftState": "not sent yet",
   "kanban.openAgents.closeAll": "Close all",
   "kanban.openAgents.shortcut": "Alt+J next agent, Alt+K previous",
   "kanban.readerClose": "Close the conversation, keep the card",

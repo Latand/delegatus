@@ -317,6 +317,12 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
  * the working cards keep their places while their agents stream. Then the
  * newest agent work, then the newest edit of the task, then the id.
  */
+/** A card no task owns that holds nothing but agent drafts. Its launch becomes
+    a task in Assigned, so the board draws it there from the first keystroke. */
+export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "members" | "mirrors">): boolean {
+  return !card.task && card.drafts.length > 0 && card.members.length === 0 && card.mirrors.length === 0;
+}
+
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
   if ((a.workingSinceMs === null) !== (b.workingSinceMs === null)) return a.workingSinceMs === null ? 1 : -1;
   if (a.workingSinceMs !== null && b.workingSinceMs !== null) return b.workingSinceMs - a.workingSinceMs || a.id.localeCompare(b.id);
@@ -608,7 +614,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const needsYou = reasons.length > 0;
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
-    const status: TaskStatus = overridden ?? task?.status ?? "inbox";
+    /* A card holding only an agent draft is where its launch will land: the task
+       the launch writes is Assigned, so the draft stands there and the launched
+       card takes the place the draft held, in the column it was drawn in. */
+    const status: TaskStatus = overridden ?? task?.status ?? (!members.length && band.members.some((member) => member.kind === "draft") ? "assigned" : "inbox");
     const hide: GroupHideState = task
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };

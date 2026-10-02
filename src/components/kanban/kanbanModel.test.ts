@@ -8,7 +8,7 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
-import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
+import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -668,6 +668,10 @@ test("an agent draft is the card's own: a band-local draft on its task, any othe
   expect(alone.origin).toBe("draft");
   expect(alone.otherSurfaces).toBe(0);
   expect(alone.idle).toBe(false);
+  /* A draft no task holds stands in Assigned, where its launch will land, and nothing else does. */
+  expect(alone.status).toBe("assigned");
+  expect(holdsOnlyDrafts(alone)).toBe(true);
+  expect(holdsOnlyDrafts(onTask)).toBe(false);
 });
 
 
