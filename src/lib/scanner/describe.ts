@@ -194,6 +194,15 @@ export function projectFromSlug(slug: string): string {
   return canonicalProject(slug);
 }
 
+/** Memory uses the same encoded project directories as Claude transcripts. */
+export function projectForClaudeMemorySlug(slug: string): string {
+  const cwd = repoPathFromSlug(slug);
+  return (cwd ? projectInfoFromCwd(cwd)?.project : null)
+    ?? projectInfoFromSlug(slug)?.project
+    ?? worktreeFromSlug(slug)?.project
+    ?? projectFromSlug(slug);
+}
+
 /** Rejoins a `path.sep`-split absolute path into one.
  *
  * An empty prefix is the POSIX root. On Windows the same slice yields a bare
