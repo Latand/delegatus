@@ -1205,25 +1205,18 @@ function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void, acceptedBo
 
 function sameHunkRebaseSandbox() {
   const box = publishSandbox();
+  const repeatedComments = ["    # same context", "    # same context", "    # same context", "    # same context"];
   const policy = (first: number, second: number) => [
     "def first():",
-    "    # before one",
-    "    # before two",
-    "    # before three",
+    ...repeatedComments,
     `    value = ${first}`,
-    "    # after one",
-    "    # after two",
-    "    # after three",
+    ...repeatedComments,
     "    return value",
     "",
     "def second():",
-    "    # before one",
-    "    # before two",
-    "    # before three",
+    ...repeatedComments,
     `    value = ${second}`,
-    "    # after one",
-    "    # after two",
-    "    # after three",
+    ...repeatedComments,
     "    return value",
     "",
   ].join("\n");
@@ -1271,12 +1264,13 @@ test.each(["update", "revert"])("stage reconciliation retains accepted history f
 test("stage reconciliation rejects an amended replay moved to an identical hunk in another function", () => {
   const box = sameHunkRebaseSandbox();
   try {
-    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), box.policy(1, 2));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), `# newer main line\n${box.policy(1, 2)}`);
     git(box.subject.worktreeDir, "add", "policy.py");
     git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
     const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
     const main = git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0];
-    expect(git(box.subject.worktreeDir, "cherry", head, box.accepted)).toBe(`- ${box.accepted}`);
+    const cherry = git(box.subject.worktreeDir, "cherry", head, box.accepted);
+    expect(cherry).toBe(`- ${box.accepted}`);
 
     const result = reconcilePipelineStageHead(box.subject, head, realExec);
 
