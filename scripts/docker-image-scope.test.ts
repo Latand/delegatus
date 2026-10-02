@@ -8,6 +8,7 @@ import tailwind from "@tailwindcss/postcss";
 import ts from "typescript";
 import { getBabelConfigFile } from "next/dist/build/get-babel-config-file";
 import { getSupportedBrowsers } from "next/dist/build/get-supported-browsers";
+import { findConfig } from "next/dist/lib/find-config";
 import { isImageInput } from "./docker-image-scope.cjs";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -27,7 +28,7 @@ const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/
 
 test("image inputs build, while prose, unrelated CI and shell tooling skip", () => {
   for (const file of [
-    "Dockerfile", ".dockerignore", "package.json", "bun.lock", "bunfig.toml", "tsconfig.json",
+    "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml", "tsconfig.json",
     "next.config.ts", "postcss.config.mjs", "patches/framework.patch", "src/app/page.tsx",
     "src/app/globals.css", "src/template.md", "public/icon.svg", "bin/cli.mjs", "vendor/tool/data.txt",
     "scripts/build-mcp.ts", "scripts/whisper_transcribe.py", "scripts/runtime-host-viewer-adapter.ts",
@@ -100,6 +101,20 @@ test("installed Next consumes admitted root Babel and Browserslist configuration
   }
 });
 
+test("admitted PostCSS rc files override the checked-in config in installed Next", async () => {
+  for (const file of [".postcssrc.json", ".postcssrc.js"]) {
+    const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-postcss-"));
+    try {
+      writeFileSync(path.join(cwd, "postcss.config.mjs"), readFileSync(path.join(root, "postcss.config.mjs")));
+      const config = { plugins: { "fixture-plugin": {} } };
+      writeFileSync(path.join(cwd, file), file.endsWith(".js")
+        ? `module.exports = ${JSON.stringify(config)};` : JSON.stringify(config));
+      expect(await findConfig(cwd, "postcss")).toEqual(config);
+      expect(isImageInput(file), file).toBe(true);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  }
+});
+
 test("workflow gates Docker steps and reserves capacity across different refs", () => {
   const { scope, build } = workflow.jobs;
   expect(scope.if).toBe("github.event_name == 'pull_request'");
@@ -162,6 +177,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       [".env", true], [".env.local", true],
       [".env.production", true], [".env.production.local", true],
       [".babelrc", true], [".browserslistrc", true],
+      ["Dockerfile.dockerignore", true], [".postcssrc.json", true], [".postcssrc.js", true],
     ] as const) {
       write(file, file.startsWith(".env") ? "LLV_STANDALONE=1\n" : "{}");
       const current = commit();

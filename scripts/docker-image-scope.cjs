@@ -5,7 +5,7 @@ const { execFileSync } = require("node:child_process");
 // Keep external JS/JSON dependencies explicit: the test checks this list
 // against the installed TypeScript program so new imports cannot drift.
 const files = new Set([
-  "Dockerfile", ".dockerignore", "package.json", "bun.lock", "bunfig.toml",
+  "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml",
   "tsconfig.json", ".github/workflows/docker-image.yml",
   "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
   "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs",
@@ -16,6 +16,7 @@ const files = new Set([
   ".babelrc", ".babelrc.json", ".babelrc.js", ".babelrc.mjs", ".babelrc.cjs",
   "babel.config.js", "babel.config.json", "babel.config.mjs", "babel.config.cjs",
   ".browserslistrc", "browserslist",
+  ".postcssrc.json", ".postcssrc.js",
 ]);
 const directories = ["src/", "public/", "bin/", "patches/", "vendor/"];
 

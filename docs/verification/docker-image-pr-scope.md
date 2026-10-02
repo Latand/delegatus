@@ -44,6 +44,8 @@ Unused evidence JSON and documentation JS/JSON skip the build. Root `.env`,
 Next loads them during the production build.
 Root Babel and Browserslist configuration files are also admitted and exercised
 through the installed Next configuration loaders.
+PostCSS rc overrides and `Dockerfile.dockerignore`, which takes precedence over
+the root Docker ignore file, also trigger a build.
 
 The broad trigger is retained for compatibility with #2452 and to avoid GitHub's
 300-file trigger-filter limit. A three-minute, read-only `scope` job evaluates
