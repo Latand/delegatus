@@ -180,6 +180,44 @@ test("with the cap reached, a card not yet attached cannot add; an attached one 
   expect(extra.disabled).toBe(false);
 });
 
+const receiptsIn = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>("[data-kanban-receipt]")];
+
+test("a press says so on the board with a receipt naming the task; taking it off adds no second one", () => {
+  const host = mount([task("a", "assigned", "Fix the mobile board\nSecond line")]);
+  expect(receiptsIn(host)).toHaveLength(0);
+  flushSyncClick(askButton(host, "a"));
+  const [receipt] = receiptsIn(host);
+  expect(receiptsIn(host)).toHaveLength(1);
+  expect(receipt!.querySelector(".msg")!.textContent).toContain("Fix the mobile board");
+  expect(receipt!.querySelector(".act")!.textContent).toBe("Show");
+  flushSyncClick(askButton(host, "a"));
+  expect(receiptsIn(host)).toHaveLength(1);
+});
+
+test("a refused press (the cap) leaves no receipt behind", () => {
+  const tasks = Array.from({ length: MAX_TASK_CHIPS + 1 }, (_, n) => task(`c${n}`, "assigned", `Task ${n}`));
+  const host = mount(tasks);
+  for (let n = 0; n < MAX_TASK_CHIPS; n += 1) flushSync(() => { addTaskChip("fixture", { id: `c${n}`, title: `Task ${n}` }); });
+  flushSyncClick(askButton(host, `c${MAX_TASK_CHIPS}`));
+  expect(receiptsIn(host)).toHaveLength(0);
+});
+
+test("the receipt's Show brings the seat's composer into focus", () => {
+  const host = mount([task("a", "assigned", "First")]);
+  const seat = document.createElement("section");
+  seat.setAttribute("data-kanban-seat", "fixture");
+  const input = document.createElement("textarea");
+  let scrolled = 0;
+  (input as unknown as { scrollIntoView: () => void }).scrollIntoView = () => { scrolled += 1; };
+  seat.appendChild(input);
+  document.body.appendChild(seat);
+  flushSyncClick(askButton(host, "a"));
+  flushSyncClick(receiptsIn(host)[0]!.querySelector(".act"));
+  expect(scrolled).toBe(1);
+  expect(document.activeElement).toBe(input);
+  expect(receiptsIn(host)).toHaveLength(0);
+});
+
 function flushSyncClick(element: Element | null) {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());

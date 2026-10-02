@@ -27,7 +27,7 @@ import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLi
 
 import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { useSeatSignal } from "./kanbanSeatStore";
-import { useTaskChipAttached, useTaskChipsFull } from "@/components/orchestrator/taskChips";
+import { useTaskChipAttached, useTaskChipsFull, type TaskChip } from "@/components/orchestrator/taskChips";
 import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
@@ -227,6 +227,8 @@ export interface KanbanCardProps {
   onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
   /** «+ Agent» in the footer: a draft on this card, seeded with the task's text (K9a). */
   onAddAgent?: (card: KanbanCardModel) => void;
+  /** «Ask» attached this task's chip: the board confirms it where the press was. */
+  onAsked?: (project: string, chip: TaskChip) => void;
   /** Cross-project Overview (#1820): display name per project key. Cards from
       several projects share the columns there, so each one says which project
       it belongs to. Absent on a project's own board, where every card on
@@ -859,7 +861,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           {/* The orchestrator's composer takes a reference to this task as a chip
               (never text in the input). Not on the Overview, where cards of
               several projects stand and no seat is on screen to take it. */}
-          {!props.projectNames ? <AskOrchestratorButton cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
+          {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
           {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
             <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
               <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
@@ -880,7 +882,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 /** The card's one «Ask» button. It stays pressed while the task is attached to
     the orchestrator's composer, so the card itself says it took, even when the
     seat is scrolled out of sight above the column. */
-function AskOrchestratorButton({ cardId, project, taskId, title, color, icon }: {
+function AskOrchestratorButton({ onAsked, cardId, project, taskId, title, color, icon }: {
+  onAsked?: (project: string, chip: TaskChip) => void;
   cardId: string;
   project: string;
   taskId: string;
@@ -901,7 +904,7 @@ function AskOrchestratorButton({ cardId, project, taskId, title, color, icon }: 
       aria-label={t("taskChip.askAria", { title })}
       title={t(attached ? "taskChip.askOnHint" : full ? "taskChip.full" : "taskChip.askHint")}
       disabled={full}
-      onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: cleanTitle(title, 80), color, icon }, attached)}
+      onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: cleanTitle(title, 80), color, icon }, attached, (chip) => onAsked?.(project, chip))}
     >
       <Bot aria-hidden /> {t("taskChip.ask")}
     </button>

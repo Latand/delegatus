@@ -2433,6 +2433,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const addAgentRef = useRef(props.onAddAgent);
   addAgentRef.current = props.onAddAgent;
   const addAgentToCard = useCallback((card: KanbanCardModel) => addAgentRef.current?.({ id: card.id, task: card.task, title: card.title }), []);
+  /* «Ask» holds the card where it was, so a folded seat opens above the viewport
+     and its composer is out of sight. The receipt says the chip took and takes
+     the operator to the composer when they want it. */
+  const taskAsked = useCallback((project: string, chip: { title: string }) => {
+    show(t("taskChip.added", { title: chip.title }), {
+      label: t("taskChip.show"),
+      run: () => {
+        const seat = [...document.querySelectorAll<HTMLElement>("[data-kanban-seat]")].find((node) => node.getAttribute("data-kanban-seat") === project);
+        const input = seat?.querySelector<HTMLElement>("textarea");
+        input?.scrollIntoView({ block: "center" });
+        input?.focus({ preventScroll: true });
+      },
+    });
+  }, [show, t]);
   /* One stable callback behind the Overview's, so a card's memo never breaks
      on a fresh arrow from the page above. */
   const openProjectRef = useRef(props.overview?.onOpenProject);
@@ -2517,6 +2531,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
         onAddAgent: props.onAddAgent ? addAgentToCard : undefined,
+        onAsked: taskAsked,
         projectNames: props.overview?.names ?? null,
         onOpenProject: props.overview ? openProject : undefined,
       }}
@@ -2852,7 +2867,7 @@ type CardHandlers = Pick<
   | "onToggleCollapsed" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onDismiss" | "onUndoDismiss" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
   | "projectNames" | "onOpenProject"
 >;
 

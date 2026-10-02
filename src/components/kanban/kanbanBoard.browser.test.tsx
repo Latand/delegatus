@@ -14252,7 +14252,23 @@ describe("task chip: the card's Ask button puts a task in the orchestrator's com
           const topAfter = await top(first);
           const seatAfter = await seatState();
           const pressed = await page.$eval(`[data-ask-orchestrator="${first}"]`, (node) => node.getAttribute("aria-pressed"));
-          await page.$eval("[data-kanban-seat]", (node) => node.scrollIntoView({ block: "start" }));
+          /* Nothing has scrolled the seat into view yet: what the operator sees at the press is the receipt. */
+          const receipt = await page.$eval("[data-kanban-receipt]", (node) => {
+            const rect = node.getBoundingClientRect();
+            const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+            return {
+              text: node.querySelector(".msg")?.textContent?.trim() ?? "",
+              action: node.querySelector(".act")?.textContent?.trim() ?? "",
+              inView: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth,
+              seatInView: seat.top >= 0 && seat.bottom <= innerHeight,
+            };
+          }).catch(() => null);
+          await page.click("[data-kanban-receipt] .act");
+          await page.waitForTimeout(600);
+          const composerInView = await page.$eval("[data-kanban-seat] textarea", (node) => {
+            const rect = node.getBoundingClientRect();
+            return rect.top >= 48 && rect.bottom <= innerHeight && document.activeElement === node;
+          });
           const chip = await page.$eval("[data-orchestrator-conversation] [data-task-chip]", (node) => ({
             text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
             width: Math.round(node.getBoundingClientRect().width),
@@ -14275,10 +14291,12 @@ describe("task chip: the card's Ask button puts a task in the orchestrator's com
           });
           const footFit = await page.$$eval('.card[data-id^="task:"] .foot', (foots) => foots.filter((foot) => foot.scrollWidth > foot.clientWidth + 1).length);
           const ask = await page.$eval(`[data-ask-orchestrator="${second}"]`, (node) => ({ label: node.getAttribute("aria-label"), text: node.textContent?.trim(), height: Math.round(node.getBoundingClientRect().height) }));
-          Object.assign(record, { foldedBefore, seatAfter, pressed, topBefore, topAfter, chip, draft, removed, footOverflow: footFit, ask });
+          Object.assign(record, { foldedBefore, seatAfter, pressed, topBefore, topAfter, receipt, composerInView, chip, draft, removed, footOverflow: footFit, ask });
           if (!foldedBefore) failures.push(`${lang}: the seat was not folded before the press`);
           if (Math.abs(topAfter - topBefore) > 2) failures.push(`${lang}: the card moved ${topAfter - topBefore} px when the seat unfolded`);
           if (seatAfter !== "0") failures.push(`${lang}: the seat is still folded after the press`);
+          if (!receipt || !receipt.inView || !/^«.+»/.test(receipt.text) || receipt.action !== tr("taskChip.show")) failures.push(`${lang}: no visible receipt at the press ${JSON.stringify(receipt)}`);
+          if (!composerInView) failures.push(`${lang}: the receipt's ${tr("taskChip.show")} did not bring the composer into view`);
           if (pressed !== "true") failures.push(`${lang}: the card's button does not read as pressed`);
           if (draft !== "") failures.push(`${lang}: the input holds "${draft}" after the press`);
           if (!chip.inView || chip.cut) failures.push(`${lang}: the chip ${JSON.stringify(chip)}`);
