@@ -110,6 +110,11 @@
    once the search sits at its floor the rest falls to the lead as before. */
 .kb .bar[data-bar="project"] .bar-find { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
 .kb .bar[data-bar="project"] .bar-find .search { flex: 0 1 auto; max-width: none; min-width: 0; }
+/* The filters share the search row and reserve their natural width. In a
+   narrow bar they scroll after the search reaches 64 px, plus the 8 px gap. */
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; flex-direction: row; align-items: center; gap: 8px; }
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 112px; }
+.kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
    reserve in one row; there, and only there, they wrap. The bar's own width decides, since it

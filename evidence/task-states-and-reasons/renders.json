@@ -4,6 +4,22 @@
       "width": 1440,
       "height": 844,
       "locale": "en",
+      "topbar": {
+        "top": 0,
+        "bottom": 48,
+        "height": 48,
+        "searchTop": 7.5,
+        "searchBottom": 39.5,
+        "filtersTop": 14.5,
+        "filtersBottom": 32.5,
+        "filtersRight": 838.953125,
+        "lastFilterRight": 838.953125,
+        "groupWidth": 414.59375,
+        "searchWidth": 110.234375,
+        "filterCount": 5,
+        "filtersClientWidth": 296,
+        "filtersScrollWidth": 296
+      },
       "lines": [
         {
           "motion": "working",
@@ -137,7 +153,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Postponed 2 Oct, 09:16: After green checks · now due · 2h ago",
+          "text": "Postponed 2 Oct, 09:39: After green checks · now due · 2h ago",
           "left": 1074,
           "right": 1302,
           "top": 760.40625,
@@ -156,6 +172,7 @@
       "width": 390,
       "height": 844,
       "locale": "en",
+      "topbar": null,
       "lines": [
         {
           "motion": "needs-you",
@@ -263,7 +280,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Postponed 2 Oct, 09:16: After green checks · now due · 2h ago",
+          "text": "Postponed 2 Oct, 09:39: After green checks · now due · 2h ago",
           "left": 24,
           "right": 366,
           "top": 726.625,
@@ -282,6 +299,22 @@
       "width": 1440,
       "height": 844,
       "locale": "uk",
+      "topbar": {
+        "top": 0,
+        "bottom": 48,
+        "height": 48,
+        "searchTop": 7.5,
+        "searchBottom": 39.5,
+        "filtersTop": 14.5,
+        "filtersBottom": 32.5,
+        "filtersRight": 838.953125,
+        "lastFilterRight": 838.953125,
+        "groupWidth": 399.734375,
+        "searchWidth": 80.875,
+        "filterCount": 5,
+        "filtersClientWidth": 311,
+        "filtersScrollWidth": 311
+      },
       "lines": [
         {
           "motion": "working",
@@ -415,7 +448,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Відкладено 2 жовт., 09:16: Після успішних перевірок · час настав · 2 год тому",
+          "text": "Відкладено 2 жовт., 09:39: Після успішних перевірок · час настав · 2 год тому",
           "left": 1074,
           "right": 1302,
           "top": 761.34375,
@@ -434,6 +467,7 @@
       "width": 390,
       "height": 844,
       "locale": "uk",
+      "topbar": null,
       "lines": [
         {
           "motion": "needs-you",
@@ -541,7 +575,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Відкладено 2 жовт., 09:16: Після успішних перевірок · час настав · 2 год тому",
+          "text": "Відкладено 2 жовт., 09:39: Після успішних перевірок · час настав · 2 год тому",
           "left": 24,
           "right": 366,
           "top": 711.75,

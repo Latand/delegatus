@@ -14420,6 +14420,34 @@ describe("task motion and waiting reasons", () => {
             await page.keyboard.press("o");
             await page.locator('[data-seat-collapse][aria-expanded="false"]').waitFor();
           }
+          const topbar = phone ? null : await page.locator('.bar[data-bar="project"]').evaluate((bar) => {
+            const rect = bar.getBoundingClientRect();
+            const search = bar.querySelector('[data-kanban-search]')!.getBoundingClientRect();
+            const filters = bar.querySelector('[data-reason-filters]') as HTMLElement;
+            const filterRect = filters.getBoundingClientRect();
+            return {
+              top: rect.top, bottom: rect.bottom, height: rect.height,
+              searchTop: search.top, searchBottom: search.bottom,
+              filtersTop: filterRect.top, filtersBottom: filterRect.bottom,
+              filtersRight: filterRect.right,
+              lastFilterRight: filters.lastElementChild!.getBoundingClientRect().right,
+              groupWidth: filters.parentElement!.getBoundingClientRect().width,
+              searchWidth: search.width,
+              filterCount: filters.children.length,
+              filtersClientWidth: filters.clientWidth, filtersScrollWidth: filters.scrollWidth,
+            };
+          });
+          if (topbar) {
+            expect(topbar.height).toBe(48);
+            expect(topbar.searchTop).toBeGreaterThanOrEqual(Math.max(0, topbar.top));
+            expect(topbar.searchBottom).toBeLessThanOrEqual(topbar.bottom);
+            expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
+            expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
+            expect(topbar.filterCount).toBe(5);
+            expect(topbar.lastFilterRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.filtersRight);
+            expect(topbar.filtersScrollWidth).toBeLessThanOrEqual(topbar.filtersClientWidth + 1);
+            await page.locator('.bar[data-bar="project"]').screenshot({ path: path.join(out, `${width}-${locale}-topbar.png`) });
+          }
           const stopped = page.locator(`${selector("motion-stopped")} [data-motion="stopped"]`);
           expect(await stopped.textContent()).toContain(translate(locale, "kanban.motion.stopped"));
           expect(await page.locator(`${selector("motion-working")} [data-motion="working"]`).count()).toBe(1);
@@ -14573,7 +14601,7 @@ describe("task motion and waiting reasons", () => {
           await editor.getByRole("button", { name: translate(locale, "kanban.hold.save"), exact: true }).click();
           await page.waitForFunction(() => !document.querySelector('[data-hold-editor]'));
           expect(pageErrors).toEqual([]);
-          cases.push({ width, height: 844, locale, lines, editor: "saved", pageErrors });
+          cases.push({ width, height: 844, locale, topbar, lines, editor: "saved", pageErrors });
         } finally { await context.close(); }
       }
     } finally { await browser?.close(); server.stop(); }
