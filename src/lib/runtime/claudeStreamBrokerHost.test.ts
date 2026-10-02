@@ -10,6 +10,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
@@ -168,6 +169,47 @@ function fakeSpawn(
     return child as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test.each([
+  { sandbox: "full", readOnly: false },
+  { sandbox: "full", readOnly: true },
+  { sandbox: "restricted", readOnly: false },
+  { sandbox: "restricted", readOnly: true },
+  { sandbox: null, readOnly: true },
+] as const)("Claude startup resume keeps sandbox=$sandbox and readOnly=$readOnly", async ({ sandbox, readOnly }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-resume-access-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = crypto.randomUUID();
+  const key = { engine: "claude" as const, sessionId };
+  registry.upsert({ key, artifactPath: path.join(directory, `${sessionId}.jsonl`), cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly, permissionMode: sandbox === null ? "plan" : "bypassPermissions" }),
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  try {
+    const reloaded = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+    const entry = reloaded.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+    const options = claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...options,
+      eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    });
+    try {
+      const args = captured.args!;
+      expect(args).toContain("--resume");
+      expect(args.includes("--restricted")).toBe(sandbox === "restricted");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe(sandbox === null ? "plan" : "bypassPermissions");
+      const denied = args[args.indexOf("--disallowedTools") + 1];
+      expect(denied.includes("Edit,Write,NotebookEdit")).toBe(sandbox === null);
+    } finally { await host.release(); }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("provider host gives Claude a private relay alias for fresh and adopted sessions", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-host-"));

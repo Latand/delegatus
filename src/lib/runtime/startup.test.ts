@@ -53,6 +53,36 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
+test.each(["full", "restricted"] as const)("startup replays durable Codex sandbox=%s and permission mode", async (sandbox) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-access-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const artifactPath = path.join(directory, "access-thread.jsonl");
+  const key = { engine: "codex" as const, sessionId: "access-thread" };
+  registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly: false, permissionMode: "on-request" }),
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  try {
+    await adoptStructuredHostsAtStartup({ registry, client: null,
+      refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
+      resolveCodexOwner: () => null,
+      adopt: async (store, optionsFor) => {
+        const options = optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
+        try {
+          expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request" });
+        } finally { options.releaseCleanup?.(); }
+        return [];
+      }, adoptClaude: async () => [],
+    });
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("startup publishes the structured controller before transcript refresh settles", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-early-controller-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));

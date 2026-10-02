@@ -1446,6 +1446,7 @@ async function adoptStructuredHostsPass(
           model: entry.launchProfile?.model ?? undefined,
           serviceTier: entry.launchProfile ? launchServiceTier(entry.launchProfile) : undefined,
           effort: entry.launchProfile?.effort ?? undefined,
+          approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
           /* Re-adoption replays the durable grant (issue #687) — a session never
