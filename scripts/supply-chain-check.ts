@@ -16,6 +16,14 @@ export function requireMatchingLockfile(base: string, root = process.cwd()): voi
   if (!files.includes("bun.lock")) throw new Error(`Dependency sections changed without bun.lock: ${changed.join(", ")}`);
 }
 
+export function requireFrozenInstall(root = process.cwd()): void {
+  const result = spawnSync(process.execPath, ["install", "--frozen-lockfile", "--ignore-scripts", "--lockfile-only"], {
+    cwd: root, stdio: "inherit", env: process.env,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`bun install --frozen-lockfile failed (${result.status ?? result.signal})`);
+}
+
 export function auditArguments(allowlist: unknown, today = new Date().toISOString().slice(0, 10)): string[] {
   if (!Array.isArray(allowlist)) throw new Error("security/audit-allowlist.json must contain an array");
   const seen = new Set<string>();
@@ -44,6 +52,7 @@ if (import.meta.main) {
     const base = baseIndex === -1 ? undefined : args[baseIndex + 1];
     if (!args.includes("--audit-only")) {
       if (!base || base.startsWith("--")) throw new Error("--base is required for the lockfile check");
+      requireFrozenInstall();
       requireMatchingLockfile(base);
     }
     if (!args.includes("--lockfile-only")) {

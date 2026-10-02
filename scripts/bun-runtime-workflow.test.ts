@@ -82,13 +82,14 @@ test("the job proves its own checks can go red, and does not only report that th
   // And end to end on the runner: each half is handed a subject that does not
   // hold. What makes these controls rather than ceremony is that a check which
   // stays green against one of them fails the job, so the refusals are named.
-  const control = scripts.find((script) => script.includes("red-path control")) ?? "";
+  expect(scripts).toContain("bun scripts/verify-bun-runtime-controls.ts");
+  const control = fs.readFileSync(path.join(repositoryRoot, "scripts/verify-bun-runtime-controls.ts"), "utf8");
   expect(control).toContain("app-page.runtime.prod.js");
-  expect(control).toContain("LLV_RUNTIME_HOST_REHEARSAL_ROOT=");
+  expect(control).toContain("LLV_RUNTIME_HOST_REHEARSAL_ROOT");
   for (const refusal of [
-    "the viewer check passed where there is no build to load",
-    "the viewer check passed with $runtime_module unloadable",
-    "the rehearsal passed against a root with no runtime host in it",
+    "Viewer check passed with no build present",
+    "Viewer check did not reject and name the unloadable",
+    "runtime-host rehearsal did not report a failed verdict",
   ]) {
     expect(control).toContain(refusal);
   }

@@ -44,6 +44,13 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     steps.push({ name: "privacy", command });
   }
   if (mode === "pre-push") steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
+  const supplyChainChanged = changedFiles.some(file => ["package.json", "bun.lock", "security/audit-allowlist.json", "scripts/supply-chain-check.ts", "scripts/audit-with-retry.sh", ".github/workflows/supply-chain.yml"].includes(file));
+  if (mode === "pre-push" && supplyChainChanged) {
+    // Install the candidate graph before any later checks execute against
+    // node_modules. The supply-chain script repeats a lockfile-only frozen
+    // check before it audits.
+    steps.unshift({ name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
+  }
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
   if (lintFiles.length) steps.push({ name: "eslint", command: ["bunx", "eslint", "--no-warn-ignored", ...lintFiles], capped: true });
   if (mode === "pre-commit") return steps;
@@ -68,10 +75,11 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
       { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true },
       { name: "Viewer runtime", command: ["bun", "scripts/verify-viewer-runtime.ts"], capped: true, isolated: true, pinned: true },
       { name: "runtime host", command: ["bun", "scripts/verify-runtime-host.ts"], capped: true, isolated: true, pinned: true },
+      { name: "runtime negative controls", command: ["bun", "scripts/verify-bun-runtime-controls.ts"], capped: true, isolated: true, pinned: true },
     );
   }
   if (env.native) for (const version of env.codexVersions) steps.push({ name: `native Codex ${version}`, command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, codex: version });
-  if (changedFiles.some(file => ["package.json", "bun.lock", "security/audit-allowlist.json", "scripts/supply-chain-check.ts", "scripts/audit-with-retry.sh", ".github/workflows/supply-chain.yml"].includes(file))) {
+  if (supplyChainChanged) {
     steps.push({ name: "audit retry tests", command: ["bun", "test", "./scripts/audit-with-retry.test.ts", "./scripts/supply-chain-check.test.ts"], capped: true, isolated: true });
     steps.push({ name: "supply chain", command: ["bun", "scripts/supply-chain-check.ts", "--base", env.base], capped: true });
   }
@@ -99,6 +107,10 @@ export function requiresMediaTools(file: string): boolean {
   } finally { closeSync(fd); }
 }
 
+function rootViewerInputs(root: string): string[] {
+  return ["src/app/page.tsx", "src/app/layout.tsx"].filter(file => existsSync(path.join(root, file)));
+}
+
 interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
 function workflow(root: string, name: string): Workflow {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as Workflow;
@@ -121,6 +133,9 @@ export function discover(root: string, base: string, files: readonly string[]): 
   const platform = workflow(root, "platform-tests.yml");
   const bun = workflow(root, "bun-runtime.yml");
   const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
+  // The GET / leg of verify-viewer-runtime serves the built root route. Follow
+  // the route and its layouts/components as additional runtime inputs.
+  const viewerInputs = executedPaths(root, rootViewerInputs(root));
   const nativeScript = "scripts/verify-native-codex-runtime.ts";
   const nativeEntries = [nativeScript, ...workflowEntries(readFileSync(path.join(root, nativeScript), "utf8"))];
   const runtimePaths = executedPaths(root, runtimeEntries);
@@ -129,7 +144,7 @@ export function discover(root: string, base: string, files: readonly string[]): 
   return {
     base, existing, skippedMedia, tests: siblingTests(root, [...files, "scripts/local-gate.ts"]),
     linux: process.platform === "linux" && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
-    runtime: common || files.some(file => runtimePaths.has(file) || ["Dockerfile", "src/instrumentation.ts"].includes(file) || /^next\.config\./.test(file) || file.startsWith("src/runtime-host/")),
+    runtime: common || files.some(file => runtimePaths.has(file) || viewerInputs.has(file) || ["Dockerfile", "src/instrumentation.ts"].includes(file) || /^next\.config\./.test(file) || file.startsWith("src/runtime-host/")),
     native: common || files.some(file => nativePaths.has(file)),
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
     runtimeTests: runtimeEntries.filter(isTest),

@@ -1,5 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync as rawSpawnSync, type SpawnSyncReturns } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +18,15 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 import type { Flow } from "./types";
+
+function spawnSync(command: string, args: string[], options: { cwd?: string; encoding?: BufferEncoding; env?: NodeJS.ProcessEnv } = {}): SpawnSyncReturns<string> {
+  const env = { ...process.env, ...options.env };
+  if (command === "git") {
+    for (const key of ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"]) delete env[key];
+    for (const key of Object.keys(env)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete env[key];
+  }
+  return rawSpawnSync(command, args, { ...options, encoding: "utf8", env }) as SpawnSyncReturns<string>;
+}
 
 let relayDeliveries = 0;
 let releaseRelayDeliveries: Array<() => void> = [];
