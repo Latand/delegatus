@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -5305,6 +5305,217 @@ browserTest("narrow card: a finished lane on the task screen stands its stages o
   expect(failures).toEqual([]);
 }, 300_000);
 
+describe("a new conversation's first message is a normal row on the phone", () => {
+  /*
+   * docs/design/first-bubble-no-raw-json.md on the phone: the cases and the
+   * per-step checks are the desktop block's (`kanbanBoard.browser.test.tsx`,
+   * "a new conversation's first message is a normal row") at 390 x 844 with
+   * touch, light and dark, English and Ukrainian, over the fixture's
+   * `?firstmessage=<p|s|f>`: p a plain spawn's prompt in the focus view, s a
+   * seat created from the sheet's draft with Confirm actually pressed, f a
+   * failed launch. Added here: the affordances a coarse pointer reaches (the
+   * failure's resend, the row's gutter control) are at least 44 px. The phone's
+   * focus view re-resolves a conversation when its path flips from `spawn:` to
+   * the transcript, so the plain case reads each state as a first paint of its
+   * own (`&step=<n>`); the in-page hand-off (same node, no empty frame) is the
+   * desktop block's and the DOM test's. The seat case stays in one page.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "first message is a normal row"
+   *
+   * Readings go to `evidence/first-message/phone.json`; frames to `.artifacts/first-message-phone/`.
+   */
+  const PLAIN_LINE = "Fix the failing export test.";
+  const MANDATE_LINE = "Keep the project moving.";
+  type Evidence = { advanceFirstMessage(): number };
+  const SHEET = '[data-testid="mobile-orchestrator-sheet"]';
+  /* Red as drawn: a `danger` utility with no hover/focus variant, inside the feed. */
+  const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
+  const ROOT = `(document.querySelector('${SHEET}') ?? document.body)`;
+
+  const watch = (page: Page) => page.evaluate(([red, rootOf]) => {
+    const reds = (0, eval)(red as string) as (root: Element) => Element[];
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
+    (window as unknown as { __fm: typeof sink }).__fm = sink;
+    const scan = () => {
+      const root = (0, eval)(rootOf as string) as HTMLElement;
+      if (/structured launch recovery|"phase"|\{\s*"/.test(root.innerText)) sink.envelope = true;
+      for (const el of reds(root)) {
+        if (el.closest("[data-outbox-failure], [data-launch-chip]")) continue;
+        const mark = (el.outerHTML ?? "").slice(0, 160);
+        if (!sink.danger.includes(mark)) sink.danger.push(mark);
+      }
+      sink.outboxMax = Math.max(sink.outboxMax, root.querySelectorAll("[data-outbox-entry]").length);
+      sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
+      sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
+      /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
+      const state = `outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}`;
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);      /* After the first card: a state with no card means the first message is gone. */
+      if (sink.mandateMax >= 1 && !root.querySelector("[data-mandate-card]") && !sink.lapses.includes(state)) sink.lapses.push(state);
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    scan();
+  }, [RED, ROOT] as const);
+
+  const readPane = (page: Page, line: string, mark: boolean) => page.evaluate(({ line, mark, red, rootOf }) => {
+    const reds = (0, eval)(red) as (root: Element) => Element[];
+    const root = (0, eval)(rootOf) as HTMLElement;
+    const visible = root.innerText;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(line));
+    const card = root.querySelector<HTMLElement>("[data-mandate-card]");
+    const first = rows[0] ?? card;
+    if (mark && first) first.setAttribute("data-fm-mark", "1");
+    const rect = first ? first.getBoundingClientRect() : null;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    /* What a thumb has to hit on the message itself: the gutter control and the failure's actions. */
+    const reach = [...root.querySelectorAll<HTMLElement>("[data-outbox-progress], [data-outbox-failure] button:not([data-outbox-reason]), [data-launch-retry]")]
+      .filter((el) => el.getClientRects().length > 0)
+      .map((el) => ({ label: el.getAttribute("aria-label") ?? el.getAttribute("data-outbox-progress") ?? (el.textContent ?? "").trim().slice(0, 30), width: Math.round(el.getBoundingClientRect().width), height: Math.round(el.getBoundingClientRect().height) }));
+    return {
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      danger: reds(root).filter((el) => !el.closest("[data-outbox-failure], [data-launch-chip]")).length,
+      rows: rows.length,
+      outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
+      userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
+      rowState: rows[0]?.getAttribute("data-message-row") ?? null,
+      sameNode: first ? first.hasAttribute("data-fm-mark") : null,
+      rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+      failureLines: root.querySelectorAll("[data-outbox-failure]").length,
+      failureText: root.querySelector("[data-outbox-failure] [data-outbox-status]")?.textContent ?? null,
+      errorChips: [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')].map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      reach,
+      overflowX: document.documentElement.scrollWidth - innerWidth,
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answered: (root.textContent ?? "").includes("Looking at the export test."),
+    };
+  }, { line, mark, red: RED, rootOf: ROOT });
+
+  browserTest("cases p, s and f hold one clean row at 390, light and dark, en and uk", async () => {
+    const out = path.resolve(".artifacts/first-message-phone");
+    const evidence = path.resolve("evidence/first-message");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const kind of ["p", "s", "f"] as const) {
+        const label = `${kind}-390-${scheme}-${lang}`;
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const line = kind === "s" ? MANDATE_LINE : PLAIN_LINE;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const pageErrors: string[] = [];
+          const openPage = async (url: string) => {
+            const opened = await context.newPage();
+            opened.on("pageerror", (error) => pageErrors.push(error.message));
+            await opened.goto(url);
+            await opened.waitForFunction(() => Boolean(document.querySelector("[data-feed-state]")), undefined, { timeout: 20_000 })
+              .catch(async (error) => { await opened.screenshot({ path: path.join(out, `${label}-stuck.png`) }); throw new Error(`${label}: ${error.message.split("\n")[0]}`); });
+            return opened;
+          };
+          let page: Page;
+          if (kind === "s") {
+            page = await context.newPage();
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${base}/?kanban=1&seatless=donly&firstmessage=s#p=atlas`);
+            await page.waitForSelector("[data-mobile2-seat-open]", { timeout: 20_000 });
+            await page.locator("[data-mobile2-seat-open]").first().click();
+            await page.waitForSelector('[data-orchestrator-sheet-mode="create"]', { timeout: 10_000 });
+            await watch(page);
+            await page.locator("[data-orchestrator-confirm]").first().click();
+            /* The sheet hands off to the focused pane, so the first paint is read wherever the window is. */
+            await page.waitForSelector("[data-mandate-card], [data-outbox-entry]", { state: "attached", timeout: 20_000 });
+          } else {
+            page = await openPage(`${base}/?firstmessage=${kind}&step=0#c=conversation_running`);
+            await watch(page);
+          }
+          const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
+          const readings: Array<Record<string, unknown>> = [];
+          const timelines: string[][] = [];
+          /* The seat's mandate opened at Pending (a real tap on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
+          for (const [index, step] of steps.entries()) {
+            if (index > 0 && kind === "s") {
+              await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
+              if (step === "answered") await page.waitForFunction(() => (document.body.textContent ?? "").includes("Looking at the export test."), undefined, { timeout: 25_000 });
+              else await page.waitForTimeout(1_800);
+            } else if (index > 0) {
+              /* The focus view re-resolves the conversation when its path flips, so each later state of the plain case is a first paint of its own. */
+              const seenSoFar = await page.evaluate(() => (window as unknown as { __fm: { timeline: string[] } }).__fm.timeline);
+              timelines.push(seenSoFar);
+              await page.close();
+              page = await openPage(`${base}/?firstmessage=${kind}&step=${index}#c=conversation_running`);
+              await watch(page);
+              if (step === "answered") await page.waitForFunction(() => (document.body.textContent ?? "").includes("Looking at the export test."), undefined, { timeout: 25_000 });
+              await page.waitForTimeout(600);
+            } else await page.waitForTimeout(600);
+            const read = await readPane(page, line, false);
+            await page.screenshot({ path: path.join(out, `${label}-${step}.png`) });
+            readings.push({ step, ...read });
+            const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator("[data-mandate-card] summary").first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(out, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(out, `${label}-${step}-open.png`) });
+            }
+            if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
+            if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
+            if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);
+            if (read.zeroWidthControls.length) failures.push(`${at}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+            const small = read.reach.filter((control) => control.height < 44 || control.width < 44);
+            if (small.length) failures.push(`${at}: touch targets under 44 px ${JSON.stringify(small)}`);
+            if (kind === "f") {
+              if (read.rows !== 1 || read.failureLines !== 1) failures.push(`${at}: ${read.rows} rows and ${read.failureLines} failure lines`);
+              if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${at}: error chips ${JSON.stringify(read.errorChips)}`);
+              if (read.failureText?.includes("runtime host unavailable")) failures.push(`${at}: the failure line prints the raw reason`);
+              continue;
+            }
+            if (read.errorChips.length) failures.push(`${at}: an error chip ${JSON.stringify(read.errorChips)}`);
+            if (kind === "p") {
+              if (read.userBubbles.length !== 1) failures.push(`${at}: ${read.userBubbles.length} bubbles carry the prompt`);
+              if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
+          }
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
+          if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
+          if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
+          if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
+          if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
+          if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card: ${JSON.stringify(seen.lapses)}`);
+          frames[label] = { readings, seen, timelines, pageErrors };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});
+
 describe("fast TTS header", () => {
   browserTest("phone header renders idle, loading and playing and shares row Stop", async () => {
     const { captureFastTtsHeaders } = await import("@/components/kanban/issue1695BrowserHarness");
@@ -5845,6 +6056,15 @@ describe("agent memory isolation", () => {
       fs.writeFileSync("evidence/agent-memory/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 90000);
+});
+
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try { await captureSeatMandateHandover(browser, base, true); }
+    finally { await browser.close(); stop(); }
+  }, 180_000);
 });
 
 describe("state writes disk-full alert", () => {
