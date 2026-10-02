@@ -38,11 +38,20 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 
-const STUB_NEXT = (exitAtOnce: boolean) => exitAtOnce ? "process.exit(3);\n" : `
+const STUB_NEXT = (exitAtOnce: boolean, tokenProtected = false) => exitAtOnce ? "process.exit(3);\n" : `
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT),
-  fetch() { return new Response(process.cwd()); },
+  fetch(request) {
+    const pathname = new URL(request.url).pathname;
+    if (${tokenProtected} && (pathname === "/" || pathname === "/api/self-update/launcher-admission")) {
+      if (request.headers.get("authorization") !== "Bearer " + process.env.LLV_TOKEN) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+    }
+    if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });
+    return new Response(process.cwd());
+  },
 });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
@@ -70,7 +79,7 @@ process.on("SIGTERM", stop);
 
 const BROKEN_HOST = "process.exit(3);\n";
 
-function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean } = {}) {
+function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean; tokenProtected?: boolean } = {}) {
   const root = mkdtempSync("/var/tmp/llv-cli-self-update-");
   roots.push(root);
   const checkout = path.join(root, "checkout");
@@ -80,7 +89,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean 
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -92,7 +101,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean 
     writeFileSync(runtime, readFileSync(runtime, "utf8").replace("export function discardUnsupportedApiCredentials(", "function discardUnsupportedApiCredentials("));
   }
   writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" }));
-  writeFileSync(path.join(checkout, "node_modules", ".bin", "next"), STUB_NEXT(false));
+  writeFileSync(path.join(checkout, "node_modules", ".bin", "next"), STUB_NEXT(false, options.tokenProtected));
   writeFileSync(path.join(checkout, "dist", "runtime-host.mjs"), STUB_HOST);
   git(checkout, "init", "--initial-branch=main");
   git(checkout, "add", "-f", ".");
@@ -192,9 +201,9 @@ async function served(port: number): Promise<string> {
   return (await fetch(`http://127.0.0.1:${port}/`)).text();
 }
 
-async function start(fixture: ReturnType<typeof install>) {
+async function start(fixture: ReturnType<typeof install>, args: string[] = []) {
   const port = await availablePort();
-  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], {
+  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port), ...args], {
     cwd: fixture.checkout,
     env: fixture.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -458,6 +467,58 @@ test("a checkout records both children, and a restart request moves each one ont
   /* A clean stop takes the record with it: nothing names a gone launcher. */
   expect(readdirSync(path.join(fixture.state, "self-update")).some((name) => name.startsWith("launcher-"))).toBe(false);
 }, 60_000);
+
+for (const tokenSource of ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated"] as const) {
+  for (const { broken, automatic } of [
+    { broken: false, automatic: false },
+    { broken: true, automatic: false },
+    { broken: false, automatic: true },
+  ]) {
+    test(`token-protected web restart uses ${tokenSource}, fallback=${broken}, automatic=${automatic}`, async () => {
+      const fixture = install({ tokenProtected: true });
+      const env = fixture.env as Record<string, string | undefined>;
+      delete env.LLV_TOKEN;
+      delete env.DELEGATUS_TOKEN;
+      const token = "fixture-update-access";
+      if (tokenSource !== "generated") env[tokenSource] = token;
+      const running = await start(fixture, tokenSource === "generated" ? ["--hostname", "0.0.0.0"] : []);
+      const before = await until(() => {
+        const record = readRecord(fixture.state);
+        return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+      });
+      const url = `http://127.0.0.1:${running.port}/`;
+      expect((await fetch(url)).status).toBe(401);
+      const next = release(fixture, "token-update", { broken });
+      writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+      if (automatic) {
+        writeFileSync(path.join(fixture.state, "self-update", "auto-admission.json"), JSON.stringify({
+          id: "token-update-gate", until: Date.now() + 30_000,
+        }));
+        writeFileSync(before.requestFile, JSON.stringify({
+          requestId: "restart-token-protected-web", role: "web", autoGateId: "token-update-gate",
+        }));
+      } else request(before, "web", "restart-token-protected-web");
+      const after = await until(() => {
+        const record = readRecord(fixture.state);
+        return record.web.requestId === "restart-token-protected-web"
+          && ["healthy", "failed"].includes(record.web.state) ? record : null;
+      });
+      expect(after.web.state).toBe("healthy");
+      expect(after.web.revision).toBe((broken ? fixture.first : next.sha).slice(0, 7));
+      if (broken) expect(after.web.error).toMatchObject({ kind: "fell-back", revision: next.sha.slice(0, 7) });
+      else expect(after.web.error).toBeNull();
+      expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+      expect(await socketAnswers(before.socket)).toBe(true);
+      expect(running.child.exitCode).toBeNull();
+      expect((await fetch(url)).status).toBe(401);
+      if (tokenSource !== "generated") {
+        const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(broken ? fixture.checkout : next.dir);
+      }
+    }, 60_000);
+  }
+}
 
 test("a release whose web does not start gives way to the one it replaced, and says so", async () => {
   const fixture = install();

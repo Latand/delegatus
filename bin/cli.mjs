@@ -1177,6 +1177,16 @@ async function main() {
   /* Restart requests are taken only once startup has finished, and only from
      a checkout: a packaged install is updated by its package manager. */
   if (checkout) {
+    const probeHeaders = () => {
+      // Use the serving child's effective token, including environment-supplied
+      // tokens and the launcher's phone-access overrides. The service tag alone
+      // does not authenticate through the token perimeter.
+      const { LLV_TOKEN: token } = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
+      return {
+        ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      };
+    };
     const restartWeb = async () => {
       const previous = serverRef.current;
       const previousRelease = serverRef.release;
@@ -1186,7 +1196,7 @@ async function main() {
         const handle = launchWeb(release, true);
         try {
           await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
-          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
+          const page = await probePageAndChunk(options.port, undefined, probeHeaders());
           if (page) throw new Error(page);
           handle.state.restarting = false;
           if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
@@ -1235,10 +1245,7 @@ async function main() {
         const url = new URL(`http://127.0.0.1:${options.port}/api/self-update/launcher-admission`);
         url.searchParams.set("requestId", requestId);
         url.searchParams.set("gateId", autoGateId);
-        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: {
-          ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
-          ...(runtime.llvToken ? { authorization: `Bearer ${runtime.llvToken}` } : {}),
-        } });
+        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: probeHeaders() });
         if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
           await response.body?.cancel();
           return false;
