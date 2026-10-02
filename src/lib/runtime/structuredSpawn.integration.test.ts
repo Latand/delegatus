@@ -14,6 +14,7 @@ import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
+import { conversationTurnLiveness } from "./liveness";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -37,8 +38,12 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-spawn-"));
+const ownedFixtureCleanup: Array<() => Promise<void>> = [];
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
-afterEach(async () => { await bindStructuredDeliveryQueue([]); });
+afterEach(async () => {
+  for (const cleanup of ownedFixtureCleanup.splice(0)) await cleanup();
+  await bindStructuredDeliveryQueue([]);
+});
 
 test("structured Claude permission mapping distinguishes trusted autonomous spawn paths", () => {
   expect(structuredClaudePermissionMode("bypassPermissions", {
@@ -4887,6 +4892,7 @@ test("a partial structured kill retains child identity across a root-dead retry"
   const severedNow = Date.now() + 91_000;
   const severedLiveness = {
     now: () => severedNow,
+    uptimeSeconds: () => os.uptime() + 91,
     processCpuMs: () => 0,
     readTranscript: async () => ({
       lastEventAt: severedNow - 182_000,
@@ -4895,8 +4901,33 @@ test("a partial structured kill retains child identity across a root-dead retry"
       turn: "busy" as const,
     }),
   };
+  expect(await conversationTurnLiveness(registry, conversation.id, severedLiveness)).toMatchObject({ state: "severed" });
+  const registeredHost = Object.assign(new RoundTripHost("codex", artifactPath, id), {
+    health: async (): Promise<HostState> => ({
+      status: "active",
+      sessionKey: id,
+      endpoint: `stdio:${root.pid}`,
+      pid: root.pid!,
+      processStartIdentity: rootIdentity.startIdentity,
+      eventCursor: 1,
+      protocolVersion: "fixture",
+      activeTurnRef: "turn:live",
+      pendingAttention: [],
+      activeFlags: [],
+      account: { type: "chatgpt" as const, planType: "subscription" as const },
+    }),
+    release: async () => {
+      if (procBackend.pidAlive(root.pid!)) originalKill(root.pid!, "SIGTERM");
+      await rootExited;
+    },
+    releaseIfOwned: async (expected: ProcessIdentity) => {
+      if (expected.pid !== rootIdentity.pid || expected.startIdentity !== rootIdentity.startIdentity) return false;
+      await registeredHost.release();
+      return true;
+    },
+  });
   try {
-    await bindStructuredDeliveryQueue([], { registry, client, liveness: severedLiveness }).catch(error => {
+    await bindStructuredDeliveryQueue([{ key, host: registeredHost }], { registry, client, liveness: severedLiveness }).catch(error => {
       expect(String(error)).toContain("the kill was refused");
     });
     for (let attempt = 0; attempt < 500; attempt += 1) {
@@ -5060,6 +5091,32 @@ describe.each(["codex", "claude"] as const)("%s structured spawn round trip", (e
       env: { NODE_ENV: "test" },
     };
     const host = new RoundTripHost(engine, artifactPath, id);
+    const hostProcess = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+    const hostProcessIdentity = captureProcessIdentity(hostProcess.pid);
+    if (!hostProcessIdentity) throw new Error("round-trip host process identity is unavailable");
+    ownedFixtureCleanup.push(async () => {
+      if (hostProcess.exitCode === null) hostProcess.kill("SIGKILL");
+      await hostProcess.exited;
+    });
+    const hostHealth = host.health.bind(host);
+    const hostRelease = host.release.bind(host);
+    Object.assign(host, {
+      health: async (): Promise<HostState> => ({
+        ...await hostHealth(),
+        pid: hostProcess.pid,
+        processStartIdentity: hostProcessIdentity.startIdentity,
+      }),
+      release: async () => {
+        if (hostProcess.exitCode === null) hostProcess.kill("SIGTERM");
+        await hostProcess.exited;
+        await hostRelease();
+      },
+      releaseIfOwned: async (expected: ProcessIdentity) => {
+        if (expected.pid !== hostProcessIdentity.pid || expected.startIdentity !== hostProcessIdentity.startIdentity) return false;
+        await host.release();
+        return true;
+      },
+    });
 
     const response = await spawnStructuredConversation({
       engine,
@@ -5079,7 +5136,7 @@ describe.each(["codex", "claude"] as const)("%s structured spawn round trip", (e
         targetRegistry.setStructuredHostClaimed(key, {
           kind: engine === "codex" ? "codex-app-server" : "claude-broker",
           endpoint: state.endpoint,
-          process: state.pid ? { pid: state.pid, startIdentity: state.processStartIdentity } : null,
+          process: state.pid ? hostProcessIdentity : null,
           eventCursor: state.eventCursor,
           protocolVersion: state.protocolVersion,
           writerClaimEpoch: claimEpoch,

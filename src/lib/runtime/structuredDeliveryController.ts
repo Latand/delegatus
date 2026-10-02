@@ -94,6 +94,7 @@ interface ControllerState {
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
+  detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -111,6 +112,7 @@ const state: ControllerState = controllerStore.__llvStructuredDeliveryController
   republishActiveHost: null,
   releaseActiveHost: null,
   terminateActiveHost: null,
+  detachRetiredActiveHost: null,
   completeActive: null,
   stopActive: () => {},
   lastDrainError: null,
@@ -821,10 +823,6 @@ export async function bindStructuredDeliveryQueue(
         }
       };
       const retainedSurvivors = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredTerminationSurvivors ?? [];
-      if (retainedSurvivors.length === 0 && await state.terminateActiveHost?.(expectedKey)) {
-        await settleKilledLaunches();
-        return true;
-      }
       let terminated = retainedSurvivors.length === 0
         ? registry.terminateInactiveStructuredHost(conversationId as `conversation_${string}`, expectedKey)
         : false;
@@ -858,7 +856,7 @@ export async function bindStructuredDeliveryQueue(
           retainedSurvivors,
           authorize,
           persistCapturedTree: identities => registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities),
-          retireRegistryEntry: (key, expected, confirmed) => { registry.terminateStructuredHost(key, expected, confirmed); },
+          retireRegistryEntry: (key, expected, confirmed) => registry.terminateStructuredHost(key, expected, confirmed),
         });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {
@@ -866,9 +864,12 @@ export async function bindStructuredDeliveryQueue(
           }
           throw new Error(outcome.error);
         }
-        terminated = registry.terminateInactiveStructuredHost(conversationId as ViewerConversationId, expectedKey);
+        /* terminateStructuredHostTree already retires the exact row after it
+           verifies every captured process identity has exited. */
+        terminated = "current";
       }
       if (!terminated) return false;
+      await state.detachRetiredActiveHost?.(expectedKey);
       await settleKilledLaunches();
       if (terminated === "current") await refreshCurrentProjection(conversationId);
       return true;
@@ -1359,6 +1360,17 @@ export async function bindStructuredDeliveryQueue(
     await detachRegistration(id, registered);
     return true;
   };
+  state.detachRetiredActiveHost = async (key) => {
+    const id = sessionKeyId(key);
+    const entry = registry.readOnlySnapshot().entries[id];
+    if (!entry || entry.status !== "dead" || entry.structuredHost !== null) return false;
+    const registration = registrations.get(id);
+    if (!registration) return false;
+    const taken = takeRegistration(id, registration.host);
+    if (!taken) return false;
+    await detachRegistration(id, taken);
+    return true;
+  };
   state.activeQueue = queue;
   state.activeRegistry = registry;
   setStructuredDeliveryKick(() => {
@@ -1388,6 +1400,7 @@ export async function bindStructuredDeliveryQueue(
       state.republishActiveHost = null;
       state.releaseActiveHost = null;
       state.terminateActiveHost = null;
+      state.detachRetiredActiveHost = null;
       state.completeActive = null;
       setStructuredDeliveryKick(null);
     }
