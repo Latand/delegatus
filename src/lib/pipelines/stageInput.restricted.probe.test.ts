@@ -5,6 +5,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
+import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-stage-input-probe-"));
 const probe = process.env.LLV_RESTRICTED_STAGE_INPUT_PROBE === "1" ? test : test.skip;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -111,7 +113,7 @@ probe("Claude reads lane artifacts in all access/sandbox profiles and restricted
   ] as const;
   for (const part of parts) {
     const external = path.join(root, "state", `${part.name}.md`);
-    const lane = path.join(cwd, ".artifacts", "pipeline-stage-inputs", `${part.name}.md`);
+    const lane = path.join(prepareControllerArtifactDirectory(cwd), `${part.name}.md`);
     fs.mkdirSync(path.dirname(external), { recursive: true });
     fs.mkdirSync(path.dirname(lane), { recursive: true });
     fs.writeFileSync(external, part.text, { mode: 0o600 });

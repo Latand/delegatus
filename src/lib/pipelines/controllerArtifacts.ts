@@ -15,26 +15,31 @@ export const CONTROLLER_ARTIFACT_PATHSPECS = [
   `:(exclude,top,glob)**/${CONTROLLER_ARTIFACT_DIRECTORY}/**`,
 ] as const;
 
-/** Keep controller handoffs out of ordinary Git discovery where possible.
- * Settlement also excludes this path explicitly, so repository negation rules
- * cannot make private controller inputs eligible for a stage commit. */
+/** Store new handoffs beneath an untracked, self-ignored child directory.
+ * Its ignore file cannot be restored from HEAD: index protection refuses any
+ * committed namespace entries except the legacy root ignore file. Restoring
+ * that tracked file therefore cannot expose a handoff to ordinary Git add. */
 export function prepareControllerArtifactDirectory(worktreeDir: string): string {
   const root = path.resolve(worktreeDir);
   const artifactRoot = path.join(root, ".artifacts");
   const directory = path.join(artifactRoot, "pipeline-stage-inputs");
+  const privateDirectory = path.join(directory, "private");
 
   /* These names are inside a repository controlled by the agent being
      launched. Never let mkdir or a later file write follow a repository
      symlink into another path. Check existing components before creating
-     either directory, then create one level at a time and recheck races. */
+     each directory, then create one level at a time and recheck races. */
   assertDirectoryOrMissing(artifactRoot);
   assertDirectoryOrMissing(directory);
+  assertDirectoryOrMissing(privateDirectory);
   protectControllerArtifactIndex(root);
   ensureDirectory(artifactRoot);
   ensureDirectory(directory);
 
   ensureCatchAllIgnore(path.join(directory, ".gitignore"));
-  return directory;
+  ensureDirectory(privateDirectory);
+  ensureCatchAllIgnore(path.join(privateDirectory, ".gitignore"));
+  return privateDirectory;
 }
 
 /** A small launch can inherit old handoffs. Repair their exclusion as well as
@@ -54,10 +59,29 @@ export function protectExistingControllerArtifacts(worktreeDir: string): void {
  * controller settlement. A committed input path cannot safely receive secrets. */
 function protectControllerArtifactIndex(worktreeDir: string): void {
   const root = path.resolve(worktreeDir);
+  // Plain launch directories and injected worktree fixtures can be absent.
+  // There is no index to protect until the directory exists.
+  if (!fs.existsSync(root)) return;
   const env = { ...process.env, GIT_LITERAL_PATHSPECS: "1" };
-  const git = (args: string[], cwd = root) => spawnSync("git", args, {
-    cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, maxBuffer: 8 * 1024 * 1024,
-  });
+  const git = (args: string[], cwd = root, literalPaths = true, controllerPathsOnly = false) => {
+    const result = spawnSync("git", args, {
+      cwd, env: literalPaths ? env : { ...env, GIT_LITERAL_PATHSPECS: "0", GIT_GLOB_PATHSPECS: "0", GIT_NOGLOB_PATHSPECS: "0" },
+      stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, maxBuffer: 8 * 1024 * 1024,
+    });
+    if (result.error) throw new Error("cannot inspect controller artifact Git paths");
+    let bytes = result.stdout ?? Buffer.alloc(0);
+    if (controllerPathsOnly) {
+      // Latin-1 preserves every byte while filtering ASCII namespace segments.
+      // Ordinary source filenames need no UTF-8 decoding or controller repair.
+      bytes = Buffer.from(bytes.toString("latin1").split("\0")
+        .filter((file) => /(?:^|\/)\.artifacts\/pipeline-stage-inputs(?:\/|$)/.test(file)).join("\0"), "latin1");
+    }
+    const stdout = bytes.toString("utf8");
+    // Git names are byte strings. A lossy decode would let an index reset
+    // target a different path while leaving the actual private entry staged.
+    if (!Buffer.from(stdout, "utf8").equals(bytes)) throw new Error("cannot safely decode controller artifact Git paths");
+    return { ...result, stdout, stderr: result.stderr?.toString("utf8") ?? "" };
+  };
   const top = git(["rev-parse", "--show-toplevel"]);
   if (top.status !== 0) {
     // Plain spawn directories and unit fixtures need no Git index protection.
@@ -78,7 +102,7 @@ function protectControllerArtifactIndex(worktreeDir: string): void {
   const head = git(["rev-parse", "--verify", "--quiet", "HEAD"], repo);
   if (head.status !== 0 && head.status !== 1) throw new Error("cannot inspect the private controller artifact Git head");
   if (head.status === 0) {
-    const committed = git(["ls-tree", "-r", "--name-only", "-z", "HEAD"], repo);
+    const committed = git(["ls-tree", "-r", "--name-only", "-z", "HEAD"], repo, true, true);
     if (committed.status !== 0) throw new Error("cannot inspect committed controller artifacts");
     for (const file of committed.stdout.split("\0")) {
       const namespace = namespaceOf(file);
@@ -91,13 +115,22 @@ function protectControllerArtifactIndex(worktreeDir: string): void {
   }
   // A worker's `git add -A` and commit consume the whole repository, even when
   // it launches in a package. Discover inherited parent/sibling namespaces,
-  // including exposed untracked files whose local ignore was removed.
-  const indexed = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"], repo);
+  // Include ignored handoffs too: restoring a tracked ancestor ignore can
+  // expose them later. Bound that discovery to controller paths so ordinary
+  // ignored build/dependency trees do not fill the result buffer.
+  const indexed = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"], repo, true, true);
   if (indexed.status !== 0) throw new Error("cannot inspect staged controller artifacts");
+  const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--",
+    `:(top,glob)**/${CONTROLLER_ARTIFACT_DIRECTORY}/**`], repo, false, true);
+  if (ignored.status !== 0) throw new Error("cannot inspect ignored controller artifacts");
   const exposed = new Set<string>();
   for (const file of indexed.stdout.split("\0")) {
     const namespace = namespaceOf(file);
     if (namespace) { namespaces.add(namespace); exposed.add(namespace); }
+  }
+  for (const file of ignored.stdout.split("\0")) {
+    const namespace = namespaceOf(file);
+    if (namespace) namespaces.add(namespace);
   }
   for (const namespace of namespaces) {
     const directory = path.join(repo, namespace);
@@ -108,6 +141,28 @@ function protectControllerArtifactIndex(worktreeDir: string): void {
       component = path.join(component, part);
       assertDirectoryOrMissing(component);
     }
+    if (fs.existsSync(directory) && fs.readdirSync(directory)
+      .some((entry) => entry !== ".gitignore" && entry !== "private")) {
+      // Older releases wrote handoffs directly beneath the tracked ignore.
+      // An independent ancestor guard keeps those paths readable and private
+      // even when a worker restores every tracked ignore file before commit.
+      const ancestorIgnore = path.join(path.dirname(directory), ".gitignore");
+      const relativeIgnore = path.relative(repo, ancestorIgnore).split(path.sep).join("/");
+      const trackedIgnore = git(["ls-files", "--cached", "-z", "--", relativeIgnore], repo);
+      if (trackedIgnore.status !== 0) throw new Error("cannot inspect the legacy controller artifact ignore");
+      if (trackedIgnore.stdout) {
+        const committedIgnore = git(["show", `HEAD:${relativeIgnore}`], repo);
+        const indexedIgnore = git(["show", `:${relativeIgnore}`], repo);
+        if (committedIgnore.status !== 0 || indexedIgnore.status !== 0 ||
+          !excludesControllerDirectory(committedIgnore.stdout) || !excludesControllerDirectory(indexedIgnore.stdout)) {
+          throw new Error("tracked ancestor ignore prevents safe legacy controller handoff protection");
+        }
+      }
+      ensureIgnoreRules(ancestorIgnore, ["/.gitignore", "/pipeline-stage-inputs/"]);
+    }
+    const privateDirectory = path.join(directory, "private");
+    assertDirectoryOrMissing(privateDirectory);
+    if (fs.existsSync(privateDirectory)) ensureCatchAllIgnore(path.join(privateDirectory, ".gitignore"));
     if (exposed.has(namespace)) {
       // Reset preserves a tracked controller .gitignore. An unborn repository
       // has no HEAD; cached removal keeps every private file on disk.
@@ -120,7 +175,20 @@ function protectControllerArtifactIndex(worktreeDir: string): void {
   }
 }
 
+function ignoreRules(contents: string): string[] {
+  return contents.split(/\r?\n/).filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"));
+}
+
+function excludesControllerDirectory(contents: string): boolean {
+  const lastRule = ignoreRules(contents).at(-1);
+  return lastRule === "*" || lastRule === "/pipeline-stage-inputs/";
+}
+
 function ensureCatchAllIgnore(filename: string): void {
+  ensureIgnoreRules(filename, ["*"]);
+}
+
+function ensureIgnoreRules(filename: string, rules: readonly string[]): void {
   const noFollow = fs.constants.O_NOFOLLOW;
   let descriptor: number;
   try {
@@ -140,11 +208,10 @@ function ensureCatchAllIgnore(filename: string): void {
   try {
     assertPrivateIgnoreFile(descriptor);
     const contents = fs.readFileSync(descriptor, "utf8");
-    const lastRule = contents.split(/\r?\n/).reverse()
-      .find((line) => line.trim() !== "" && !line.trimStart().startsWith("#"));
-    if (lastRule !== "*") {
+    const existingRules = ignoreRules(contents);
+    if (existingRules.at(-1) !== "*" && existingRules.slice(-rules.length).join("\n") !== rules.join("\n")) {
       assertPrivateIgnoreFile(descriptor);
-      fs.writeSync(descriptor, `${contents.length > 0 && !contents.endsWith("\n") ? "\n" : ""}*\n`);
+      fs.writeSync(descriptor, `${contents.length > 0 && !contents.endsWith("\n") ? "\n" : ""}${rules.join("\n")}\n`);
     }
   } finally {
     fs.closeSync(descriptor);

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
-import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
+import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
 import { renderStagePrompt } from "./prompts";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 
@@ -24,12 +24,12 @@ export function composeStageInput(
     return inline;
   }
 
-  prepareControllerArtifactDirectory(worktreeDir);
+  const directory = prepareControllerArtifactDirectory(worktreeDir);
 
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
   const artifact = (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
-    const file = path.resolve(worktreeDir, CONTROLLER_ARTIFACT_DIRECTORY, `${label.replaceAll(" ", "-")}-${digest}.md`);
+    const file = path.join(directory, `${label.replaceAll(" ", "-")}-${digest}.md`);
     const part = { label, file, text };
     artifacts.push(part);
     return part;

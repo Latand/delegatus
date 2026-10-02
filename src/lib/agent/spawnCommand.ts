@@ -518,17 +518,6 @@ export async function executeSpawnRequest(
   if (!stat.isDirectory()) {
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
-  if (transport === "structured") {
-    try {
-      /* Compose the full role scaffold and caller brief before envelope checks,
-         admission receipts, request digests, or deferred delivery. */
-      prompt = composeStructuredFirstMessage(prompt, cwd);
-      assertStructuredTextEnvelope(prompt);
-    } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });
-    }
-  }
-
   /* Who started this agent (sign-in-and-team §7.2): in team mode a person
      needs a member session, and the audit names them once the launch exists. */
   const spawnActor = teamActor(req);
@@ -546,6 +535,16 @@ export async function executeSpawnRequest(
       return NextResponse.json({ error: "project could not be resolved for direct operator spawn" }, { status: 400 });
     }
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `spawn:${clientAttemptId!}`, project });
+  }
+  if (transport === "structured") {
+    try {
+      /* Materialization changes files and the index, so admit the caller and
+         task first. Compose before receipts, digests, or deferred delivery. */
+      prompt = composeStructuredFirstMessage(prompt, cwd);
+      assertStructuredTextEnvelope(prompt);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });
+    }
   }
 
   /* Saved paths stay visible to the catch. A pane-bound receipt keeps them:
