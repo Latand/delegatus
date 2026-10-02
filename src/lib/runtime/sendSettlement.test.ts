@@ -77,7 +77,7 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
     producerCursor: async (producerKind: string, eventKeyPrefix: string) =>
       journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
+    transitionOperation: async (operationId, status, details, options) => journal.transitionOperation(operationId, status, details, options),
     retryOperation: async (operationId, nextIdempotencyKey) => journal.retryOperation(operationId, nextIdempotencyKey),
   } as RuntimeHostClient;
 }
@@ -129,7 +129,7 @@ interface Fixture {
   close(): void;
 }
 
-function fixture(name: string, options: { now?: () => number } = {}): Fixture {
+function fixture(name: string, options: { now?: () => number; engine?: "codex" | "claude" } = {}): Fixture {
   const directory = fs.mkdtempSync(path.join(isolated, `${name}-`));
   const registry = new AgentRegistry(
     path.join(directory, "agent-registry.json"),
@@ -141,7 +141,7 @@ function fixture(name: string, options: { now?: () => number } = {}): Fixture {
   const transcriptPath = path.join(directory, `${name}.jsonl`);
   const launchProfile = emptyLaunchProfile({ cwd: directory });
   registry.reconcileConversations([{
-    engine: "codex",
+    engine: options.engine ?? "codex",
     path: transcriptPath,
     accountId: "settlement-fixture-account",
     launchProfile,
@@ -152,7 +152,7 @@ function fixture(name: string, options: { now?: () => number } = {}): Fixture {
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) throw new Error("fixture conversation is missing");
   registry.upsert({
-    key: { engine: "codex", sessionId: generation.id },
+    key: { engine: options.engine ?? "codex", sessionId: generation.id },
     artifactPath: transcriptPath,
     cwd: directory,
     accountId: "settlement-fixture-account",
@@ -160,7 +160,7 @@ function fixture(name: string, options: { now?: () => number } = {}): Fixture {
     status: "idle",
     host: null,
     structuredHost: {
-      kind: "codex-app-server",
+      kind: options.engine === "claude" ? "claude-broker" : "codex-app-server",
       endpoint: "fixture:settlement-host",
       process: null,
       eventCursor: 0,
@@ -181,8 +181,8 @@ function fixture(name: string, options: { now?: () => number } = {}): Fixture {
     kind: "session-status",
     payload: {
       conversationId: conversation.id,
-      sessionKey: { engine: "codex", sessionId: generation.id },
-      hostKind: "codex-app-server",
+      sessionKey: { engine: options.engine ?? "codex", sessionId: generation.id },
+      hostKind: options.engine === "claude" ? "claude-broker" : "codex-app-server",
       host: "hosted",
       turn: "idle",
       provenance: "structured",
@@ -1527,4 +1527,153 @@ test("a send that reached the engine without interrupting anything carries no ro
   } finally {
     active.close();
   }
+});
+
+const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
+const { deliveryDedupToken } = await import("./deliveryDedup");
+const { encodeCodexStructuredUserText } = await import("./codexStructuredUserText.server");
+
+for (const evidence of ["echo", "transcript", "startup"] as const) {
+  test(`Viewer restart settles an uncertain Claude send from late ${evidence} without replay`, async () => {
+    const active = fixture(`late-claude-${evidence}`, { engine: "claude" });
+    try {
+      const text = "check the release";
+      const { operationId, deliveryId } = acceptSend(active, { text });
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+      active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+      const uuid = "canonical-user-turn";
+      if (evidence !== "transcript") ledger.confirmDelivered(active.generationId, operationId, uuid);
+      fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid, timestamp: new Date().toISOString(), message: { role: "user", content: text } }) + "\n");
+      const reopened = new AgentRegistry(active.registryPath);
+      if (evidence === "startup") {
+        const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+        await bindStructuredDeliveryQueue([], { registry: reopened, client: active.client });
+        expect(sendReceiptFor(reopened.readOnlySnapshot(), operationId)?.state).toBe("delivered");
+        await bindStructuredDeliveryQueue([], { registry: reopened, client: null });
+      }
+      const answer = await resolveSendReceipt(operationId, { registry: reopened, client: active.client });
+      expect(answer).toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+      expect(sendReceiptFor(reopened.readOnlySnapshot(), operationId)?.state).toBe("delivered");
+      expect(active.journal.effectBatch(100)).toEqual([]);
+    } finally { active.close(); }
+  });
+}
+
+test("a Codex canonical user turn settles started delivery even when the Viewer missed its echo", async () => {
+  const active = fixture("canonical-codex");
+  try {
+    const text = "check the release";
+    const { operationId } = acceptSend(active, { text });
+    active.journal.transitionOperation(operationId, "delivering");
+    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client })).toMatchObject({ state: "delivered", resend: "not-needed" });
+  } finally { active.close(); }
+});
+
+test("equal text under another key and an assistant answer prove nothing about this send", async () => {
+  const active = fixture("wrong-key-codex");
+  try {
+    const text = "check the release";
+    const { operationId } = acceptSend(active, { text });
+    active.journal.transitionOperation(operationId, "delivering");
+    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken("different-operation"));
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n" + JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] } }) + "\n");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW })).toMatchObject({ state: "failed", resend: "verify-first" });
+  } finally { active.close(); }
+});
+
+test("a host accepting during the not-delivered fence cannot be reported safe to resend", async () => {
+  const active = fixture("acceptance-fence-race");
+  try {
+    const { operationId } = acceptSend(active);
+    const transition = active.client.transitionOperation;
+    active.client.transitionOperation = async (id, status, details, options) => {
+      if (status === "failed" && details?.reason === SEND_LOST_REASON) {
+        active.journal.transitionOperation(id, "delivering");
+        active.journal.transitionOperation(id, "delivered");
+      }
+      return transition(id, status, details, options);
+    };
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }))
+      .toMatchObject({ state: "delivered", resend: "not-needed" });
+  } finally { active.close(); }
+});
+
+for (const kind of ["old-user", "different-payload", "consumed-user", "tool-result"] as const) {
+  test(`Claude ${kind} cannot settle an unrelated uncertain attempt`, async () => {
+    const active = fixture(`claude-negative-${kind}`, { engine: "claude" });
+    try {
+      const text = "check the release";
+      const { operationId, deliveryId } = acceptSend(active, { text });
+      const ledger = new FileClaudeDeliveryLedger();
+      if (kind === "consumed-user") {
+        ledger.recordQueued(active.generationId, { id: "earlier-operation", text }, "turn-started");
+        ledger.confirmDelivered(active.generationId, "earlier-operation", "user-1");
+      }
+      ledger.recordQueued(active.generationId, { id: operationId, text: kind === "different-payload" ? "other payload" : text }, "turn-started");
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "uncertain");
+      active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+      const content = kind === "tool-result" ? [{ type: "tool_result", content: text }] : text;
+      fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid: "user-1", timestamp: kind === "old-user" ? "2020-01-01T00:00:00.000Z" : new Date().toISOString(), message: { role: "user", content } }) + "\n");
+      expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client })).toMatchObject({ state: "failed", resend: "verify-first" });
+    } finally { active.close(); }
+  });
+}
+
+test("an explicit status recovery with late canonical delivery never rearms the operation", async () => {
+  const active = fixture("late-confirmation-retry", { engine: "claude" });
+  try {
+    const text = "check the release";
+    const { operationId, deliveryId } = acceptSend(active, { text });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain");
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+    ledger.confirmDelivered(active.generationId, operationId, "echo-user");
+    const response = await handleRuntimeRetry(new NextRequest("http://127.0.0.1/api/runtime/operations/check/retry", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "retry-uncertain" }),
+    }), operationId, { enabled: () => true, client: () => active.client, registry: () => active.registry, kick: async () => {} });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
+    expect(active.journal.effectBatch(100)).toEqual([]);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+  } finally { active.close(); }
+});
+
+test("a compacted unknown Claude attempt retains its late delivered settlement", async () => {
+  let clock = Date.now();
+  const active = fixture("compacted-late-claude", { engine: "claude", now: () => clock });
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { text: "check the release" });
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text: "check the release" }, "turn-started");
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    clock += 8 * 24 * 60 * 60 * 1000;
+    const later = acceptSend(active, { clientMessageId: "later-key", operationId: "later-operation" });
+    active.registry.recordDeliveryOutcome(later.deliveryId, "delivered", null, "delivered");
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]).toBeUndefined();
+    ledger.confirmDelivered(active.generationId, operationId, "late-echo");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: null }))
+      .toMatchObject({ state: "delivered", resend: "not-needed" });
+    expect(sendReceiptFor(new AgentRegistry(active.registryPath).readOnlySnapshot(), operationId)?.state).toBe("delivered");
+  } finally { active.close(); }
+});
+
+test("late recipient evidence preserves an explicit discard", async () => {
+  const active = fixture("discarded-late-claude", { engine: "claude" });
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { text: "check the release" });
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text: "check the release" }, "turn-started");
+    ledger.confirmDelivered(active.generationId, operationId, "late-echo");
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", "delivery-discarded", "unverified");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: null }))
+      .toMatchObject({ state: "failed", reason: "delivery-discarded" });
+  } finally { active.close(); }
 });

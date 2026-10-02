@@ -15,6 +15,7 @@ import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
+import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
@@ -403,7 +404,8 @@ async function reconcileTerminalDeliveries(
   client: RuntimeHostClient,
   isCurrent: () => boolean,
 ): Promise<void> {
-  const unsettledDeliveries = Object.values(registry.readOnlySnapshot().heldDeliveries)
+  const snapshot = registry.readOnlySnapshot();
+  const unsettledDeliveries = Object.values(snapshot.heldDeliveries)
     .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
   const pendingAcknowledgements: string[] = [];
@@ -418,6 +420,18 @@ async function reconcileTerminalDeliveries(
     const page = unsettledDeliveries.slice(offset, offset + TERMINAL_RECONCILIATION_PAGE_SIZE);
     const outcomes = (await Promise.all(page.map(async (delivery) => {
       try {
+        if (delivery.error !== "delivery-discarded"
+          && await confirmedSend(snapshot, delivery.command.operationId)) {
+          return {
+            conversationId: delivery.conversationId,
+            operationId: delivery.command.operationId,
+            state: "delivered" as const,
+            error: null,
+            disposition: "delivered" as const,
+            receiptOperationId: delivery.command.operationId,
+            route: null,
+          };
+        }
         const result = await client.operationStatus(delivery.command.operationId, { currentRetryLeaf: true });
         if (!result) return null;
         const outcome = terminalDeliveryOutcome(registry, result, {

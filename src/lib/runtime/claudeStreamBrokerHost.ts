@@ -550,7 +550,11 @@ function sanitizedUserReplay(
 }
 
 function defaultTranscriptUsers(cwd: string, sessionId: string, projectsRoot?: string): ClaudeTranscriptUser[] {
-  const filename = claudeTranscriptPath(cwd, sessionId, projectsRoot);
+  return readClaudeTranscriptUsers(claudeTranscriptPath(cwd, sessionId, projectsRoot));
+}
+
+/** Canonical user records shared by adoption and delivery settlement. */
+export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUser[] {
   let contents: string;
   try { contents = fs.readFileSync(filename, "utf8"); }
   catch (error) {

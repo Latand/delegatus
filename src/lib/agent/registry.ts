@@ -9056,7 +9056,11 @@ export class AgentRegistry {
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId || owner.terminalState !== null) return owner ? clone(owner) : null;
+      if (!owner?.retryOfOperationId || (owner.terminalState !== null
+        && !(state === "delivered" && disposition === "delivered"
+          && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
+          && owner.terminalReason !== OPERATOR_DISCARDED_DELIVERY_REASON
+          && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)))) return owner ? clone(owner) : null;
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
@@ -9142,7 +9146,21 @@ export class AgentRegistry {
       const settled = outcomes.map((outcome) => {
         const canonicalId = resolveConversationAlias(file, outcome.conversationId);
         const delivery = deliveries.get(keyFor(canonicalId, outcome.operationId));
-        if (!delivery || delivery.state === "delivered") return delivery ? clone(delivery) : null;
+        if (!delivery) {
+          const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+            && outcome.state === "delivered" && outcome.disposition === "delivered"
+            && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
+            && owner.terminalReason !== OPERATOR_DISCARDED_DELIVERY_REASON
+            && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)) {
+            owner.terminalState = "delivered";
+            owner.terminalDisposition = "delivered";
+            owner.terminalReason = null;
+            owner.settledAt = now();
+          }
+          return null;
+        }
+        if (delivery.state === "delivered") return clone(delivery);
         const retryRecovered = delivery.state === "failed"
           && outcome.state === "delivered"
           && !terminalDeliveryFailureIsAbsorbing(delivery);

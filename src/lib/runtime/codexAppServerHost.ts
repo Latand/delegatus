@@ -1072,6 +1072,19 @@ function rolloutConfirmedDelivery(
   });
 }
 
+/** Exceptional settlement reads the whole immutable evidence afresh. A rewrite
+ * plus growth must not inherit a positive result from the incremental cache. */
+export async function readCodexConfirmedDelivery(pathname: string, entry: QueueEntry): Promise<DeliveryReceipt | null> {
+  try {
+    const before = await fs.promises.stat(pathname);
+    if (!before.isFile()) return null;
+    const scanned = await scanRolloutStructuredUserDeliveries(pathname, before.size, rolloutFileIdentity(before), undefined);
+    const after = await fs.promises.stat(pathname);
+    if (!sameRolloutFile(after, { size: before.size, mtimeMs: before.mtimeMs, fileIdentity: rolloutFileIdentity(before) })) return null;
+    return rolloutDeliveryReceipt(entry, scanned.deliveries.get(codexDeliveryDedup(entry.id)));
+  } catch { return null; }
+}
+
 function resumedActiveTurnId(value: unknown): string | null {
   const activeTurn = resumedTurns(value).findLast((turn) => stringField(turn, "status") === "inProgress");
   return activeTurn ? stringField(activeTurn, "id") : null;
