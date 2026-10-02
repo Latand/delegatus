@@ -1321,6 +1321,8 @@ const malformedChecklists: Array<[string, unknown]> = [
   ["null entry", [null]], ["primitive entries", ["bad", 4, false]],
   ["array entry", [[]]], ["missing fields", [{}]],
   ["invalid state", [{ id: "item", text: "Item", state: "invalid" }]],
+  ["array state", [{ id: "item", text: "Item", state: ["open"] }]],
+  ["object state", [{ id: "item", text: "Item", state: { toString: null } }]],
 ];
 
 test.each(malformedChecklists)("persisted %s checklist retains its task and projects safely on desktop and phone", (_shape, steps) => {

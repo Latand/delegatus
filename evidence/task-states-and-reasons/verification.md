@@ -159,13 +159,16 @@ on desktop, phone cards and the phone task screen, and combines both sets of
 REST/MCP fields, guards and regression cases.
 
 The store now removes a checklist rejected by `storedTaskSteps` after the raw
-row spread. Eleven persisted shapes each have a regression through
+row spread. Thirteen persisted shapes each have a regression through
 `loadTasks` → `projectTaskWorkflows` → `buildTaskBands` → `buildKanbanModel` →
 `buildPhoneKanban`: string, number, boolean, null, object, empty array, null
-entry, primitive entries, nested array, missing fields and invalid state.
+entry, primitive entries, nested array, missing fields, invalid state,
+array-valued state and object-valued state. Persisted state validation now
+checks the primitive string type before membership, so object-to-string
+coercion cannot throw and an array cannot masquerade as an open state.
 The checks exercise legacy import and the subsequent SQLite read, retaining
 the task without steps. A mixed-array regression retains both valid entries.
-All eleven malformed cases failed before the fix, including the production
+All thirteen malformed cases failed before their fixes, including the production
 `steps.map` and null `step.ref` crashes; the mixed-array case already passed.
 
 Filters retain their search-row placement at 1440. Below 1168 px of actual
@@ -178,7 +181,7 @@ failed before the layout change (296 px of filters in 183 px of space).
 
 Final verification:
 
-- 301 tests pass across 13 targeted files, each run separately through the
+- 303 tests pass across 13 targeted files, each run separately through the
   memory-capped gate with an isolated state directory.
 - The shared browser case passes 498 assertions over eight width/locale
   combinations. Search remains at y=7.5..39.5 inside the y=0..48 bar. At 1440,
@@ -188,7 +191,7 @@ Final verification:
 - Opened bar/filter frames at every desktop width in both languages, plus
   progress, Waiting and full-reason phone frames. The driver closes its
   contexts, browser and ephemeral fixture server in its finalizer.
-- `bunx tsc --noEmit` and `git diff --check` pass. ESLint on the four changed
+- `bunx tsc --noEmit` and `git diff --check` pass. ESLint on the five changed
   TypeScript files reports 70 errors/four warnings; a file/rule/severity/message
   comparison with current main gives exactly the same diagnostics.
 - Privacy with `--check-commits` passes using the scanner from a detached
@@ -199,3 +202,14 @@ conversation wording and grey phone Working text remain outside the two
 findings. No product changes were made for those observations. The old
 schema-description failure recorded above is resolved by the main merge;
 the complete schema-parity file now passes all 32 tests.
+
+
+Hosted note after the first push: `privacy-publication` fails in the trusted
+main checkout's OCR `exactOnly` self-tests at
+`scripts/privacy-publication-gate.test.ts:1391`. The expected-output assertion
+omits the scanner's added `file-sha256` attribution line. Both scanner and
+self-test files are byte-identical to current main in this branch, and the
+workflow runs this step in `trusted` before scanning the candidate. The direct
+trusted-main scan of the candidate with commit checking passes. This unrelated
+self-test issue stays outside the two fixes; hosted build/native checks may
+still be pending when the fix stage hands over.

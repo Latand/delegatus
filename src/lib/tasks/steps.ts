@@ -108,7 +108,7 @@ export function storedTaskSteps(value: unknown): TaskStep[] | undefined {
     const raw = item as Record<string, unknown>;
     if (typeof raw.id !== "string" || !STEP_ID.test(raw.id) || seen.has(raw.id)
       || typeof raw.text !== "string" || !raw.text.trim() || raw.text.length > 120
-      || !["done", "open", "dropped"].includes(String(raw.state))) continue;
+      || typeof raw.state !== "string" || !["done", "open", "dropped"].includes(raw.state)) continue;
     const ref = raw.ref === undefined || raw.ref === null ? undefined : typeof raw.ref === "string" || typeof raw.ref === "number" ? String(raw.ref).trim() : undefined;
     if (ref && ref.length > 200) continue;
     seen.add(raw.id);
