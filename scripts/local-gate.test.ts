@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { discover, isolatedEnvironment, pinnedBunVersion, plan, type PlanEnvironment } from "./local-gate";
+import { discover, isolatedEnvironment, pinnedBunVersion, plan, requiresMediaTools, type PlanEnvironment } from "./local-gate";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -42,11 +42,13 @@ test("media skipping is explicit and still checks commits when the whole diff is
 });
 test("state isolation replaces inherited roots and removes the live owner claim", () => {
   const sandbox = mkdtempSync(path.join(tmpdir(), "gate-env-")); roots.push(sandbox);
-  const env = isolatedEnvironment(sandbox, { NODE_ENV: "test", HOME: "operator", LLV_STATE_DIR: "operator", LLV_STATE_OWNER: "viewer", LLV_INBOX_DIR: "operator" });
+  const env = isolatedEnvironment(sandbox, { GIT_DIR: "operator", GIT_INDEX_FILE: "operator", GIT_WORK_TREE: "operator", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: "/dev/null", XDG_RUNTIME_DIR: sandbox, NODE_ENV: "test", HOME: "operator", LLV_STATE_DIR: "operator", LLV_STATE_OWNER: "viewer", LLV_INBOX_DIR: "operator" });
   for (const key of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     expect(env[key]).toStartWith(sandbox + path.sep); expect(existsSync(env[key]!)).toBeTrue();
   }
   expect(env.LLV_STATE_OWNER).toBeUndefined(); expect(env.LLV_INBOX_DIR).toBeUndefined();
+  for (const key of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) expect(env[key]).toBeUndefined();
+  expect(env.LLV_GATE_LOCK_DIR).toBe(path.join(sandbox, "delegatus-gate"));
 });
 test("scope uses executed import closure and the workflow test lists", () => {
   const doc = discover(root, "HEAD", ["CONTRIBUTING.md"]);
@@ -72,7 +74,7 @@ function hookFixture() {
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
-  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync } from "node:fs"; appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
+  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync } from "node:fs"; appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
   for (const name of ["bun", "bunx"]) {
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
@@ -83,7 +85,7 @@ function hookFixture() {
   writeFileSync(path.join(dir, "package.json"), "{}"); writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");
   writeFileSync(path.join(dir, "example.test.ts"), "// hook fixture\n"); git("add", "."); git("commit", "-m", "base");
   git("update-ref", "refs/remotes/origin/main", "HEAD"); git("config", "core.hooksPath", ".githooks");
-  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; state?: string; home?: string; config?: string; tmp?: string; known?: string });
+  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string });
   return { dir, env, git, calls };
 }
 test("real pre-commit hook checks staged source, stops failures, and supports the escape hatch", () => {
@@ -108,9 +110,19 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   expect(result.status).toBe(0);
   const tests = f.calls().find(call => call.args[0] === "test")!;
   expect(tests.args).toEqual(["test", "./example.test.ts"]);
+  expect(tests.gitDir).toBeUndefined(); expect(tests.index).toBeUndefined();
   for (const key of ["state", "home", "config", "tmp"] as const) expect(tests[key]).toContain("delegatus-local-gate-");
   expect(existsSync(tests.state!)).toBeFalse();
   expect(f.calls().some(call => call.args.includes("--check-commits"))).toBeTrue();
   const rejected = spawnSync("git", ["push", "origin", "HEAD:blocked"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "tsc" }, encoding: "utf8" });
   expect(rejected.status).not.toBe(0);
+});
+
+test("media deferral recognizes disguised raster magic without loading the privacy gate", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-media-")); roots.push(dir);
+  const disguised = path.join(dir, "capture.dat");
+  writeFileSync(disguised, Buffer.from("89504e470d0a1a0a", "hex"));
+  expect(requiresMediaTools(disguised)).toBeTrue();
+  const text = path.join(dir, "note.md"); writeFileSync(text, "plain text");
+  expect(requiresMediaTools(text)).toBeFalse();
 });

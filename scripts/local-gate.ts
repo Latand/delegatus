@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
-import { mediaKind } from "./privacy-publication-gate";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -79,6 +78,27 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   return steps;
 }
 
+/** Match publication media by extension and magic bytes, including disguised
+ * rasters. Read only the header; the privacy gate still performs the inspection.
+ */
+export function requiresMediaTools(file: string): boolean {
+  if (/\.(?:bmp|jpe?g|png|tiff?|webp|avi|gif|m4v|mkv|mov|mp4|webm|mp3|wav)$/i.test(file)) return true;
+  const fd = openSync(file, "r");
+  try {
+    const bytes = Buffer.alloc(12);
+    const length = readSync(fd, bytes, 0, 12, 0);
+    const prefix = bytes.subarray(0, length).toString("latin1");
+    return bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
+      || bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))
+      || prefix.startsWith("GIF87a") || prefix.startsWith("GIF89a") || prefix.startsWith("BM")
+      || bytes.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00]))
+      || bytes.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a]))
+      || (prefix.startsWith("RIFF") && ["AVI ", "WEBP"].includes(prefix.slice(8, 12)))
+      || prefix.slice(4, 8) === "ftyp"
+      || bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  } finally { closeSync(fd); }
+}
+
 interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
 function workflow(root: string, name: string): Workflow {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as Workflow;
@@ -96,7 +116,7 @@ function siblingTests(root: string, files: readonly string[]): string[] {
 export function discover(root: string, base: string, files: readonly string[]): PlanEnvironment {
   const existing = new Set(files.filter(file => existsSync(path.join(root, file))));
   const mediaTools = ["tesseract", "ffmpeg", "ffprobe"].every(tool => Bun.which(tool));
-  const skippedMedia = mediaTools ? [] : [...existing].filter(file => mediaKind(path.join(root, file)) !== undefined);
+  const skippedMedia = mediaTools ? [] : [...existing].filter(file => requiresMediaTools(path.join(root, file)));
   const platformFile = ".github/workflows/platform-tests.yml";
   const platform = workflow(root, "platform-tests.yml");
   const bun = workflow(root, "bun-runtime.yml");
@@ -120,6 +140,18 @@ export function discover(root: string, base: string, files: readonly string[]): 
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
+  // Git exports these to hooks. Keeping them makes a fixture's `git -C`
+  // operate on the pushing repository instead of the fixture repository.
+  for (const key of [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
+    "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+  ]) delete env[key];
+  for (const key of Object.keys(env)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete env[key];
+  // Keep slots shared even when TMPDIR below becomes private to the test run.
+  env.LLV_GATE_LOCK_DIR = inherited.LLV_GATE_LOCK_DIR ?? path.join(inherited.XDG_RUNTIME_DIR ?? tmpdir(), "delegatus-gate");
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });

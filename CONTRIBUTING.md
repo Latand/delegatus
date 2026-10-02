@@ -71,7 +71,8 @@ fingerprints, and eslint on staged source files. These checks read working-tree
 content, including unstaged edits in a partially staged file. Pre-push checks
 publication including commit messages and identities, incremental TypeScript,
 changed-file lint, and touched test files. Tests run by explicit file path under
-an isolated home, config, state and temp root. Browser tests keep their rendered
+an isolated home, config, state and temp root. Git repository variables exported
+to hooks are removed from child checks so fixture repositories remain isolated. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
 The pre-push gate reuses the platform import closure to scope Linux tests,
