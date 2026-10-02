@@ -4,6 +4,12 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "stateWrites.title": "Disk full: state writes are failing",
+  "stateWrites.free": "Free space: {free}.",
+  "stateWrites.unknown": "unknown",
+  "stateWrites.since": "Failing since {time}.",
+  "stateWrites.recovery": "Free space on this disk; Delegatus recovers by itself.",
+
   "telemetry.settings": "Settings",
   "telemetry.label": "Anonymous install ping",
   "telemetry.locked": "Disabled by an environment variable.",
@@ -163,8 +169,12 @@ export const en = {
   "links.peerCodePlaceholder": "Code from the other install",
   "links.peerName": "Name on this machine",
   "links.revoked": "Revoked",
+  "links.syncWaiting": "Waiting for a successful sync",
   "links.syncNow": "Sync now",
-  "links.syncedAt": "Synced {date}",
+  "links.syncedAgo": "Synced {ago}",
+  "links.syncStale": "Last successful sync {ago}",
+  "links.syncFailing": "Last sync failed · last success {ago}",
+  "links.syncFailingNever": "Last sync failed · no success yet",
   "links.remove": "Remove",
   "links.removeWarning": "This install could not be told. Remove this machine from its list too.",
   "links.requests": "requests",
@@ -3670,6 +3680,10 @@ export const en = {
   "kanban.remoteAsOf": "as of {time}",
   "kanban.remote.managedOn": "Managed on {host}",
   "kanban.remote.notLinked": "Runs on {host} (not linked)",
+  "kanban.remote.sync.synced": "{host} · synced",
+  "kanban.remote.sync.stale": "{host} · sync {ago}",
+  "kanban.remote.sync.failing": "{host} · sync failed",
+  "kanban.remote.sync.waiting": "{host} · waiting for sync",
   "kanban.remote.hint": "Runs on {host}. Start its agents and answer its pipeline's questions there.",
   "pipelineBlock.remote.decisionHead": "Waiting for a decision on {stage}",
   "pipelineBlock.remote.decisionTail": "answer it on {host}",

@@ -2594,6 +2594,13 @@ export class RuntimeJournal {
     if (event.kind === "deployment.state") {
       const status = payload as unknown as ViewerDeploymentStatus;
       this.upsertEntity("deployment", scope.id, event.revision, status, event.seq);
+      return;
+    }
+    if (scope.type === "session") {
+      // Informational events (including limits) still consume a session revision.
+      // Keep snapshot heads aligned with snapshotSeq so the next event is contiguous.
+      const previous = this.entity<RuntimeSession>("session", scope.id) ?? baseSession(scope.id, {}, 0);
+      this.upsertEntity("session", scope.id, event.revision, { ...previous, revision: event.revision }, event.seq);
     }
   }
 

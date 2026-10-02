@@ -4,6 +4,12 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "stateWrites.title": "Диск заповнений: зміни стану не зберігаються",
+  "stateWrites.free": "Вільне місце: {free}.",
+  "stateWrites.unknown": "невідомо",
+  "stateWrites.since": "Збої з {time}.",
+  "stateWrites.recovery": "Звільніть місце на цьому диску; Delegatus відновиться сама.",
+
   "telemetry.settings": "Налаштування",
   "telemetry.label": "Анонімний пінг встановлення",
   "telemetry.locked": "Вимкнено змінною середовища.",
@@ -162,8 +168,12 @@ export const uk: Record<keyof typeof en, Message> = {
   "links.peerCodePlaceholder": "Код з іншої машини",
   "links.peerName": "Назва на цій машині",
   "links.revoked": "Доступ відкликано",
+  "links.syncWaiting": "Очікуємо успішної синхронізації",
   "links.syncNow": "Синхронізувати",
-  "links.syncedAt": "Синхронізовано {date}",
+  "links.syncedAgo": "Синхронізовано {ago}",
+  "links.syncStale": "Остання успішна синхронізація {ago}",
+  "links.syncFailing": "Остання синхронізація невдала · остання успішна {ago}",
+  "links.syncFailingNever": "Остання синхронізація невдала · успішних ще не було",
   "links.remove": "Видалити",
   "links.removeWarning": "Не вдалося сповістити іншу інсталяцію. Видаліть цю машину і з її списку.",
   "links.requests": "запитів",
@@ -3585,6 +3595,10 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.remoteAsOf": "станом на {time}",
   "kanban.remote.managedOn": "Керується на {host}",
   "kanban.remote.notLinked": "Виконується на {host} (не під'єднана)",
+  "kanban.remote.sync.synced": "{host} · синхронізовано",
+  "kanban.remote.sync.stale": "{host} · синхр. {ago}",
+  "kanban.remote.sync.failing": "{host} · збій синхр.",
+  "kanban.remote.sync.waiting": "{host} · очікуємо синхр.",
   "kanban.remote.hint": "Виконується на {host}. Запускайте її агентів і відповідайте на питання її пайплайна там.",
   "pipelineBlock.remote.decisionHead": "Чекає рішення на етапі {stage}",
   "pipelineBlock.remote.decisionTail": "відповісти можна на {host}",
