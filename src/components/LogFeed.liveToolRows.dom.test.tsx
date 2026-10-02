@@ -484,6 +484,6 @@ test.each([false, true])("pending replies retain the seat continuation after a d
 test("a pending seat reply keeps the live speaker lead while a deputy is active", () => {
   tailState.lines = [0, 2].map(second => JSON.stringify({ type: "user", timestamp: AT(second), message: { content: `Request ${second}` } }));
   sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "active-deputy", "Seat reply", AT(3)) };
-  const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "running" } as SeatDeputyView]);
+  const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "active" } as SeatDeputyView]);
   expect(host.querySelector('[data-live-turn] [data-seat-speaker="live"]')).not.toBeNull();
 });
