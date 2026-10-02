@@ -172,9 +172,20 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     if (Math.abs(pose.dx) + Math.abs(pose.dy) + Math.abs(pose.sx - 1) + Math.abs(pose.sy - 1) + Math.abs(ex - 1) > 0.001 || opacity < 1) {
       play(shot.node, [ { transform: transform(pose.dx, pose.dy, pose.sx, pose.sy), opacity }, { transform: transform(0, 0, ex, 1), opacity: 1 } ], duration, "card", paused);
     }
+    // Sibling text layers share the same inverse pose. Reuse their frame
+    // definitions lazily, so activation still stays in bounded batches.
+    const contentCache = new Map<string, Keyframe[]>();
     for (const content of shot.contents) {
       const { node } = content;
-      const frames = (count?: number) => contentFrames(node, content.opacity, pose.sx, pose.sy, ex, 1, pose.px, pose.py, reveal, parentEnd, reveal ? 1 : content.scaleX, reveal ? 1 : content.scaleY, count);
+      const frames = (count?: number) => {
+        const key = `${count ?? "full"}|${content.opacity}|${content.scaleX}|${content.scaleY}|${contentBase.get(node) ?? ""}`;
+        let frames = contentCache.get(key);
+        if (!frames) {
+          frames = contentFrames(node, content.opacity, pose.sx, pose.sy, ex, 1, pose.px, pose.py, reveal, parentEnd, reveal ? 1 : content.scaleX, reveal ? 1 : content.scaleY, count);
+          contentCache.set(key, frames);
+        }
+        return frames;
+      };
       play(node, () => frames(), duration, "content", paused, frames(1)[0]);
     }
   };
