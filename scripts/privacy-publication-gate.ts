@@ -485,7 +485,12 @@ function maskApprovedPublicValues(text: string): string {
         const start = rawCursor - 1;
         const before = /[([]/.test(character) ? rawCalleeBefore(start) : start - 1;
         const callee = completedRawGroups.get(before);
-        rawGroups.push({ start, envelopeStart: callee?.envelopeStart ?? before + 1, attached: false, parent: rawGroups.at(-1) });
+        const namedCallee = before < skipRawTrivia(start - 1);
+        const unicodeCallee = before >= 0 && text.charCodeAt(before) > 0x7f;
+        // A standalone group keeps its own opening edge (for example an arrow
+        // callback body). Calls/indexes retain their named or returned callee.
+        const envelopeStart = callee?.envelopeStart ?? (namedCallee || unicodeCallee ? before + 1 : start);
+        rawGroups.push({ start, envelopeStart, attached: false, parent: rawGroups.at(-1) });
       } else if (/[)\]}]/.test(character)) {
         const group = rawGroups.pop();
         if (group) {
