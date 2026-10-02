@@ -24,6 +24,62 @@ afterAll(() => {
 });
 const HEAD = "a".repeat(40);
 
+test.each(["unsupported", "unopenable"] as const)("an accepted publication settles a %s locking refusal in the controller and journal", async (failure) => {
+  const h = setupRetry(); h.lane.state = "paused";
+  h.lane.delivery = { target: { repository: "unsupported-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  let commands = 0;
+  const ports = { ...h.ports, stageHostResident: async () => false,
+    stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    exec: async () => { commands++; return { code: 0, stdout: HEAD, stderr: "" }; } };
+  expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const expected = failure === "unsupported" ? "WSL 2" : "could not be opened";
+  let blockedLock: string | undefined;
+  if (failure === "unsupported") Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  else {
+    const { pipelineArtifactsDir } = await import("./store");
+    blockedLock = path.join(pipelineArtifactsDir(h.lane.id), "publication.lock");
+    fs.mkdirSync(blockedLock, { recursive: true });
+  }
+  try {
+    await tickPipelines([], ports);
+    const current = findPipelineRecord(h.lane.id)!;
+    expect(current.delivery!.operation).toMatchObject({ state: "settled", result: { ok: false, error: expect.stringContaining(expected) } });
+    expect(current.stateDetail).toContain(expected);
+    expect(current.delivery!.journal.at(-1)!.reason).toContain(expected);
+    expect(commands).toBe(0);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (blockedLock) fs.rmdirSync(blockedLock);
+  }
+});
+
+test("an old publication lock refusal preserves a newer reservation and lane detail", async () => {
+  const h = setupRetry(); h.lane.state = "paused";
+  h.lane.delivery = { target: { repository: "replacement-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  await patchPipeline(h.lane.id, { action: "publish" }, h.ports);
+  const stale = findPipelineRecord(h.lane.id)!;
+  await withPipelineMutation((lanes, persist) => {
+    const current = lanes.find((item) => item.id === h.lane.id)!;
+    current.delivery!.operation = { ...current.delivery!.operation!, id: "new-publication" };
+    current.stateDetail = "new operator detail"; persist([current]);
+  });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  try {
+    expect(await publishPipelineBranch(stale, h.ports.exec, { acceptedSha: HEAD })).toMatchObject({ ok: false });
+    const current = findPipelineRecord(h.lane.id)!;
+    expect(current.delivery!.operation).toMatchObject({ id: "new-publication", state: "pending" });
+    expect(current.stateDetail).toBe("new operator detail");
+    expect(current.delivery!.journal).toEqual([]);
+    expect(h.remoteCalls()).toBe(0);
+  } finally { Object.defineProperty(process, "platform", platform); }
+});
+
 test("a queued publication is superseded by a pause before execution", async () => {
   const h = setupRetry(); h.lane.state = "running";
   h.lane.delivery = { target: { repository: "pause-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },

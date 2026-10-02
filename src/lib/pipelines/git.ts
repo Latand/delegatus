@@ -1065,7 +1065,7 @@ export async function acquirePublicationFileLock(lock: string): Promise<number |
   assertInheritedPipelineLockSupport();
   let descriptor: number;
   try { descriptor = fs.openSync(lock, "a", 0o600); }
-  catch { return null; }
+  catch (error) { throw new Error(`Pipeline publication lock could not be opened: ${(error as NodeJS.ErrnoException).code ?? "unknown error"}`); }
   try {
     const held = tryLockFenceExclusive({ fd: descriptor, filename: lock });
     if (held) {
@@ -1135,10 +1135,28 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
   let descriptor: number | null;
-  try { descriptor = await acquirePublicationFileLock(lock); }
-  catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
+  try {
+    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    descriptor = await acquirePublicationFileLock(lock);
+  } catch (error) {
+    const result = { ok: false as const, error: error instanceof Error ? error.message : "Pipeline locking unavailable" };
+    const queued = pipeline.delivery?.operation;
+    if (queued?.state === "pending") await withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      const delivery = current?.delivery;
+      if (!current || !delivery || delivery.epoch !== pipeline.delivery!.epoch
+        || delivery.operation?.id !== queued.id || delivery.operation.state !== "pending"
+        || delivery.operation.sha !== request.acceptedSha) return;
+      // Nothing could execute before locking. Record that known refusal on
+      // this admission without replacing a newer reservation or lane detail.
+      delivery.operation = { ...delivery.operation, state: "settled", result };
+      if (current.stateDetail === "publication accepted; remote verification pending") current.stateDetail = result.error;
+      deliveryJournal(current, "recovery", `publication refused before execution: ${result.error}`);
+      tx.put(current);
+    });
+    return result;
+  }
   if (descriptor === null) {
     const current = findPipelineRecord(pipeline.id);
     const error = deliveryOwnerError(current ?? pipeline, current);
