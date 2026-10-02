@@ -7,12 +7,14 @@ on:
   # and resolveJsonModule lets any of them import JSON, so those globs sit
   # beside the directory paths. Tailwind scans every non-ignored file under the
   # root for class names, not only src/, and .gitignore decides which files it
-  # skips, so markup and script globs and every .gitignore are inputs as well.
+  # skips. Tailwind scans text sources across extensions, so every repository
+  # path is an input; the broad glob also covers new source formats.
   # Pushes to main and v* tags always build.
   pull_request:
     paths:
       - Dockerfile
       - .dockerignore
+      - "**/*"
       - package.json
       - bun.lock
       - bunfig.toml
@@ -46,12 +48,12 @@ permissions:
 
 concurrency:
   group: docker-image-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 90 }}
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 360 }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
