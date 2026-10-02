@@ -114,3 +114,38 @@ message, with no introduced diagnostics. The schema-description failure was
 also reproduced on current main. A fresh independent read-only review of
 the complete diff and all 30 captures found no remaining pinned defect.
 The status-note fence is preserved.
+
+## Project-bar overflow acceptance
+
+The additional UI finding is fixed in the project bar only. Search and reason
+filters share one row; the filter group keeps its natural width while search
+gives room first. Bars without reasons and the Overview retain their layouts.
+The new shared-driver regression failed against the prior layout with the
+search starting at -3 px. It now checks both vertical bounds and that all five
+reason chips fit horizontally at 1440 in English and Ukrainian.
+
+Merged current main (`ef18d741d`) without conflicts, retaining its phone-launch
+and runtime changes. Acceptance checks on the merged head:
+
+- All nine finding-specific files/cases pass: 213 model, component and real
+  MCP transport tests. The preceding complete by-file sweep had 451 passes
+  and only the baseline schema-description failure documented above.
+- The shared task-motion browser case passes 432 assertions at 1440/390 in
+  en/uk. It saves 32 captures, including the two new top-bar captures. The
+  browser, contexts and ephemeral fixture server close in the finalizer.
+- At 1440 in both languages the bar is y=0..48, search is y=7.5..39.5 and
+  filters are y=14.5..32.5. Filter client/scroll widths agree: 296/296 px in
+  English and 311/311 px in Ukrainian. Measurements are in `renders.json`.
+- TypeScript, privacy with commit checking and diff checks pass.
+- ESLint on changed TypeScript files reports 93 errors/eight warnings.
+  Current main over the same existing files reports 93 errors/ten warnings;
+  the file/rule/severity/leading-message comparison finds no new diagnostics.
+  The new files and the shared browser driver have no lint diagnostics.
+
+The rendered acceptance surfaces were inspected directly. Local source and
+test changes were reviewed against the findings; the status-note fence remains
+preserved. Notes: the unrelated pipeline-description assertion still fails
+on current main. The pre-existing clipped Done column, Ukrainian conversation
+wording and grey phone Working line remain outside the pinned findings. At
+narrower desktop widths the filters remain horizontally scrollable; the
+Ukrainian search placeholder truncates at 1440 as the field gives room first.
