@@ -33,11 +33,14 @@ export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host
        below, which used to write to a raw connection with no handler at all —
        and it stays attached, because a socket can fail more than once. */
     let upstream: net.Socket | null = null;
+    let downstreamEnding = false;
     const destroyPeers = () => {
       downstream.destroy();
       upstream?.destroy();
     };
     const endDownstream = (response?: string) => {
+      if (downstreamEnding || downstream.destroyed) return;
+      downstreamEnding = true;
       /* Bun 1.4.0 does not report a peer close on a raw socket after end().
          finish means the response was handed off; the timer also bounds a
          stalled flush so this connection cannot hold server.close forever. */
@@ -65,8 +68,17 @@ export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host
       return;
     }
     upstream = net.createConnection({ host: endpoint.hostname, port: Number(endpoint.port) });
+    let responseStarted = false;
+    upstream.on("data", () => { responseStarted = true; });
     upstream.on("error", () => {
-      destroyPeers();
+      if (responseStarted) {
+        destroyPeers();
+        return;
+      }
+      const body = `Delegatus Viewer unavailable.\nDeployment: ${target.container}\nRevision: ${target.revision}\n`;
+      endDownstream("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"
+        + "Content-Type: text/plain; charset=utf-8\r\n"
+        + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
     });
     downstream.pipe(upstream);
     upstream.pipe(downstream, { end: false });
@@ -76,7 +88,8 @@ export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host
       endDownstream();
     });
     upstream.once("close", () => {
-      if (!upstreamEnded) downstream.destroy();
+      // An upstream error may already be flushing the unavailable response.
+      if (!upstreamEnded && !downstreamEnding) downstream.destroy();
     });
     downstream.resume();
     downstream.once("close", () => upstream?.destroy());
