@@ -3046,10 +3046,11 @@ export async function preparePipelineReviewRepair(flowId: string, ports: Pipelin
   const matches = (current: Pipeline | null) => JSON.stringify(current) === fingerprint
     && JSON.stringify(ports.getFlow(flowId)) === flowFingerprint;
   const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
   let descriptor: number | null;
-  try { descriptor = await acquirePublicationFileLock(lock); }
-  catch (error) { return { ok: false, retryable: false, detail: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
+  try {
+    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    descriptor = await acquirePublicationFileLock(lock);
+  } catch (error) { return { ok: false, retryable: false, detail: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
   if (descriptor === null) return { ok: false, retryable: true, detail: "review repair is waiting for its owned Git lock" };
   const abort = new AbortController();
   const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
@@ -6127,10 +6128,11 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     const action = preview.remoteAction;
     if (action?.state !== "pending") continue;
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
-    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
     let descriptor: number | null;
-    try { descriptor = await acquirePublicationFileLock(lock); }
-    catch (error) {
+    try {
+      fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+      descriptor = await acquirePublicationFileLock(lock);
+    } catch (error) {
       const detail = error instanceof Error ? error.message : "Pipeline locking unavailable";
       await withPipelineMutation((pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
@@ -6304,10 +6306,11 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const matches = (current: Pipeline | null) => JSON.stringify(current) === fingerprint
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
-    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
     let descriptor: number | null;
-    try { descriptor = await acquirePublicationFileLock(lock); }
-    catch (error) {
+    try {
+      fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+      descriptor = await acquirePublicationFileLock(lock);
+    } catch (error) {
       await withPipelineMutation((pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;

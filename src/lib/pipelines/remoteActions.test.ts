@@ -293,6 +293,38 @@ test.each(["unsupported", "unopenable"] as const)("an accepted publication settl
   }
 });
 
+test.each(["action", "stage", "repair"] as const)("a blocked artifact parent produces a visible %s refusal", async (kind) => {
+  const h = setupRetry(), blocked = pipelineCorpus(8, 1)[7]!;
+  blocked.closedAt = null; blocked.lastPassedCommit = HEAD; blocked.publication = "internal";
+  blocked.state = kind === "action" ? "needs_decision" : "running";
+  blocked.cursor = { stageId: kind === "stage" ? "build" : "review", state: kind === "stage" ? "committing" : "reviewing", input: null, activatedBy: null };
+  blocked.runs[kind === "stage" ? 0 : 1]!.attempts[0]!.state = kind === "stage" ? "committing" : "needs_decision";
+  blocked.delivery = { target: { repository: "parent-refusal-repo", remote: "origin", branch: `refs/heads/${blocked.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: blocked.id, epoch: 1, active: true, journal: [] };
+  if (kind === "repair") {
+    blocked.stages[0]!.effectiveRole.access = "read-only"; blocked.stages[0]!.outputs = ["report.md"];
+    blocked.runs[1]!.attempts[0]!.flowId = "blocked-parent-repair";
+  }
+  savePipelines([blocked, h.lane]);
+  const { pipelineArtifactsDir } = await import("./store");
+  const parent = pipelineArtifactsDir(blocked.id);
+  fs.mkdirSync(path.dirname(parent), { recursive: true }); fs.writeFileSync(parent, "preserved file\n");
+  try {
+    if (kind === "action") {
+      await patchPipeline(blocked.id, { action: "skip-stage" }, h.ports);
+      await patchPipeline(h.lane.id, { action: "retry-stage" }, h.ports);
+      await settlePendingRemoteActions(h.ports);
+      expect(findPipelineRecord(blocked.id)).toMatchObject({ remoteAction: { state: "settled", error: expect.stringContaining("EEXIST") } });
+      expect(findPipelineRecord(blocked.id)!.delivery!.journal.at(-1)!.reason).toContain("EEXIST");
+      expect(findPipelineRecord(h.lane.id)).toMatchObject({ remoteAction: { state: "settled" }, state: "running" });
+    } else if (kind === "stage") {
+      expect(await settlePendingStageGit(h.ports)).toBe(true);
+      expect(findPipelineRecord(blocked.id)).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("EEXIST") });
+    } else expect(await preparePipelineReviewRepair("blocked-parent-repair", h.ports)).toMatchObject({ ok: false, retryable: false, detail: expect.stringContaining("EEXIST") });
+    expect(fs.readFileSync(parent, "utf8")).toBe("preserved file\n");
+  } finally { fs.unlinkSync(parent); }
+});
+
 test("an old publication lock refusal preserves a newer reservation and lane detail", async () => {
   const h = setupRetry(); h.lane.state = "paused";
   h.lane.delivery = { target: { repository: "replacement-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
