@@ -13,6 +13,7 @@ import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatC
 import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 import { productionDomainDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
+import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -145,6 +146,7 @@ test("a capability header that does not authenticate is rejected before pipeline
 });
 
 test("rotation revokes A's pipeline control while B, its builder and a live deputy can create work", async () => {
+  const project = projectIdentityFromRepositoryRoot(process.cwd())?.project ?? "proj-a";
   const a = seedCaller("orchestrator");
   const b = seedCaller("orchestrator");
   const builder = seedCaller("builder", b.conversationId);
@@ -153,7 +155,7 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   const deps: SeatCommandDependencies = {
     spawn: async () => ({ status: 200, body: { ok: true, conversationId: next.conversationId, path: next.path } }),
     deliver: async () => ({ ok: true, outcome: "delivered" }),
-    conversationTarget: id => ({ kind: "eligible", conversationId: id, path: id === a.conversationId ? a.path : b.path, cwd: process.cwd(), project: "proj-a", engine: "codex" }),
+    conversationTarget: id => ({ kind: "eligible", conversationId: id, path: id === a.conversationId ? a.path : b.path, cwd: process.cwd(), project, engine: "codex" }),
     resolvedConversation: id => ({ conversationId: id, path: id === a.conversationId ? a.path : b.path, holdsTurns: true, cwd: process.cwd() }),
     stampRegistryIdentity: () => {},
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
@@ -161,16 +163,16 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
     runtimeIdentity: () => ({ engine: null, model: null }),
     now: () => "2026-09-28T00:00:00.000Z",
   };
-  const seated = await executeOrchestratorSeatRequest({ project: "proj-a", clientRequestId: "seat-authority-a", mandate: "edited mandate", engine: "codex", model: "gpt-6-sol", cwd: process.cwd() }, deps);
+  const seated = await executeOrchestratorSeatRequest({ project, clientRequestId: "seat-authority-a", mandate: "edited mandate", engine: "codex", model: "gpt-6-sol", cwd: process.cwd() }, deps);
   expect(seated.status).toBe(200);
   const request = (caller: typeof a, task: string) => ({ task, repoDir: process.cwd(), src: caller.path, autoStart: false, stages: [] });
   const predecessorCreate = await POST(pipelineRequest(request(a, "incumbent lane"), { "x-llv-spawn-capability": a.capability }));
   expect(predecessorCreate.status).toBe(201);
   const predecessor = await predecessorCreate.json() as { pipeline: { id: string } };
   next = b;
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "seat-authority-b" }, deps);
+  const rotated = await executeOrchestratorRotation({ project, clientRequestId: "seat-authority-b" }, deps);
   expect(rotated.status).toBe(200);
-  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(b.conversationId);
+  expect(orchestratorSeatFor(project).active?.conversationId).toBe(b.conversationId);
   const beforeRefusal = {
     pipelines: getPipelines().pipelines.length,
     tasks: loadTasks().length,
@@ -195,6 +197,18 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
   expect(oldAction.status).toBe(403);
   expect(await oldAction.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
+  const beforeDecisionActions = JSON.stringify(getPipelines().pipelines);
+  for (const action of ["resolve-decision", "continue-review", "accept-head"] as const) {
+    const sendAction = (capability?: string) => PATCH(new NextRequest(`http://127.0.0.1:8898/api/pipelines/${predecessor.pipeline.id}`, {
+      method: "PATCH",
+      headers: { host: "127.0.0.1:8898", "content-type": "application/json", ...(capability ? { "x-llv-spawn-capability": capability } : {}) },
+      body: JSON.stringify({ action, actor: { kind: "operator" } }),
+    }), { params: Promise.resolve({ id: predecessor.pipeline.id }) });
+    expect((await sendAction(builder.capability)).status).toBe(403);
+    expect((await sendAction(b.capability)).status).toBe(400);
+    expect((await sendAction()).status).toBe(400);
+    expect(JSON.stringify(getPipelines().pipelines)).toBe(beforeDecisionActions);
+  }
   const oldHttpCreate = await POST(pipelineRequest(request(a, "old HTTP duplicate"), { "x-llv-spawn-capability": a.capability }));
   expect(oldHttpCreate.status).toBe(403);
   expect(await oldHttpCreate.json()).toMatchObject({ code: "orchestrator_seat_revoked", error: expect.stringContaining(b.conversationId) });
