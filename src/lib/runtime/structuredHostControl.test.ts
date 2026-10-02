@@ -239,9 +239,9 @@ test("an owned host ends through the runtime, bound to the process it authorized
     key: { engine: "claude", sessionId: CLAUDE_SESSION },
     expected: { pid: tree.pid, startIdentity: tree.startIdentity, bootEpoch: BOOT_EPOCH },
   }]);
-  /* The runtime retired the row inside its own lifecycle; retiring it a
-     second time here would be a second authority over one record. */
-  expect(retired).toEqual([]);
+  /* Runtime release ends its own host; the controller then retires the row
+     using the identities confirmed by the full process-tree sweep. */
+  expect(retired).toEqual([{ engine: "claude", sessionId: CLAUDE_SESSION }]);
   expect(procBackend.pidAlive(tree.pid)).toBeFalse();
 });
 
@@ -261,6 +261,7 @@ test("a runtime-confirmed exit receives no fallback group signal", async () => {
         return true;
       },
       signal: (pid) => { signals.push(pid); },
+      retireRegistryEntry: () => {},
     },
   );
 

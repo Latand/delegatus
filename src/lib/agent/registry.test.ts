@@ -114,8 +114,10 @@ function structuredLaunchFixture(store: AgentRegistry, pendingAction: "spawn" | 
 describe("agent registry", () => {
   test("survivor evidence fences structured host claims and spawn settlement", () => {
     const store = jsonRegistry(() => false);
-    const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
-    const artifactPath = `/sessions/${key.sessionId}.jsonl`;
+    const sessionId = crypto.randomUUID();
+    const artifactPath = `/sessions/${sessionId}.jsonl`;
+    const conversation = store.ensureConversation("codex", artifactPath, "default");
+    const key = { engine: "codex" as const, sessionId: conversation.generations[0]!.id };
     const root = { pid: 41_001, startIdentity: "41001:root" };
     const survivor = { pid: 41_002, startIdentity: "41002:child" };
     store.upsert({
@@ -142,6 +144,26 @@ describe("agent registry", () => {
     });
     expect(store.recordStructuredTerminationSurvivors(key, root, [root, survivor])).toBeTrue();
     expect(store.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true })).toBeNull();
+
+    const failedResume = store.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", accountId: "default", transport: "structured",
+      conversationId: conversation.id, purpose: "resume-successor", expectedArtifactPath: artifactPath,
+      launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+    });
+    if (failedResume.kind !== "created") throw new Error("expected a resume receipt");
+    store.upsert({
+      key, artifactPath, cwd: "/repo", accountId: "default", status: "live", host: null,
+      structuredHost: {
+        kind: "codex-app-server", endpoint: "stdio:root-dead", process: root, eventCursor: 1,
+        protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+      },
+      claimEpoch: 1, claimOwner: null, pendingAction: null,
+      structuredHostOperationId: failedResume.receipt.launchId,
+    });
+    expect(store.failStructuredSpawn(failedResume.receipt.launchId, "terminal spawn failure").claimed).toBeTrue();
+    expect(store.readOnlySnapshot().entries[`codex:${key.sessionId}`]).toMatchObject({
+      structuredHost: { process: root }, structuredTerminationSurvivors: [root, survivor],
+    });
 
     const profile = emptyLaunchProfile({ cwd: "/repo" });
     const begun = store.beginSpawnRequest({

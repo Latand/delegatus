@@ -6520,14 +6520,17 @@ export class AgentRegistry {
         process: clone(entry.structuredHost?.process ?? null),
         releaseRegisteredHost,
       };
+      const retainedSurvivors = entry.structuredTerminationSurvivors ?? [];
       /* A foreground launch can prove its transcript will never materialize
          while the host still refuses release. The receipt must settle so the
          stage can retry, and the exact process identity must remain listed
          so the Viewer can finish the reap without an operator searching the
-         process table. Only this launch's registered live host qualifies. */
-      if (options.retainRegisteredHost === true
+         process table. Only this launch's registered live host qualifies.
+         A captured descendant has the same preservation requirement: clearing
+         the root row would strand its identity and let a resume start a twin. */
+      if (retainedSurvivors.length > 0 || (options.retainRegisteredHost === true
         && releaseRegisteredHost
-        && entry.structuredHost?.process) {
+        && entry.structuredHost?.process)) {
         entry.pendingAction = null;
         entry.updatedAt = now();
         return { claimed: true, receipt: clone(receipt), cleanup };

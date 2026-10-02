@@ -335,7 +335,7 @@ export interface StructuredHostTerminationDependencies {
       release or process signal can make a child disappear from observation. */
   persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
-  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): void;
+  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void;
   /** Previously captured descendants whose root may have exited between retries. */
   retainedSurvivors?: readonly ProcessIdentity[];
   protectedPids?(): Set<number>;
@@ -392,10 +392,10 @@ function signalErrorCode(error: unknown): string | null {
  * Ends one structured host and everything under it.
  *
  * Through the runtime's own lifecycle when it still holds *this* host — that
- * releases the engine host and retires the registry row in one move — and by
- * process group when it does not, which is the only thing that reaches a
- * released or orphaned host (`conversation_action kill` answers "structured
- * runtime host is unavailable" for those, #1199). Either way the sweep runs:
+ * releases the engine host — and by process group when it does not, which is
+ * the only thing that reaches a released or orphaned host (`conversation_action
+ * kill` answers "structured runtime host is unavailable" for those, #1199).
+ * Either way the sweep runs:
  * the `nsenter`/`setpriv`/shell wrapper and every descendant get SIGTERM once,
  * then SIGKILL once for whatever is still standing. The registry row is retired
  * only when the tree is confirmed gone, and only while it still names the pid
@@ -414,7 +414,7 @@ export async function terminateStructuredHostTree(
   const signal = dependencies.signal ?? ((pid: number, value: NodeJS.Signals) => { process.kill(pid, value); });
   const retire = dependencies.retireRegistryEntry
     ?? ((key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]) => {
-      agentRegistry().terminateStructuredHost(key, expected, confirmed);
+      return agentRegistry().terminateStructuredHost(key, expected, confirmed);
     });
   const terminateOwned = dependencies.terminateOwnedHost ?? terminateStructuredDeliveryHost;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -439,7 +439,9 @@ export async function terminateStructuredHostTree(
   if (initialStatus === "dead" && !alive(pid)) {
     const retained = dependencies.retainedSurvivors ?? [];
     if (retained.length === 0) {
-      if (key) retire(key, expected, []);
+      if (key && retire(key, expected, []) === false) {
+        return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      }
       return { ok: true, via: "already-exited", pids: [] };
     }
     const stillUnresolved = retained.filter(identity => {
@@ -447,7 +449,9 @@ export async function terminateStructuredHostTree(
       catch { return true; }
     });
     if (stillUnresolved.length === 0) {
-      if (key) retire(key, expected, retained);
+      if (key && retire(key, expected, retained) === false) {
+        return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      }
       return { ok: true, via: "already-exited", pids: retained.map(identity => identity.pid) };
     }
   }
@@ -667,8 +671,12 @@ export async function terminateStructuredHostTree(
         ...partialEvidence(),
       };
     }
-    /* The runtime path already retired the row as part of its own lifecycle. */
-    if (key && via !== "runtime") retire(key, expected, [...identities.values()]);
+    /* The runtime can release its root before detached descendants are gone.
+       Retire only after the full captured tree has passed identity checks, and
+       require the registry to accept that exact evidence on every path. */
+    if (key && retire(key, expected, [...identities.values()]) === false) {
+      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+    }
     return { ok: true, via, pids: tree };
   } catch (error) {
     const evidence = partialEvidence();

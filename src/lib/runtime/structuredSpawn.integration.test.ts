@@ -3418,6 +3418,64 @@ test("a resume claim loser leaves the winning writer projection and ownership in
   journal.close();
 });
 
+test("a retained survivor fences resume before runtime admission even after the host column was cleared", async () => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `resume-survivor-fence-${sessionId}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "codex-subscription", launchProfile,
+    status: "dead", host: null, structuredHost: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+  });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription",
+    conversationId: conversation.id, purpose: "resume-successor", expectedArtifactPath: artifactPath,
+    launchProfile,
+  });
+  if (begun.kind !== "created") throw new Error("resume receipt was unavailable");
+  const snapshot = registry.readOnlySnapshot();
+  const current = snapshot.entries[`codex:${sessionId}`]!;
+  const survivors: ProcessIdentity[] = [{ pid: 41_111, startIdentity: "41111:retained", bootEpoch: systemBootEpoch() }];
+  const snapshotSpy = spyOn(registry, "readOnlySnapshot").mockImplementation(() => ({
+    ...snapshot,
+    entries: { ...snapshot.entries, [`codex:${sessionId}`]: { ...current, structuredHost: null, structuredTerminationSurvivors: survivors } },
+  }));
+  let runtimeAdmissions = 0;
+  let starts = 0;
+  const trackingClient: RuntimeHostClient = {
+    ...client,
+    command: async input => {
+      if (input.kind === "spawn") runtimeAdmissions += 1;
+      return client.command(input);
+    },
+  };
+  try {
+    await expect(spawnStructuredConversation({
+      engine: "codex", receipt: begun.receipt,
+      spec: { command: "codex", cwd, windowName: "resume", engine: "codex", transcript: artifactPath, launchProfile },
+      account: { engine: "codex", accountId: "codex-subscription", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "", registry, client: trackingClient,
+    }, {
+      startHost: async () => { starts += 1; return new RoundTripHost("codex", artifactPath, sessionId); },
+      processIdentity: () => captureProcessIdentity(process.pid),
+    })).rejects.toThrow("structured resume host termination still has live survivors");
+    expect(runtimeAdmissions).toBe(0);
+    expect(starts).toBe(0);
+    expect(await client.effectBatch(["runtime.spawn"], 0)).toEqual([]);
+  } finally {
+    snapshotSpy.mockRestore();
+    journal.close();
+  }
+});
+
 describe.each(["bind", "publish", "first-message"] as const)("structured spawn %s failure", (barrier) => {
   test("a concurrent replay never observes success", async () => {
     const id = crypto.randomUUID();
