@@ -89,6 +89,7 @@ import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
 import { projectDisplayName } from "@/lib/displayNames";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { orchestratorRelayPayload } from "@/lib/orchestrator/relay";
 import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -265,7 +266,7 @@ export interface ViewerControlDependencies {
     headers?: Record<string, string>,
     context?: McpToolCallContext,
   ): Promise<Record<string, unknown>>;
-  /** #1490: ONE attempt, never repeated once the request may have reached the
+  /** #1490: never repeated once the request may have reached the
       Viewer. Throws {@link McpDispatchUncertainError} for every failure that
       cannot prove the server did nothing. Optional so a harness that supplies
       only `post` keeps working; the production set always provides it. */
@@ -284,6 +285,7 @@ const CONTROL_DEADLINE_RESERVE_MS = 250;
 const CONTROL_RETRY_BASE_MS = 100;
 const CONTROL_RETRY_MAX_MS = 1_000;
 const TRANSIENT_CONTROL_STATUSES = new Set([502, 504]);
+const controlLastResponseAt = new Map<string, number>();
 
 class ViewerControlResponseError extends Error {
   constructor(message: string) {
@@ -505,8 +507,9 @@ async function postViewerControl(
 }
 
 /**
- * One dispatch of a recoverable mutation (#1490). No reconnect loop: the
- * request is written once, and what comes back is classified by what it can
+ * One potentially received dispatch of a recoverable mutation (#1490). A
+ * send reconnects only after a kernel refusal proves no request was sent.
+ * What comes back is classified by what it can
  * PROVE. A connection the kernel refused never carried a byte, so the server
  * did nothing; a reset, a timeout after the write, an unreadable or missing
  * body, and a proxy status that says nothing about the upstream all leave the
@@ -527,37 +530,73 @@ async function dispatchViewerControl(
   const budgetMs = context.deadlineAt === undefined
     ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(1, context.deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, budgetMs), {
-    signal: context.signal,
-    reason: "Viewer control dispatch timed out",
-  });
+  const reconnectSend = pathname === "/api/tmux";
+  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, budgetMs);
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
   let response: Response;
+  let attempt: ReturnType<typeof deadlineSignal>;
+  let attempts = 0;
+  const refusedSend = () => {
+    const endpoint = new URL(pathname, baseUrl).origin;
+    const lastResponseAt = controlLastResponseAt.get(baseUrl);
+    const lastResponseAgeMs = lastResponseAt === undefined ? null : Math.max(0, Date.now() - lastResponseAt);
+    return new McpUnadmittedRefusal(
+      `Viewer control is unreachable at ${endpoint} after ${attempts} attempts: the connection was refused before the request was sent (last response age: ${lastResponseAgeMs === null ? "unknown" : `${lastResponseAgeMs} ms`})`,
+      { endpoint, lastResponseAgeMs },
+    );
+  };
   /* From here on the request may be on the wire: the service reads this to
      tell a failure that happened BEFORE any dispatch from one after it. */
   if (context.dispatch) context.dispatch.attempted = true;
-  try {
-    response = await fetch(new URL(pathname, baseUrl), {
-      method: "POST",
-      // Redirects can repeat a POST after the first endpoint accepted it.
-      redirect: "error",
-      headers: requestHeaders,
-      body: JSON.stringify(body),
-      signal: attempt.signal,
+  while (true) {
+    attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+      signal: context.signal,
+      reason: "Viewer control dispatch timed out",
     });
-  } catch (error) {
-    attempt.release();
-    const code = (error as { code?: unknown }).code;
-    if (code === "ConnectionRefused" || code === "ECONNREFUSED") {
-      throw new McpDispatchNotExecutedError("Viewer control is unreachable: the connection was refused before the request was sent");
+    attempts += 1;
+    try {
+      response = await fetch(new URL(pathname, baseUrl), {
+        method: "POST",
+        // Redirects can repeat a POST after the first endpoint accepted it.
+        redirect: "error",
+        headers: requestHeaders,
+        body: JSON.stringify(body),
+        signal: attempt.signal,
+      });
+      // fetch owns the socket pool; record the observable response age instead.
+      controlLastResponseAt.delete(baseUrl);
+      controlLastResponseAt.set(baseUrl, Date.now());
+      if (controlLastResponseAt.size > 32) controlLastResponseAt.delete(controlLastResponseAt.keys().next().value!);
+      break;
+    } catch (error) {
+      attempt.release();
+      const code = (error as { code?: unknown }).code;
+      if (code === "ConnectionRefused" || code === "ECONNREFUSED") {
+        if (!reconnectSend) {
+          throw new McpDispatchNotExecutedError("Viewer control is unreachable: the connection was refused before the request was sent");
+        }
+        const delayMs = controlRetryDelay(attempts);
+        if (!context.signal?.aborted && Date.now() + delayMs < expiresAt) {
+          // Every preceding attempt was affirmatively refused before sending.
+          // Keep the same durable binding, body and downstream key.
+          try {
+            await waitForControlRetry(delayMs, context.signal);
+          } catch {
+            // Cancellation here cannot turn a refused connection into a send.
+            throw refusedSend();
+          }
+          continue;
+        }
+        throw refusedSend();
+      }
+      throw new McpDispatchUncertainError(
+        attempt.signal.aborted
+          ? "the Viewer did not answer before the dispatch deadline; the request may have been received"
+          : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"})`,
+      );
     }
-    throw new McpDispatchUncertainError(
-      attempt.signal.aborted
-        ? "the Viewer did not answer before the dispatch deadline; the request may have been received"
-        : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"})`,
-    );
   }
   let parsed: unknown;
   let unreadable = false;
@@ -1483,6 +1522,7 @@ async function sendMessage(
     Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
   context?: McpToolCallContext,
   downstreamKey = sendDownstreamKey(requestId(args)),
+  orchestratorRelayProject?: string,
 ): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -1490,7 +1530,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)("/api/tmux", {
+    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1501,6 +1541,7 @@ async function sendMessage(
       /* #1117: an MCP send is inter-agent traffic by definition; the sender role
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
+      ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
     }, callerCapabilityHeaders());
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
@@ -4275,6 +4316,7 @@ async function sendMessageToOrchestrator(
   dependencies: ViewerMcpDomainDependencies,
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
   requiredMessageText(args);
   const key = requestId(args);
@@ -4311,7 +4353,7 @@ async function sendMessageToOrchestrator(
       conversationId: recipient,
       transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
       path: undefined,
-    }, control, dependencies, context, orchestratorSendDownstreamKey(key));
+    }, control, dependencies, context, orchestratorSendDownstreamKey(key), project);
     return redactPayload({
       ...outcome, project, created,
       // Seat metadata describes only the recipient this dispatch actually used.
@@ -6056,15 +6098,45 @@ function orchestratorSendDownstreamKey(key: string): string {
 }
 
 function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
-  requiredMessageText(args);
+  const message = requiredMessageText(args);
+  const caller = recoveryCaller(dependencies);
+  const attribution = attributionOf(dependencies);
+  // Match HTTP admission: a designated seat takes precedence even when the
+  // root caller's general attribution also identifies it as the voice gateway.
+  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find((candidate) => candidate.conversationId === attribution.conversationId);
+  if (!seat && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+    throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
+      code: "orchestrator_relay_refused", retryable: false,
+    });
+  }
   return {
-    caller: recoveryCaller(dependencies),
+    // Relay receipts belong to the exact sender, never its successor seat.
+    caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
+      text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
+    },
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
   };
+}
+
+/** The gateway keeps its existing relay path. A seat gets messaging only:
+    auto-creation still goes through the unchanged operator-only seat route. */
+function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  const caller = attributionOf(dependencies);
+  if (caller.kind === "gateway") return;
+  if (caller.conversationId && !caller.via) {
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;
+  }
+  throw new McpToolRefusal("only a designated orchestrator seat or the voice gateway may relay to an orchestrator", {
+    code: "orchestrator_relay_refused", retryable: false,
+  });
 }
 
 function bindSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
@@ -6133,11 +6205,15 @@ async function recoverSend(
   if (legacy) {
     return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "no durable evidence establishes the owner of this send", ids: {}, ownership: "unknown" };
   }
+  if (binding.toolName === "send_message_to_orchestrator" && !binding.sendPayload) {
+    return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
+  }
   if (!binding.target.identity) {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };
   }
   const ports: SendSettlementPorts = dependencies.sendSettlementPorts?.() ?? {};
-  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey, ...(typeof args?.text === "string" ? { text: args.text } : {}) }, ports);
+  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey,
+    ...(binding.sendPayload ?? (typeof args?.text === "string" ? { text: args.text } : {})) }, ports);
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };
   }
