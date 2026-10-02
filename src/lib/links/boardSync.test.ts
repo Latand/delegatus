@@ -5,7 +5,8 @@
  * TCP counting proxy between the two (`wireMeter.ts`); body figures are
  * `Buffer.byteLength` of what the test server received and answered.
  */
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,6 +29,11 @@ const processes: ChildProcessWithoutNullStreams[] = [];
 const installProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const installPorts = new Map<string, number>();
 const meters: Meter[] = [];
+// Completed cases must not retain dozens of Bun installs inside the gate's
+// memory scope while later cases measure per-process CPU.
+afterEach(async () => {
+  for (const url of [...installProcesses.keys()]) await stopInstall(url);
+});
 afterAll(() => {
   for (const counts of meters) counts.close();
   for (const child of processes) if (child.pid && !child.killed) child.kill("SIGTERM");
@@ -120,11 +126,11 @@ function oldSource(): string {
 }
 
 /** Merge-base processes used to seed state as it existed before this fix. */
-function mergeBaseSource(): string {
-  const source = path.join(root, "source-merge-base");
+function mergeBaseSource(revision = "4baabbec88d86b5a9a69d178e2be9881d12fa7fe"): string {
+  const source = path.join(root, `source-merge-base-${revision}`);
   if (fs.existsSync(source)) return source;
   fs.mkdirSync(source);
-  const archive = spawnSync("git", ["archive", "4baabbec88d86b5a9a69d178e2be9881d12fa7fe", "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
+  const archive = spawnSync("git", ["archive", revision, "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
   if (archive.status !== 0) throw new Error(`merge-base source archive failed: ${archive.stderr.toString()}`);
   const unpack = spawnSync("tar", ["-x", "-C", source], { input: archive.stdout });
   if (unpack.status !== 0) throw new Error(`merge-base source extraction failed: ${unpack.stderr.toString()}`);
@@ -1023,6 +1029,7 @@ test("2 000 expired Done omissions per install keep unchanged idle syncs within 
   for (let i = 0; i < 100; i++) await sync(installs[0]!, peerId);
   const cpuAfter = await cpu();
   const idle = await Promise.all(installs.map((side) => figures(side)));
+  console.info("Expired Done idle CPU per 100 syncs (ms):", cpuAfter.map((after, side) => after - cpuBefore[side]!));
   for (const side of [0, 1]) {
     expect({ side, rowReads: idle[side]!.rowReads, writes: idle[side]!.writes }).toEqual({ side, rowReads: 0, writes: 0 });
     expect(idle[side]!.revisions).toEqual(before[side]!.revisions);
@@ -1419,6 +1426,65 @@ test("a receiver upgraded after its sender replays title recovery from its consu
   await sync(upgradedReceiver, peerId);
   expect(await taskOn(upgradedReceiver, task.id)).toMatchObject({ text: "Sender-first automatic title", details: "Preserve these details", status: "blocked" });
 }, 60_000);
+
+for (const upgradeInitiator of [false, true]) {
+  test(`consumed v3 title recovery survives an ${upgradeInitiator ? "initiating" : "accepting"}-only upgrade and restart`, async () => {
+    const legacy = mergeBaseSource("7b5cc5fe");
+    const names = [`title-v3-A-${upgradeInitiator}`, `title-v3-B-${upgradeInitiator}`];
+    let a = await install(names[0]!, {}, legacy), b = await install(names[1]!, {}, legacy);
+    const fromA = await createOn(a, "Authoritative initiating title");
+    const fromB = await createOn(b, "Authoritative accepting title");
+    const edited = await createOn(a, "Older owner title");
+    const peerId = await link(a, b);
+    await sync(a, peerId);
+    const saved = await Promise.all([tasksOf(a), tasksOf(b)]);
+    await stopInstall(a);
+    await stopInstall(b);
+    const bInstallId = JSON.parse(fs.readFileSync(path.join(root, names[1]!, "links/self.json"), "utf8")).installId as string;
+    const newerTextStamp = `${String(Date.now()).padStart(13, "0")}.999.${installPrefix(bInstallId)}`;
+    // Reproduce the persisted equal-stamp loss without advancing the log or
+    // resetting cursors. Both directions have already consumed real v3 feeds.
+    for (const [side, name] of names.entries()) {
+      const db = new Database(path.join(root, name, "state.sqlite"));
+      try {
+        if (side === 0) {
+          const cursor = db.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection = 'board_links' AND row_key = ?").get(`tasks:${peerId}`)!;
+          expect(JSON.parse(cursor.value_json)).toMatchObject({ taskWireVersion: 3, cursor: { boardReplayVersion: 1 } });
+        }
+        const lostId = side === 0 ? fromB.id : fromA.id;
+        for (const task of saved[side]!) {
+          if (task.id === lostId) task.text = "Untitled task";
+          else if (side === 1 && task.id === edited.id) {
+            task.text = "Newer local title";
+            task.sync!.s.text = newerTextStamp;
+          } else continue;
+          db.query("UPDATE state_rows SET value_json = ? WHERE collection = 'tasks' AND row_key = ?").run(JSON.stringify(task), `t:${task.id}`);
+        }
+      } finally { db.close(); }
+    }
+    a = await install(names[0]!, {}, upgradeInitiator ? process.cwd() : legacy);
+    b = await install(names[1]!, {}, upgradeInitiator ? legacy : process.cwd());
+    expect((await taskOn(b, fromA.id))?.text).toBe("Untitled task");
+    expect((await taskOn(a, fromB.id))?.text).toBe("Untitled task");
+    await sync(a, peerId);
+    await sync(a, peerId);
+    expect(await taskOn(b, fromA.id)).toMatchObject({ text: fromA.text, sync: { s: { text: saved[1]!.find((task) => task.id === fromA.id)!.sync!.s.text } } });
+    expect(await taskOn(a, fromB.id)).toMatchObject({ text: fromB.text, sync: { s: { text: saved[0]!.find((task) => task.id === fromB.id)!.sync!.s.text } } });
+    expect(await taskOn(b, edited.id)).toMatchObject({ text: "Newer local title", sync: { s: { text: newerTextStamp } } });
+    await stopInstall(a);
+    await stopInstall(b);
+    a = await install(names[0]!, {}, upgradeInitiator ? process.cwd() : legacy);
+    b = await install(names[1]!, {}, upgradeInitiator ? legacy : process.cwd());
+    const before = await Promise.all([tasksOf(a), tasksOf(b)]);
+    await request(b, "/test/capture?on=1");
+    for (let i = 0; i < 3; i++) await sync(a, peerId);
+    expect(await Promise.all([tasksOf(a), tasksOf(b)])).toEqual(before);
+    for (const call of await captured(b)) {
+      expect(JSON.parse(call.request).push?.rows ?? []).toEqual([]);
+      expect(JSON.parse(call.response).tasks?.rows ?? []).toEqual([]);
+    }
+  }, 60_000);
+}
 
 test("task wire v3 keeps board sync compatible with a strict v2 peer in both upgrade orders", async () => {
   let current = await install("rolling-board-current");

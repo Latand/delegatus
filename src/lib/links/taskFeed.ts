@@ -13,7 +13,7 @@ import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
-import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 
 import { encodeTask, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -80,10 +80,29 @@ type EligibilitySweep = {
   after: string | null;
 };
 const eligibilitySweeps = new Map<string, Map<string, EligibilitySweep>>();
+type EligibilityRevisions = Pick<EligibilitySweep, "taskRevision" | "omissionRevision" | "pipelineRevision">;
+const eligibilityRevisions = new Map<string, { signature: string; pipelineSignature: string; revisions: EligibilityRevisions }>();
+
+/** Opening a read-only connection on every idle page costs more than the
+ * sync budget. Observe WAL writes too, and read the revision only on change. */
+function readEligibilityRevisions(source: NonNullable<ReturnType<typeof taskFeedSource>>, omissions: SqliteStateCollection<OmittedTask>): EligibilityRevisions {
+  const pipelineDatabase = statePath("state.sqlite");
+  const signature = stateDatabaseSignature(source.database);
+  const pipelineSignature = pipelineDatabase === source.database ? signature : stateDatabaseSignature(pipelineDatabase);
+  const held = eligibilityRevisions.get(source.database);
+  if (held?.signature === signature && held.pipelineSignature === pipelineSignature) return held.revisions;
+  const revisions = { taskRevision: source.revision(), omissionRevision: omissions.revision(),
+    pipelineRevision: readStateCollectionRevision(pipelineDatabase, "pipelines") };
+  // Cache the signature read before the query: a concurrent write after it
+  // must invalidate the result on the next call.
+  eligibilityRevisions.set(source.database, { signature, pipelineSignature, revisions });
+  return revisions;
+}
 
 function seatSignature(): string {
   try {
-    const stat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true });
+    const stat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
+    if (!stat) return "absent";
     return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
@@ -111,12 +130,11 @@ function omittedTasks(database: string, create = false): SqliteStateCollection<O
 /** Remember exclusions across restarts. When external state makes one eligible
  * again, append its unchanged row to the normal log before reading the cursor.
  * Requeue commits before removing the marker, so a crash can only replay it. */
-function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource>>, filter: FeedFilter, eligible: (task: BoardTask) => boolean): void {
+function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource>>, filter: FeedFilter, eligible: (task: BoardTask) => boolean): number {
   const omissions = omittedTasks(source.database);
-  if (!omissions) return;
+  if (!omissions) return source.revision();
   const context = {
-    taskRevision: source.revision(), omissionRevision: omissions.revision(),
-    files: lastScannedFiles(), pipelineRevision: readStateCollectionRevision(statePath("state.sqlite"), "pipelines"), seats: seatSignature(),
+    ...readEligibilityRevisions(source, omissions), files: lastScannedFiles(), seats: seatSignature(),
   };
   let sweeps = eligibilitySweeps.get(source.database);
   if (!sweeps) eligibilitySweeps.set(source.database, sweeps = new Map());
@@ -127,7 +145,7 @@ function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource
   // cannot keep restarting at the first omission and starve the later keys.
   if (!sweep || sweep.after === null) {
     if (sweep && sweep.taskRevision === context.taskRevision && sweep.omissionRevision === context.omissionRevision
-      && sweep.files === context.files && sweep.pipelineRevision === context.pipelineRevision && sweep.seats === context.seats) return;
+      && sweep.files === context.files && sweep.pipelineRevision === context.pipelineRevision && sweep.seats === context.seats) return context.taskRevision;
     sweep = { ...context, after: "" };
     sweeps.set(scope, sweep);
   }
@@ -144,6 +162,7 @@ function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource
   const deleted = [...resumed, ...removed];
   if (deleted.length) omissions.boundedPatch(deleted.length, (tx) => { for (const id of deleted) tx.delete(id); });
   sweep.after = batch.length < SCAN_BATCH ? null : batch.at(-1)!.id;
+  return resumed.length ? source.revision() : context.taskRevision;
 }
 
 function trackOmission(task: BoardTask, database: string, eligible: (task: BoardTask) => boolean): boolean {
@@ -181,10 +200,9 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   const source = taskFeedSource(filter.filePath ?? TASKS_FILE);
   if (!source) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
   const exportable = exportableTasks(filter);
-  resumeOmittedTasks(source, filter, exportable);
+  const current = resumeOmittedTasks(source, filter, exportable);
   const [revision, key = ""] = after;
   // Unchanged eligibility context leaves omissions off the idle read path.
-  const current = source.revision();
   if (revision > current) return { kind: "resync" };
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
   const tombstones = tombstoneCollection(source.database, false);
