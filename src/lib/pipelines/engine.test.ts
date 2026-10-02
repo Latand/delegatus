@@ -21,7 +21,7 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
@@ -47,6 +47,25 @@ type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
 registerPipelineTick(async () => {});
 
 afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+
+/** These state-machine assertions wait for remote settlement. Immediate
+    acceptance and concurrent reads are covered by remoteActions.test.ts. */
+const patchPipeline: typeof rawPatchPipeline = async (id, request, ports = defaultPipelinePorts(), actor) => {
+  const accepted = await rawPatchPipeline(id, request, ports, actor);
+  if (accepted.error || !accepted.pipeline) return accepted;
+  if (accepted.pipeline.remoteAction?.state === "pending") await engineModule.settlePendingRemoteActions(ports);
+  let current = loadPipelines().find((pipeline) => pipeline.id === id) ?? accepted.pipeline;
+  if (current.remoteAction?.state === "settled" && current.remoteAction.error
+    && (request.action === "retry-stage" || request.action === "takeover")) return { error: current.remoteAction.error, status: 409 };
+  if ((request.action === "publish" || request.action === "retry-stage") && current.delivery?.operation?.state === "pending") {
+    const { publishPipelineBranch } = await import("./git");
+    const result = await publishPipelineBranch(current, ports.exec, { acceptedSha: current.delivery.operation.sha });
+    if (!result.ok) return { error: result.error, status: 409 };
+    if (result.remote === "unreachable") return { error: result.detail, status: 409 };
+    current = loadPipelines().find((pipeline) => pipeline.id === id) ?? current;
+  }
+  return { ...accepted, pipeline: current };
+};
 
 /** Lifecycle assertions read the durable result after the controller drains. */
 async function closeAndDrain(id: string, req: Parameters<typeof patchPipeline>[1], ports: PipelinePorts) {
@@ -631,23 +650,23 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   fs.mkdirSync(repo);
-  git(root, "init", "--bare", "--initial-branch=main", origin);
-  git(repo, "init", "--initial-branch=main");
-  git(repo, "config", "user.name", "Fixture");
-  git(repo, "config", "user.email", "noreply@example.com");
-  git(repo, "config", "commit.gpgSign", "false");
+  (await git(root, "init", "--bare", "--initial-branch=main", origin));
+  (await git(repo, "init", "--initial-branch=main"));
+  (await git(repo, "config", "user.name", "Fixture"));
+  (await git(repo, "config", "user.email", "noreply@example.com"));
+  (await git(repo, "config", "commit.gpgSign", "false"));
   fs.writeFileSync(path.join(repo, ".gitignore"), "sentinel.tmp\n");
-  git(repo, "add", ".gitignore");
-  git(repo, "commit", "-m", "base");
-  git(repo, "remote", "add", "origin", origin);
-  git(repo, "push", "origin", "main");
-  const base = git(repo, "rev-parse", "HEAD");
+  (await git(repo, "add", ".gitignore"));
+  (await git(repo, "commit", "-m", "base"));
+  (await git(repo, "remote", "add", "origin", origin));
+  (await git(repo, "push", "origin", "main"));
+  const base = (await git(repo, "rev-parse", "HEAD"));
   const h = harness();
   h.ports.exec = realExec;
   h.ports.provisionExec = realProvisionExec;
@@ -674,22 +693,22 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
     const branch = loadPipelines().find((item) => item.id === id)!.branch;
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(accepted);
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
     fs.writeFileSync(path.join(repo, "asset.bin"), crypto.randomBytes(1_200_000));
-    git(repo, "add", "main.txt");
-    git(repo, "add", "asset.bin");
-    git(repo, "commit", "-m", "advance main");
-    git(repo, "push", "origin", "main");
-    git(worktree, "rebase", "origin/main");
+    (await git(repo, "add", "main.txt"));
+    (await git(repo, "add", "asset.bin"));
+    (await git(repo, "commit", "-m", "advance main"));
+    (await git(repo, "push", "origin", "main"));
+    (await git(worktree, "rebase", "origin/main"));
     fs.appendFileSync(path.join(worktree, ".gitignore"), "builder-rule\n");
     fs.appendFileSync(path.join(worktree, "brief.md"), "builder elaboration\n");
     fs.writeFileSync(path.join(worktree, "build.txt"), "builder content\n");
-    git(worktree, "add", ".gitignore", "brief.md", "build.txt");
-    git(worktree, "commit", "-m", "build after rebase");
-    const rebased = git(worktree, "rev-parse", "HEAD");
-    const tree = git(worktree, "rev-parse", "HEAD^{tree}");
+    (await git(worktree, "add", ".gitignore", "brief.md", "build.txt"));
+    (await git(worktree, "commit", "-m", "build after rebase"));
+    const rebased = (await git(worktree, "rev-parse", "HEAD"));
+    const tree = (await git(worktree, "rev-parse", "HEAD^{tree}"));
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -697,9 +716,9 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     expect(current.state).toBe("running");
     expect(current.cursor?.stageId).toBe("review");
     const reconciled = current.lastPassedCommit;
-    expect(git(worktree, "rev-parse", `${reconciled}^{tree}`)).toBe(tree);
-    expect(git(worktree, "rev-list", "--parents", "-n", "1", reconciled)).toBe(`${reconciled} ${rebased} ${accepted}`);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(reconciled);
+    expect((await git(worktree, "rev-parse", `${reconciled}^{tree}`))).toBe(tree);
+    expect((await git(worktree, "rev-list", "--parents", "-n", "1", reconciled))).toBe(`${reconciled} ${rebased} ${accepted}`);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(reconciled);
     expect(current.publishedCommit).toBe(reconciled);
     for (let n = 0; n < 4 && h.spawnInputs.length < 3; n += 1) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(3);
@@ -720,20 +739,20 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     const { git, h, id, repo, origin, worktree } = fixture;
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "dropped.md"), "accepted content\n");
-    git(worktree, "add", "dropped.md");
-    git(worktree, "commit", "-m", "accepted requirement");
-    const dropped = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "dropped.md"));
+    (await git(worktree, "commit", "-m", "accepted requirement"));
+    const dropped = (await git(worktree, "rev-parse", "HEAD"));
     fs.writeFileSync(path.join(worktree, "kept.md"), "kept content\n");
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
     const branch = loadPipelines().find((item) => item.id === id)!.branch;
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
-    git(repo, "add", "main.txt");
-    git(repo, "commit", "-m", "advance main");
-    git(repo, "push", "origin", "main");
-    git(worktree, "rebase", "--onto", "origin/main", dropped);
-    const rewritten = git(worktree, "rev-parse", "HEAD");
+    (await git(repo, "add", "main.txt"));
+    (await git(repo, "commit", "-m", "advance main"));
+    (await git(repo, "push", "origin", "main"));
+    (await git(worktree, "rebase", "--onto", "origin/main", dropped));
+    const rewritten = (await git(worktree, "rev-parse", "HEAD"));
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -743,8 +762,8 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     expect(parked.stateDetail).toContain(dropped);
     expect(parked.stateDetail).not.toContain(`dropped accepted commits: ${accepted}`);
     expect(parked.lastPassedCommit).toBe(accepted);
-    expect(git(worktree, "rev-parse", "HEAD")).toBe(rewritten);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    expect((await git(worktree, "rev-parse", "HEAD"))).toBe(rewritten);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(accepted);
     expect(h.spawnInputs).toHaveLength(2);
   } finally {
     savePipelines([]);
@@ -764,8 +783,8 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    const built = git(worktree, "rev-parse", "HEAD");
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(built);
+    const built = (await git(worktree, "rev-parse", "HEAD"));
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(built);
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail")], h.ports);
@@ -775,7 +794,7 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     const offline = `${origin}.offline`;
     fs.renameSync(origin, offline);
     await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    const fixed = (await git(worktree, "rev-parse", "HEAD"));
     expect(fixed).not.toBe(built);
     expect(loadPipelines().find((item) => item.id === id)).toMatchObject({
       state: "running", cursor: { stageId: "review-fix", state: "committing" }, lastPassedCommit: fixed,
@@ -783,13 +802,13 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     expect(h.spawnInputs).toHaveLength(3);
     fs.renameSync(offline, origin);
     await tickPipelines([], h.ports);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(fixed);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(fixed);
     for (let n = 0; n < 4 && h.spawnInputs.length < 4; n += 1) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(4);
     await tickPipelines([h.finish("/codex/stage-4.jsonl", "pass")], h.ports);
     const completed = loadPipelines().find((item) => item.id === id)!;
     expect(completed).toMatchObject({ state: "completed", lastPassedCommit: fixed, publishedCommit: fixed });
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(completed.lastPassedCommit);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(completed.lastPassedCommit);
   } finally {
     savePipelines([]);
     if (fs.existsSync(`${fixture.origin}.offline`)) fs.renameSync(`${fixture.origin}.offline`, fixture.origin);
@@ -808,7 +827,7 @@ test("an owner keeps a terminal read-only declared output local after publishing
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    const built = git(origin, "rev-parse", `refs/heads/${branch}`);
+    const built = (await git(origin, "rev-parse", `refs/heads/${branch}`));
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(worktree, "review.md"), "approved\n");
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
@@ -816,7 +835,7 @@ test("an owner keeps a terminal read-only declared output local after publishing
     expect(completed.state).toBe("completed");
     expect(completed.lastPassedCommit).not.toBe(built);
     expect(completed.publishedCommit).toBe(built);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(built);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(built);
     expect(completed.runs[1]!.attempts[0]!.outputBaseHead).toBe(built);
   } finally {
     savePipelines([]);
@@ -833,9 +852,9 @@ test("skip carries a committed fix into review and completion without touching i
     const { h, git, worktree, id, base } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "accepted fix\n");
     fs.writeFileSync(path.join(worktree, "sentinel.tmp"), "untouched\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "fix B");
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "fix.txt"));
+    (await git(worktree, "commit", "-m", "fix B"));
+    const fixed = (await git(worktree, "rev-parse", "HEAD"));
     expect(fixed).not.toBe(base);
     h.setConversationActive(false);
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision")], h.ports);
@@ -846,7 +865,7 @@ test("skip carries a committed fix into review and completion without touching i
     });
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);
-    expect(git(worktree, "rev-parse", "HEAD")).toBe(fixed);
+    expect((await git(worktree, "rev-parse", "HEAD"))).toBe(fixed);
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
     expect(loadPipelines().find((item) => item.id === id)!).toMatchObject({ state: "completed", lastPassedCommit: fixed, cursor: null });
     expect(fs.readFileSync(path.join(worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
@@ -863,9 +882,9 @@ test("remote skip publishes the accepted head before its reviewer can start", as
   ], "remote-branch");
   try {
     fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
-    fixture.git(fixture.worktree, "add", "fix.txt");
-    fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
-    const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    (await fixture.git(fixture.worktree, "add", "fix.txt"));
+    (await fixture.git(fixture.worktree, "commit", "-m", "accepted fix"));
+    const accepted = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
     fixture.h.setConversationActive(false);
     await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "needs_decision")], fixture.h.ports);
     expect((await patchPipeline(fixture.id, { action: "skip-stage" }, fixture.h.ports)).error).toBeUndefined();
@@ -873,7 +892,7 @@ test("remote skip publishes the accepted head before its reviewer can start", as
     expect(waiting).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "fix", state: "committing" } });
     expect(waiting.runs[0]!.attempts[0]!.state).toBe("skipped");
     expect(fixture.h.spawnInputs).toHaveLength(1);
-    expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+    expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
     await tickPipelines([], fixture.h.ports);
     expect(loadPipelines().find((item) => item.id === fixture.id)!.cursor?.stageId).toBe("review");
     await tickPipelines([], fixture.h.ports);
@@ -894,8 +913,8 @@ for (const completion of ["pass", "skip"] as const) {
     try {
       fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
       if (completion === "skip") {
-        fixture.git(fixture.worktree, "add", "fix.txt");
-        fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
+        (await fixture.git(fixture.worktree, "add", "fix.txt"));
+        (await fixture.git(fixture.worktree, "commit", "-m", "accepted fix"));
       }
       fixture.h.setConversationActive(false);
       fs.renameSync(fixture.origin, offline);
@@ -905,7 +924,7 @@ for (const completion of ["pass", "skip"] as const) {
       }
       await tickPipelines([], fixture.h.ports);
       const waiting = loadPipelines().find((item) => item.id === fixture.id)!;
-      const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+      const accepted = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
       expect(waiting.lastPassedCommit).toBe(accepted);
       expect(waiting.publishedCommit).toBeNull();
       expect(waiting.cursor).toMatchObject({ stageId: "fix", state: "committing" });
@@ -913,7 +932,7 @@ for (const completion of ["pass", "skip"] as const) {
       fs.renameSync(offline, fixture.origin);
       await tickPipelines([], fixture.h.ports);
       await tickPipelines([], fixture.h.ports);
-      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+      expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
       expect(fixture.h.spawnInputs).toHaveLength(2);
     } finally {
       savePipelines([]);
@@ -935,7 +954,7 @@ test("ordinary retry leaves dirty work for the next attempt", async () => {
     expect(fs.readFileSync(path.join(fixture.worktree, "draft.txt"), "utf8")).toBe("unfinished\n");
     await tickPipelines([], fixture.h.ports);
     expect(fixture.h.spawnInputs).toHaveLength(2);
-    expect(fixture.git(fixture.worktree, "rev-parse", "HEAD")).toBe(fixture.base);
+    expect((await fixture.git(fixture.worktree, "rev-parse", "HEAD"))).toBe(fixture.base);
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -955,7 +974,7 @@ test("a read-only architect pass commits its declared fix output through settlem
     const current = loadPipelines().find((item) => item.id === fixture.id)!;
     expect(current.state).toBe("completed");
     expect(current.lastPassedCommit).not.toBe(fixture.base);
-    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("reports/fix.md");
+    expect((await fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("reports/fix.md");
     expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
   } finally {
     savePipelines([]);
@@ -977,9 +996,9 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
     };
     savePipelines([admitted]);
     fs.writeFileSync(path.join(worktree, "build.txt"), "accepted build\n");
-    git(worktree, "add", "build.txt");
-    git(worktree, "commit", "-m", "accepted build");
-    const prHead = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "build.txt"));
+    (await git(worktree, "commit", "-m", "accepted build"));
+    const prHead = (await git(worktree, "rev-parse", "HEAD"));
     h.setConversationActive(false);
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     await tickPipelines([], h.ports);
@@ -1049,12 +1068,12 @@ test("a skipped legacy architect publishes its declared output to the review flo
     expect((await patchPipeline(id, { action: "skip-stage" }, h.ports)).error).toBeUndefined();
     await tickPipelines([], h.ports);
     const skipped = loadPipelines().find((item) => item.id === id)!;
-    const accepted = git(worktree, "rev-parse", "HEAD");
+    const accepted = (await git(worktree, "rev-parse", "HEAD"));
     expect(accepted).not.toBe(fixture.base);
     expect(skipped).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "review" } });
     expect(skipped.runs[0]!.attempts[0]!.state).toBe("skipped");
-    expect(git(worktree, "show", "--name-only", "--format=", "HEAD")).toBe("fix.txt");
-    expect(git(origin, "rev-parse", `refs/heads/${skipped.branch}`)).toBe(accepted);
+    expect((await git(worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("fix.txt");
+    expect((await git(origin, "rev-parse", `refs/heads/${skipped.branch}`))).toBe(accepted);
     await tickPipelines([], h.ports);
     const review = loadPipelines().find((item) => item.id === id)!;
     expect(review.state).toBe("running");
@@ -1080,7 +1099,7 @@ test(`a legacy architect repair commits its declared output before ${publication
     fixture.h.setConversationActive(false);
     await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "pass")], fixture.h.ports);
     await tickPipelines([], fixture.h.ports);
-    const first = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    const first = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
     const flow = fixture.h.flows.get("flow-1")!;
     expect(flow).toBeDefined();
     const transcript = path.join(fixture.root, "architect-repair.jsonl");
@@ -1107,19 +1126,19 @@ test(`a legacy architect repair commits its declared output before ${publication
     record.mtime = Date.now() / 1_000;
     if (publication === "remote-branch") fs.renameSync(fixture.origin, offline);
     expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
-    const repaired = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    const repaired = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
     expect(repaired).not.toBe(first);
     if (publication === "remote-branch") {
       expect(flow.state).toBe("fixing");
       expect(flow.rounds).toHaveLength(1);
       fs.renameSync(offline, fixture.origin);
       expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
-      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`)).toBe(repaired);
+      expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`))).toBe(repaired);
     }
     expect(flow.state).toBe("spawning");
     expect(flow.rounds[1]!.reviewHeadSha).toBe(repaired);
     expect(loadPipelines().find((item) => item.id === fixture.id)!.lastPassedCommit).toBe(repaired);
-    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("report.md");
+    expect((await fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("report.md");
     expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("keep me\n");
   } finally {
     savePipelines([]);
@@ -1136,24 +1155,24 @@ test("a new owner reviews the commit published after the producer turn ends", as
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   try {
     fs.mkdirSync(repo);
-    git(root, "init", "--bare", "--initial-branch=main", origin);
-    git(repo, "init", "--initial-branch=main");
-    git(repo, "config", "user.name", "Fixture");
-    git(repo, "config", "user.email", "noreply@example.com");
-    git(repo, "config", "commit.gpgSign", "false");
+    (await git(root, "init", "--bare", "--initial-branch=main", origin));
+    (await git(repo, "init", "--initial-branch=main"));
+    (await git(repo, "config", "user.name", "Fixture"));
+    (await git(repo, "config", "user.email", "noreply@example.com"));
+    (await git(repo, "config", "commit.gpgSign", "false"));
     fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
-    git(repo, "add", "base.txt");
-    git(repo, "commit", "-m", "base");
-    git(repo, "remote", "add", "origin", origin);
-    git(repo, "push", "origin", "main");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "base.txt"));
+    (await git(repo, "commit", "-m", "base"));
+    (await git(repo, "remote", "add", "origin", origin));
+    (await git(repo, "push", "origin", "main"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
 
     const h = harness();
     h.ports.exec = realExec;
@@ -1170,8 +1189,8 @@ test("a new owner reviews the commit published after the producer turn ends", as
     const id = created.pipeline.id;
     await tickPipelines([], h.ports);
     const lane = loadPipelines().find((item) => item.id === id)!;
-    expect(git(lane.worktreeDir, "branch", "--show-current")).toBe("feature/shared");
-    expect(realExec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${lane.branch}`], repo).code).not.toBe(0);
+    expect((await git(lane.worktreeDir, "branch", "--show-current"))).toBe("feature/shared");
+    expect((await realExec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${lane.branch}`], repo)).code).not.toBe(0);
     await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(lane.worktreeDir, "work.txt"), "producer work\n");
     const ready = h.finish("/codex/stage-1.jsonl", "pass");
@@ -1184,11 +1203,11 @@ test("a new owner reviews the commit published after the producer turn ends", as
     ready.activity = "idle";
     h.setConversationActive(false);
     await tickPipelines([ready], h.ports);
-    const committed = git(lane.worktreeDir, "rev-parse", "HEAD");
+    const committed = (await git(lane.worktreeDir, "rev-parse", "HEAD"));
     expect(committed).not.toBe(base);
     expect(h.spawnInputs).toHaveLength(1);
     for (let n = 0; n < 5 && h.spawnInputs.length === 1; n += 1) await tickPipelines([], h.ports);
-    expect(git(origin, "rev-parse", "refs/heads/feature/shared")).toBe(committed);
+    expect((await git(origin, "rev-parse", "refs/heads/feature/shared"))).toBe(committed);
     expect(loadPipelines().find((item) => item.id === id)!.lastPassedCommit).toBe(committed);
     expect(h.spawnInputs).toHaveLength(2);
     await tickPipelines([], h.ports);
@@ -1207,28 +1226,28 @@ for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "l
     const origin = path.join(root, "origin.git");
     const { realExec } = await import("@/lib/workflows/provision");
     const { realProvisionExec } = await import("./git");
-    const git = (cwd: string, ...args: string[]) => {
-      const result = realExec("git", args, cwd);
+    const git = async (cwd: string, ...args: string[]) => {
+      const result = (await realExec("git", args, cwd));
       if (result.code !== 0) throw new Error(result.stderr || result.stdout);
       return result.stdout.trim();
     };
     try {
       fs.mkdirSync(repo);
-      git(repo, "init", "--initial-branch=main");
-      git(repo, "config", "user.name", "Fixture");
-      git(repo, "config", "user.email", "noreply");
-      git(repo, "config", "commit.gpgSign", "false");
-      git(repo, "commit", "--allow-empty", "-m", "pinned base");
-      const base = git(repo, "rev-parse", "HEAD");
-      git(root, "init", "--bare", "--initial-branch=main", origin);
-      git(repo, "remote", "add", "origin", origin);
-      git(repo, "push", "origin", "main");
-      git(repo, "checkout", "-b", "feature/provision");
-      git(repo, "commit", "--allow-empty", "-m", "published head");
-      git(repo, "push", "origin", "feature/provision");
-      const published = git(repo, "rev-parse", "HEAD");
-      git(repo, "commit", "--allow-empty", "-m", "unpublished leftover");
-      const leftover = git(repo, "rev-parse", "HEAD");
+      (await git(repo, "init", "--initial-branch=main"));
+      (await git(repo, "config", "user.name", "Fixture"));
+      (await git(repo, "config", "user.email", "noreply"));
+      (await git(repo, "config", "commit.gpgSign", "false"));
+      (await git(repo, "commit", "--allow-empty", "-m", "pinned base"));
+      const base = (await git(repo, "rev-parse", "HEAD"));
+      (await git(root, "init", "--bare", "--initial-branch=main", origin));
+      (await git(repo, "remote", "add", "origin", origin));
+      (await git(repo, "push", "origin", "main"));
+      (await git(repo, "checkout", "-b", "feature/provision"));
+      (await git(repo, "commit", "--allow-empty", "-m", "published head"));
+      (await git(repo, "push", "origin", "feature/provision"));
+      const published = (await git(repo, "rev-parse", "HEAD"));
+      (await git(repo, "commit", "--allow-empty", "-m", "unpublished leftover"));
+      const leftover = (await git(repo, "rev-parse", "HEAD"));
       const h = harness();
       h.ports.exec = realExec;
       h.ports.provisionExec = realProvisionExec;
@@ -1267,10 +1286,10 @@ for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "l
       await tickPipelines([], h.ports);
       const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
       expect(lane.state).toBe("running");
-      expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(pinned ? base : published);
-      expect(git(repo, "rev-parse", "HEAD")).toBe(leftover);
-      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished");
-      expect(git(repo, "rev-parse", backup)).toBe(leftover);
+      expect((await git(lane.worktreeDir, "rev-parse", "HEAD"))).toBe(pinned ? base : published);
+      expect((await git(repo, "rev-parse", "HEAD"))).toBe(leftover);
+      const backup = (await git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished"));
+      expect((await git(repo, "rev-parse", backup))).toBe(leftover);
       expect(lane.stateDetail).toContain(backup);
       expect(lane.delivery!.journal.some((entry) => entry.reason.includes(backup) && entry.reason.includes("1 unpublished commit"))).toBe(true);
       expect(loadPipelines().find((item) => item.id === lane.id)!.baseRefPinned ?? false).toBe(pinned);
@@ -2724,23 +2743,23 @@ test("lanes in linked checkouts serialize Git writes through their common direct
   const origin = path.join(root, "origin.git");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr);
     return result.stdout.trim();
   };
   try {
-    git(root, "init", "--bare", "--initial-branch=main", origin);
-    git(root, "clone", origin, source);
-    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
-    git(source, "push", "origin", "main");
-    git(source, "worktree", "add", "-b", "linked", linked);
+    (await git(root, "init", "--bare", "--initial-branch=main", origin));
+    (await git(root, "clone", origin, source));
+    (await git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base"));
+    (await git(source, "push", "origin", "main"));
+    (await git(source, "worktree", "add", "-b", "linked", linked));
     // Advance the remote from an independent clone, leaving both local refs stale.
     const publisher = path.join(root, "publisher");
-    git(root, "clone", origin, publisher);
-    git(publisher, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance");
-    git(publisher, "push", "origin", "main");
-    const expected = git(publisher, "rev-parse", "HEAD");
+    (await git(root, "clone", origin, publisher));
+    (await git(publisher, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance"));
+    (await git(publisher, "push", "origin", "main"));
+    const expected = (await git(publisher, "rev-parse", "HEAD"));
     const hook = path.join(source, ".git", "hooks", "reference-transaction");
     fs.writeFileSync(hook, '#!/bin/sh\nif [ "$1" = prepared ]; then sleep 0.1; fi\n', { mode: 0o755 });
     for (const repoDir of [source, linked]) {
@@ -2758,7 +2777,7 @@ test("lanes in linked checkouts serialize Git writes through their common direct
     expect(peakWriters).toBe(1);
     for (const pipeline of loadPipelines()) {
       expect(pipeline).toMatchObject({ state: "running", baseRef: expected, lastPassedCommit: expected });
-      expect(git(pipeline.worktreeDir, "rev-parse", "HEAD")).toBe(expected);
+      expect((await git(pipeline.worktreeDir, "rev-parse", "HEAD"))).toBe(expected);
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 10_000);
@@ -2782,7 +2801,7 @@ for (const disposition of ["close", "remove"] as const) {
         result = await child;
         return result;
       }
-      return h.ports.exec(command, args, cwd);
+      return (await h.ports.exec(command, args, cwd));
     };
     const tick = tickPipelines([], h.ports);
     try {
@@ -2796,7 +2815,7 @@ for (const disposition of ["close", "remove"] as const) {
       }
       await tick;
       // Killed, not waited out: the five-second fetch ended on SIGKILL.
-      expect(result?.stderr).toBe("pipeline provisioning cancelled");
+      expect(result?.stderr).toBe("command cancelled");
       expect(result?.signal).toBe("SIGKILL");
       expect(fetches).toBe(1);
       expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
@@ -2819,7 +2838,7 @@ test("a completed provision loses its fence when ownership changes before the ap
   let checked!: () => void;
   const completed = new Promise<void>((resolve) => { checked = resolve; });
   h.ports.provisionExec = async (command, args, cwd) => {
-    const result = h.ports.exec(command, args, cwd);
+    const result = (await h.ports.exec(command, args, cwd));
     if (args[0] === "rev-parse" && args[1] === "HEAD") checked();
     return result;
   };
@@ -2989,16 +3008,16 @@ async function realProvisioningRepo(name: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   fs.mkdirSync(repo);
-  git(repo, "init", "--initial-branch=main");
-  git(repo, "config", "user.name", "Fixture");
-  git(repo, "config", "user.email", "noreply@example.com");
-  git(repo, "config", "commit.gpgSign", "false");
+  (await git(repo, "init", "--initial-branch=main"));
+  (await git(repo, "config", "user.name", "Fixture"));
+  (await git(repo, "config", "user.email", "noreply@example.com"));
+  (await git(repo, "config", "commit.gpgSign", "false"));
   return { root, repo, git, realExec };
 }
 
@@ -3007,9 +3026,9 @@ test("a ref lock another Git process holds is retried, and the lane provisions o
   const { root, repo, git, realExec } = await realProvisioningRepo("ref-lock");
   try {
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
     const h = harness();
     const { scheduled, advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3034,7 +3053,7 @@ test("a ref lock another Git process holds is retried, and the lane provisions o
     advance(5_000);
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
-    expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(base);
+    expect((await git(lane.worktreeDir, "rev-parse", "HEAD"))).toBe(base);
     expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 10_000);
@@ -3044,9 +3063,9 @@ test("a failed attempt that already created the branch and worktree is adopted b
   const { root, repo, git, realExec } = await realProvisioningRepo("adopt-created");
   try {
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
     const h = harness();
     const { advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3067,7 +3086,7 @@ test("a failed attempt that already created the branch and worktree is adopted b
       advance(60_000);
     }
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base });
-    expect(git(created.pipeline!.worktreeDir, "rev-parse", "HEAD")).toBe(base);
+    expect((await git(created.pipeline!.worktreeDir, "rev-parse", "HEAD"))).toBe(base);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 10_000);
 
@@ -3078,12 +3097,12 @@ test("a checkout killed at its bound is finished by the retry instead of parking
   try {
     fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
     /* A checkout that cannot finish inside its bound: the host under load. */
-    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
-    git(repo, "config", "filter.slow.required", "true");
+    (await git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
+    (await git(repo, "config", "filter.slow.required", "true"));
     const h = harness();
     const { scheduled, advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3101,19 +3120,19 @@ test("a checkout killed at its bound is finished by the retry instead of parking
     expect(waiting.state).toBe("provisioning");
     expect(waiting.stateDetail).toContain("checkout interrupted or timed out");
     expect(scheduled).toEqual([5_000]);
-    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).toContain("locked initializing");
     fs.writeFileSync(path.join(lane.worktreeDir, "keep.txt"), "untracked work survives\n");
 
     // The load passes; the retry finishes the checkout the killed one began.
-    git(repo, "config", "filter.slow.smudge", "cat");
-    git(repo, "config", "filter.slow.clean", "cat");
+    (await git(repo, "config", "filter.slow.smudge", "cat"));
+    (await git(repo, "config", "filter.slow.clean", "cat"));
     advance(5_000);
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
     expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
     expect(fs.readFileSync(path.join(lane.worktreeDir, "keep.txt"), "utf8")).toBe("untracked work survives\n");
-    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("locked");
-    expect(git(lane.worktreeDir, "status", "--porcelain", "--untracked-files=no")).toBe("");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).not.toContain("locked");
+    expect((await git(lane.worktreeDir, "status", "--porcelain", "--untracked-files=no"))).toBe("");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 
@@ -3124,11 +3143,11 @@ test("interrupted checkout recovery preserves an untracked directory that blocks
   try {
     fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
-    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
-    git(repo, "config", "filter.slow.required", "true");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
+    (await git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
+    (await git(repo, "config", "filter.slow.required", "true"));
     const h = harness();
     const { scheduled, advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3144,15 +3163,15 @@ test("interrupted checkout recovery preserves an untracked directory that blocks
     fs.rmSync(collision, { recursive: true, force: true });
     fs.mkdirSync(collision);
     fs.writeFileSync(path.join(collision, "operator-note.txt"), "keep this operator file\n");
-    git(repo, "config", "filter.slow.smudge", "cat");
-    git(repo, "config", "filter.slow.clean", "cat");
+    (await git(repo, "config", "filter.slow.smudge", "cat"));
+    (await git(repo, "config", "filter.slow.clean", "cat"));
 
     advance(5_000);
     await tickPipelines([], h.ports);
 
     expect(JSON.stringify(loadPipelines()[0])).toContain("untracked content blocking tracked paths");
     expect(fs.readFileSync(path.join(collision, "operator-note.txt"), "utf8")).toBe("keep this operator file\n");
-    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).toContain("locked initializing");
     expect(scheduled).toEqual([5_000]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
@@ -3165,11 +3184,11 @@ test("interrupted checkout recovery parks before overwriting a tracked edit", as
     fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
     fs.writeFileSync(path.join(repo, "a.txt"), "original operator file\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
-    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
-    git(repo, "config", "filter.slow.required", "true");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
+    (await git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
+    (await git(repo, "config", "filter.slow.required", "true"));
     const h = harness();
     const { advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3183,15 +3202,15 @@ test("interrupted checkout recovery parks before overwriting a tracked edit", as
     expect(fs.existsSync(marker)).toBe(true);
     const edited = path.join(lane.worktreeDir, "a.txt");
     fs.writeFileSync(edited, "operator edit to preserve\n");
-    git(repo, "config", "filter.slow.smudge", "cat");
-    git(repo, "config", "filter.slow.clean", "cat");
+    (await git(repo, "config", "filter.slow.smudge", "cat"));
+    (await git(repo, "config", "filter.slow.clean", "cat"));
 
     advance(5_000);
     await tickPipelines([], h.ports);
 
     expect(JSON.stringify(loadPipelines()[0])).toContain("modified tracked path");
     expect(fs.readFileSync(edited, "utf8")).toBe("operator edit to preserve\n");
-    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).toContain("locked initializing");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 
@@ -12243,13 +12262,13 @@ test("a restarted engine reconciles an interrupted reservation from the remote w
   box.setRemote(box.passedSha);
   const reservation = crashed.id;
   const exec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
+  h.ports.exec = async (command, args, cwd) => {
     if (args.includes("ls-remote")) {
       const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
       try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
       finally { db.close(); }
     }
-    return exec(command, args, cwd);
+    return (await exec(command, args, cwd));
   };
   await tickPipelines([], { ...h.ports });
   const recovered = loadPipelines()[0]!;
@@ -12547,9 +12566,9 @@ test.each([
 
   const exec = h.ports.exec;
   if (cause === "moved") box.setLocalHead("8".repeat(40));
-  else h.ports.exec = (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
+  else h.ports.exec = async (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
     ? { code: 128, stdout: "", stderr: "HEAD temporarily unavailable" }
-    : exec(command, args, cwd);
+    : (await exec(command, args, cwd));
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
   const legacy = loadPipelines()[0]!;
   expect(legacy.stateDetail).toStartWith(cause === "moved"
@@ -12581,9 +12600,9 @@ test("a pass whose commit failed still retries stage work before publishing", as
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const exec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => args[0] === "commit"
+  h.ports.exec = async (command, args, cwd) => args[0] === "commit"
     ? { code: 1, stdout: "", stderr: "commit temporarily unavailable" }
-    : exec(command, args, cwd);
+    : (await exec(command, args, cwd));
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: ORIGIN_MAIN_SHA,
@@ -15449,7 +15468,7 @@ test("close drain keeps a slow embedded flow and worktree inspection outside the
   const started = new Promise<void>((resolve) => { entered = resolve; });
   h.ports.closeFlow = async () => { expectPipelineLeaseAbsent(); entered(); await gate; return { stoppedReviewer: { round: 1 } } as never; };
   const exec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => { expectPipelineLeaseAbsent(); return exec(command, args, cwd); };
+  h.ports.exec = async (command, args, cwd) => { expectPipelineLeaseAbsent(); return (await exec(command, args, cwd)); };
   const accepted = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
   expect(accepted.close?.status).toBe("pending");
   const draining = engineModule.drainStageActivations(h.ports);

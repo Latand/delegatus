@@ -323,7 +323,7 @@ test("health-check scratch commit uses the controller identity despite inherited
     HEALTH_IDENTITY_REPO: repo,
   };
   const prepare = spawnSync(process.execPath, ["-e",
-    `import { prepareHealthRepo } from ${JSON.stringify(path.resolve("src/lib/onboarding/healthCheck.ts"))}; prepareHealthRepo(process.env.HEALTH_IDENTITY_REPO);`,
+    `import { prepareHealthRepo } from ${JSON.stringify(path.resolve("src/lib/onboarding/healthCheck.ts"))}; await prepareHealthRepo(process.env.HEALTH_IDENTITY_REPO);`,
   ], { env, encoding: "utf8" });
   expect(prepare.status).toBe(0);
   const identity = spawnSync("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], { cwd: repo, encoding: "utf8" });
@@ -334,8 +334,8 @@ test("health-check scratch commit uses the controller identity despite inherited
 
 test("cleanup removes the stage worktree and its branch from the scratch repository", async () => {
   const repo = path.join(sandbox, "viewer-health-check");
-  const { baseRef } = prepareHealthRepo(repo);
-  expect(prepareHealthRepo(repo).baseRef).toBe(baseRef);
+  const { baseRef } = await prepareHealthRepo(repo);
+  expect((await prepareHealthRepo(repo)).baseRef).toBe(baseRef);
   const worktree = path.join(sandbox, "viewer-health-check-pipeline-health01");
   execFileSync("git", ["worktree", "add", "-b", "pipeline/health01", worktree], { cwd: repo, stdio: "ignore" });
   const { calls, ports } = cleanupPorts({

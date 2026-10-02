@@ -314,7 +314,9 @@ function isStageProvenance(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const provenance = value as Record<string, unknown>;
   const pullRequest = provenance.pullRequest as Record<string, unknown> | null;
-  return isNullableString(provenance.head)
+  return (provenance.state === undefined || ["pending", "complete", "unknown"].includes(String(provenance.state)))
+    && (provenance.pullRequestState === undefined || ["pending", "observed", "absent", "unknown"].includes(String(provenance.pullRequestState)))
+    && isNullableString(provenance.head)
     && typeof provenance.branch === "string"
     && (provenance.uncommitted === null
       || (Array.isArray(provenance.uncommitted) && provenance.uncommitted.every((path) => typeof path === "string")))
@@ -323,7 +325,7 @@ function isStageProvenance(value: unknown): boolean {
     && Array.isArray(provenance.outputs)
     && provenance.outputs.every((output) => Boolean(output && typeof output === "object" && !Array.isArray(output)
       && typeof (output as { path: unknown }).path === "string"
-      && typeof (output as { present: unknown }).present === "boolean"));
+      && ((output as { present: unknown }).present === null || typeof (output as { present: unknown }).present === "boolean")));
 }
 
 /** A stage attempt's own completion report (graph slice 2). */
@@ -785,6 +787,21 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
+    (pipeline.remoteAction === undefined || (Boolean(pipeline.remoteAction && typeof pipeline.remoteAction === "object")
+      && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover"].includes(pipeline.remoteAction.action)
+      && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
+      && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
+      && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
+      && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
+      && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
+      && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)
+        && typeof pipeline.remoteAction.retryReceipt.launchId === "string"
+        && ["failed", "conflicted", "completed"].includes(pipeline.remoteAction.retryReceipt.state)
+        && (pipeline.remoteAction.retryReceipt.claimId === undefined || typeof pipeline.remoteAction.retryReceipt.claimId === "string")))
+      && (pipeline.remoteAction.action !== "takeover" || (Boolean(pipeline.remoteAction.takeover)
+        && typeof pipeline.remoteAction.takeover?.expectedOwner === "string"
+        && Number.isSafeInteger(pipeline.remoteAction.takeover?.expectedEpoch) && pipeline.remoteAction.takeover!.expectedEpoch > 0
+        && typeof pipeline.remoteAction.takeover?.reason === "string" && pipeline.remoteAction.takeover.reason.length > 0)))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
@@ -1349,10 +1366,11 @@ export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): 
   return `Viewer publication denied: target owner is ${owner?.id ?? delivery?.ownerId ?? "unclaimed"} at epoch ${owner?.delivery?.epoch ?? delivery?.epoch ?? 0}; this lane must request explicit takeover`;
 }
 
-export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
+export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null, admitted?: (pipeline: Pipeline) => boolean): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
   return withDeliveryMutationAsync((tx) => {
     const pipeline = tx.get(id);
     if (!pipeline?.delivery) return { error: "pipeline has no delivery target", status: 409 };
+    if (admitted && !admitted(pipeline)) return { error: "takeover admission superseded", status: 409 };
     const target = pipeline.delivery.target;
     const owner = tx.pipelineLookup({ ...target, active: true });
     const previous = owner ?? tx.pipelineLookup(target);

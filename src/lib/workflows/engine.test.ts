@@ -146,12 +146,12 @@ function makeHarness() {
   return { ports, calls, state };
 }
 
-function createWf(ports: WorkflowPorts, overrides: Partial<Parameters<typeof createWorkflowFromRequest>[0]> = {}): Workflow {
+async function createWf(ports: WorkflowPorts, overrides: Partial<Parameters<typeof createWorkflowFromRequest>[0]> = {}): Promise<Workflow> {
   saveWorkflows([]);
-  const res = createWorkflowFromRequest(
+  const res = (await createWorkflowFromRequest(
     { task: "Build the thing", repoDir: "/repos/repo", stages: STAGES as never, mode: "auto", ...overrides },
     ports,
-  );
+  ));
   if (!res.workflow) throw new Error(res.error);
   return res.workflow;
 }
@@ -169,17 +169,17 @@ function finishTurn(harness: ReturnType<typeof makeHarness>, transcript: string,
   return entry;
 }
 
-test("createWorkflowFromRequest validates task, repo and stages", () => {
+test("createWorkflowFromRequest validates task, repo and stages", async () => {
   const { ports } = makeHarness();
-  expect(createWorkflowFromRequest({ task: " ", repoDir: "/r", stages: STAGES as never }, ports).status).toBe(400);
-  expect(createWorkflowFromRequest({ task: "t", repoDir: "/r", stages: [] as never }, ports).status).toBe(400);
-  expect(createWorkflowFromRequest({ task: "t", repoDir: "/r", template: "nope" }, ports).status).toBe(400);
+  expect((await createWorkflowFromRequest({ task: " ", repoDir: "/r", stages: STAGES as never }, ports)).status).toBe(400);
+  expect((await createWorkflowFromRequest({ task: "t", repoDir: "/r", stages: [] as never }, ports)).status).toBe(400);
+  expect((await createWorkflowFromRequest({ task: "t", repoDir: "/r", template: "nope" }, ports)).status).toBe(400);
   const { ports: failing, state } = makeHarness();
   state.execFail = "--git-dir";
-  expect(createWorkflowFromRequest({ task: "t", repoDir: "/r", stages: STAGES as never }, failing).status).toBe(400);
+  expect((await createWorkflowFromRequest({ task: "t", repoDir: "/r", stages: STAGES as never }, failing)).status).toBe(400);
 });
 
-test("createWorkflowFromRequest rejects unknown implementer, reviewer, and fixer models before persistence", () => {
+test("createWorkflowFromRequest rejects unknown implementer, reviewer, and fixer models before persistence", async () => {
   const { ports } = makeHarness();
   const expected = `invalid codex model id "gpt-fabricated"; valid codex model ids: ${ENGINE_MODELS.codex.map((option) => option.id).join(", ")}`;
   const cases = [
@@ -202,7 +202,7 @@ test("createWorkflowFromRequest rejects unknown implementer, reviewer, and fixer
 
   for (const stages of cases) {
     saveWorkflows([]);
-    expect(createWorkflowFromRequest({ task: "t", repoDir: "/r", stages: stages as never }, ports)).toEqual({
+    expect((await createWorkflowFromRequest({ task: "t", repoDir: "/r", stages: stages as never }, ports))).toEqual({
       error: expected,
       status: 400,
     });
@@ -210,21 +210,21 @@ test("createWorkflowFromRequest rejects unknown implementer, reviewer, and fixer
   }
 });
 
-test("createWorkflowFromRequest stamps the scanner project key, basename as fallback", () => {
+test("createWorkflowFromRequest stamps the scanner project key, basename as fallback", async () => {
   const { ports } = makeHarness();
-  const stamped = createWf(ports);
+  const stamped = (await createWf(ports));
   expect(stamped.project).toBe("repo");
   saveWorkflows([]);
-  const fallback = createWorkflowFromRequest(
+  const fallback = (await createWorkflowFromRequest(
     { task: "t", repoDir: "/elsewhere/deep/tool-dir", stages: STAGES as never },
     ports,
-  );
+  ));
   expect(fallback.workflow?.project).toBe("tool-dir");
 });
 
 test("long workflow tasks retain a distinct stage suffix", async () => {
   const { ports, state } = makeHarness();
-  const workflow = createWf(ports, { task: "Long workflow task ".repeat(20) });
+  const workflow = (await createWf(ports, { task: "Long workflow task ".repeat(20) }));
 
   await tickWorkflows([], ports);
   await tickWorkflows([], ports);
@@ -237,7 +237,7 @@ test("long workflow tasks retain a distinct stage suffix", async () => {
 test("happy path: provision → two stages → review flow → PR", async () => {
   const harness = makeHarness();
   const { ports, calls, state } = harness;
-  const wf = createWf(ports);
+  const wf = (await createWf(ports));
   expect(wf.state).toBe("provisioning");
 
   /* Tick 1: worktree + setup already done → implementing, stage 0 spawns. */
@@ -315,7 +315,7 @@ test("happy path: provision → two stages → review flow → PR", async () => 
 test("provisioning failures park the workflow: worktree add, setup start, setup exit", async () => {
   const worktree = makeHarness();
   worktree.state.execFail = "worktree add";
-  const wf1 = createWf(worktree.ports);
+  const wf1 = (await createWf(worktree.ports));
   await tickWorkflows([], worktree.ports);
   let cur = load(wf1.id);
   expect(cur.state).toBe("needs_decision");
@@ -325,7 +325,7 @@ test("provisioning failures park the workflow: worktree add, setup start, setup 
   const setup = makeHarness();
   setup.state.setup = "failed";
   setup.state.setupDetail = "setup exited with code 3: boom";
-  const wf2 = createWf(setup.ports, { setup: "bun install" });
+  const wf2 = (await createWf(setup.ports, { setup: "bun install" }));
   /* createWf builds an ad-hoc template; setup comes from the request.
      Tick 1 starts the detached setup, tick 2 sees its failure. */
   await tickWorkflows([], setup.ports);
@@ -338,7 +338,7 @@ test("provisioning failures park the workflow: worktree add, setup start, setup 
 test("a failed stage spawn parks; retry-stage respawns fresh", async () => {
   const harness = makeHarness();
   harness.state.spawnFail = true;
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports); // provision → implementing
   await tickWorkflows([], harness.ports); // spawn fails
   let cur = load(wf.id);
@@ -357,7 +357,7 @@ test("a failed stage spawn parks; retry-stage respawns fresh", async () => {
 
 test("pause during spawn preserves operator state and the spawned pane binding", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports); // provision → implementing
   const spawn = harness.ports.spawnAgent;
   harness.ports.spawnAgent = async (...args) => {
@@ -374,7 +374,7 @@ test("pause during spawn preserves operator state and the spawned pane binding",
 
 test("a stage agent pane dying before STAGE_DONE parks the workflow", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports);
   await tickWorkflows([], harness.ports); // stage 0 spawned, pane %1
   harness.state.paneDead.add("%1");
@@ -386,7 +386,7 @@ test("a stage agent pane dying before STAGE_DONE parks the workflow", async () =
 
 test("workflow fallback claim skips a newer native Codex subagent", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports);
   await tickWorkflows([], harness.ports);
   let cur = load(wf.id);
@@ -415,7 +415,7 @@ test("workflow fallback claim skips a newer native Codex subagent", async () => 
 
 test("a spawn interrupted by a restart parks instead of double-spawning", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports);
   /* Simulate the persisted mid-spawn shape from a previous process. */
   const workflows = loadWorkflows();
@@ -438,7 +438,7 @@ test("embedded flow trouble parks the workflow: create error, needs_decision, CO
   ];
   for (const testCase of cases) {
     const harness = makeHarness();
-    const wf = createWf(harness.ports);
+    const wf = (await createWf(harness.ports));
     const workflows = loadWorkflows();
     const cur = workflows.find((item) => item.id === wf.id)!;
     /* Jump straight to the bootstrapped review stage. */
@@ -461,7 +461,7 @@ test("embedded flow trouble parks the workflow: create error, needs_decision, CO
 test("a finish failure parks; retry-stage reruns the finish", async () => {
   const harness = makeHarness();
   harness.state.execFail = "push";
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   const workflows = loadWorkflows();
   const cur = workflows.find((item) => item.id === wf.id)!;
   cur.state = "finishing";
@@ -484,7 +484,7 @@ test("a finish failure parks; retry-stage reruns the finish", async () => {
 test("finishing a dirty worktree parks; retry after the commit publishes", async () => {
   const harness = makeHarness();
   harness.state.dirtyWorktree = true;
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   const workflows = loadWorkflows();
   const cur = workflows.find((item) => item.id === wf.id)!;
   cur.state = "finishing";
@@ -508,7 +508,7 @@ test("finishing a dirty worktree parks; retry after the commit publishes", async
 
 test("manual mode gates every stage boundary until advance", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports, { mode: "manual" });
+  const wf = (await createWf(harness.ports, { mode: "manual" }));
   await tickWorkflows([], harness.ports); // provision → implementing
   await tickWorkflows([], harness.ports); // spawn stage 0
   const stage0 = "/codex/rollout-1.jsonl";
@@ -531,7 +531,7 @@ test("manual mode gates every stage boundary until advance", async () => {
 
 test("advance force-completes a running stage with the user note", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports);
   await tickWorkflows([], harness.ports); // stage 0 running
   const patched = await patchWorkflow(wf.id, { action: "advance", note: "good enough" }, harness.ports);
@@ -541,7 +541,7 @@ test("advance force-completes a running stage with the user note", async () => {
 
 test("advance past a live review closes the embedded flow and moves to finishing", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   const workflows = loadWorkflows();
   const cur = workflows.find((item) => item.id === wf.id)!;
   cur.state = "reviewing";
@@ -556,7 +556,7 @@ test("advance past a live review closes the embedded flow and moves to finishing
 
 test("pause holds the phase; resume returns to it", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   await tickWorkflows([], harness.ports);
   const paused = await patchWorkflow(wf.id, { action: "pause" }, harness.ports);
   expect(paused.workflow).toMatchObject({ state: "paused", stateDetail: "paused by operator" });
@@ -574,7 +574,7 @@ test("pause holds the phase; resume returns to it", async () => {
 
 test("close stops the embedded flow and keeps worktree state on the record", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   const workflows = loadWorkflows();
   const cur = workflows.find((item) => item.id === wf.id)!;
   cur.state = "reviewing";
@@ -591,7 +591,7 @@ test("close stops the embedded flow and keeps worktree state on the record", asy
 test("review transitions stop when embedded reviewer teardown fails", async () => {
   for (const action of ["advance", "retry-stage", "close"] as const) {
     const harness = makeHarness();
-    const wf = createWf(harness.ports);
+    const wf = (await createWf(harness.ports));
     const workflows = loadWorkflows();
     const cur = workflows.find((item) => item.id === wf.id)!;
     cur.state = "reviewing";
@@ -610,7 +610,7 @@ test("review transitions stop when embedded reviewer teardown fails", async () =
 
 test("an orphaned flow from a restart is adopted instead of recreated", async () => {
   const harness = makeHarness();
-  const wf = createWf(harness.ports);
+  const wf = (await createWf(harness.ports));
   const workflows = loadWorkflows();
   const cur = workflows.find((item) => item.id === wf.id)!;
   cur.state = "reviewing";
@@ -632,7 +632,7 @@ test("an orphaned flow from a restart is adopted instead of recreated", async ()
    catalogue. */
 test("a workflow stage launches on the account the project's allowed set resolves to (#1279)", async () => {
   const { ports, calls, state } = makeHarness();
-  const wf = createWf(ports);
+  const wf = (await createWf(ports));
   await tickWorkflows([], ports);
   /* Captured inside the mock: mockRestore() drops the recorded calls with it. */
   const asked: unknown[] = [];
@@ -658,7 +658,7 @@ test("a workflow stage launches on the account the project's allowed set resolve
 
 test("every allowed account out of capacity parks the workflow instead of crossing the boundary (#1279)", async () => {
   const { ports, calls } = makeHarness();
-  const wf = createWf(ports);
+  const wf = (await createWf(ports));
   await tickWorkflows([], ports);
   const resetsAt = Math.floor(Date.parse("2026-08-30T11:00:00.000Z") / 1000);
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({

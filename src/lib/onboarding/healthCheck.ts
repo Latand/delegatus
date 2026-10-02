@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { realExec } from "@/lib/workflows/provision";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -302,7 +302,7 @@ export interface HealthCheckPorts {
   newId(): string;
   readiness(engine: RoleEngine): EngineReadiness;
   /** The scratch repository: created on first use, committed, no origin. */
-  prepareRepo(): { repoDir: string; baseRef: string };
+  prepareRepo(): { repoDir: string; baseRef: string } | Promise<{ repoDir: string; baseRef: string }>;
   /** Launch the test orchestrator; answers its conversation id or a refusal. */
   spawnSeat(input: { runtime: HealthRuntime; cwd: string; clientAttemptId: string }): Promise<{ conversationId: string } | { error: string; code: string | null; reason: EngineReadiness | null }>;
   /** The seat conversation once its transcript exists on disk, else null. */
@@ -501,7 +501,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     begin("spawn");
     const ready = readinessFailure(runtime, ports.readiness(runtime.engine));
     if (ready) fail("spawn", ready);
-    const repo = ports.prepareRepo();
+    const repo = await ports.prepareRepo();
     record({ repoDir: repo.repoDir });
     const spawned = await ports.spawnSeat({ runtime, cwd: repo.repoDir, clientAttemptId: `health-seat-${run.id}` });
     if ("error" in spawned) {
@@ -650,24 +650,23 @@ class RowFailed extends Error {}
 
 /* ── Production ports ─────────────────────────────────────────────────── */
 
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
-    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ...controllerCommitIdentityEnv() },
-  }).trim();
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const result = await realExec("git", ["-c", "commit.gpgsign=false", ...args], cwd, controllerCommitIdentityEnv(), { timeoutMs: 5_000 });
+  if (result.code !== 0) throw new Error(result.stderr || "health-check Git command failed");
+  return result.stdout.trim();
 }
 
 /** The scratch repository: `state/onboarding/viewer-health-check`, its own
     project, with a committed README and no origin. */
-export function prepareHealthRepo(repoDir: string): { repoDir: string; baseRef: string } {
+export async function prepareHealthRepo(repoDir: string): Promise<{ repoDir: string; baseRef: string }> {
   if (!fs.existsSync(path.join(repoDir, ".git"))) {
     fs.mkdirSync(repoDir, { recursive: true });
-    git(repoDir, "init", "--initial-branch=main", ".");
+    await git(repoDir, "init", "--initial-branch=main", ".");
     fs.writeFileSync(path.join(repoDir, "README.md"), "# Viewer health check\n\nA scratch repository the setup guide's health check runs one tiny pipeline in.\n", "utf8");
-    git(repoDir, "add", "README.md");
-    git(repoDir, "commit", "-m", "Viewer health check: scratch repository");
+    await git(repoDir, "add", "README.md");
+    await git(repoDir, "commit", "-m", "Viewer health check: scratch repository");
   }
-  return { repoDir, baseRef: git(repoDir, "rev-parse", "HEAD") };
+  return { repoDir, baseRef: await git(repoDir, "rev-parse", "HEAD") };
 }
 
 export async function productionHealthCheckPorts(): Promise<HealthCheckPorts> {
@@ -915,10 +914,10 @@ export async function cleanupHealthRun(input: HealthCleanupInput, ports: Cleanup
   if (input.seatConversationId) await step("stop the test orchestrator", () => ports.stopConversation(input.seatConversationId!, seatPath));
   if (pipeline && input.repoDir) {
     const repoDir = input.repoDir;
-    await step("remove the worktree", () => {
-      if (fs.existsSync(pipeline.worktreeDir)) git(repoDir, "worktree", "remove", "--force", pipeline.worktreeDir);
-      git(repoDir, "worktree", "prune");
-      if (pipeline.branch && git(repoDir, "branch", "--list", pipeline.branch)) git(repoDir, "branch", "-D", pipeline.branch);
+    await step("remove the worktree", async () => {
+      if (fs.existsSync(pipeline.worktreeDir)) await git(repoDir, "worktree", "remove", "--force", pipeline.worktreeDir);
+      await git(repoDir, "worktree", "prune");
+      if (pipeline.branch && await git(repoDir, "branch", "--list", pipeline.branch)) await git(repoDir, "branch", "-D", pipeline.branch);
     });
   }
   /* The pipeline names its project; before one exists the seat's does, and

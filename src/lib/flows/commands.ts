@@ -236,7 +236,7 @@ export async function createFlowFromRequest(
   const base =
     typeof req.baseRef === "string" && req.baseRef.trim()
       ? { ok: true as const, sha: req.baseRef.trim() }
-      : resolveBaseRef(cwd, baseMode);
+      : (await resolveBaseRef(cwd, baseMode));
   if (!base.ok) return { error: base.error, status: 409 };
   const flows = loadFlows();
   const existing = flows.find((flow) =>
@@ -266,8 +266,8 @@ export async function createFlowFromRequest(
     state: "waiting_ready",
     pausedState: null,
     stateDetail: null,
-    mergeEvidence: (() => {
-      const identity = resolveFlowMergeIdentity(cwd);
+    mergeEvidence: await (async () => {
+      const identity = (await resolveFlowMergeIdentity(cwd));
       return identity ? { ...identity, prNumber: null, mergedAt: null, checkedAt: null, source: null } : null;
     })(),
     kickoffDelivery: null,

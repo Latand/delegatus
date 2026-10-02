@@ -5717,6 +5717,8 @@ async function requestAttention(
   if (intent !== "show" && intent !== "open") throw new Error("intent must be show or open");
   const zoom = text(args.zoom) as ZoomIntent | "";
   if (zoom && zoom !== "inspect" && zoom !== "situate") throw new Error("zoom must be inspect or situate");
+  const waitFor = args.waitFor ?? "arrived";
+  if (waitFor !== "accepted" && waitFor !== "arrived") throw new Error("waitFor must be accepted or arrived");
   const reason = required(args, "reason");
   const contextLabel = text(args.contextLabel);
   /* Canonical, as every seat is: a target named by a key that has since moved
@@ -5824,6 +5826,15 @@ async function requestAttention(
        one, and this run reports it rather than counting a creation. */
     if (created.adopted) created = null;
   }
+
+  if (waitFor === "accepted") return redactPayload({
+    attentionId: request.id, request, accepted: true,
+    arrival: request.state === "following" || (request.state === "returned" && request.returnPoints.length > 0)
+      ? "arrived" : ["expired", "dismissed", "returned"].includes(request.state) ? "failed" : "pending",
+    handoff: null, recovered: created === null,
+    superseded: created?.superseded ?? [], dropped: created?.dropped ?? [],
+    ...mutationReceipt(operationKey),
+  });
 
   /* Inside the caller's own transport deadline, so the bounded failure is OURS
      to report rather than a timeout the caller reads as silence. */
@@ -6486,7 +6497,7 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedBeforeMutation(() => createPipeline(args, context, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {

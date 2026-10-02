@@ -289,11 +289,11 @@ export function reserveReviewerSpawn(
   return begun;
 }
 
-export function captureReviewHead(flow: Flow, round: Round): string {
-  const headSha = resolveCleanFlowHead(flow.cwd);
+export async function captureReviewHead(flow: Flow, round: Round): Promise<string> {
+  const headSha = (await resolveCleanFlowHead(flow.cwd));
   if (!headSha) throw new Error("review requires a clean committed HEAD");
   if (flow.headRef && flow.requireRemoteHead === true) {
-    const remoteSha = resolveFlowRemoteHead(flow.cwd, flow.headRef);
+    const remoteSha = (await resolveFlowRemoteHead(flow.cwd, flow.headRef));
     if (remoteSha !== headSha) {
       const detail = remoteSha
         ? `review remote head mismatch before launch: local ${headSha}, origin/${flow.headRef} ${remoteSha}`
@@ -1200,7 +1200,7 @@ export async function tickFlow(
       refuse("agent decision turn ended without successful completion");
       return true;
     }
-    if (evidence.turnId !== decision.turnId || decisionHead(flow.cwd, decision.decision) !== decision.expectedHead) {
+    if (evidence.turnId !== decision.turnId || (await decisionHead(flow.cwd, decision.decision)) !== decision.expectedHead) {
       refuse("completed agent decision no longer matches its turn or clean HEAD");
       return true;
     }
@@ -1269,7 +1269,7 @@ export async function tickFlow(
            (and its published copy, when the pipeline publishes) in the same
            durable marker transition, before a delayed reviewer launch or
            parent reconciliation can expose the prior HEAD. */
-        if (flow.headRef) captureReviewHead(flow, markerRound);
+        if (flow.headRef) (await captureReviewHead(flow, markerRound));
         flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
         flow.stateDetail = null;
       } catch (error) {
@@ -1296,7 +1296,7 @@ export async function tickFlow(
     const submission = flow.agentDecisions?.find((item) => item.decision === "submit-review" && item.disposition === "applied" && item.round + 1 === round.n);
     if (submission && !round.spawnStartedAt && (!decisionStillOwned(flow, submission)
       || !decisionStageMatches(flow, submission.stage, loadPipelines())
-      || resolveCleanFlowHead(flow.cwd) !== submission.expectedHead)) {
+      || (await resolveCleanFlowHead(flow.cwd)) !== submission.expectedHead)) {
       markNeedsDecision(flow, "submitted review lost its owner, generation, stage attempt or exact HEAD fence before launch");
       return true;
     }
@@ -1331,7 +1331,7 @@ export async function tickFlow(
     }
     try {
       const prepared = prepareReviewerLaunch(flow, round);
-      captureReviewHead(flow, round);
+      (await captureReviewHead(flow, round));
       round.spawnStartedAt = isoNow();
       const reservation = await withAccountMutationLockAsync(
         () => reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId),

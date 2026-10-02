@@ -315,7 +315,7 @@ test.each(["pending", "red", "unknown"] as const)("launcher admission refuses a 
 
 test("a web fallback restores the pointer and turns the switch off", async () => {
   const h = scenario();
-  writeFileSync(h.record.releasePointer, JSON.stringify({ sha: TARGET, dir: h.record.releasesDir, checkoutHead: headOf(process.cwd()) }));
+  writeFileSync(h.record.releasePointer, JSON.stringify({ sha: TARGET, dir: h.record.releasesDir, checkoutHead: await headOf(process.cwd()) }));
   let service = h.service();
   await service.autoTick();
   h.advance(60_000);

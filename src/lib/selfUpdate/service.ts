@@ -81,7 +81,7 @@ export interface ServiceDeps {
   mode(): Promise<ModeDecision>;
   check(input: CheckInput): Promise<CheckOutcome>;
   describe(repo: string, revision: string): Promise<Revision>;
-  createRunner(config: RunnerConfig, publish: (release: Release) => void, onChange: () => void): RunnerPort;
+  createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
   requestRestart(record: LauncherRecord, role: LauncherRole): string;
   processAlive(pid: number, startIdentity: string): boolean;
   hostHealth(): Promise<RuntimeHostHealth | null>;
@@ -230,7 +230,7 @@ export class SelfUpdateService {
     // A prior snapshot may have cached a different launcher generation.
     if (enabled) this.decision = null;
     const decision = await this.decide();
-    const availability = this.autoAvailability(decision);
+    const availability = (await this.autoAvailability(decision));
     if (enabled && availability !== "available") return refuse(409, "auto-unavailable", `Automatic updates unavailable: ${availability}`);
     const at = new Date(this.deps.now()).toISOString();
     const previousAuto = this.auto;
@@ -250,7 +250,7 @@ export class SelfUpdateService {
     const currentAuto = this.auto;
     const autoBeforeCommit = currentAuto;
     const nextAuto = { ...currentAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : currentAuto.off, quietSince: null };
-    replaySnapshot.auto = this.autoView(decision, replaySnapshot, nextAuto);
+    replaySnapshot.auto = await this.autoView(decision, replaySnapshot, nextAuto);
     replaySnapshot.meta.pollMinutes = nextAuto.enabled ? 15 : this.deps.pollMinutes;
     let previousAutoFile: Buffer | null;
     let previousHistoryFile: Buffer | null;
@@ -281,7 +281,7 @@ export class SelfUpdateService {
     return { ok: true, ...(receiptId ? { replaySnapshot } : {}) };
   }
 
-  private autoAvailability(decision: ModeDecision): AutoView["availability"] {
+  private async autoAvailability(decision: ModeDecision): Promise<AutoView["availability"]> {
     if (decision.mode === "managed") {
       try { if (!this.deps.releaseTarget()?.revision) return "no-release-target"; }
       catch { return "no-release-target"; }
@@ -290,7 +290,7 @@ export class SelfUpdateService {
       if (decision.record.launcher.autoAdmission !== 1) return "launcher-upgrade";
       try {
         const raw = JSON.parse(readFileSync(decision.record.releasePointer, "utf8")) as { checkoutHead?: string };
-        if (!raw.checkoutHead || raw.checkoutHead !== headOf(decision.record.checkout)) return "hand-managed";
+        if (!raw.checkoutHead || raw.checkoutHead !== (await headOf(decision.record.checkout))) return "hand-managed";
       } catch { if (existsSync(decision.record.releasePointer)) return "hand-managed"; }
     }
     if (!githubRepositoryOfRemote(this.deps.remote)) return "not-github";
@@ -298,7 +298,7 @@ export class SelfUpdateService {
     return "available";
   }
 
-  private autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): AutoView {
+  private async autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): Promise<AutoView> {
     const built = snapshot.installed.sha;
     const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
       : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
@@ -312,7 +312,7 @@ export class SelfUpdateService {
       : sha && auto.green[sha] && auto.green[sha].state !== "green" ? "not-green"
       : auto.waitingSince ? "waiting"
       : sha && !auto.green[sha] ? "checks" : "idle";
-    return { availability: this.autoAvailability(decision), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
+    return { availability: (await this.autoAvailability(decision)), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
       waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= 24 * 60 * 60_000,
       changedAt: auto.changedAt, changedBy: auto.changedBy };
@@ -380,7 +380,7 @@ export class SelfUpdateService {
       }
       return;
     }
-    if (!this.auto.enabled || this.autoAvailability(decision) !== "available") return;
+    if (!this.auto.enabled || (await this.autoAvailability(decision)) !== "available") return;
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
     const target = this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
@@ -433,7 +433,7 @@ export class SelfUpdateService {
         return;
       }
       const role: LauncherRole = serves(finalSnapshot.serving.web) ? "runtime-host" : "web";
-      const rollbackPointer = this.auto.rollbackCaptured ? this.auto.rollbackPointer : this.pointerForServing(record, finalSnapshot);
+      const rollbackPointer = this.auto.rollbackCaptured ? this.auto.rollbackPointer : await this.pointerForServing(record, finalSnapshot);
       if (rollbackPointer === undefined) {
         this.autoBlockers = { ...finalProbe.blockers, unreadable: "the release now served by web cannot be identified" };
         this.changes.emit();
@@ -569,7 +569,7 @@ export class SelfUpdateService {
         pending = null;
       }
     }
-    if (!this.auto.enabled || this.autoAvailability(decision) !== "available" || managedActive(this.managed)
+    if (!this.auto.enabled || (await this.autoAvailability(decision)) !== "available" || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
     const target = pending?.target ?? this.slice.available;
     if (this.slice.check.state !== "update-available" || !target?.sha || this.slice.available?.sha !== target.sha
@@ -599,7 +599,7 @@ export class SelfUpdateService {
       // read blockers again so work that starts during that read can veto it.
       this.decision = null;
       const current = await this.decide();
-      if (current.mode !== "managed" || this.autoAvailability(current) !== "available" || !this.auto.enabled
+      if (current.mode !== "managed" || (await this.autoAvailability(current)) !== "available" || !this.auto.enabled
         || managedActive(this.managed) || this.checking || this.slice.check.state !== "update-available"
         || this.slice.available?.sha !== target.sha) return;
       green = await this.refreshGreen(target.sha, repo, green);
@@ -644,15 +644,15 @@ export class SelfUpdateService {
     const snapshot = await this.snapshot();
     const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now()) : null;
     if (this.auto.enabled && green.state === "green" && quiet?.quiet && snapshot.installed.sha === pending.target
-      && record.launcher.pid === pending.launcherPid && this.autoAvailability(decision) === "available") return true;
+      && record.launcher.pid === pending.launcherPid && (await this.autoAvailability(decision)) === "available") return true;
     this.autoBlockers = quiet?.blockers ?? null;
     this.auto = { ...this.auto, pending: null, quietSince: null, lastBlockers: quiet?.blockers ?? this.auto.lastBlockers };
     this.saveAuto();
     return false;
   }
 
-  private pointerForServing(record: LauncherRecord, snapshot: Snapshot): string | null | undefined {
-    const checkoutHead = headOf(record.checkout!);
+  private async pointerForServing(record: LauncherRecord, snapshot: Snapshot): Promise<string | null | undefined> {
+    const checkoutHead = await headOf(record.checkout!);
     const serving = snapshot.serving.web?.sha;
     if (!serving || !/^[a-f0-9]{40}$/.test(serving)) return undefined;
     if (serving === checkoutHead) return null;
@@ -661,7 +661,7 @@ export class SelfUpdateService {
       if ((JSON.parse(raw) as { sha?: string }).sha === serving) return raw;
     } catch { /* a newer build already moved the pointer */ }
     const dir = releaseDirFor(record.releasesDir, serving);
-    if (!existsSync(join(dir, ".next", "BUILD_ID")) || headOf(dir) !== serving) return undefined;
+    if (!existsSync(join(dir, ".next", "BUILD_ID")) || await headOf(dir) !== serving) return undefined;
     return `${JSON.stringify({ sha: serving, dir, checkoutHead, publishedAt: new Date(this.deps.now()).toISOString() })}\n`;
   }
 
@@ -782,7 +782,7 @@ export class SelfUpdateService {
   private async checkInput(decision: ModeDecision): Promise<CheckInput | null> {
     const { remote, branch } = this.deps;
     if (decision.mode === "checkout" && decision.record?.checkout) {
-      const installed = new ReleasePointer(decision.record.releasePointer, decision.record.checkout).current().sha || "HEAD";
+      const installed = (await new ReleasePointer(decision.record.releasePointer, decision.record.checkout).current()).sha || "HEAD";
       return { repo: decision.record.checkout, remote, branch, installed };
     }
     if (decision.mode === "managed") {
@@ -846,7 +846,7 @@ export class SelfUpdateService {
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
     const available = this.slice.available;
-    if (!available && decision.mode === "checkout" && decision.record && this.autoAvailability(decision) === "hand-managed"
+    if (!available && decision.mode === "checkout" && decision.record && (await this.autoAvailability(decision)) === "hand-managed"
       && this.slice.check.relation === "equal" && snapshot.installed.sha) {
       const runner = this.runnerFor(decision.record);
       void runner.start(snapshot.installed.sha, { short: snapshot.installed.short, version: snapshot.installed.version, trigger: "operator" }).catch(() => {}).finally(() => this.afterUpdate());
@@ -1027,7 +1027,7 @@ export class SelfUpdateService {
     // refreshes. Receipt snapshots pass replayAuto to preserve their original
     // immutable response across later changes.
     const auto = replayAuto ?? this.auto;
-    snapshot.auto = this.autoView(decision, snapshot, auto);
+    snapshot.auto = await this.autoView(decision, snapshot, auto);
     snapshot.history = readHistory(this.historyFile);
     snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
     return snapshot;
@@ -1035,7 +1035,7 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    const pointer = new ReleasePointer(record.releasePointer, record.checkout!).current();
+    const pointer = await new ReleasePointer(record.releasePointer, record.checkout!).current();
     const installed = pointer.sha ? await this.describe(record.checkout!, pointer.sha) : (this.slice.installed ?? UNKNOWN_REVISION);
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;

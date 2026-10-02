@@ -2,20 +2,19 @@ import type { ExecPort } from "@/lib/workflows/provision";
 
 import { pipelineWorktreeChanges } from "./git";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { observeForgePullRequest } from "@/lib/forge/cache";
+import { pipelineRepository } from "@/lib/forge/resolve";
+import { loadPipelines, withPipelineMutation } from "./store";
 import type { Pipeline, PipelineStageProvenance } from "./types";
 
-/** The forge read is the only remote call a completion report makes. Bound it,
-    and treat anything it cannot answer as "no pull request observed", which
-    still accepts the report: a forge outage says nothing about the stage's own
-    work. The caller runs this before it takes the pipeline mutation, so the
-    bound is what keeps one unanswered connection off the report's latency. */
-const PULL_REQUEST_LOOKUP_TIMEOUT = "10s";
+/** Forge observation runs after durable report acceptance. A timeout or an
+    unreadable answer records unknown provenance without changing the verdict. */
 const MAX_UNCOMMITTED_PATHS = 20;
 
 type PullRequest = NonNullable<PipelineStageProvenance["pullRequest"]>;
 
-function headOf(worktreeDir: string, exec: ExecPort): string | null {
-  const head = exec("git", ["rev-parse", "HEAD"], worktreeDir);
+async function headOf(worktreeDir: string, exec: ExecPort): Promise<string | null> {
+  const head = (await exec("git", ["rev-parse", "HEAD"], worktreeDir));
   const sha = head.code === 0 ? head.stdout.trim() : "";
   return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
 }
@@ -23,46 +22,46 @@ function headOf(worktreeDir: string, exec: ExecPort): string | null {
 /** Every path the worktree knows under the stage's declared outputs, tracked
     and untracked alike, so a report can say whether what the stage promised to
     produce is actually there. */
-function declaredOutputPresence(
+async function declaredOutputPresence(
   worktreeDir: string,
   declaredOutputs: readonly string[],
   exec: ExecPort,
-): PipelineStageProvenance["outputs"] {
+): Promise<PipelineStageProvenance["outputs"]> {
   if (declaredOutputs.length === 0) return [];
-  const known = exec(
+  const known = (await exec(
     "git",
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ...declaredOutputs],
     worktreeDir,
-  );
+  ));
   const paths = known.code === 0 ? known.stdout.split("\0").filter(Boolean) : [];
   return declaredOutputs.map((output) => ({
     path: output,
-    present: paths.some((candidate) => pathIsDeclaredOutput(candidate, [output])),
+    present: known.code !== 0 ? null : paths.some((candidate) => pathIsDeclaredOutput(candidate, [output])),
   }));
 }
 
-function pullRequestOf(worktreeDir: string, branch: string, exec: ExecPort): PullRequest | null {
-  if (!branch) return null;
-  const listed = exec(
-    "timeout",
+async function pullRequestOf(worktreeDir: string, branch: string, exec: ExecPort): Promise<{ pullRequest: PullRequest | null; pullRequestState: "observed" | "absent" | "unknown" }> {
+  if (!branch) return { pullRequest: null, pullRequestState: "unknown" };
+  const listed = (await exec(
+    "gh",
     [
-      "--signal=KILL", PULL_REQUEST_LOOKUP_TIMEOUT,
-      "gh", "pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number,state",
+      "pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "url,number,state",
     ],
     worktreeDir,
-  );
-  if (listed.code !== 0) return null;
+  ));
+  if (listed.code !== 0) return { pullRequest: null, pullRequestState: "unknown" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(listed.stdout.trim() || "[]");
   } catch {
-    return null;
+    return { pullRequest: null, pullRequestState: "unknown" };
   }
   const first = Array.isArray(parsed) ? parsed[0] : null;
-  if (!first || typeof first !== "object") return null;
+  if (Array.isArray(parsed) && parsed.length === 0) return { pullRequest: null, pullRequestState: "absent" };
+  if (!first || typeof first !== "object") return { pullRequest: null, pullRequestState: "unknown" };
   const record = first as Record<string, unknown>;
-  if (typeof record.url !== "string" || !Number.isSafeInteger(record.number) || typeof record.state !== "string") return null;
-  return { url: record.url, number: record.number as number, state: record.state };
+  if (typeof record.url !== "string" || !Number.isSafeInteger(record.number) || typeof record.state !== "string") return { pullRequest: null, pullRequestState: "unknown" };
+  return { pullRequest: { url: record.url, number: record.number as number, state: record.state }, pullRequestState: "observed" };
 }
 
 /**
@@ -75,17 +74,64 @@ function pullRequestOf(worktreeDir: string, branch: string, exec: ExecPort): Pul
  * refuses the report: a field the server could not read is `null`, which
  * describes the read itself.
  */
-export function collectStageProvenance(
+export async function collectStageProvenance(
   pipeline: Pick<Pipeline, "worktreeDir" | "branch">,
   declaredOutputs: readonly string[],
   exec: ExecPort,
-): PipelineStageProvenance {
-  const changes = pipelineWorktreeChanges(pipeline, exec, MAX_UNCOMMITTED_PATHS);
+): Promise<PipelineStageProvenance> {
+  const checkedOut = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
+  const branch = checkedOut.code === 0 && checkedOut.stdout.trim() ? checkedOut.stdout.trim() : pipeline.branch;
+  const changes = await pipelineWorktreeChanges(pipeline, exec, MAX_UNCOMMITTED_PATHS);
+  const head = await headOf(pipeline.worktreeDir, exec);
+  const outputs = await declaredOutputPresence(pipeline.worktreeDir, declaredOutputs, exec);
+  const forge = await pullRequestOf(pipeline.worktreeDir, branch, exec);
   return {
-    head: headOf(pipeline.worktreeDir, exec),
-    branch: pipeline.branch,
-    uncommitted: changes.ok ? changes.paths : null,
-    pullRequest: pullRequestOf(pipeline.worktreeDir, pipeline.branch, exec),
-    outputs: declaredOutputPresence(pipeline.worktreeDir, declaredOutputs, exec),
+    state: head && changes.ok && outputs.every((output) => output.present !== null) && forge.pullRequestState !== "unknown" ? "complete" : "unknown",
+    head, branch, uncommitted: changes.ok ? changes.paths : null, ...forge, outputs,
   };
+}
+
+/** Pending intent is durable. Observation is attached only to the same report
+    sequence and conversation, including when its turn has already settled. */
+export async function settlePendingStageProvenance(ports: Pick<import("./engine").PipelinePorts, "exec" | "now">): Promise<void> {
+  for (const pipeline of loadPipelines()) for (const run of pipeline.runs) for (const attempt of run.attempts) {
+    const report = attempt.report;
+    if (report?.provenance.state !== "pending") continue;
+    const abort = new AbortController();
+    const currentLane = () => loadPipelines().find((item) => item.id === pipeline.id);
+    const revalidate = () => {
+      const current = currentLane();
+      const attempts = current?.runs.find((item) => item.stageId === run.stageId)?.attempts;
+      if (attempts?.find((item) => item.n === attempt.n)?.report?.seq !== report.seq
+        || attempts?.at(-1)?.n !== attempt.n || current?.cursor?.stageId !== run.stageId) abort.abort();
+    };
+    const watch = setInterval(revalidate, 50);
+    const exec: ExecPort = async (command, args, cwd, env) => {
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "provenance superseded" };
+      return await ports.exec(command, args, cwd, env, { signal: abort.signal, timeoutMs: command === "gh" ? 10_000 : 5_000 });
+    };
+    let provenance: PipelineStageProvenance;
+    try { provenance = await collectStageProvenance(pipeline, report.provenance.outputs.map((output) => output.path), exec); }
+    catch { provenance = { ...report.provenance, state: "unknown", pullRequestState: "unknown" }; }
+    finally { clearInterval(watch); }
+    revalidate();
+    if (abort.signal.aborted) provenance = { ...report.provenance, state: "unknown", pullRequestState: "unknown" };
+    await withPipelineMutation((pipelines, persist) => {
+      const current = pipelines.find((item) => item.id === pipeline.id);
+      const candidate = current?.runs.find((item) => item.stageId === run.stageId)?.attempts.find((item) => item.n === attempt.n);
+      if (!current || candidate?.conversationId !== attempt.conversationId || candidate.report?.seq !== report.seq) return;
+      if (current.runs.find((item) => item.stageId === run.stageId)?.attempts.at(-1)?.n !== attempt.n
+        || current.cursor?.stageId !== run.stageId) provenance = { ...report.provenance, state: "unknown", pullRequestState: "unknown" };
+      candidate.report = { ...candidate.report, provenance };
+      current.stageReports = current.stageReports?.map((entry) => entry.seq === report.seq
+        ? { ...entry, provenanceState: provenance.state, provenanceAt: ports.now() } : entry);
+      persist();
+      const repository = provenance.pullRequest ? pipelineRepository(current) : null;
+      if (repository && provenance.pullRequest) {
+        try { observeForgePullRequest(repository, provenance.pullRequest, provenance.branch, ports.now()); }
+        catch { /* The cache sweep retries an optional cache write. */ }
+      }
+    });
+  }
 }

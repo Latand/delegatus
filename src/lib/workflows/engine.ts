@@ -311,7 +311,7 @@ async function ensureStageAgent(
 
 async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
   if (!wf.baseRef) {
-    const res = provisionWorktree(wf, ports.exec);
+    const res = (await provisionWorktree(wf, ports.exec));
     if (!res.ok) {
       park(wf, res.error);
       return;
@@ -455,9 +455,9 @@ async function tickReviewing(
   else if (flow.state === "closed") park(wf, "the embedded review flow was closed");
 }
 
-function tickFinishing(wf: Workflow, ports: WorkflowPorts): void {
+async function tickFinishing(wf: Workflow, ports: WorkflowPorts): Promise<void> {
   const flow = wf.flowId ? ports.getFlow(wf.flowId) : null;
-  const res = runFinish(wf, prBody(wf, flow?.rounds ?? []), ports.exec);
+  const res = (await runFinish(wf, prBody(wf, flow?.rounds ?? []), ports.exec));
   if (!res.ok) {
     park(wf, res.error);
     return;
@@ -479,7 +479,7 @@ async function tickWorkflow(
   if (wf.state === "provisioning") await tickProvisioning(wf, ports, persistCheckpoint);
   else if (wf.state === "implementing") await tickImplementing(wf, entries, entriesByPath, ports, persistCheckpoint);
   else if (wf.state === "reviewing") await tickReviewing(wf, entries, ports, persistCheckpoint);
-  else if (wf.state === "finishing") tickFinishing(wf, ports);
+  else if (wf.state === "finishing") (await tickFinishing(wf, ports));
   return JSON.stringify(wf) !== before;
 }
 
@@ -619,15 +619,15 @@ export async function patchWorkflow(
   return { workflow: wf };
 }
 
-export function createWorkflowFromRequest(
+export async function createWorkflowFromRequest(
   req: CreateWorkflowRequest,
   ports: WorkflowPorts = defaultPorts(),
-): { workflow?: Workflow; error?: string; status?: number } {
+): Promise<{ workflow?: Workflow; error?: string; status?: number }> {
   const task = typeof req.task === "string" ? req.task.trim() : "";
   if (!task) return { error: "task brief is required", status: 400 };
   const repoDir = typeof req.repoDir === "string" ? req.repoDir.trim() : "";
   if (!repoDir) return { error: "repoDir is required", status: 400 };
-  const gitCheck = ports.exec("git", ["rev-parse", "--git-dir"], repoDir);
+  const gitCheck = (await ports.exec("git", ["rev-parse", "--git-dir"], repoDir));
   if (gitCheck.code !== 0) return { error: `not a git repository: ${repoDir}`, status: 400 };
 
   let template: WorkflowTemplate;

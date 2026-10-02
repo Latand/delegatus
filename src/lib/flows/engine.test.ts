@@ -64,7 +64,7 @@ function writeCodexEntry(name: string, payload: Record<string, unknown>, mtime: 
   return entryFor(pathname, mtime);
 }
 
-test("a review round captures its clean commit immediately before launch", () => {
+test("a review round captures its clean commit immediately before launch", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-reviewed-head-"));
   try {
     expect(spawnSync("git", ["init", "-b", "main"], { cwd: directory }).status).toBe(0);
@@ -86,16 +86,16 @@ test("a review round captures its clean commit immediately before launch", () =>
 
     const round = newRound(flow, "marker", null);
     expect(round.reviewHeadSha).toBeNull();
-    expect(captureReviewHead(flow, round)).toBe(headSha);
+    expect(await captureReviewHead(flow, round)).toBe(headSha);
     expect(round.reviewHeadSha).toBe(headSha);
     fs.writeFileSync(path.join(directory, "work.txt"), "uncommitted\n");
-    expect(() => captureReviewHead(flow, newRound(flow, "marker", null))).toThrow("review requires a clean committed HEAD");
+    await expect(captureReviewHead(flow, newRound(flow, "marker", null))).rejects.toThrow("review requires a clean committed HEAD");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("issue 533: a repair review parks when its remote branch is behind the captured head", () => {
+test("issue 533: a repair review parks when its remote branch is behind the captured head", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-remote-head-"));
   const directory = path.join(root, "worktree");
   const remote = path.join(root, "origin.git");
@@ -121,14 +121,14 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
       }, rounds: [],
     } as unknown as Flow;
 
-    expect(() => captureReviewHead(flow, newRound(flow, "marker", null)))
-      .toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
+    await expect(captureReviewHead(flow, newRound(flow, "marker", null)))
+      .rejects.toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("a pipeline flow that does not publish captures its clean local head without reading any remote (#1692)", () => {
+test("a pipeline flow that does not publish captures its clean local head without reading any remote (#1692)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-internal-head-"));
   const directory = path.join(root, "worktree");
   fs.mkdirSync(directory);
@@ -150,12 +150,12 @@ test("a pipeline flow that does not publish captures its clean local head withou
     } as unknown as Flow;
 
     const internal = newRound(flow, "marker", null);
-    expect(captureReviewHead(flow, internal)).toBe(headSha);
+    expect(await captureReviewHead(flow, internal)).toBe(headSha);
     expect(internal.reviewHeadSha).toBe(headSha);
 
     const publishing = { ...flow, requireRemoteHead: true } as Flow;
-    expect(() => captureReviewHead(publishing, newRound(publishing, "marker", null)))
-      .toThrow("review remote head is unavailable before launch: origin/main");
+    await expect(captureReviewHead(publishing, newRound(publishing, "marker", null)))
+      .rejects.toThrow("review remote head is unavailable before launch: origin/main");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -250,7 +250,7 @@ test("issue 532: a dirty marker-time checkout parks with an actionable decision"
   }
 });
 
-test("a review round parks when clean HEAD advances past its synchronized target before launch (#522)", () => {
+test("a review round parks when clean HEAD advances past its synchronized target before launch (#522)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-target-head-"));
   try {
     expect(spawnSync("git", ["init", "-b", "main"], { cwd: directory }).status).toBe(0);
@@ -275,7 +275,7 @@ test("a review round parks when clean HEAD advances past its synchronized target
     } as unknown as Flow;
     const round = newRound(flow, "button", null);
 
-    expect(() => captureReviewHead(flow, round)).toThrow(`review target changed before launch: expected ${targetSha}, found ${advancedSha}`);
+    await expect(captureReviewHead(flow, round)).rejects.toThrow(`review target changed before launch: expected ${targetSha}, found ${advancedSha}`);
     expect(round.reviewHeadSha).toBeNull();
     expect(flow).toMatchObject({
       state: "needs_decision",

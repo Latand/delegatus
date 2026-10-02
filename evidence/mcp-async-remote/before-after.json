@@ -1,0 +1,121 @@
+{
+  "baseline": "40d5dd0a4",
+  "harness": "MCP call-cost audit integration profile (SDK transport and loopback Viewer routes)",
+  "seed": {
+    "tasks": 107,
+    "pipelines": 27,
+    "stagesPerPipeline": 2,
+    "attemptsPerStage": 6,
+    "transcriptMessages": 1000,
+    "transcriptBytes": 1232550
+  },
+  "delayMs": 1200,
+  "measurements": [
+    {
+      "scenario": "pipeline_action/retry-remote1200",
+      "before": {
+        "key": "pipeline_action/retry-remote1200",
+        "n": 2,
+        "ok": 2,
+        "p50ms": 3621.66,
+        "p95ms": 3621.77,
+        "maxMs": 3621.77,
+        "inTokP50": 19.5,
+        "outTokP50": 136.5
+      },
+      "after": {
+        "key": "pipeline_action/retry-remote1200",
+        "n": 2,
+        "ok": 2,
+        "p50ms": 8.79,
+        "p95ms": 8.91,
+        "maxMs": 8.91,
+        "inTokP50": 19.5,
+        "outTokP50": 140.75
+      }
+    },
+    {
+      "scenario": "stage_report/forge-delay1200",
+      "before": {
+        "key": "stage_report/forge-delay1200",
+        "n": 3,
+        "ok": 3,
+        "p50ms": 1223.83,
+        "p95ms": 1226.26,
+        "maxMs": 1226.26,
+        "inTokP50": 18.5,
+        "outTokP50": 114
+      },
+      "after": {
+        "key": "stage_report/forge-delay1200",
+        "n": 3,
+        "ok": 3,
+        "p50ms": 15.56,
+        "p95ms": 16.11,
+        "maxMs": 16.11,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      }
+    },
+    {
+      "scenario": "get_pipeline/concurrent-forge1200",
+      "before": {
+        "key": "get_pipeline/concurrent-forge1200",
+        "n": 3,
+        "ok": 3,
+        "p50ms": 1219.33,
+        "p95ms": 1222.48,
+        "maxMs": 1222.48,
+        "inTokP50": 18.25,
+        "outTokP50": 204.5
+      },
+      "after": {
+        "key": "get_pipeline/concurrent-forge1200",
+        "n": 3,
+        "ok": 3,
+        "p50ms": 17.51,
+        "p95ms": 18.84,
+        "maxMs": 18.84,
+        "inTokP50": 10.75,
+        "outTokP50": 202.75
+      }
+    },
+    {
+      "scenario": "request_attention/browser-arrival1200",
+      "before": {
+        "key": "request_attention/browser-arrival1200",
+        "n": 2,
+        "ok": 2,
+        "p50ms": 1256.08,
+        "p95ms": 1256.62,
+        "maxMs": 1256.62,
+        "inTokP50": 30,
+        "outTokP50": 326.5
+      },
+      "after": {
+        "key": "request_attention/browser-arrival1200",
+        "n": 2,
+        "ok": 2,
+        "p50ms": 1254.98,
+        "p95ms": 1257.79,
+        "maxMs": 1257.79,
+        "inTokP50": 30,
+        "outTokP50": 326.5
+      }
+    },
+    {
+      "scenario": "request_attention/accepted-only",
+      "before": null,
+      "after": {
+        "key": "request_attention/accepted-only",
+        "n": 2,
+        "ok": 2,
+        "p50ms": 0.91,
+        "p95ms": 1.12,
+        "maxMs": 1.12,
+        "inTokP50": 35.5,
+        "outTokP50": 263.75
+      }
+    }
+  ]
+}

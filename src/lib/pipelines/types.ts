@@ -263,6 +263,9 @@ export type PipelineGraphEdit = {
     else. A field the server could not read is `null`, which states what the
     read found and says nothing about the work itself. */
 export type PipelineStageProvenance = {
+  /** Absent on older records. Pending reads survive a Viewer restart. */
+  state?: "pending" | "complete" | "unknown";
+  pullRequestState?: "pending" | "observed" | "absent" | "unknown";
   /** The worktree's checked-out commit, dirty tree included. */
   head: string | null;
   branch: string;
@@ -274,7 +277,7 @@ export type PipelineStageProvenance = {
   pullRequest: { url: string; number: number; state: string } | null;
   /** The stage's declared outputs, and whether the server found each in the
       worktree. Empty when the stage declares none. */
-  outputs: Array<{ path: string; present: boolean }>;
+  outputs: Array<{ path: string; present: boolean | null }>;
 };
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
@@ -307,6 +310,8 @@ export type PipelineStageReportEntry = {
   findings: number;
   /** The `seq` of the report this call replaced before settlement, or null. */
   replaces: number | null;
+  provenanceState?: "pending" | "complete" | "unknown";
+  provenanceAt?: string;
   summary: string | null;
 };
 
@@ -778,6 +783,19 @@ export function pipelineActivitySettled(
   return true;
 }
 
+export type PipelineRemoteAction = {
+  id: string;
+  action: "retry-stage" | "takeover";
+  state: "pending" | "settled";
+  fence: string;
+  at: string;
+  settledAt?: string;
+  error?: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
+  takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
+};
+
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
@@ -785,6 +803,7 @@ export type Pipeline = {
   activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
   delivery?: PipelineDelivery;
+  remoteAction?: PipelineRemoteAction;
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;

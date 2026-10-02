@@ -38,6 +38,10 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     stateDetail: clampChars(pipeline.stateDetail, ACK_DETAIL_CHARS),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
+    ...(pipeline.remoteAction ? { remoteCheck: { id: pipeline.remoteAction.id, action: pipeline.remoteAction.action,
+      state: pipeline.remoteAction.state, ...(pipeline.remoteAction.error ? { error: pipeline.remoteAction.error } : {}) } } : {}),
+    ...(pipeline.delivery?.operation ? { publicationCheck: { id: pipeline.delivery.operation.id,
+      state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha } } : {}),
     taskIds: [...(pipeline.taskIds ?? [])],
     ...finishesTaskFields(pipeline),
     branch: pipeline.branch,
@@ -125,6 +129,7 @@ export function stageReportAcknowledgement(report: PipelineStageReport) {
       severityCounts,
     },
     provenance: {
+      ...(report.provenance.state ? { state: report.provenance.state, pullRequestState: report.provenance.pullRequestState } : {}),
       head: report.provenance.head,
       branch: report.provenance.branch,
       dirty: report.provenance.uncommitted === null ? null : report.provenance.uncommitted.length > 0,
