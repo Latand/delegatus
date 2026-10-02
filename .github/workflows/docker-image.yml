@@ -2,6 +2,26 @@ name: Docker image
 
 on:
   pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - 'tsconfig.json'
+      - 'next.config.*'
+      - 'postcss.config.*'
+      - 'src/**'
+      - 'public/**'
+      - 'bin/**'
+      - 'patches/**'
+      - 'vendor/**'
+      - 'scripts/build-mcp.ts'
+      - 'scripts/whisper_transcribe.py'
+      - 'scripts/runtime-host-viewer-adapter.ts'
+      - 'scripts/runtime-host-healthcheck.ts'
+      - 'scripts/published-image-entrypoint.sh'
+      - '.github/workflows/docker-image.yml'
   push:
     branches: [main]
     tags: ["v*"]
@@ -17,7 +37,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

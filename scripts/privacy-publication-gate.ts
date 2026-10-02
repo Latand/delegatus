@@ -208,7 +208,7 @@ function signatureMediaKind(bytes: Buffer): MediaKind | undefined {
   return undefined;
 }
 
-function mediaKind(path: string): MediaKind | undefined {
+export function mediaKind(path: string): MediaKind | undefined {
   try {
     const signature = signatureMediaKind(readFileSync(path));
     if (signature === "audio" && !audioExtensions.has(extname(path).toLowerCase())) return undefined;

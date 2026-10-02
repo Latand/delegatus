@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 [ "${LLV_SKIP_HOOKS:-0}" = "1" ] && exit 0
-exec bun scripts/local-gate.ts pre-push
+exec bun scripts/local-gate.ts pre-commit

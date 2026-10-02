@@ -8,7 +8,8 @@ name: Bun runtime pin
 # Three review rounds then asked for evidence that a moved pin actually loads
 # this build, serves it, and holds that listener — and the only evidence anyone
 # could offer was a local run nobody else could reproduce. This job is where it
-# runs instead, at the pull request's own commit, under the pin the Dockerfile
+# runs by dispatch, and local pre-push runs the scoped checks under the same
+# pin the Dockerfile
 # carries rather than a version written here. It is the same answer #1256 got
 # for macOS, where nobody had the hardware either.
 #
@@ -27,7 +28,6 @@ name: Bun runtime pin
 # rather than through the image's `npm install -g`.
 
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       native_queue_campaign:

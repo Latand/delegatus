@@ -32,7 +32,7 @@ const workflow = Bun.YAML.parse(workflowSource) as {
 const steps = workflow.jobs["bun-runtime"].steps;
 const scripts = steps.map((step) => step.run ?? "");
 
-test("the job performs the runtime verification the pull request cannot prove locally", () => {
+test("dispatch preserves both runtime verification processes", () => {
   // The Viewer half: the compiled server runtimes load, and the served build
   // answers 200. The host half: a completed succession, endpoints held.
   expect(scripts).toContain("bun scripts/verify-viewer-runtime.ts");
@@ -132,4 +132,9 @@ test("both supported Codex CLIs run the full native contracts at the proposed co
     expect(step["continue-on-error"]).toBeUndefined();
     for (const swallow of ["|| true", "set +e"]) expect(step.run ?? "").not.toContain(swallow);
   }
+});
+
+test("runtime CI is dispatch-only; pre-push owns the scoped local runs", () => {
+  const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
+  expect(Object.keys(triggers.on)).toEqual(["workflow_dispatch"]);
 });
