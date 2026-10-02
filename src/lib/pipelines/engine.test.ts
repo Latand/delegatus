@@ -708,6 +708,289 @@ test("a read-only successor settles and advances when its handoff is in a clean 
   }
 });
 
+test("a stage's fresh pushed branch and PR are adopted before the next stage", async () => {
+  const fixture = await realWorktreeLane("stage-branch-adoption", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const stageBranch = "fix/stage-created";
+    git(worktree, "switch", "-c", stageBranch);
+    fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "stage work");
+    git(worktree, "push", "origin", stageBranch);
+    const head = git(worktree, "rev-parse", "HEAD");
+    const exec = h.ports.exec;
+    h.ports.exec = (command, args, ...rest) => command === "timeout" && args.includes("gh")
+      ? { code: 0, stdout: JSON.stringify([{ url: "https://forge.example/repo/pull/7", number: 7, state: "OPEN" }]), stderr: "" }
+      : exec(command, args, ...rest);
+    h.setConversationActive(false);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "Built")], h.ports);
+    const adopted = loadPipelines().find((item) => item.id === id)!;
+    expect(adopted.state).toBe("running");
+    expect(adopted.cursor?.stageId).toBe("review");
+    expect(adopted.lastPassedCommit).toBe(head);
+    expect(git(worktree, "branch", "--show-current")).toBe(lane.branch);
+    expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(head);
+    expect(git(origin, "rev-parse", `refs/heads/${stageBranch}`)).toBe(head);
+    expect(adopted.runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ head, branch: stageBranch, pullRequest: { number: 7 } });
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination", "protected", "forge-protected-alias", "forge-protected-url", "read-only"] as const) {
+  test(`a stage on a ${shape} branch still parks without changing either tip`, async () => {
+    const fixture = await realWorktreeLane(`stage-branch-${shape}`, [
+      { id: "build", kind: "run", role: { roleId: shape === "read-only" ? "reviewer" : "builder" }, access: shape === "read-only" ? "read-only" : "read-write", prompt: "Build", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    ], "remote-branch");
+    try {
+      const { git, h, id, repo, worktree } = fixture;
+      const lane = loadPipelines().find((item) => item.id === id)!;
+      const branch = shape === "protected" ? "master" : "fix/other-stage";
+      if (shape === "unrelated") git(worktree, "switch", "--orphan", branch);
+      else git(worktree, "switch", "-c", branch);
+      fs.writeFileSync(path.join(worktree, "build.txt"), "keep stage work\n");
+      git(worktree, "add", "build.txt");
+      git(worktree, "commit", "-m", "stage work");
+      const tip = git(worktree, "rev-parse", "HEAD");
+      if (shape.startsWith("forge-protected")) {
+        const forgeUrl = "https://github.com/fixture/repo.git";
+        const exec = h.ports.exec;
+        h.ports.exec = (command, args, ...rest) => command === "git" && args[0] === "remote" && args[1] === "get-url" && args[2] === "origin"
+          ? { code: 0, stdout: forgeUrl, stderr: "" } : exec(command, args, ...rest);
+        lane.delivery!.target.remote = shape === "forge-protected-url" ? forgeUrl : "origin";
+        savePipelines([lane]);
+        const remoteExec = h.ports.provisionExec!;
+        h.ports.provisionExec = async (command, args, ...rest) => {
+          if (command === "timeout" && args.includes("ls-remote")) return { code: 0, stdout: `${tip}\trefs/heads/${branch}\n`, stderr: "" };
+          if (command === "timeout" && args.includes("gh")) {
+            expect(args).toContain(`repos/fixture/repo/branches/${encodeURIComponent(branch)}`);
+            // The forge check must hold no registry mutation lease.
+            const { withPipelineMutation } = await import("./store");
+            await withPipelineMutation(() => {});
+            return { code: 0, stdout: "true\n", stderr: "" };
+          }
+          return remoteExec(command, args, ...rest);
+        };
+      }
+      if (shape === "owned" || shape === "owned-checkout" || shape === "owned-destination") {
+        const owner = structuredClone(lane);
+        owner.id = "87654321";
+        Object.assign(owner, pipelineIdentity(owner.id, owner.task, owner.repoDir));
+        owner.delivery!.target.branch = `refs/heads/${branch}`;
+        owner.delivery!.ownerId = owner.id;
+        owner.state = "needs_decision";
+        if (shape === "owned-checkout") {
+          lane.delivery!.target.branch = `refs/heads/${branch}`;
+          lane.delivery!.active = false;
+          lane.delivery!.publish = "disabled";
+          fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep uncommitted stage work\n");
+        }
+        if (shape === "owned-destination") {
+          const destination = "delivery/shared";
+          git(worktree, "branch", "-m", lane.branch, destination);
+          lane.delivery!.target.branch = `refs/heads/${destination}`;
+          lane.delivery!.active = false;
+          lane.delivery!.publish = "disabled";
+          owner.delivery!.target.branch = `refs/heads/${destination}`;
+        }
+        savePipelines([lane, owner]);
+      }
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const parked = loadPipelines().find((item) => item.id === id)!;
+      expect(parked.state).toBe("needs_decision");
+      expect(parked.cursor?.stageId).toBe("build");
+      expect(parked.lastPassedCommit).toBe(lane.lastPassedCommit);
+      expect(git(repo, "rev-parse", shape === "owned-destination" ? "refs/heads/delivery/shared" : `refs/heads/${lane.branch}`)).toBe(lane.lastPassedCommit);
+      expect(git(worktree, "rev-parse", `refs/heads/${branch}`)).toBe(tip);
+      if (shape === "unrelated") expect(parked.stateDetail).toContain("does not descend");
+      if (shape === "owned" || shape === "owned-checkout") expect(parked.stateDetail).toContain("another pipeline owns");
+      if (shape === "owned-destination") expect(parked.stateDetail).toContain("adoption destination");
+      if (shape === "protected") expect(parked.stateDetail).toContain("protected base branch");
+      if (shape.startsWith("forge-protected")) expect(parked.stateDetail).toContain("protected forge branch");
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const interruptedAfterMerge of [false, true]) {
+  test(`a restarted controller finishes its recorded branch adoption (after merge: ${interruptedAfterMerge})`, async () => {
+    const fixture = await realWorktreeLane("stage-branch-restart", [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+    ], "remote-branch");
+    try {
+      const { git, h, id, origin, worktree } = fixture;
+      const lane = loadPipelines().find((item) => item.id === id)!;
+      const source = "fix/interrupted-stage";
+      git(worktree, "switch", "-c", source);
+      fs.writeFileSync(path.join(worktree, "build.txt"), "recover stage work\n");
+      git(worktree, "add", "build.txt");
+      git(worktree, "commit", "-m", "stage work");
+      const head = git(worktree, "rev-parse", "HEAD");
+      const exec = h.ports.exec;
+      h.ports.exec = (command, args, ...rest) => {
+        if (command === "git" && args[0] === "merge" && args.includes("--ff-only")) {
+          if (interruptedAfterMerge) exec(command, args, ...rest);
+          throw new Error("fixture controller interruption");
+        }
+        return exec(command, args, ...rest);
+      };
+      await expect(tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports)).rejects.toThrow("fixture controller interruption");
+      const interrupted = loadPipelines().find((item) => item.id === id)!;
+      expect(interrupted.lastPassedCommit).toBe(lane.lastPassedCommit);
+      expect(interrupted.runs[0]!.attempts[0]!.branchAdoption).toEqual({ branch: source, head, target: lane.branch });
+      expect(git(worktree, "branch", "--show-current")).toBe(lane.branch);
+      h.ports.exec = exec;
+      await tickPipelines([], h.ports);
+      const recovered = loadPipelines().find((item) => item.id === id)!;
+      expect(recovered.state).toBe("running");
+      expect(recovered.cursor?.stageId).toBe("review");
+      expect(recovered.lastPassedCommit).toBe(head);
+      expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(head);
+      expect(git(worktree, "show", "HEAD:build.txt")).toBe("recover stage work");
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a stage branch is adopted onto an owned delivery branch when the lane ref is absent", async () => {
+  const fixture = await realWorktreeLane("stage-branch-delivery-only", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const delivery = "fix/existing-pr";
+    git(worktree, "branch", "-m", delivery);
+    lane.delivery!.target.branch = `refs/heads/${delivery}`;
+    savePipelines([lane]);
+    git(worktree, "switch", "-c", "fix/new-stage");
+    fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "stage work");
+    const head = git(worktree, "rev-parse", "HEAD");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const adopted = loadPipelines().find((item) => item.id === id)!;
+    expect(adopted.state).toBe("running");
+    expect(adopted.cursor?.stageId).toBe("review");
+    expect(adopted.lastPassedCommit).toBe(head);
+    expect(git(worktree, "branch", "--show-current")).toBe(delivery);
+    expect(git(origin, "rev-parse", `refs/heads/${delivery}`)).toBe(head);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a still-busy reported stage on a foreign branch makes no protection probes", async () => {
+  const fixture = await realWorktreeLane("stage-branch-busy", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, worktree } = fixture;
+    git(worktree, "switch", "-c", "fix/busy-stage");
+    const exec = h.ports.exec;
+    h.ports.exec = (command, args, ...rest) => command === "timeout" && args.includes("gh")
+      ? { code: 0, stdout: "[]", stderr: "" } : exec(command, args, ...rest);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+    h.setConversationActive(true);
+    const finished = h.finish("/codex/stage-1.jsonl", "pass");
+    h.durableTurns.set(finished.path, { turn: "busy", message: h.messages.get(finished.path)! });
+    h.ports.provisionExec = async () => { throw new Error("a busy stage must not probe its remote"); };
+    await tickPipelines([finished], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)).toMatchObject({ state: "running", cursor: { stageId: "build", state: "running" } });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a stage branch is adopted from durable terminal evidence before the scanner projects it", async () => {
+  const fixture = await realWorktreeLane("stage-branch-durable-fallback", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, worktree } = fixture;
+    git(worktree, "switch", "-c", "fix/durable-stage");
+    fs.writeFileSync(path.join(worktree, "build.txt"), "durable stage work\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "stage work");
+    const head = git(worktree, "rev-parse", "HEAD");
+    finishReported(h, "/codex/stage-1.jsonl", "pass", "Built");
+    await tickPipelines([], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)).toMatchObject({ state: "running", lastPassedCommit: head, cursor: { stageId: "review" } });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const interruption of [null, "before-ref", "after-ref"] as const) {
+  test(`a divergent stage branch retaining accepted content is adopted without moving its source (${interruption ?? "uninterrupted"})`, async () => {
+    const fixture = await realWorktreeLane("stage-branch-divergent", [
+      { id: "brief", kind: "run", role: { roleId: "builder" }, prompt: "Brief", next: "build" },
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+    ], "remote-branch");
+    try {
+      const { git, h, id, base, origin, worktree } = fixture;
+      fs.writeFileSync(path.join(worktree, "accepted.txt"), "accepted work\n");
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const lane = loadPipelines().find((item) => item.id === id)!;
+      await tickPipelines([], h.ports);
+      const source = "fix/divergent-stage";
+      git(worktree, "switch", "-c", source, base);
+      fs.writeFileSync(path.join(worktree, "accepted.txt"), "accepted work\n");
+      git(worktree, "add", "accepted.txt");
+      git(worktree, "commit", "-m", "retain accepted work with fresh history");
+      fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
+      git(worktree, "add", "build.txt");
+      git(worktree, "commit", "-m", "stage work");
+      git(worktree, "push", "origin", source);
+      const head = git(worktree, "rev-parse", "HEAD");
+      const exec = h.ports.exec;
+      if (interruption) h.ports.exec = (command, args, ...rest) => {
+        if (command === "git" && args[0] === "update-ref" && args.includes("pipeline: reconcile rebased stage")) {
+          if (interruption === "after-ref") exec(command, args, ...rest);
+          throw new Error("fixture reconciliation interruption");
+        }
+        return exec(command, args, ...rest);
+      };
+      const finish = tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+      if (interruption) {
+        await expect(finish).rejects.toThrow("fixture reconciliation interruption");
+        expect(loadPipelines().find((item) => item.id === id)!.runs[1]!.attempts[0]!.branchAdoption).toMatchObject({ branch: source, head });
+        h.ports.exec = exec;
+        await tickPipelines([], h.ports);
+      } else await finish;
+      const adopted = loadPipelines().find((item) => item.id === id)!;
+      expect(adopted.state).toBe("running");
+      expect(adopted.cursor?.stageId).toBe("review");
+      expect(git(worktree, "rev-parse", "HEAD")).toBe(adopted.lastPassedCommit);
+      expect(git(worktree, "merge-base", lane.lastPassedCommit, adopted.lastPassedCommit)).toBe(lane.lastPassedCommit);
+      expect(git(worktree, "merge-base", head, adopted.lastPassedCommit)).toBe(head);
+      expect(git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(head);
+      expect(git(origin, "rev-parse", `refs/heads/${source}`)).toBe(head);
+      expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(adopted.lastPassedCommit);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("a rebased builder reconciles accepted content and continues with fast-forward delivery", async () => {
   const fixture = await realWorktreeLane("rebase-reconcile", [
     { id: "brief", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Brief", next: "build" },

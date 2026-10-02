@@ -24,6 +24,24 @@ test("comparison guidance names the owner while preserving full host capabilitie
   expect(stage.sandbox).toBe("full");
 });
 
+test("every run scaffold overrides conflicting branch instructions and names the lane branch", () => {
+  for (const access of ["read-write", "read-only"] as const) {
+    const stage: PipelineStage = { id: "build", kind: "run", prompt: "Branch from current origin/main", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access, promptScaffold: "Create a new branch" } };
+    const pipeline = buildPipeline({ id: "branch-rule", task: "Branch rule", project: "viewer", repoDir: "/repo",
+      stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+    const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "Switch branches");
+    expect(prompt).toContain(`Pipeline branch: ${pipeline.branch}. Never create or switch branches.`);
+    expect(prompt).toContain("overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold");
+    expect(prompt.indexOf("Pipeline branch:")).toBeGreaterThan(prompt.indexOf("Create a new branch"));
+    if (access === "read-write") {
+      expect(prompt).toContain(`Commit your changes on ${pipeline.branch}`);
+      expect(prompt).toContain("Push this branch");
+    }
+    else expect(prompt).not.toContain("Commit your changes on");
+  }
+});
+
 test("run prompt renders task, previous output, spec, access, verdict, and nesting contracts", () => {
   const stage: PipelineStage = {
     id: "build",

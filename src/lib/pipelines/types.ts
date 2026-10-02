@@ -499,6 +499,9 @@ export type PipelineStageAttempt = {
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Persisted before switching away from a stage-created branch, so a
+      controller restart must finish adopting this head before acceptance. */
+  branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
   error: string | null;
   /** Set when a `needs_decision` verdict that carried findings was routed along
       this stage's fail edge as a fail (#1785). The verdict keeps the status the

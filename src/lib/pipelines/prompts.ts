@@ -62,6 +62,14 @@ export function renderStagePrompt(
   const baseLine = pipeline.baseRef
     ? [`This pipeline's worktree started from commit ${pipeline.baseRef}${pipeline.baseBranch ? ` on ${pipeline.baseBranch}` : ""}.`]
     : [];
+  const branchContract = [
+    `Pipeline branch: ${pipeline.branch}. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.`,
+    ...(pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}`
+      ? [`If the worktree is already checked out on its owned delivery branch ${pipeline.delivery.target.branch}, keep that branch checked out and use it for the commits below.`] : []),
+    ...(role.access === "read-write"
+      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch).${pipeline.delivery?.publish === "disabled" ? "" : ` Push this branch${pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}` ? ` to the delivery target ${pipeline.delivery.target.branch}` : ""}.`}`]
+      : []),
+  ];
   const roleContext = role.roleId
     ? [
         `Role preset: ${role.roleId} (${role.engine}${role.model ? `/${role.model}` : ""}${role.effort ? `, ${role.effort}` : ""}).`,
@@ -82,6 +90,7 @@ export function renderStagePrompt(
     access,
     hostAccess,
     ...baseLine,
+    ...branchContract,
     ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
     "",
