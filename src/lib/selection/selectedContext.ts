@@ -301,6 +301,24 @@ export function stripTaskReferencePrelude(text: string, tasks: readonly Selected
   return text.split("\n").filter((line) => !lines.has(line)).join("\n");
 }
 
+const TASK_REFERENCE_LINE = /^\[task reference — id [A-Za-z0-9_-]{1,64}, title "(?:[^"\\]|\\.)*"; read it with get_task\]$/;
+
+/** The text without any line in the exact shape of a task reference, for a
+    surface that holds only the wire text (a delivery receipt) and no longer
+    knows which chips went with it. The shape is `taskReferenceLine`'s, whole. */
+export function stripTaskReferenceLines(text: string): string {
+  if (!text.includes("[task reference — id ")) return text;
+  return text.split("\n").filter((line) => !TASK_REFERENCE_LINE.test(line)).join("\n").trim();
+}
+
+/** The title a task chip carries, from the card's displayed title: control
+    characters folded to spaces, trimmed, capped once at `MAX_TASK_TITLE_CHARS`.
+    Identifiers (`_`, `#`) stay as the card shows them, and the desktop and the
+    phone hand the seat the same string. */
+export function taskChipTitle(title: string): string {
+  return boundedText(title, MAX_TASK_TITLE_CHARS) ?? "";
+}
+
 function capturedAtOf(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 40) return null;
   const at = Date.parse(value);

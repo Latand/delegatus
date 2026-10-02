@@ -542,6 +542,16 @@ test("«Ask» attaches the task as a chip and opens the orchestrator's conversat
   }
 });
 
+test("«Ask» carries the card's title, identifiers intact and capped at the desktop's length", async () => {
+  const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  resetTaskChipsForTests();
+  const title = "request_attention: the target blinks, intent open opens the conversation (#1696) in __init__.py";
+  const { host } = mount(taskPorts([]), noPipelinePorts, { ...theTask, text: `${title}\nBody.` } as BoardTask);
+  click(q(host, "[data-phone-task-ask-orchestrator]"));
+  expect(readTaskChips("fixture")).toMatchObject([{ id: "t-many", title: title.slice(0, 80).trim() }]);
+  resetTaskChipsForTests();
+});
+
 test("«Ask» with no live seat to open still attaches the chip and says so", async () => {
   const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
   const { resetManagerIdentityForTest } = await import("@/components/voice/managerIdentity");

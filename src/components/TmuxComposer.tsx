@@ -16,7 +16,7 @@ import { useComposer } from "@/hooks/useComposer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useCodexRealtime } from "@/hooks/useCodexRealtime";
 import { interruptRuntime, useRuntimeBusState, type RuntimeSessionView } from "@/hooks/useRuntime";
-import { parseSelectedContextRef, taskReferencePrelude, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
+import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { useViewerSelectedContext, viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
 import { useHostTarget } from "@/hooks/useHostTarget";
@@ -615,9 +615,9 @@ export function RuntimeComposerReceipts({
                   <span
                     className="min-w-[3rem] flex-1 truncate text-right text-muted"
                     data-receipt-preview
-                    title={visibleAttempts[0]?.text ?? undefined}
+                    title={visibleAttempts[0]?.text ? stripTaskReferenceLines(visibleAttempts[0].text) : undefined}
                   >
-                    {visibleAttempts[0]?.text}
+                    {visibleAttempts[0]?.text ? stripTaskReferenceLines(visibleAttempts[0].text) : null}
                   </span>
                 </>
               )}
@@ -754,7 +754,7 @@ export function RuntimeComposerReceipts({
                         className="min-w-[8rem] flex-1 whitespace-pre-wrap break-words text-right text-secondary"
                         data-receipt-message
                       >
-                        {receipt.text}
+                        {receipt.text ? stripTaskReferenceLines(receipt.text) : receipt.text}
                       </span>
                       {group.attempts.length > 1 ? (
                         <Badge
@@ -4509,9 +4509,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           <span className="sr-only">{t("composer.deliveredEcho")}</span>
           <span
             className="min-w-0 max-w-[85%] truncate text-label text-secondary"
-            title={receipt.text ?? undefined}
+            title={receipt.text ? stripTaskReferenceLines(receipt.text) : undefined}
           >
-            {receipt.text}
+            {receipt.text ? stripTaskReferenceLines(receipt.text) : receipt.text}
           </span>
           <span className="inline-flex shrink-0 items-center gap-0.5 text-caption tabular-nums text-muted">
             {hhmm(Date.parse(receipt.at))}
@@ -4555,9 +4555,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ) : null}
           <span
             className="min-w-0 max-w-[85%] truncate text-label text-secondary"
-            title={entry.text}
+            title={stripTaskReferenceLines(entry.text)}
           >
-            {entry.text}
+            {stripTaskReferenceLines(entry.text)}
           </span>
           <span className="inline-flex shrink-0 items-center gap-0.5 text-caption tabular-nums text-muted">
             {entry.via === "spawn" ? <Play className="h-2.5 w-2.5" aria-hidden /> : <ArrowRight className="h-2.5 w-2.5" aria-hidden />}

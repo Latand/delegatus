@@ -10,7 +10,9 @@ import {
   decodeSelectedContextRef,
   encodeSelectedContextRef,
   parseSelectedContextRef,
+  stripTaskReferenceLines,
   stripTaskReferencePrelude,
+  taskChipTitle,
   taskReferencePrelude,
   withSelectedTasks,
   type SelectedContextRef,
@@ -148,4 +150,41 @@ test("a conversation-only reference still delivers and decodes as before", () =>
   const ref = selected();
   const wire = encodeCodexStructuredUserText("Look at that one.", undefined, ref, { kind: "operator" }, "b".repeat(64));
   expect(decodeCodexStructuredUserText(wire).selectedContext).toEqual(ref);
+});
+
+const IDENTIFIER_TITLE = "request_attention: the target blinks, intent open opens the conversation (#1696) in __init__.py";
+
+test("a chip's title keeps identifiers: `_` and `#` reach the reference line, the record and the history", () => {
+  const title = taskChipTitle(IDENTIFIER_TITLE);
+  expect(title).toBe(IDENTIFIER_TITLE.slice(0, MAX_TASK_TITLE_CHARS).trim());
+  expect(title).toContain("request_attention");
+  expect(title).toContain("#1696".slice(0, 1));
+  const ref = withSelectedTasks(selected(), [{ id: TASK_A, title }]);
+  expect(ref.tasks).toEqual([{ id: TASK_A, title }]);
+  const prelude = taskReferencePrelude(ref.tasks);
+  expect(prelude).toContain("request_attention");
+  const wire = encodeCodexStructuredUserText(`${prelude}\nstart`, undefined, ref, { kind: "operator" }, "c".repeat(64));
+  expect(decodeCodexStructuredUserText(wire).selectedContext?.tasks).toEqual([{ id: TASK_A, title }]);
+  expect(taskChipTitle("Fix __init__.py and my_var")).toBe("Fix __init__.py and my_var");
+});
+
+test("the chip title is capped once, and the same card text gives the same title everywhere", () => {
+  const long = `${"word_".repeat(40)}#9`;
+  const title = taskChipTitle(long);
+  expect([...title]).toHaveLength(MAX_TASK_TITLE_CHARS);
+  /* The wire's own bound leaves an already-capped title as it is. */
+  expect(withSelectedTasks(selected(), [{ id: TASK_A, title }]).tasks).toEqual([{ id: TASK_A, title }]);
+  expect(taskChipTitle(`  spaced\ttitle\n`)).toBe("spaced title");
+  expect(taskChipTitle("   ")).toBe("");
+});
+
+test("a receipt that holds only the wire text shows the operator's words: reference lines go, nothing else", () => {
+  const prelude = taskReferencePrelude([
+    { id: TASK_A, title: IDENTIFIER_TITLE },
+    { id: TASK_B, title: 'He said "go" \\ now' },
+  ]);
+  expect(stripTaskReferenceLines(`${prelude}\nstart this one`)).toBe("start this one");
+  expect(stripTaskReferenceLines(`${prelude}\n[viewer context — x]\nstart`)).toBe("[viewer context — x]\nstart");
+  expect(stripTaskReferenceLines("plain words")).toBe("plain words");
+  expect(stripTaskReferenceLines(`look at [task reference — id ${TASK_A}] please`)).toBe(`look at [task reference — id ${TASK_A}] please`);
 });

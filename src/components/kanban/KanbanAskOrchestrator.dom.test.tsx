@@ -127,6 +127,14 @@ test("pressing it adds this task's chip to the project's orchestrator, and chang
   expect(askButton(host, "a")!.getAttribute("aria-pressed")).toBe("true");
 });
 
+test("the chip carries the card's own title, identifiers intact, capped once", () => {
+  const title = "request_attention: the target blinks, intent open opens the conversation (#1696) in __init__.py";
+  const host = mount([task("a", "assigned", `${title}\nSecond line`)]);
+  flushSyncClick(askButton(host, "a"));
+  expect(readTaskChips("fixture")).toMatchObject([{ id: "a", title: title.slice(0, 80).trim() }]);
+  expect(host.querySelector("h3.title")!.textContent).toBe(title);
+});
+
 test("several cards add several chips; pressing a pressed button takes its chip back off", () => {
   const host = mount([task("a", "assigned", "First"), task("b", "inbox", "Second")]);
   flushSyncClick(askButton(host, "a"));

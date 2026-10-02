@@ -32,6 +32,7 @@ import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
@@ -537,6 +538,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const tickNotice = task ? isSeatTickNotice(task.text) : false;
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
+  const chipTitle = taskChipTitle(title);
 
   /* ── Edits ────────────────────────────────────────────────────────────── */
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -649,7 +651,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
      screen is pushed over the board, so ‹ from the seat comes back here. */
   const askOrchestrator = () => {
     if (!task) return;
-    if (!addTaskChip(props.project, { id: task.id, title: receiptTitle, color: task.color ?? null, icon: task.icon ?? null })) {
+    if (!addTaskChip(props.project, { id: task.id, title: chipTitle, color: task.color ?? null, icon: task.icon ?? null })) {
       showReceipt(t("taskChip.full"), null, { error: true });
       return;
     }

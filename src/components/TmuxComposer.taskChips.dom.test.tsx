@@ -237,6 +237,23 @@ test("a send carries every chip as a task reference, with one plain line each fo
   expect(readTaskChips("atlas")).toEqual([]);
 });
 
+test("after a send the delivered echo shows the operator's words, never the reference lines", async () => {
+  const host = await mountComposer();
+  const title = "request_attention: the target blinks (#1696)";
+  await act(async () => { addTaskChip("atlas", { id: TASK_A, title }); });
+  await settle();
+  await sendThrough(host, COMPOSING, "start this one");
+
+  /* The seat did read the lines; the composer's own rows must not show them. */
+  expect(sent[0]!.text).toContain("[task reference —");
+  expect(sent[0]!.selectedContext?.tasks).toEqual([{ id: TASK_A, title }]);
+  const deliveries = host.querySelector("[data-testid=composer-deliveries]");
+  expect(deliveries).not.toBeNull();
+  expect(deliveries!.textContent).toContain("start this one");
+  expect(deliveries!.textContent).not.toContain("task reference");
+  expect(host.textContent).not.toContain("[task reference —");
+});
+
 test("the sent row remembers the chips, so the history shows what the message was about", async () => {
   const host = await mountComposer();
   await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Fix the mobile board" }); });

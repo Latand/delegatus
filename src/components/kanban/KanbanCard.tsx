@@ -13,6 +13,7 @@ import type { FileEntry } from "@/lib/types";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
+import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { laneMergeUnsettled, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
@@ -904,7 +905,7 @@ function AskOrchestratorButton({ onAsked, cardId, project, taskId, title, color,
       aria-label={t("taskChip.askAria", { title })}
       title={t(attached ? "taskChip.askOnHint" : full ? "taskChip.full" : "taskChip.askHint")}
       disabled={full}
-      onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: cleanTitle(title, 80), color, icon }, attached, (chip) => onAsked?.(project, chip))}
+      onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: taskChipTitle(title), color, icon }, attached, (chip) => onAsked?.(project, chip))}
     >
       <Bot aria-hidden /> {t("taskChip.ask")}
     </button>
