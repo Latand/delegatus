@@ -19,15 +19,16 @@ Viewer/runtime-host boot when a readable open-turn artifact agrees with positive
 idle, dead, or confirmed stalled runtime evidence. Recovery confirms termination
 through the existing process identity fence, records the interrupted attempt as
 failed, and launches a new conversation on the same checkout with the same bound
-stage definition and input. The new prompt includes a short restart note and the
-previous transcript path for reference. Pending deliveries, deploy continuations,
-permission requests, terminal turns and unknown evidence retain their existing
-authority. Newer transcript progress or terminal evidence withdraws a stale
-recovery decision before a replacement is reserved. A second interruption of
-the replacement during the same boot parks with an explicit reason and wakes the
-seat. Retry requires the caller's stage and attempt, positive stalled evidence,
-and confirmed host termination; it preserves the checkout. Surviving process
-identities continue to fence replacement attempts.
+stage definition and input. The new prompt says the previous attempt was
+interrupted by a restart and includes its transcript path for reference. Restart
+recovery never messages the previous conversation. Pending deliveries, deploy
+continuations, permission requests, terminal turns and unknown evidence retain
+their existing authority. Newer transcript progress or terminal evidence
+withdraws a stale recovery decision before a replacement is reserved. A second
+interruption of the replacement during the same boot parks with an explicit
+reason and wakes the seat. Retry requires the caller's stage and attempt,
+positive stalled evidence, and confirmed host termination; it preserves the
+checkout. Surviving process identities continue to fence replacement attempts.
 
 The seat clock checks immediately at boot. A newly confirmed lane stall can
 attempt ordinary wake delivery despite a missing MCP heartbeat, so the delivery

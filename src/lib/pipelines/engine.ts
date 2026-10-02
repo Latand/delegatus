@@ -1256,6 +1256,9 @@ export function defaultPipelinePorts(
       if (!id) return null;
       const interrupted = await defaultPipelinePorts(dependencies).conversationTurnInterrupted!(id);
       if (interrupted !== "dead" && interrupted !== "stalled" && !(options?.allowIdle && interrupted === "idle")) return null;
+      // The snapshot read above can overlap a completed turn. Recheck the
+      // captured host and artifact after that await before reporting it idle.
+      if (stamp() !== observed) return null;
       if (!probe || !probe.resident()) return { outcome: "not-running" };
       let changed = false;
       const guard = (): { status: 409; error: string } | null => {
@@ -3300,6 +3303,9 @@ async function replaceInterruptedStageAttempt(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void, bootId: string, lastRecordAt: number | null,
 ): Promise<boolean> {
+  // A stage report is durable authority even when succession entered recovery
+  // (or one was recorded while the host-stop operation was awaiting).
+  if (attempt.report) return false;
   const previous = attempt.restartRecovery;
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined) {
@@ -3320,11 +3326,28 @@ async function replaceInterruptedStageAttempt(
   attempt.restartRecovery = { bootId, requestedAt, lastRecordAt };
   persist();
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
+  // Termination can take long enough for the old turn to finish or make new
+  // progress. Preserve that evidence and let the normal settlement path read
+  // it before changing the original attempt or reserving a replacement.
+  const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt);
+  if (latest?.turn === "terminal" && latest.message && latest.message.ts > unixMs(attempt.startedAt)) {
+    const fenced = parsePipelineStageVerdict(latest.message.text);
+    const parsed = reportedStageVerdict(attempt, fenced, latest.message.text, latest.backgroundReportedAt, latest.reportProse) ?? fenced;
+    if (parsed) {
+      markVerdictRecoverySucceeded(attempt, ports.now(), latest.message.ts);
+      settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
+      return true;
+    }
+  }
+  if (attempt.report || attempt.state !== "running" || latest?.turn !== "busy" || latest.launchOnly
+    || (latest.lastRecordAt ?? null) !== lastRecordAt) {
+    return false;
+  }
   if (stopped === null) {
     if (previous) attempt.restartRecovery = previous;
     else delete attempt.restartRecovery;
     persist();
-    return true;
+    return false;
   }
   if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
     park(pipeline, "restart recovery could not confirm termination of the interrupted stage host", attempt);
@@ -3414,7 +3437,7 @@ async function reconcileSeveredStageTurn(
   const conversationId = attempt.conversationId;
   /* A pane-hosted stage has a transport this Viewer never severed, and only a
      running attempt has a turn a succession could have cut. */
-  if (attempt.state !== "running" || attempt.paneId || !conversationId || !attempt.agentPath) return "continue";
+  if (attempt.state !== "running" || attempt.report || attempt.paneId || !conversationId || !attempt.agentPath) return "continue";
   const epoch = await ports.runtimeHostEpoch?.() ?? null;
   if (epoch === null) return "continue";
   if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return "continue";

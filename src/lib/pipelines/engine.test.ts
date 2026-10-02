@@ -16059,14 +16059,19 @@ test("restart leaves a recorded stage report authoritative until its verdict is 
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
   attempt.paneId = null;
+  attempt.hostEpoch = 1;
   savePipelines([lane]);
   const report = await engineModule.reportStageCompletion({ verdict: "pass", findings: [], summary: "Work finished" },
     { kind: "agent", role: "builder", conversationId: attempt.conversationId }, h.ports);
   expect(report.error).toBeUndefined();
-  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  const lastRecordAt = Date.parse(h.ports.now()) - 4 * 60_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
   let sends = 0;
   const restarted: PipelinePorts = { ...h.ports, restartRecoveryBootId: () => "report-boot",
+    runtimeHostEpoch: async () => 2,
     conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  h.advanceWallClock(4 * 60_000);
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(sends).toBe(0);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
@@ -16077,6 +16082,55 @@ test("restart leaves a recorded stage report authoritative until its verdict is 
   await tickPipelines([finalEntry], restarted);
   expect(loadPipelines()[0]!.state).toBe("completed");
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+});
+
+
+test("terminal stage evidence arriving during the final restart stop settles without a replacement", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `restart-stop-registry-${crypto.randomUUID()}.json`));
+  const transcriptPath = path.join(process.env.LLV_STATE_DIR!, `restart-stop-${crypto.randomUUID()}.jsonl`);
+  fs.writeFileSync(transcriptPath, "{}\n");
+  const conversation = registry.ensureConversation("codex", transcriptPath, "test-account");
+  attempt.conversationId = conversation.id;
+  attempt.agentPath = transcriptPath;
+  savePipelines([lane]);
+  setAgentRegistryForTests(registry);
+  const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(transcriptPath, { turn: "busy", message: null, lastRecordAt });
+  let stopCompleted = false;
+  try {
+    await withRuntimeSnapshot((requestNumber) => {
+      stopCompleted = true;
+      fs.appendFileSync(transcriptPath, "terminal record arrived during the host snapshot\n");
+      h.finish(transcriptPath, "pass", "Completed during stop");
+      const message = h.messages.get(transcriptPath)!;
+      h.durableTurns.set(transcriptPath, { turn: "terminal", message, lastRecordAt: message.ts });
+      expect(requestNumber).toBe(0);
+      return { runtime: { hostEpoch: 7 }, sessions: [
+        { conversationId: conversation.id, host: "dead", turn: "running", attentionIds: [] },
+      ] };
+    }, async () => {
+      const production = defaultPipelinePorts();
+      const stopping: PipelinePorts = { ...h.ports,
+        conversationTurnInterrupted: async () => "idle",
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      };
+      await tickPipelines([entry(transcriptPath)], stopping);
+      await tickPipelines([], stopping);
+      expect(stopCompleted).toBe(true);
+      expect(loadPipelines()[0]!.state).toBe("completed");
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+    });
+  } finally {
+    setAgentRegistryForTests(null);
+  }
 });
 
 
