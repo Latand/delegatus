@@ -1368,6 +1368,15 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         { name: `raw standalone call ${form}`, text: `String("${value}")`, pass: true },
         { name: `raw standalone index ${form}`, text: `x["${value}"]`, pass: true },
       ]),
+      ...[host, origin, discovery].flatMap((value, form) =>
+        [" ", " /*comment*/ ", " //comment\n "].flatMap((trivia, gap) => [
+          ...["\u00a0", "\u200b"].flatMap((separator, code) => [
+            { name: `raw trivia call prefix ${form} ${gap} ${code}`, text: `${separator}String${trivia}("${value}")`, pass: false },
+            { name: `raw trivia chained call prefix ${form} ${gap} ${code}`, text: `${separator}(x)${trivia}("${value}")`, pass: false },
+            { name: `raw trivia chained index prefix ${form} ${gap} ${code}`, text: `${separator}[x]${trivia}["${value}"]`, pass: false },
+          ]),
+          { name: `raw trivia standalone call ${form} ${gap}`, text: `String${trivia}("${value}")`, pass: true },
+        ])),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
       { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
       { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: false },
@@ -1983,6 +1992,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         || c.name.startsWith("review Unicode NFKC shell")
         || c.name.startsWith("raw quoted wrapper suffix")
         || c.name.startsWith("raw bare ")
+        || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
         || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {
         test(`${source}: merge identity ${specimen.name}`, () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));

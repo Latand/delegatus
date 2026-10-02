@@ -174,7 +174,9 @@ Every other adjacent character withholds the exemption, including NUL, Unicode
 spaces, zero-width characters, a dot, hyphen, letter, percent escape or entity.
 
 Quotes and balanced wrappers retain their raw outer boundaries; quoting a
-fragment cannot conceal an adjacent Unicode or encoded continuation. Source
+fragment cannot conceal an adjacent Unicode or encoded continuation. Call and
+index envelopes retain their callees across ASCII whitespace and source comments.
+A separator inside that span cannot conceal the raw character before the callee. Source
 operand checks and decoded inspection views can revoke a raw-approved candidate
 when it belongs to an extended email, host, URI or concatenated expression.
 They cannot grant an exemption to a spelling or boundary introduced by decoding.

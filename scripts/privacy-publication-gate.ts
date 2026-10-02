@@ -118,10 +118,7 @@ function approvedRawGroupBoundaries(text: string, start: number, end?: number): 
   // The raw graph supplies the complete call/index/group span,
   // including other arguments and every enclosing wrapper. All of its edges
   // remain raw; normalization cannot turn a neighbour into an approved one.
-  let before = start - 1;
-  if (text[start] === "(" || text[start] === "[") {
-    while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
-  }
+  const before = start - 1;
   return (before < 0 || approvedRawOuterLeft.test(text[before]))
     && (end === undefined || end === text.length || approvedRawOuterRight.test(text[end]));
 }
@@ -323,8 +320,13 @@ function maskApprovedPublicValues(text: string): string {
       previousSyntax = character;
     }
   }
+  const rawTriviaEnds = new Map<number, number>();
   function completeLiteral(): void {
     if (!literal) return;
+    if ((literal[0].startsWith("/*") && literal[0].endsWith("*/"))
+      || (literal[0].startsWith("//") && text[literal.index - 1] !== ":")) {
+      rawTriviaEnds.set(literal.index + literal[0].length - 1, literal.index);
+    }
     advanceSyntax(literal.index);
     syntaxCursor = literal.index + literal[0].length;
     if (!/^(?:\/[/*]|#|--)/.test(literal[0])) {
@@ -448,6 +450,28 @@ function maskApprovedPublicValues(text: string): string {
   const rawGroups: RawGroup[] = [];
   const completedRawGroups = new Map<number, RawGroup>();
   const candidateRawGroups = new Map<(typeof candidates)[number], RawGroup>();
+  function skipRawTrivia(before: number): number {
+    for (;;) {
+      while (before >= 0 && /[\t\n\v\f\r ]/.test(text[before])) before -= 1;
+      const commentStart = rawTriviaEnds.get(before);
+      if (commentStart === undefined) return before;
+      before = commentStart - 1;
+    }
+  }
+  function rawCalleeBefore(start: number): number {
+    let before = skipRawTrivia(start - 1);
+    for (;;) {
+      const end = before;
+      while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
+      if (before === end) return before;
+      const member = /^[?.]$/.test(text[before + 1]);
+      const previous = skipRawTrivia(before);
+      // Trivia inside member access belongs to the callee too. An unrelated
+      // preceding identifier remains outside this raw call/index envelope.
+      if (!member && text[previous] !== ".") return before;
+      before = previous;
+    }
+  }
   function advanceRawGroups(end: number): void {
     while (rawCursor < end) {
       if (rawQuote && rawCursor === rawQuote.index) {
@@ -459,10 +483,9 @@ function maskApprovedPublicValues(text: string): string {
       const character = text[rawCursor++];
       if (/[([{]/.test(character)) {
         const start = rawCursor - 1;
-        let before = start - 1;
-        while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
+        const before = /[([]/.test(character) ? rawCalleeBefore(start) : start - 1;
         const callee = completedRawGroups.get(before);
-        rawGroups.push({ start, envelopeStart: callee?.envelopeStart ?? start, attached: false, parent: rawGroups.at(-1) });
+        rawGroups.push({ start, envelopeStart: callee?.envelopeStart ?? before + 1, attached: false, parent: rawGroups.at(-1) });
       } else if (/[)\]}]/.test(character)) {
         const group = rawGroups.pop();
         if (group) {
