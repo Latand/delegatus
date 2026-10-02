@@ -1,3 +1,4 @@
+import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
 import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -94,6 +95,9 @@ const SEAT_NOISE = SCENARIO === "seat-noise";
 const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
+const FEED_RECOVERY = SCENARIO === "feed-recovery";
+let feedRecoveryEcho = false;
+const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
 const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || FIRST_MESSAGE;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
@@ -1758,6 +1762,7 @@ function transcriptOf(pathname: string): string {
   if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
+  if (FEED_RECOVERY && file === searchVer2) return `${[said(120, L("Ready for the next request.", "Готовий до наступного запиту.")), ...(feedRecoveryEcho ? [asked(0, delayedLaunchText)] : [])].join("\n")}\n`;
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
@@ -1854,7 +1859,26 @@ let board = {
   },
 } as unknown as BoardProjectStateV1;
 
+if (FEED_RECOVERY) searchVer2.generation = 1;
+
 const evidence = {
+  seedDelayedLaunch() {
+    const card = searchVer2.conversationId!;
+    const at = Date.now();
+    const seed = { id: "delayed-launch", text: delayedLaunchText, images: 0, at,
+      owner: { conversationId: card, generation: 1 } };
+    seedLaunchOutbox(card, seed);
+    updateOutbox(card, seed.id, { state: "delivered", settledAt: at });
+    for (let i = 0; i < OUTBOX_LIMIT; i++) {
+      const id = `settled-filler-${i}`;
+      enqueueOutbox(card, { id, text: `Settled filler ${i}`, images: 0, at: at + i + 1 });
+      updateOutbox(card, id, { state: "delivered", settledAt: at, responseStartedAt: at });
+    }
+    seedLaunchOutbox(card, seed);
+    return readOutbox(card).find(entry => entry.id === seed.id)?.state;
+  },
+  publishDelayedLaunch() { feedRecoveryEcho = true; },
+  delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
@@ -2746,7 +2770,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if (FIRST_MESSAGE && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }

@@ -15477,3 +15477,40 @@ describe("passive task status note", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+
+describe("conversation feed delayed launch echo", () => {
+  browserTest("compacted launch retires on echo at desktop and 390px in both languages", async () => {
+    const out = path.resolve(".artifacts/conversation-feed/rendered");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${server.base}?scenario=feed-recovery#c=conversation_search-ver-2`,
+          { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator("[data-feed-state]").first().waitFor();
+          expect(await page.evaluate(() => (window as unknown as { evidence: { seedDelayedLaunch(): string } }).evidence.seedDelayedLaunch())).toBe("delivered");
+          const row = page.locator("[data-message-row]").filter({ hasText: locale === "en" ? "Keep this message until its transcript arrives." : "Збережи повідомлення до появи запису в розмові." });
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-pending.png`) });
+          await page.evaluate(() => (window as unknown as { evidence: { publishDelayedLaunch(): void } }).evidence.publishDelayedLaunch());
+          await page.waitForFunction(() => (window as unknown as { evidence: { delayedLaunchRetired(): boolean } }).evidence.delayedLaunchRetired(), undefined, { timeout: 15_000 });
+          expect(await row.count()).toBe(1);
+          await row.scrollIntoViewIfNeeded();
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-retired.png`) });
+          readings.push({ locale, width, rows: await row.count(), retired: true, overflow, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/conversation-feed", { recursive: true });
+      fs.writeFileSync("evidence/conversation-feed/delayed-launch.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
