@@ -3114,11 +3114,18 @@ function fixerSelfFailCanGoToReview(
     || attempt.effectiveRole.access !== "read-write" || definition.role?.params?.mode !== "apply-fixes"
     || !next || !(next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer")) return false;
   // Reports have no blocked bit. Fix scaffolds request a Blocked: reason;
-  // also recognize ordinary blocker prose in legacy reports and findings.
-  const reason = [parsed.output, parsed.completionText, ...parsed.verdict.findings].filter(Boolean).join("\n")
+  // also recognize ordinary blocker prose in legacy summaries. Findings are
+  // defect descriptions for the reviewer, so words like "tests fail to cover"
+  // in a finding cannot establish that the fixer is blocked.
+  const completion = [parsed.output, parsed.completionText].filter(Boolean).join("\n");
+  const recoveredHistoricalFailure = /\bfailed on (?:the )?base\b/i.test(completion)
+    && /\bpassed on (?:the )?head\b/i.test(completion);
+  const reason = (recoveredHistoricalFailure
+    ? completion.replace(/[^.\n]*\bfailed on (?:the )?base\b[^.\n]*(?:\.|\n|$)/gi, "")
+    : completion)
     .replace(/\b(?:not blocked|no blockers?)\b/gi, "")
     // Red/green evidence describes a resolved failure, not a present stop.
-    .replace(/[^.\n]*\bfailed (?:on (?:the )?base|before (?:the )?fix)\b[^.\n]*\bpassed\b[^.\n]*/gi, "");
+    .replace(/[^.\n]*\bfailed before (?:the )?fix\b[^.\n]*\bpassed\b[^.\n]*/gi, "");
   if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\s+(?:failed|failing|fail)\b/i.test(reason)) return false;
   const head = currentPipelineBranchHead(pipeline, ports.exec);
   return head.ok && head.sha !== pipeline.lastPassedCommit;

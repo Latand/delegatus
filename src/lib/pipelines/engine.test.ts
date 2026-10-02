@@ -745,6 +745,53 @@ test.each([
   }
 });
 
+test.each([
+  { label: "historical red/green evidence across sentences", summary: "Regression tests failed on base. All required checks passed on head. No blockers.", finding: "another in-scope issue" },
+  { label: "test coverage finding", summary: "Handed findings fixed; checks passed.", finding: "Tests fail to cover cancellation in fix.txt:1" },
+].flatMap((scenario) => ["fenced verdict", "recorded report"].map((settlement) => ({ ...scenario, settlement }))))("a fixer routes $label to review through a $settlement settlement", async ({ summary, finding, settlement }) => {
+  const fixture = await realWorktreeLane("fixer-blocker-wording", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ]);
+  try {
+    const { h, git, worktree } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "fix handed findings");
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    const findings = [`P2 — ${finding}`];
+    const lane = loadPipelines()[0]!;
+    if (settlement === "recorded report") {
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1,
+        at: h.ports.now(),
+        actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", findings },
+        summary,
+        provenance: { head: fixed, branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+        calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    h.setConversationActive(false);
+    const transcriptVerdict = settlement === "fenced verdict"
+      ? `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings })}\n\`\`\``
+      : "";
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${transcriptVerdict}`, ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    await tickPipelines([], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(fixed);
+    expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
+    expect(current.cursor?.input).toContain(finding);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("an owner publishes a review-fix commit before the passing review starts", async () => {
   const fixture = await realWorktreeLane("owner-review-fix", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
