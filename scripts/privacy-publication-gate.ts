@@ -612,7 +612,8 @@ const numericVersionDomain = /^[0-9]+(?:\.[0-9]+)+(?:-[A-Z0-9-]+(?:\.[A-Z0-9-]+)
    source character can continue it. The sentinel makes a single terminal
    character a complete label for the IDNA check. */
 function hasIdnaDomainContinuation(domain: string, text: string, end: number): boolean {
-  const following = text[end];
+  const followingCodePoint = text.codePointAt(end);
+  const following = followingCodePoint === undefined ? undefined : String.fromCodePoint(followingCodePoint);
   // ASCII domain characters and separators are already consumed by
   // emailDomain. ASCII punctuation such as `+` starts semver build metadata.
   if (following === undefined || /^[\x00-\x7f]$/.test(following)) return false;

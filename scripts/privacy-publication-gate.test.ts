@@ -45,6 +45,9 @@ const packageVersionSamples = [
 ];
 const versionLookingRealAddresses = [
   ["a", "1.2.3.com"].join("@"),
+  ["probe", "1.2.3\u{1F130}.com"].join("@"),
+  ["probe", "1.2.3%F0%9F%84%B0.com"].join("@"),
+  ["probe", "1.2.3&#x1F130;.com"].join("@"),
   ["probe", "1.2.3.\u0F0B\u0F40.com"].join("@"),
   ["probe", "1.2.3.%E0%BC%8B%E0%BD%80.com"].join("@"),
   ["probe", "1.2.3.&#xF0B;&#xF40;.com"].join("@"),
