@@ -16,10 +16,10 @@ The audit's integration profile was rerun against main after the MCP answer-slim
 
 | MCP scenario | Before p95 / max | After p95 / max | Samples |
 | --- | ---: | ---: | ---: |
-| Remote review retry | 3621.77 / 3621.77 ms | 10.31 / 10.31 ms | 2 |
-| Stage report with delayed forge | 1226.26 / 1226.26 ms | 17.63 / 17.63 ms | 3 |
-| Pipeline read during forge check | 1222.48 / 1222.48 ms | 19.02 / 19.02 ms | 3 |
-| Attention, default arrival | 1256.62 / 1256.62 ms | 1256.65 / 1256.65 ms | 2 |
-| Attention, accepted-only | New option | 1.26 / 1.26 ms | 2 |
+| Remote review retry | 3621.77 / 3621.77 ms | 9.53 / 9.53 ms | 2 |
+| Stage report with delayed forge | 1226.26 / 1226.26 ms | 17.03 / 17.03 ms | 3 |
+| Pipeline read during forge check | 1222.48 / 1222.48 ms | 18.24 / 18.24 ms | 3 |
+| Attention, default arrival | 1256.62 / 1256.62 ms | 1255.36 / 1255.36 ms | 2 |
+| Attention, accepted-only | New option | 1.15 / 1.15 ms | 2 |
 
 The numeric record is [before-after.json](../evidence/mcp-async-remote/before-after.json). The request-path regressions first failed against the original synchronous implementation. Existing real-Git tests cover preserved history, exact publication SHA, inherited locks and cancellation. Deferred-work tests cover restart recovery, supersession, remote failure and receipt settlement. Tests use explicit files and isolated state; type checking, changed-file lint and the trusted-main publication gate accompany the change.
