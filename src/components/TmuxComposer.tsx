@@ -3512,7 +3512,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           json = { ...json, ok: false, receipt: undefined, operationId: undefined, error: "receipt-identity-mismatch" };
         }
         await refreshPayloads();
-      } else if (durable?.envelope?.route === "runtime" && !json.ok && !json.operationId
+      } else if (durable && !json.ok && !json.operationId
         && (refusedBeforeDispatch || (json.status !== undefined && PRE_ADMISSION_REFUSALS.has(json.status)))) {
         /* Refused before anything was reserved: say so durably, so a reload
            still offers the sealed envelope again instead of an unknown fate.
@@ -4490,7 +4490,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const askInParallel = () => {
     if (!seatProject || parallelRequests.has(cardId) || busy || voiceSending || sendBlocked) return;
     const retainedFallback = retainedParallelFallback(textRef.current);
-    if (retainedFallback && (retainedFallback.state !== "failed" || retainedFallback.deliveryUncertain)) return;
+    if (retainedFallback) {
+      // A failed idle fallback still owns this authored generation. Retry its
+      // sealed envelope under the original key instead of creating a deputy
+      // alongside the retained row.
+      if (retainedFallback.state === "failed" && !retainedFallback.deliveryUncertain) {
+        retryOutbox(cardId, retainedFallback.id);
+      }
+      return;
+    }
     const requestedText = textRef.current.trim();
     const requestedImages = attachments.imagesRef.current.map((image) => ({ ...image }));
     if (!requestedText && !requestedImages.length) return;

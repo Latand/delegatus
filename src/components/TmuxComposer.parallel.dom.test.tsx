@@ -123,6 +123,11 @@ function parallel(host: HTMLElement) {
     nativeEvent: { isComposing: false }, preventDefault() {}, stopPropagation() {} });
 }
 
+function RetryParallelFallback({ entryId }: { entryId: string }) {
+  const actions = useOutboxRowActions("conv-queuefirst", readOutbox("conv-queuefirst"));
+  return <button data-retry-fallback onClick={() => actions.onRetry(entryId)}>Retry</button>;
+}
+
 for (const locale of ["en", "uk"] as const) for (const failure of [null, "wire", "ghost"] as const) {
   test(`parallel fallback keeps the draft until accepted (${locale}, ${failure})`, async () => {
     setLocale(locale);
@@ -171,6 +176,116 @@ for (const locale of ["en", "uk"] as const) for (const failure of [null, "wire",
     } finally { await act(async () => root.unmount()); }
   });
 }
+
+test("parallel retry keeps a refused fallback on its original key through remount", async () => {
+  publishSeatProject("conv-queuefirst", "viewer");
+  const ghosts: Record<string, unknown>[] = [];
+  const wires: Record<string, unknown>[] = [];
+  const answers: ((response: Response) => void)[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("/api/orchestrator/ghost?")) return Response.json({ conversationId: "conv-queuefirst", busy: true });
+    if (url === "/api/orchestrator/ghost") {
+      ghosts.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: false, code: "seat_not_busy" }, { status: 409 });
+    }
+    if (url === "/api/tmux" && init?.method === "POST") {
+      wires.push(JSON.parse(String(init.body)));
+      return await new Promise<Response>((resolve) => { answers.push(resolve); });
+    }
+    return Response.json({ targets: {}, seat: null, operations: [], receipts: [] });
+  }) as typeof fetch;
+  const first = await renderInto(<TmuxComposer file={file} />);
+  let firstUnmounted = false;
+  try {
+    await settle(() => appendComposerDraft("conv-queuefirst", "one logical ask"));
+    await settle(() => parallel(first.host));
+    for (let i = 0; i < 60 && wires.length < 1; i++) await settle(() => {});
+    expect(wires).toHaveLength(1);
+    const key = wires[0]?.idempotencyKey;
+    await settle(() => answers[0]!(Response.json({ ok: false, error: "refused before admission" }, { status: 400 })));
+    for (let i = 0; i < 30 && readOutbox("conv-queuefirst")[0]?.state !== "failed"; i++) await settle(() => {});
+    const failed = readOutbox("conv-queuefirst")[0]!;
+    expect((await composerSubmissionPayloads.restore({ conversationId: "conv-queuefirst", key: failed.id }))?.retry).toBe("resend");
+
+    // The seat now reports busy, but this authored generation still belongs
+    // to its failed row and must retry that envelope.
+    await settle(() => parallel(first.host));
+    for (let i = 0; i < 60 && wires.length < 2; i++) await settle(() => {});
+    expect(ghosts).toHaveLength(1);
+    expect(wires).toHaveLength(2);
+    expect(wires[1]).toMatchObject({ idempotencyKey: key, text: "one logical ask" });
+    await settle(() => answers[1]!(Response.json({ ok: true })));
+    for (let i = 0; i < 60 && readOutbox("conv-queuefirst")[0]?.state !== "delivered"; i++) await settle(() => {});
+    expect(readOutbox("conv-queuefirst")[0]?.state).toBe("delivered");
+    await act(async () => first.root.unmount());
+    firstUnmounted = true;
+
+    // A remounted row keeps its original key and cannot replay an admitted ask.
+    const remounted = await renderInto(<><TmuxComposer file={file} /><RetryParallelFallback entryId={failed.id} /></>);
+    try {
+      await settle(() => remounted.host.querySelector<HTMLButtonElement>("[data-retry-fallback]")!.click());
+      expect(readOutbox("conv-queuefirst")).toHaveLength(1);
+      expect(readOutbox("conv-queuefirst")[0]?.state).toBe("delivered");
+      expect(wires).toHaveLength(2);
+      expect(ghosts).toHaveLength(1);
+    } finally { await act(async () => remounted.root.unmount()); }
+  } finally { if (!firstUnmounted) await act(async () => first.root.unmount()); }
+});
+
+test("legacy idle fallback records refusals so Send and row Retry reuse its sealed key", async () => {
+  publishSeatProject("conv-queuefirst", "viewer");
+  const wires: Record<string, unknown>[] = [];
+  const answers: ((response: Response) => void)[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("/api/orchestrator/ghost?")) return Response.json({ conversationId: "conv-queuefirst", busy: true });
+    if (url === "/api/orchestrator/ghost") return Response.json({ ok: false, code: "seat_not_busy" }, { status: 409 });
+    if (url === "/api/tmux" && init?.method === "POST") {
+      wires.push(JSON.parse(String(init.body)));
+      return await new Promise<Response>((resolve) => { answers.push(resolve); });
+    }
+    return Response.json({ targets: {}, seat: null, operations: [], receipts: [] });
+  }) as typeof fetch;
+  const rendered = await renderInto(<TmuxComposer file={file} />);
+  try {
+    const textarea = rendered.host.querySelector("textarea")!;
+    const propsKey = Object.keys(textarea).find((key) => key.startsWith("__reactProps$"))!;
+    const props = (textarea as unknown as Record<string, { onPaste(event: unknown): void }>)[propsKey]!;
+    await settle(() => appendComposerDraft("conv-queuefirst", "legacy ask with image"));
+    await settle(() => props.onPaste({ clipboardData: { items: [{ type: "image/png", getAsFile: () => new dom.File([new Uint8Array([1, 2, 3])], "ask.png", { type: "image/png" }) }] }, preventDefault() {} }));
+    for (let i = 0; i < 10; i++) await settle(() => {});
+    await settle(() => parallel(rendered.host));
+    for (let i = 0; i < 60 && wires.length < 1; i++) await settle(() => {});
+    expect(wires[0]?.images).toHaveLength(1);
+    const key = wires[0]?.idempotencyKey;
+    await settle(() => answers[0]!(Response.json({ ok: false, error: "refused before admission" }, { status: 400 })));
+    for (let i = 0; i < 30 && readOutbox("conv-queuefirst")[0]?.state !== "failed"; i++) await settle(() => {});
+    const entry = readOutbox("conv-queuefirst")[0]!;
+    expect((await composerSubmissionPayloads.restore({ conversationId: "conv-queuefirst", key: entry.id }))?.retry).toBe("resend");
+    expect((rendered.host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("legacy ask with image");
+    expect(rendered.host.querySelectorAll("img")).toHaveLength(1);
+
+    await settle(() => rendered.host.querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    for (let i = 0; i < 60 && wires.length < 2; i++) await settle(() => {});
+    expect(wires).toHaveLength(2);
+    expect(wires[1]?.idempotencyKey).toBe(key);
+    await settle(() => answers[1]!(Response.json({ ok: false, error: "still refused" }, { status: 400 })));
+    for (let i = 0; i < 30 && readOutbox("conv-queuefirst")[0]?.state !== "failed"; i++) await settle(() => {});
+
+    await settle(() => rendered.root.render(<><TmuxComposer file={file} /><RetryParallelFallback entryId={entry.id} /></>));
+    await settle(() => rendered.host.querySelector<HTMLButtonElement>("[data-retry-fallback]")!.click());
+    for (let i = 0; i < 60 && wires.length < 3; i++) await settle(() => {});
+    expect(wires).toHaveLength(3);
+    expect(wires[2]).toMatchObject({ idempotencyKey: key, text: "legacy ask with image" });
+    expect(wires[2]?.images).toHaveLength(1);
+    await settle(() => answers[2]!(Response.json({ ok: true })));
+    for (let i = 0; i < 60 && readOutbox("conv-queuefirst")[0]?.state !== "delivered"; i++) await settle(() => {});
+    expect((rendered.host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+    expect(rendered.host.querySelectorAll("img")).toHaveLength(0);
+    expect(readOutbox("conv-queuefirst")[0]?.state).toBe("delivered");
+  } finally { await act(async () => rendered.root.unmount()); }
+});
 
 
 test("late idle fallback delivers to the original conversation after a card switch", async () => {
