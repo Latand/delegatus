@@ -787,6 +787,10 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
+    (pipeline.publicationAdmission === undefined || (Boolean(pipeline.publicationAdmission && typeof pipeline.publicationAdmission === "object")
+      && typeof pipeline.publicationAdmission.id === "string" && /^[0-9a-f]{40}$/i.test(pipeline.publicationAdmission.sha)
+      && /^[0-9a-f]{64}$/.test(pipeline.publicationAdmission.fence) && ["pending", "settled"].includes(pipeline.publicationAdmission.state)
+      && (pipeline.publicationAdmission.error === undefined || typeof pipeline.publicationAdmission.error === "string"))) &&
     (pipeline.remoteAction === undefined || (Boolean(pipeline.remoteAction && typeof pipeline.remoteAction === "object")
       && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover"].includes(pipeline.remoteAction.action)
       && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"

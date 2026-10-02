@@ -8,7 +8,7 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
-import { activeRestartGate, restartGateFile } from "./restartGate";
+import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { GreenReader } from "./green";
 import { proxy } from "../../proxy";
 import { POST as postPresence } from "../../app/api/view/presence/route";
@@ -72,6 +72,54 @@ async function postTypingPresence(role: string): Promise<void> {
   expect((await postPresence(request)).status).toBe(200);
   expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
 }
+
+test.each(["disable", "work-starts"] as const)("final launcher admission rechecks %s after its Git observation", async (change) => {
+  const h = scenario();
+  const checkout = join(h.dir, "admission-checkout"); mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha, dir: checkout }));
+  const requestId = "final-admission-request";
+  const pending = { role: "web", requestId, target: sha, launcherPid: h.record.launcher.pid, at: new Date().toISOString(), from: sha };
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoPending: pending }));
+  const service = h.service();
+  const originalSnapshot = service.snapshot;
+  service.snapshot = async () => ({ ...await originalSnapshot(), installed: { sha, short: sha.slice(0, 7), version: "1", date: "" } });
+  // The switch's view is independent of the held final admission probe.
+  (service as unknown as { buildSnapshot: () => Promise<Snapshot> }).buildSnapshot = service.snapshot;
+  const gateFile = restartGateFile(h.record.requestFile), gateId = beginRestartGate(gateFile)!;
+  const bin = join(h.dir, "admission-bin"); mkdirSync(bin);
+  const entered = join(bin, "entered"), released = join(bin, "released");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nif [ ! -f "$ADMISSION_ENTERED" ]; then touch "$ADMISSION_ENTERED"; while [ ! -f "$ADMISSION_RELEASED" ]; do sleep 0.01; done; fi\nexec "$ADMISSION_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, ADMISSION_ENTERED: process.env.ADMISSION_ENTERED, ADMISSION_RELEASED: process.env.ADMISSION_RELEASED, ADMISSION_GIT: process.env.ADMISSION_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, ADMISSION_ENTERED: entered, ADMISSION_RELEASED: released, ADMISSION_GIT: git });
+  let admission: ReturnType<SelfUpdateService["admitAutoRestart"]> | undefined;
+  try {
+    admission = service.admitAutoRestart(requestId, gateId);
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    if (change === "disable") {
+      expect(await service.setAuto(false)).toMatchObject({ ok: true });
+      expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    } else h.setStage(true);
+    writeFileSync(released, "");
+    expect(await admission).toBe(false);
+    expect(h.pending()).toBeNull();
+  } finally {
+    writeFileSync(released, ""); await admission;
+    endRestartGate(gateFile, gateId); service.stop();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
 
 test("a delayed final Git observation cannot let an older switch overwrite a newer disable", async () => {
   const h = scenario();

@@ -5906,16 +5906,43 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
 }
 
 async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: PipelinePorts): Promise<Pipeline | null> {
-  const remote = (await ports.exec("git", ["remote", "get-url", "--push", "origin"], pipeline.repoDir));
+  const admission = pipeline.publicationAdmission?.state === "pending" ? pipeline.publicationAdmission : null;
+  const abort = new AbortController();
+  const revalidate = () => {
+    const current = findPipelineRecord(pipeline.id);
+    if (admission && (!current || current.publicationAdmission?.id !== admission.id || remoteActionFence(current) !== admission.fence)) abort.abort();
+  };
+  const watch = setInterval(revalidate, 50);
+  let remote: Awaited<ReturnType<ExecPort>>;
+  try {
+    revalidate();
+    remote = await ports.exec("git", ["remote", "get-url", "--push", "origin"], pipeline.repoDir, undefined, { signal: abort.signal, timeoutMs: 5_000 });
+  } finally { clearInterval(watch); }
   let url = remote.code === 0 ? remote.stdout.trim() : "";
   if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url) && !/^[^/]+:/.test(url)) url = path.resolve(pipeline.repoDir, url);
   const repository = (url ? projectIdentityFromRemote(url, pipeline.repoDir)?.project : localRepositoryProjectId(pipeline.repoDir)) ?? pipeline.project;
   const target = { repository, remote: url, branch: `refs/heads/${pipeline.branch}` };
   return withDeliveryMutationAsync((tx) => {
     const current = tx.get(pipeline.id);
+    if (admission && (!current || current.publicationAdmission?.id !== admission.id)) return current;
+    if (admission && current && (abort.signal.aborted || remoteActionFence(current) !== admission.fence)) {
+      current.publicationAdmission = { ...admission, state: "settled", error: "publication admission superseded" };
+      tx.put(current); return current;
+    }
+    if (admission && remote.code !== 0) {
+      current!.publicationAdmission = { ...admission, state: "settled", error: "publication repository identity could not be observed" };
+      current!.stateDetail = current!.publicationAdmission.error!;
+      tx.put(current!); return current;
+    }
     if (current && !current.delivery && current.repoDir === pipeline.repoDir && current.branch === pipeline.branch
       && current.state !== "closed" && current.state !== "completed") {
       assignPipelineDelivery(current, target, false, tx.pipelineLookup);
+      if (admission) {
+        const result = queuePipelinePublication(current, ports.exec, { acceptedSha: admission.sha });
+        current.publicationAdmission = { ...admission, state: "settled", ...(!result.ok ? { error: result.error } : {}) };
+        current.stateDetail = result.ok ? "publication accepted; remote verification pending" : result.error;
+        if (current.delivery) deliveryJournal(current, "recovery", current.stateDetail);
+      }
       tx.put(current);
     }
     return current;
@@ -6142,7 +6169,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   let followUp = false;
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
-    const legacy = unclaimedPipelinePublications();
+    const requested = loadPipelines().filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
+    const legacy = [...new Map([...requested, ...unclaimedPipelinePublications()].map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
     if (legacy.length === 16) followUp = true;
     /* Creates the store refused during a handover (#1835), stored before
@@ -8236,17 +8264,23 @@ export async function patchPipeline(
     return { pipeline, legacyReviewPreview: previewLegacyReview(pipeline, req, ports) };
   }
   if (req.action === "publish") {
-    let pipeline = findPipelineRecord(id);
+    const pipeline = findPipelineRecord(id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
-    if (!pipeline.delivery) {
-      pipeline = await admitExistingPipelineDelivery(pipeline, ports);
-      if (!pipeline) return { error: "pipeline no longer available", status: 409 };
-    }
     return withPipelineMutation((pipelines, persist) => {
       const current = pipelines.find((item) => item.id === id);
-      if (!current || !current.delivery || current.delivery.epoch !== pipeline!.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
+      if (!current || current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
+      if (current.state === "closed" || current.closedAt || current.hiddenAt) return { error: "a closed lane cannot publish", status: 409 };
       const acceptedSha = req.acceptedSha ?? current.lastPassedCommit;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      if (!current.delivery) {
+        if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
+        if (current.publicationAdmission?.state === "pending" && current.publicationAdmission.sha !== acceptedSha) return { error: "another publication admission is pending", status: 409 };
+        current.publicationAdmission = { id: current.publicationAdmission?.state === "pending" ? current.publicationAdmission.id : crypto.randomUUID(),
+          sha: acceptedSha, fence: remoteActionFence(current), state: "pending" };
+        current.stateDetail = "publication accepted; repository and remote verification pending";
+        persist(); requestPipelineTick();
+        return { pipeline: current };
+      }
       const reserved = queuePipelinePublication(current, ports.exec, { acceptedSha });
       if (!reserved.ok) return { error: reserved.error, status: 409 };
       if (current.stateDetail === null && reserved.remote !== "published") current.stateDetail = "publication accepted; remote verification pending";
@@ -8694,8 +8728,7 @@ export async function patchPipeline(
         attempt.state = "passed";
         pipeline.state = "running";
         pipeline.pausedState = null;
-        pipeline.stateDetail = null;
-        (await retryTerminalStagePublication(pipeline, stage, attempt, ports));
+        pipeline.stateDetail = "accepted head verification and publication pending";
         persist();
         return { pipeline };
       }
@@ -9073,10 +9106,7 @@ export async function patchPipeline(
   });
   if (req.action !== "close" && req.action !== "delete" && req.action !== "resolve-decision" && req.action !== "continue-review"
     && patched.pipeline?.delivery?.operation?.state === "pending") {
-    const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
-    if (!published.ok) return { error: published.error, status: 409 };
     requestPipelineTick();
-    return { ...patched, pipeline: findPipelineRecord(id)! };
   }
   if (req.action === "close" && patched.close?.status === "pending") ports.scheduleTick?.(0);
   /* The lock is gone: ask the sweep to read what the new links name. */

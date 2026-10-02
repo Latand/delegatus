@@ -648,9 +648,19 @@ export class SelfUpdateService {
       || activeRestartGate(restartGateFile(record.requestFile)) !== gateId) return false;
     const green = await this.refreshGreen(pending.target, record.checkout!, this.auto.green[pending.target] ?? { state: "unknown" });
     const snapshot = await this.snapshot();
+    const availability = await this.autoAvailability(decision);
+    const current = await this.decide();
     const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now()) : null;
+    // Every asynchronous observation precedes the final admission fence. A
+    // later disable or replacement request must never admit this old request.
+    if (JSON.stringify(this.auto.pending) !== JSON.stringify(pending)) return false;
+    const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
+    const currentRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
     if (this.auto.enabled && green.state === "green" && quiet?.quiet && snapshot.installed.sha === pending.target
-      && record.launcher.pid === pending.launcherPid && (await this.autoAvailability(decision)) === "available") return true;
+      && availability === "available" && current.mode === "checkout" && currentRecord?.checkout === record.checkout
+      && currentRecord.launcher.pid === pending.launcherPid && currentRecord.launcher.startIdentity === record.launcher.startIdentity
+      && currentRecord.launcher.autoAdmission === record.launcher.autoAdmission
+      && activeRestartGate(restartGateFile(currentRecord.requestFile)) === gateId) return true;
     this.autoBlockers = quiet?.blockers ?? null;
     this.auto = { ...this.auto, pending: null, quietSince: null, lastBlockers: quiet?.blockers ?? this.auto.lastBlockers };
     this.saveAuto();

@@ -1100,6 +1100,17 @@ async function withPublicationFileLock<T>(lock: string, operation: () => Promise
   finally { releasePublicationFileLock(descriptor); }
 }
 
+function publicationFence(pipeline: Pipeline): string {
+  const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+  const delivery = pipeline.delivery;
+  return JSON.stringify({ state: pipeline.state, closed: pipeline.closedAt, hidden: pipeline.hiddenAt,
+    cursor: pipeline.cursor, stages: pipeline.stages, head: pipeline.lastPassedCommit,
+    branch: pipeline.branch, worktree: pipeline.worktreeDir,
+    attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
+    delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null });
+}
+
 /**
  * Publishes the accepted pipeline revision so the review layer can fence on the
  * exact revision it reviews. The orchestrator owns this step: a builder that
@@ -1139,6 +1150,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const lockIdentity = publicationLockIdentity(descriptor);
   let descriptorOpen = true;
   let reserved = false;
+  let watch: ReturnType<typeof setInterval> | undefined;
   try {
     const reservation = await withDeliveryMutationAsync((tx) => {
       const current = tx.get(pipeline.id);
@@ -1154,6 +1166,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
+      if (current.state === "closed" || current.closedAt || current.hiddenAt) {
+        const error = "publication superseded by lane closure";
+        if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        deliveryJournal(current, "recovery", error); tx.put(current);
+        return { error };
+      }
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
         ...(previous?.state === "pending" ? { requestKey: previous.requestKey } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
@@ -1164,18 +1182,35 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (reservation.waiting) return reservation.waiting;
     if (!reservation.pipeline) return { ok: false, error: reservation.error! };
     reserved = true;
+    const fence = publicationFence(reservation.pipeline);
+    const abort = new AbortController();
+    let writeStarted = false;
+    const matches = (current: Pipeline | null) => current !== null && publicationFence(current) === fence;
+    const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
+    const superseded = (): PipelinePublishResult => writeStarted
+      ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
+        detail: "publication superseded after a remote write began; reconcile its outcome" }
+      : { ok: false, error: "publication superseded before a remote write" };
+    watch = setInterval(revalidate, 50);
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
     // lock stays held until that child is gone; takeover must prove it is free.
-    const fencedExec: ExecPort = async (command, args, cwd) => {
+    const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       fs.futimesSync(descriptor, new Date(), new Date());
-      if (exec !== realExec) return (await exec(command, args, cwd));
-      return await realExec(command, args, cwd, undefined, { inheritFd: descriptor });
+      if (command === "git" && args[0] === "push") writeStarted = true;
+      return await exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor });
     };
     let result: PipelinePublishResult;
     try { result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
       publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null })); }
-    catch (error) { result = { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }; }
+    catch (error) { result = writeStarted
+      ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
+      : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
+    revalidate();
+    if (abort.signal.aborted) result = superseded();
+    clearInterval(watch); watch = undefined;
     releasePublicationFileLock(descriptor);
     descriptorOpen = false;
     // Reacquisition proves that no orphan child retained the inherited lock.
@@ -1184,9 +1219,13 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const delivery = current?.delivery;
       if (!current || !delivery || delivery.operation?.id !== reservation.operationId
         || delivery.epoch !== reservation.pipeline.delivery!.epoch) return { ok: false, error: "publication reservation changed; reconcile the remote before retrying" };
+      if (!matches(current)) result = superseded();
       // A lost reply after push must keep fencing takeover.
       if (delivery.operation.executor) delivery.operation.executor.finished = true;
-      if (result.ok && result.remote === "unreachable" && result.uncertain) { tx.put(current); return result; }
+      if (result.ok && result.remote === "unreachable" && result.uncertain) {
+        deliveryJournal(current, "recovery", result.detail);
+        tx.put(current); return result;
+      }
       delivery.operation = { ...delivery.operation, state: "settled", result };
       if (current.stateDetail === "publication accepted; remote verification pending") current.stateDetail = result.ok
         ? result.remote === "published" ? null : "publication checked; remote is unavailable"
@@ -1211,7 +1250,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (!reserved) throw error;
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
       detail: `publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}` };
-  } finally { if (descriptorOpen) releasePublicationFileLock(descriptor); }
+  } finally { if (watch) clearInterval(watch); if (descriptorOpen) releasePublicationFileLock(descriptor); }
 }
 
 /** Explicit recovery reads the remote only after proving the previous executor
@@ -1296,6 +1335,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   }
 
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir));
+  if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
   if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };

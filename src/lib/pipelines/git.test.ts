@@ -12,6 +12,48 @@ import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
+test.each(["probe", "push-reply"] as const)("closing a lane during a real publication %s fences its outcome", async (phase) => {
+  const box = await publishSandbox();
+  const { patchPipeline, defaultPipelinePorts } = await import("./engine");
+  const { registerPipelineTick } = await import("./controllerSignal");
+  const restoreTick = registerPipelineTick(async () => {});
+  const head = await box.commit("accepted.txt", "accepted\n");
+  const bin = path.join(box.root, "bin"); fs.mkdirSync(bin);
+  const entered = path.join(bin, "entered"), released = path.join(bin, "released");
+  const gitBinary = Bun.which("git")!;
+  fs.writeFileSync(path.join(bin, "git"), phase === "probe"
+    ? '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; fi\nexec "$PUBLISH_GIT" "$@"\n'
+    : '#!/bin/sh\nif [ "$1" = "push" ]; then "$PUBLISH_GIT" "$@" || exit $?; touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; exit 0; fi\nexec "$PUBLISH_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, PUBLISH_ENTERED: process.env.PUBLISH_ENTERED, PUBLISH_RELEASED: process.env.PUBLISH_RELEASED, PUBLISH_GIT: process.env.PUBLISH_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, PUBLISH_ENTERED: entered, PUBLISH_RELEASED: released, PUBLISH_GIT: gitBinary });
+  let pending: ReturnType<typeof publishPipelineBranch> | undefined;
+  try {
+    pending = publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
+    const deadline = Date.now() + 2_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(entered)).toBe(true);
+    const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
+    expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
+    fs.writeFileSync(released, "");
+    expect(await pending).toMatchObject(phase === "probe" ? { ok: false, error: expect.stringContaining("superseded") }
+      : { ok: true, remote: "unreachable", uncertain: true, detail: expect.stringContaining("superseded") });
+    expect(findPipelineRecord(box.subject.id)!.state).toBe("closed");
+    expect(findPipelineRecord(box.subject.id)!.publishedCommit).not.toBe(head);
+    const remote = await realExec(gitBinary, ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
+    if (phase === "probe") expect(remote.code).not.toBe(0);
+    else {
+      expect(remote.code).toBe(0);
+      expect(remote.stdout).toContain(head);
+      expect(findPipelineRecord(box.subject.id)!.delivery!.operation!.state).toBe("running");
+      expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.detail).toContain("reconcile");
+    }
+  } finally {
+    fs.writeFileSync(released, ""); await pending;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
 let previousState: string | undefined;
 let publicationState: string;
 beforeEach(() => {
@@ -2120,7 +2162,10 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
 test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {
   const subject = pipeline();
   const head = "7".repeat(40);
-  await publishPipelineBranch(subject, () => { throw new Error("lost publication reply"); }, { acceptedSha: head });
+  await publishPipelineBranch(subject, (_command, args) => {
+    if (args[0] === "push") throw new Error("lost publication reply");
+    return { code: 0, stdout: args[0] === "rev-parse" ? head : args[0] === "branch" ? subject.branch : "", stderr: "" };
+  }, { acceptedSha: head });
   const running = findPipelineRecord(subject.id)!;
   const descriptor = fs.openSync(running.delivery!.operation!.executor!.lock, "a");
   let execCalls = 0;

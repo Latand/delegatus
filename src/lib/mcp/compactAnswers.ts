@@ -40,6 +40,8 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     closedAt: pipeline.closedAt ?? null,
     ...(pipeline.remoteAction ? { remoteCheck: { id: pipeline.remoteAction.id, action: pipeline.remoteAction.action,
       state: pipeline.remoteAction.state, ...(pipeline.remoteAction.error ? { error: pipeline.remoteAction.error } : {}) } } : {}),
+    ...(pipeline.publicationAdmission ? { publicationAdmission: { id: pipeline.publicationAdmission.id, state: pipeline.publicationAdmission.state,
+      ...(pipeline.publicationAdmission.error ? { error: pipeline.publicationAdmission.error } : {}) } } : {}),
     ...(pipeline.delivery?.operation ? { publicationCheck: { id: pipeline.delivery.operation.id,
       state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha } } : {}),
     taskIds: [...(pipeline.taskIds ?? [])],

@@ -804,6 +804,8 @@ export type Pipeline = {
   /** Viewer publication ownership. Agent tools remain unrestricted. */
   delivery?: PipelineDelivery;
   remoteAction?: PipelineRemoteAction;
+  /** Legacy lanes observe their repository identity before claiming delivery. */
+  publicationAdmission?: { id: string; sha: string; fence: string; state: "pending" | "settled"; error?: string };
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;

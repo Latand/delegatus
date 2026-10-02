@@ -892,8 +892,9 @@ test("remote skip publishes the accepted head before its reviewer can start", as
     expect(waiting).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "fix", state: "committing" } });
     expect(waiting.runs[0]!.attempts[0]!.state).toBe("skipped");
     expect(fixture.h.spawnInputs).toHaveLength(1);
-    expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
+    expect(waiting.delivery!.operation!.state).toBe("pending");
     await tickPipelines([], fixture.h.ports);
+    expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
     expect(loadPipelines().find((item) => item.id === fixture.id)!.cursor?.stageId).toBe("review");
     await tickPipelines([], fixture.h.ports);
     expect(fixture.h.spawnInputs).toHaveLength(2);
@@ -12189,7 +12190,10 @@ async function interruptedPublication() {
   savePipelines([pipeline]);
   box.setRemoteReadFails(false);
   const { publishPipelineBranch } = await import("./git");
-  await publishPipelineBranch(pipeline, () => { throw new Error("publisher interrupted after reservation"); }, { acceptedSha: box.passedSha });
+  await publishPipelineBranch(pipeline, async (command, args, cwd, env, options) => {
+    if (args[0] === "push") throw new Error("publisher interrupted during the remote write");
+    return await h.ports.exec(command, args, cwd, env, options);
+  }, { acceptedSha: box.passedSha });
   return { h, box, pipeline: loadPipelines()[0]! };
 }
 
@@ -12519,6 +12523,7 @@ test.each(["retry-stage", "publish"] as const)("publication recovery keeps the a
   const moved = "8".repeat(40);
   box.setLocalHead(moved);
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
+  await tickPipelines([], h.ports);
   const waiting = loadPipelines()[0]!;
   expect(waiting.state).toBe("needs_decision");
   expect(waiting.stateDetail).toContain(`the worktree moved to ${moved}`);
@@ -12573,6 +12578,7 @@ test.each([
     ? { code: 128, stdout: "", stderr: "HEAD temporarily unavailable" }
     : (await exec(command, args, cwd));
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
   const legacy = loadPipelines()[0]!;
   expect(legacy.stateDetail).toStartWith(cause === "moved"
     ? "the worktree moved to " : "the accepted head cannot be verified before completion:");

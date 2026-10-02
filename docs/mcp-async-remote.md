@@ -8,6 +8,8 @@ Committing-stage Git, commit hooks and approved-review head checks run after the
 
 Review retries and delivery takeovers record a durable `remoteAction`. The controller runs the original Git safety checks outside the pipeline mutation lease, under an inherited kernel lock, then revalidates the stage, checkout, delivery epoch and any claimed spawn receipt before applying a result. Publication records a queued operation for the existing publication controller. A read or acknowledgement exposes pending and settled outcomes; acceptance does not claim remote publication. Pausing or replacing the lane cancels stale work, and a restart resumes durable pending work after its previous process releases the lock.
 
+Retrying a passed stage retains its accepted attempt and records pending head verification on its committing cursor. A legacy publication request records a pending repository admission before reading Git identity. Publication rechecks the lane and delivery owner before every command and during execution, and checks them again when settling. Cancellation after a remote write began retains an unknown outcome for reconciliation. Automatic restart admission rechecks the enabled switch, pending request, launcher identity and admission gate after Git observations, with its quiet-work check last.
+
 `request_attention` retains its default browser-arrival contract. `waitFor: "accepted"` returns after durable acceptance with `accepted: true`, a current arrival state and `handoff: null`; callers can inspect the attention receipt for arrival later.
 
 ## Measurement

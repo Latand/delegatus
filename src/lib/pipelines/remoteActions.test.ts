@@ -15,6 +15,84 @@ const restore = registerPipelineTick(async () => {});
 afterAll(() => { restore(); fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); });
 const HEAD = "a".repeat(40);
 
+test("legacy publication records acceptance before observing its missing delivery claim", async () => {
+  const h = setupRetry();
+  delete h.lane.delivery;
+  savePipelines([h.lane]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let commands = 0;
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    commands++; await held;
+    return { code: 0, stdout: args[0] === "remote" ? "https://example.invalid/project.git" : "", stderr: "" };
+  } };
+  const publish = patchPipeline(h.lane.id, { action: "publish", acceptedSha: HEAD }, ports);
+  try {
+    const answer = await Promise.race([publish, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(answer?.error).toBeUndefined();
+    expect(commands).toBe(0);
+    expect(findPipelineRecord(h.lane.id)!.stateDetail).toContain("pending");
+    release();
+    await tickPipelines([], ports);
+    expect(findPipelineRecord(h.lane.id)!.publicationAdmission).toMatchObject({ state: "settled" });
+    expect(findPipelineRecord(h.lane.id)!.delivery).toBeDefined();
+  } finally { release(); await publish; }
+});
+
+test("a passed-stage retry acknowledges before checking its accepted local head", async () => {
+  const h = setupRetry();
+  h.lane.stateDetail = "publishing the passed stage: remote unavailable";
+  h.lane.cursor = { stageId: "build", state: "committing", input: null, activatedBy: null };
+  const attempt = h.lane.runs[0]!.attempts[0]!;
+  attempt.state = "passed"; attempt.verdict = { status: "pass" };
+  savePipelines([h.lane]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let commands = 0;
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    commands++;
+    if (args[0] === "status") await held;
+    return { code: 0, stdout: args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? h.lane.branch : "", stderr: "" };
+  } };
+  const retry = patchPipeline(h.lane.id, { action: "retry-stage" }, ports);
+  try {
+    const answer = await Promise.race([retry, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(answer?.error).toBeUndefined();
+    expect(commands).toBe(0);
+    expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "running", stateDetail: expect.stringContaining("pending"), cursor: { state: "committing" } });
+    release();
+    await settlePendingStageGit(ports);
+    expect(commands).toBeGreaterThan(0);
+    expect(findPipelineRecord(h.lane.id)!.runs[0]!.attempts).toHaveLength(1);
+  } finally { release(); await retry; }
+});
+
+test("a routine mutation acknowledges an existing queued publication without executing Git", async () => {
+  const h = setupRetry();
+  h.lane.delivery = { target: { repository: "audit-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  h.lane.delivery!.operation = { id: "queued-publication", epoch: h.lane.delivery!.epoch, sha: HEAD, requestKey: "pass:build:1", state: "pending" };
+  savePipelines([h.lane]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let remoteCalls = 0;
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    if (args.includes("ls-remote") || args.includes("fetch")) { remoteCalls++; await held; }
+    return { code: 0, stdout: args.includes("ls-remote") ? `${HEAD}\trefs/heads/${h.lane.branch}\n`
+      : args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? h.lane.branch : "", stderr: "" };
+  } };
+  const mutation = patchPipeline(h.lane.id, { action: "pause" }, ports);
+  try {
+    const answer = await Promise.race([mutation, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(answer?.error).toBeUndefined();
+    expect(remoteCalls).toBe(0);
+    expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "paused", delivery: { operation: { state: "pending" } } });
+  } finally { release(); await mutation; }
+});
+
 test("unsupported inherited locks settle visibly before any Git command", async () => {
   const lane = pipelineCorpus(2, 1)[1]!;
   lane.state = "running"; lane.closedAt = null; lane.publication = "internal";
