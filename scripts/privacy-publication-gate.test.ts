@@ -288,6 +288,11 @@ function writeFingerprintCatalog(path: string, value: string): void {
 const FIXED_VENDOR_FIXTURE_DIGEST = "6f86679e7321bb68b4a370cc5c419e0a593568c45982e63887ef82232cc70342";
 const FIXED_EXECUTABLE_VENDOR_FIXTURE_DIGEST = "e4a542b697441803c4bc2f48f02158758fd7d853345474e6d7d2babd561fc051";
 
+function fileNotice(path: string, finding: string, line?: number): string {
+  const digest = createHash("sha256").update(path).digest("hex");
+  return `file-sha256:${digest}${line === undefined ? "" : `:${line}`} ${finding}`;
+}
+
 function createVendorDigestFixture(): { manifest: string; readme: string; root: string; runtime: string } {
   const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-vendor-root-"));
   temporaryDirectories.push(directory);
@@ -319,8 +324,39 @@ describe("privacy publication gate", () => {
     const output = result.stdout.toString();
     expect(result.exitCode).toBe(1);
     expect(output).toContain("PRIVACY GATE: FAIL\nknown_value: 1\n");
-    expect(output).toContain("file: src/shared-fixture.ts:1 known_value");
+    expect(output).toContain(fileNotice(file, "known_value", 1));
     expect(output).not.toContain(findingValue);
+  });
+
+  test("file attribution withholds fingerprint, email, and credential values embedded in filenames", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-filename-"));
+    temporaryDirectories.push(directory);
+    const email = [["fixture", "person"].join("-"), ["internal", "local"].join(".")].join("@");
+    const credential = `${String.fromCharCode(33, 35, 36, 64)}syntheticfixture123456`;
+    const credentialKey = ["pass", "word"].join("");
+    const cases = [
+      { finding: "known_value", value: "filename-fingerprint-private-value", path: "known-filename-fingerprint-private-value.ts" },
+      { finding: "email_address", value: email, path: `email-${email}.txt` },
+      { finding: "credential", value: credential, path: `password-${credential}.md` },
+    ];
+    const catalog = join(directory, "fingerprints.json");
+    writeFingerprintCatalog(catalog, cases[0]!.value);
+
+    for (const item of cases) {
+      const body = item.finding === "credential" ? `${credentialKey}=${JSON.stringify(item.value)}\n` : `${item.value}\n`;
+      writeFileSync(join(directory, item.path), body);
+      const result = runGateArguments(["--repository", directory, "--paths", item.path], {
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+        LLV_PRIVACY_KNOWN_VALUES: "",
+      }, directory);
+      const output = result.stdout.toString();
+
+      expect(result.exitCode).toBe(1);
+      expect(output).toContain(`${item.finding}: 1\n`);
+      expect(output).toContain(fileNotice(item.path, item.finding, 1));
+      expect(output).not.toContain(item.value);
+      expect(result.stderr.toString()).not.toContain(item.value);
+    }
   });
 
   test("publication children exclude unapproved ambient API keys", () => {
@@ -1716,7 +1752,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\n");
+    expect(output).toBe(`PRIVACY GATE: FAIL\nhome_path: 1\n${fileNotice("release-notes.md", "home_path", 2)}\n`);
     expect(output).not.toContain(syntheticHome);
     expect(output).not.toContain(directory);
     expect(result.stderr.toString()).toBe("");
@@ -1796,7 +1832,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
+    expect(output).toBe(`PRIVACY GATE: FAIL\nknown_value: 1\n${fileNotice("docs/publication.md", "known_value", 1)}\n`);
     expect(output).not.toContain(knownValue);
     expect(output).not.toContain(candidate);
     expect(result.stderr.toString()).toBe("");
@@ -1845,7 +1881,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_invalid: 1\n");
+    expect(output).toBe([
+      "PRIVACY GATE: FAIL",
+      "home_path: 1",
+      "provenance_invalid: 1",
+      fileNotice("privacy-fixtures/synthetic-path.png", "home_path"),
+      fileNotice("privacy-fixtures/synthetic-path.png", "provenance_invalid"),
+      "",
+    ].join("\n"));
     expect(output).not.toContain(syntheticHome);
     expect(output).not.toContain(directory);
     expect(result.stderr.toString()).toBe("");
@@ -1897,6 +1940,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       "PRIVACY GATE: FAIL",
       "media_live_source: 1",
       "provenance_invalid: 1",
+      fileNotice("docs/acceptance/issue-290/readiness-kanban.png", "media_live_source"),
+      fileNotice("docs/acceptance/issue-290/readiness-kanban.png", "provenance_invalid"),
       "",
     ].join("\n"));
     expect(result.stdout.toString()).not.toContain(directory);
@@ -1943,6 +1988,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       "PRIVACY GATE: FAIL",
       "media_live_source: 1",
       "provenance_invalid: 1",
+      fileNotice("published/capture.png", "media_live_source"),
+      fileNotice("published/capture.png", "provenance_invalid"),
       "",
     ].join("\n"));
     expect(result.stdout.toString()).not.toContain(directory);

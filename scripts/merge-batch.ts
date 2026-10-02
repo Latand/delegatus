@@ -2,7 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 
 export type ReviewedPr = { number: number; reviewed: string };
@@ -58,25 +58,48 @@ export function touchedTests(paths: string[], regularFile: (path: string) => boo
 }
 
 type BatchCommit = { number: number; commit: string; paths: string[] };
+const privacyFindingClass = "(?:configuration_error|credential|email_address|home_path|inspection_error|known_value|media_live_source|private_network|provenance_invalid|provenance_missing|resource_identifier|tool_unavailable|transcript_content|unsafe_path)";
 export function noticePrs(log: string, commits: BatchCommit[], lineOwner?: (path: string, line: number) => string | undefined): number[] {
-  // Checkout logs also print HEAD and filenames. Only a diagnostic can accuse
-  // a PR; incidental checkout output must never turn a main-wide red into one.
-  const notices = log.split("\n").filter((line) => /\b(?:commit_message|merge_boundary|error|warning|notice|finding|file|path):|::(?:error|warning|notice)(?:\s|::)/i.test(line)).join("\n");
-  const hashes = new Set(notices.match(/\b[a-f0-9]{7,40}\b/g) ?? []);
+  // Accept only the privacy gate's complete, known notice shapes. Parsing
+  // arbitrary log lines lets a filename containing a newline forge blame.
+  const lines = log.split("\n");
+  const commitNotices = lines.filter((line) => new RegExp(
+    `^(?:commit_message: [a-f0-9]{12} message (?:unreadable|${privacyFindingClass}(?:, ${privacyFindingClass})*)`
+      + `|merge_boundary: [a-f0-9]{12} (?:author|committer) identity composes an attributable Co-Authored-By trailer \\(address withheld\\))$`,
+  ).test(line));
+  const fileNotices = lines.filter((line) => new RegExp(
+    `^file-sha256:[a-f0-9]{64}(?::\\d+)? ${privacyFindingClass}$`,
+  ).test(line));
+  const notices = [...commitNotices, ...fileNotices];
+  const hashes = new Set(commitNotices.flatMap((line) => {
+    const match = /^(?:commit_message|merge_boundary): ([a-f0-9]{12}) /.exec(line);
+    return match ? [match[1]!] : [];
+  }));
   const attributed = new Set(commits.filter((entry) => [...hashes].some((hash) => entry.commit.startsWith(hash)))
     .map((entry) => entry.number));
-  for (const line of notices.split("\n")) {
-    const diagnostic = /(?:error|warning|notice|finding|file|path):\s*(.+?):(\d+)(?::|\s)/i.exec(line);
-    if (diagnostic && lineOwner) {
-      const owner = lineOwner(diagnostic[1]!, Number(diagnostic[2]));
-      const row = owner && commits.find((entry) => entry.commit === owner);
-      if (row) attributed.add(row.number);
+  const pathsByDigest = new Map<string, string[]>();
+  for (const entry of commits) for (const path of entry.paths) {
+    const digest = createHash("sha256").update(path).digest("hex");
+    pathsByDigest.set(digest, [...(pathsByDigest.get(digest) ?? []), path]);
+  }
+  for (const line of notices) {
+    const diagnostic = /^file-sha256:([a-f0-9]{64}):(\d+) ([a-z_]+)$/.exec(line);
+    const pathNotice = /^file-sha256:([a-f0-9]{64}) ([a-z_]+)$/.exec(line);
+    const fileNotice = diagnostic ?? pathNotice;
+    if (fileNotice) {
+      const paths = pathsByDigest.get(fileNotice[1]!) ?? [];
+      if (diagnostic && lineOwner) {
+        const owners = new Set(paths.map((path) => lineOwner(path, Number(diagnostic[2]))).filter((owner): owner is string => Boolean(owner)));
+        for (const owner of owners) {
+          const row = commits.find((entry) => entry.commit === owner);
+          if (row) attributed.add(row.number);
+        }
+      } else if (!diagnostic && paths.length === 1) {
+        const writers = commits.filter((entry) => entry.paths.includes(paths[0]!));
+        if (writers.length === 1) attributed.add(writers[0]!.number);
+      }
       continue;
     }
-    const pathNotice = /(?:error|warning|notice|finding|file|path):\s*([^:\s]+)(?:\s|$)/i.exec(line);
-    if (!pathNotice) continue;
-    const writers = commits.filter((entry) => entry.paths.includes(pathNotice[1]!));
-    if (writers.length === 1) attributed.add(writers[0]!.number);
   }
   return [...attributed];
 }
@@ -306,12 +329,12 @@ export class MergeBatch {
     this.save(state);
   }
 
-  private async gateCommand(cwd: string, gate: Gate): Promise<CommandResult> {
+  private async gateCommand(cwd: string, gate: Gate, useStableTestCorpus = true): Promise<CommandResult> {
     let args = gate.args;
     if (gate.id === "tests" || gate.id === "eslint") {
       const prefix = gate.id === "tests" ? 2 : 3;
       let files = args.slice(prefix).filter((path) => existsSync(join(cwd, path)) && statSync(join(cwd, path)).isFile());
-      const corpus = gate.id === "tests" ? this.read().testCorpus : undefined;
+      const corpus = gate.id === "tests" && useStableTestCorpus ? this.read().testCorpus : undefined;
       if (corpus) files = Object.keys(corpus).map((path) => `./${path}`);
       if (!files.length) return gate.id === "tests" && args.length > prefix
         ? { code: 1, output: "Stable regression test corpus is unavailable at this bisect subject" }
@@ -319,7 +342,7 @@ export class MergeBatch {
       args = [...args.slice(0, prefix), ...files];
     }
     const stateDir = mkdtempSync(join("/var/tmp", "merge-gate-state-"));
-    const corpus = gate.id === "tests" ? this.read().testCorpus : undefined;
+    const corpus = gate.id === "tests" && useStableTestCorpus ? this.read().testCorpus : undefined;
     const backups = new Map<string, Buffer | null>();
     const createdDirectories: string[] = [];
     try {
@@ -613,7 +636,7 @@ export class MergeBatch {
     git(work, ["merge-base", "--is-ancestor", row.head, "HEAD"]);
     git(work, ["merge-base", "--is-ancestor", main, "HEAD"]);
     for (const gate of localGateCommands(work, main)) {
-      const result = await this.gateCommand(work, gate);
+      const result = await this.gateCommand(work, gate, false);
       if (result.code) throw new Error(`Resolution failed ${gate.id}; no branch pushed`);
     }
     if (!await this.unchanged(row)) { row.status = "head-moved"; this.save(state); return state; }

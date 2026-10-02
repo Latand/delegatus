@@ -1237,10 +1237,11 @@ export function inspectPaths(
             .flatMap((line, index) => sensitiveClasses(line).has(finding) ? [index + 1] : []);
         } catch { /* The aggregate finding still carries a path-only notice. */ }
       }
+      const pathDigest = createHash("sha256").update(repositoryPath).digest("hex");
       if (lines.length) {
-        attributionNotices.push(...lines.map((line) => `file: ${repositoryPath}:${line} ${finding}`));
+        attributionNotices.push(...lines.map((line) => `file-sha256:${pathDigest}:${line} ${finding}`));
       } else {
-        attributionNotices.push(`file: ${repositoryPath} ${finding}`);
+        attributionNotices.push(`file-sha256:${pathDigest} ${finding}`);
       }
     }
   }
@@ -1255,8 +1256,9 @@ export function formatPrivacyReport(findings: Map<FindingClass, number>, notices
   for (const [finding, count] of [...findings].sort(([left], [right]) => left.localeCompare(right))) {
     lines.push(`${finding}: ${count}`);
   }
-  /* Notices identify a relative file/line or an opaque commit, never the
-     sensitive value that caused the finding. */
+  /* File notices carry only a digest of the relative path and an optional
+     line, so neither sensitive contents nor sensitive filename components
+     reach public check logs. */
   lines.push(...notices);
   return `${lines.join("\n")}\n`;
 }

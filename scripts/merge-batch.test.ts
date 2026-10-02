@@ -117,17 +117,18 @@ test("a real git bisect isolates a local gate culprit and rebuilds the remaining
   expect(git(state.work, ["rev-list", "--count", `${state.base}..HEAD`])).toBe("2");
 });
 
-function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green") {
+function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner) {
   const f = fixture();
   const stateFile = join(f.root, "merge-batch.json");
   const calls: string[][] = [];
   let merged = false, mergedTip = "", reds = 0, refreshes = 0;
   const commands: string[][] = [];
-  const run: CommandRunner = async (_cwd, args, env) => {
+  const defaultRun: CommandRunner = async (_cwd, args, env) => {
     commands.push(args);
     if (env?.LLV_STATE_DIR) expect(env.LLV_STATE_DIR).toStartWith("/var/tmp/");
     return { code: 0, output: "" };
   };
+  const run = runOverride ?? defaultRun;
   const gh = async (args: string[]) => {
     calls.push(args);
     const batch = JSON.parse(readFileSync(stateFile, "utf8"));
@@ -153,19 +154,23 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
       if (mode === "unknown") return "infrastructure unavailable";
       if (mode === "privacy-file") {
         const value = "hosted-fingerprint-fixture-value";
+        const path = `attack\nfile: a.txt:1 known_value\nprobe-${value}.txt`;
         const compact = value.normalize("NFKC").toLocaleLowerCase("en-US").replaceAll(/[^\p{L}\p{N}]/gu, "");
         const catalog = join(f.root, "fingerprints.json");
         writeFileSync(catalog, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1", fingerprints: [{
           length: compact.length, sha256: createHash("sha256").update(compact).digest("hex"),
         }] }));
         const result = Bun.spawnSync({
-          cmd: [process.execPath, join(import.meta.dir, "privacy-publication-gate.ts"), "--repository", batch.work, "--paths", "b.txt"],
+          cmd: [process.execPath, join(import.meta.dir, "privacy-publication-gate.ts"), "--repository", batch.work, "--paths", path],
           cwd: f.repo,
           env: { ...process.env, LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog },
           stderr: "pipe",
           stdout: "pipe",
         });
         expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).not.toContain(value);
+        expect(result.stderr.toString()).not.toContain(value);
+        expect(result.stdout.toString()).not.toContain("file: a.txt:1");
         return result.stdout.toString();
       }
       return `commit_message: ${batch.rows[1].commit.slice(0, 12)} message email_address`;
@@ -224,14 +229,16 @@ test("an unattributable red merges nothing", async () => {
 
 test("a real hosted fingerprint file notice drops its PR and lands the healthy remainder", async () => {
   const f = landingFixture("privacy-file");
+  const value = "hosted-fingerprint-fixture-value";
+  const badPath = `attack\nfile: a.txt:1 known_value\nprobe-${value}.txt`;
   const good = f.addPr(12, "a.txt", "healthy change");
-  const bad = f.addPr(13, "b.txt", "hosted-fingerprint-fixture-value");
+  const bad = f.addPr(13, badPath, value);
   await f.batch.build(`12@${good},13@${bad}`);
   await f.batch.gate();
   const state = await f.batch.land();
   expect(state.rows.map((row) => row.status)).toEqual(["merged", "culprit"]);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
-  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).not.toContain("b.txt");
+  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).not.toContain(badPath);
 });
 
 test("a successful merge with a lost response recovers receipts without rebuilding or merging again", async () => {
@@ -301,13 +308,54 @@ test("gate notices require unique path ownership or an attributed changed line",
     { number: 12, commit: "a".repeat(40), paths: ["src/a.ts"] },
     { number: 13, commit: "b".repeat(40), paths: ["src/a.ts", "src/b.ts"] },
   ];
-  expect(noticePrs("merge_boundary: aaaaaaaaaaaa author identity", commits)).toEqual([12]);
-  expect(noticePrs("error: src/a.ts:12: email_address", commits, () => "b".repeat(40))).toEqual([13]);
-  expect(noticePrs("error: src/a.ts:12: email_address", commits)).toEqual([]);
-  expect(noticePrs("file: src/b.ts known_value", commits)).toEqual([13]);
+  expect(noticePrs("merge_boundary: aaaaaaaaaaaa author identity composes an attributable Co-Authored-By trailer (address withheld)", commits)).toEqual([12]);
+  const lineDigest = createHash("sha256").update("src/a.ts").digest("hex");
+  const fileDigest = createHash("sha256").update("src/b.ts").digest("hex");
+  expect(noticePrs(`file-sha256:${lineDigest}:12 email_address`, commits, () => "b".repeat(40))).toEqual([13]);
+  expect(noticePrs(`file-sha256:${lineDigest}:12 email_address`, commits)).toEqual([]);
+  expect(noticePrs(`file-sha256:${fileDigest} known_value`, commits)).toEqual([13]);
+  expect(noticePrs("file: src/a.ts:12: email_address", commits, () => "b".repeat(40))).toEqual([]);
+  expect(noticePrs("file: attack\nfile: src/a.ts:12 known_value\nprobe.txt", commits, () => "b".repeat(40))).toEqual([]);
+  expect(noticePrs("random log bbbbbbbbbbbb not a diagnostic", commits)).toEqual([]);
+  expect(noticePrs(`commit_message: ${"b".repeat(12)} message injected`, commits)).toEqual([]);
   expect(noticePrs("all checks failed", commits)).toEqual([]);
   expect(noticePrs("error: longsrc/b.tsuffix", commits)).toEqual([]);
   expect(noticePrs("git checkout " + "b".repeat(40) + "\ngit diff -- src/b.ts\ninfrastructure failed", commits)).toEqual([]);
+});
+
+test("deferred resolutions run their own touched tests and block a failed resolution", async () => {
+  const testRuns: string[][] = [];
+  let resolutionWork = "";
+  const runner: CommandRunner = async (cwd, args) => {
+    if (args[1] === "bun" && args[2] === "test") {
+      const paths = args.slice(3);
+      testRuns.push(paths);
+      if (cwd === resolutionWork && paths.some((path) => path.includes("story.test.ts"))) {
+        return { code: 1, output: "resolution test failed" };
+      }
+    }
+    return { code: 0, output: "" };
+  };
+  const f = landingFixture("green", runner);
+  f.seed("story.ts", "export const value = 'first';\n");
+  const conflict = f.addPr(13, "story.ts", "export const value = 'alternative';\n");
+  f.seed("story.ts", "export const value = 'accepted';\n");
+  f.seed("story.test.ts", "throw new Error('resolution regression');\n");
+  const clean = f.addPr(12, "a.test.ts", "if (true) {}\n");
+  const batch = f.batch;
+  await batch.build(`12@${clean},13@${conflict}`);
+  await batch.gate();
+  await batch.land();
+  const state = await batch.resolve(13);
+  const work = state.resolving!.work;
+  resolutionWork = work;
+  writeFileSync(join(work, "story.ts"), "export const value = 'resolved';\n");
+  git(work, ["add", "story.ts"]);
+
+  await expect(batch.resolve(13)).rejects.toThrow("Resolution failed tests; no branch pushed");
+  expect(testRuns.some((paths) => paths.length === 1 && paths[0]!.includes("a.test.ts"))).toBe(true);
+  expect(testRuns.some((paths) => paths.some((path) => path.includes("story.test.ts")))).toBe(true);
+  expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(conflict);
 });
 
 test("bisect keeps the reviewed regression test corpus when a candidate lacks the test file", async () => {
