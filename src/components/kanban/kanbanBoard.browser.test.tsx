@@ -14881,10 +14881,10 @@ describe("task motion and waiting reasons", () => {
               expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.bottom);
             }
             // The attention chip is drawn over the bar's right reserve and must
-            // leave the task-panel toggle whole, so «13» never reads as «1»; in the compact
-            // bar (filters below it) it leaves ⋯ whole as well.
+            // leave the task-panel toggle whole, so «13» never reads as «1», and ⋯ whole as
+            // well at every width: the chip drops its label when the full one would reach it.
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
-            if (topbar.belowBar) expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
+            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
             expect(topbar.documentOverflow).toBeFalse();
             expect(topbar.filtersRight).toBeLessThanOrEqual(topbar.barRight);
             expect(topbar.filterCount).toBe(5);

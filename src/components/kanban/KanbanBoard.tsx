@@ -212,6 +212,8 @@ interface SheetTarget {
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const NO_READERS: readonly OpenReader[] = [];
 /** Parts of the board's root that belong to the Viewer, where the board answers no key. */
+/** Least space the full attention chip leaves the bar's ⋯ menu before it drops its label. */
+const CHIP_CLEARANCE = 8;
 const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
@@ -333,6 +335,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [barWide, setBarWide] = useState(true);
   const [barWrap, setBarWrap] = useState(false);
   const [reasonsBelowBar, setReasonsBelowBar] = useState(false);
+  /* The full attention chip would reach into ⋯ (measured, so it follows the locale's label and the
+     digits of the count); the chip then keeps its dot and count, as it does in a compact bar. */
+  const [chipCrowded, setChipCrowded] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
   const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
@@ -647,6 +652,33 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (seat) observer.observe(seat);
     return () => observer.disconnect();
   }, [hasAside, seatSide, railShown]);
+
+  /* The chip is fixed over the bar's right reserve and the bar's groups can run into it (the uk
+     label is the widest). With the bar's own filters in the row, measure the chip in its full form
+     against ⋯ and compact it only when they would touch. Measuring takes the attribute off and puts
+     it back inside one task, so nothing is drawn between and the verdict does not depend on the
+     last one. */
+  useLayoutEffect(() => {
+    const bar = rootRef.current?.querySelector<HTMLElement>('.bar[data-bar="project"]');
+    if (!bar || reasonsBelowBar) { setChipCrowded(false); return; }
+    const fit = () => {
+      const chip = bar.querySelector<HTMLElement>("[data-attention-count]");
+      const more = bar.querySelector<HTMLElement>('[data-bar-group="more"]');
+      if (!chip || !more) return;
+      const compact = bar.hasAttribute("data-bar-compact");
+      bar.removeAttribute("data-bar-compact");
+      const crowded = chip.getBoundingClientRect().left < more.getBoundingClientRect().right + CHIP_CLEARANCE;
+      if (compact) bar.setAttribute("data-bar-compact", "");
+      setChipCrowded(crowded);
+    };
+    fit();
+    if (typeof ResizeObserver !== "function") return;
+    const resize = new ResizeObserver(fit);
+    resize.observe(bar);
+    const mutation = typeof MutationObserver === "function" ? new MutationObserver(fit) : null;
+    mutation?.observe(bar, { childList: true, subtree: true, characterData: true });
+    return () => { resize.disconnect(); mutation?.disconnect(); };
+  }, [reasonsBelowBar, barWide, barWrap, locale, hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -2770,7 +2802,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           ) : null}
         </header>
       ) : (
-        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar ? "" : undefined}>
+        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar || chipCrowded ? "" : undefined}>
           {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
           <span className="summary" data-bar-group="status">
             {reachStatus ?? (
