@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 38;
+export const ORCHESTRATOR_PROMPT_VERSION = 39;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -278,8 +278,7 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   `membership.test.ts`). A pipeline whose recorded task was deleted AFTER
  *   creation does not refuse its stage: the launch falls back to the container
  *   task (`launchMembership.ts`);
- * - a launch carrying NO task: a pipeline stage mints the container
- *   placeholder; a spawn joins every task held by its lineage parent and by the
+ * - a launch carrying NO task joins every task held by its lineage parent and by the
  *   conversation it reviews (`inherit` in `launchMembership.ts`, joined in
  *   `membership.ts`), and mints a placeholder only when neither holds one. Who
  *   the parent is depends on the path. MCP `spawn_agent` dispatches same-origin
@@ -299,8 +298,9 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
  *   `link_task_to_pipeline` writes one assignment row and leaves that list
  *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
- * - a pipeline created without `taskIds` adopts the placeholder its first
- *   stage minted AT THAT STAGE'S RESERVATION, so a repair starts from
+ * - a pipeline created without `taskIds` adopts its first stage's inherited
+ *   task, or its fallback placeholder when no owner holds one, AT THAT STAGE'S
+ *   RESERVATION. When it minted a placeholder, a repair starts from
  *   `[placeholder]`: `link-task` makes it `[placeholder, outcome]` and later
  *   stages join both. Re-adoption runs only on an EMPTY list
  *   (`adoptPipelineFallbackTask` and `reconcilePipelineFallbackTasks` in
@@ -325,7 +325,7 @@ GIVE IT AN ICON AND A COLOUR. Pass icon and color on every create_task, both pic
 
 THE TEXT IS FOR THE HUMAN; AGENT CONTEXT GOES IN details. text is a title and at most a few plain sentences about the outcome. The prompt you would hand a worker, the working context, the rules, the lane ids and any state card go in details, condensed. A write replaces details whole, so read it with get_task before you change it.
 
-CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. A pipeline created without taskIds is given a placeholder card of its own — the duplicate the operator sees. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one; spawn_agent sets a parent only when the call names one. None of these is the outcome's card. So:
+CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. Without taskIds, a pipeline adopts its first stage's inherited tasks, or one placeholder if there is no owner. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one; spawn_agent sets a parent only when the call names one. Pass the outcome's task explicitly to keep the target unambiguous:
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every launch of that pipeline — each stage, retry and fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
 - A pipeline's reviewer and fix stages join its task like every other stage; pass nothing more.
@@ -333,7 +333,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when
 
 EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
 
-REPAIR WITH THE TOOL THAT BINDS. A pipeline started without taskIds already carries the placeholder its first stage minted. Repair in order: pipeline_action "link-task" with the outcome's task, read it back, then "unlink-task" the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing. Never unlink a pipeline's LAST task: with none left it re-adopts its placeholder on the next controller tick.
+REPAIR WITH THE TOOL THAT BINDS. If a pipeline carries an unwanted placeholder, repair in order: pipeline_action "link-task" with the outcome's task, read it back, then "unlink-task" the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing. Never unlink a pipeline's LAST task: with none left it re-adopts the task its attempts hold on the next controller tick.
 
 READ BACK WHAT YOU DID. The create_pipeline and pipeline_action answers list the pipeline's taskIds: check the task there, and confirm the other side with get_task compact:true, whose pipelineIds hold the link the moment it lands. A link writes no assignment, so a repaired pipeline's task shows its first one when the NEXT stage launches. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
 

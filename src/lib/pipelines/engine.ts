@@ -103,6 +103,7 @@ import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQ
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
+import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest } from "@/lib/forge/cache";
@@ -2298,16 +2299,24 @@ function tasksForBinding(): readonly BoardTask[] {
 }
 
 /**
- * A pipeline without a recorded task adopts the fallback task its admission
- * minted (#1586, origin `pipeline:<id>`), so the task/pipeline read model and
+ * A pipeline without a recorded task adopts the task its admission inherited
+ * or minted (#1586, origin `pipeline:<id>`), so the task/pipeline read model and
  * `ensurePipelineForTask` see the binding instead of asking for another
  * pipeline. Idempotent: recovery of the same launch reuses the same fallback.
  */
 export function adoptPipelineFallbackTask(pipeline: Pipeline, tasks: readonly BoardTask[]): boolean {
   if (pipeline.taskIds.length) return false;
   const fallback = tasks.find((task) => task.origin?.kind === "pipeline" && task.origin.key === pipeline.id);
-  if (!fallback) return false;
-  pipeline.taskIds = [fallback.id];
+  /* Keep historical fallback cards intact. A new admission may instead have
+     joined the source's work; retain that binding before any later stage runs
+     without a source of its own. */
+  const attempts = pipeline.runs.flatMap(run => run.attempts);
+  const inherited = fallback ? [] : tasks.filter(task => canonicalOrchestratorProject(task.project) === canonicalOrchestratorProject(pipeline.project)
+    && task.assignments.some(assignment => assignment.state !== "failed" && attempts.some(attempt => assignmentHoldsIdentity(assignment, {
+      conversationId: attempt.conversationId, launchId: attempt.launchId, path: attempt.agentPath,
+    }))));
+  if (!fallback && !inherited.length) return false;
+  pipeline.taskIds = fallback ? [fallback.id] : inherited.map(task => task.id);
   return true;
 }
 
