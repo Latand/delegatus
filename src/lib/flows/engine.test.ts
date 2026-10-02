@@ -1,4 +1,4 @@
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -3408,6 +3408,90 @@ test("native headless usage limits wait for reset without spending missing-verdi
       now = resetsAt * 1_000 + 60_000;
     }
   } finally { clock.mockRestore(); }
+});
+
+test.each(["session", "weekly"] as const)("native Claude %s reviewer reset defers one relaunch and preserves later unknown backoff", async (scope) => {
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "native-reviewer-reset-"));
+  let now = Date.parse("2026-10-02T00:16:00Z");
+  const resetsAt = Date.parse("2026-10-02T14:30:00Z");
+  const clock = (at: number) => { now = at; setSystemTime(now); };
+  clock(now);
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const exec = await import("./exec");
+  const account = { engine: "claude" as const, accountId: "account-a", kind: "managed" as const,
+    home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({ kind: "available", account }));
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "native-reset-review-session", reviewerPath: null });
+  const nativeStatus = exec.headlessReviewStatus;
+  const status = spyOn(exec, "headlessReviewStatus").mockImplementation((id, n, round, engine) => launch.mock.calls.length > 0
+    ? { status: "running", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null }
+    : nativeStatus(id, n, round, engine));
+  try {
+    expect(spawnSync("git", ["init", "-b", "main"], { cwd: root }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply", "commit", "--allow-empty", "-m", "Base"], { cwd: root }).status).toBe(0);
+    const implementer = writeCodexEntry(`native-${scope}-implementer.jsonl`, { id: crypto.randomUUID(), cwd: root }, now / 1_000);
+    const reviewer = writeCodexEntry(`native-${scope}-reviewer.jsonl`, { id: crypto.randomUUID(), cwd: root }, now / 1_000);
+    fs.appendFileSync(reviewer.path, JSON.stringify({ type: "assistant", timestamp: new Date(now).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+        content: [{ type: "text", text: `You've hit your ${scope} limit · resets 2:30pm (UTC)` }] } }) + "\n");
+    const flow = raceFlow({ id: `flow-native-claude-${scope}-reset`, cwd: root, implementerPath: implementer.path, state: "reviewing" });
+    flow.rounds = [newRound(flow, "button", null)];
+    Object.assign(flow.rounds[0]!, { reviewerPath: reviewer.path, reviewerRole: { engine: "claude", model: "fable", effort: "high" },
+      accountId: "account-a", reviewerPid: 999_999_999, spawnStartedAt: new Date(now - 1_000).toISOString() });
+    fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+    fs.writeFileSync(outputPathFor(flow.id, 1), "");
+    saveFlows([flow]);
+    await tickFlows([implementer, reviewer]);
+    for (const at of [now + 30 * 60_000, now + 6 * 60 * 60_000, resetsAt, resetsAt + 59_999]) {
+      clock(at);
+      await tickFlows([implementer]);
+      const waiting = loadFlows()[0]!;
+      expect(waiting.state).toBe("spawning");
+      expect(waiting.rounds[0]!.providerLimitWait).toMatchObject({ resetsAt: resetsAt / 1_000, capacityProbes: 0 });
+      expect(waiting.rounds[0]!.autoRetryCount).toBe(0);
+      expect(waiting.rounds[0]!.providerRetryCount).toBe(1);
+      expect(launch).not.toHaveBeenCalled();
+      expect(resolve).not.toHaveBeenCalled();
+    }
+    clock(now + 1);
+    await tickFlows([implementer]);
+    await tickFlows([implementer]);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(loadFlows()[0]!.state).toBe("reviewing");
+    expect(loadFlows()[0]!.rounds).toHaveLength(1);
+    // The relaunched reviewer encounters a new limit without usable reset
+    // evidence. The earlier known wait must not exhaust its capacity backoff.
+    clock(now + 1_000);
+    fs.appendFileSync(reviewer.path, JSON.stringify({ type: "assistant", timestamp: new Date(now).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+        content: [{ type: "text", text: `You've hit your ${scope} limit` }] } }) + "\n");
+    const relaunched = loadFlows()[0]!;
+    Object.assign(relaunched.rounds[0]!, { reviewerPath: reviewer.path, reviewerPid: 999_999_999, sessionId: null });
+    fs.writeFileSync(outputPathFor(flow.id, 1), "");
+    status.mockImplementation(nativeStatus);
+    resolve.mockImplementation(() => ({ kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a"] }));
+    saveFlows([relaunched]);
+    await tickFlows([implementer, reviewer]);
+    expect(loadFlows()[0]!.state).toBe("spawning");
+    expect(loadFlows()[0]!.rounds[0]!.providerLimitWait?.resetsAt).toBeNull();
+    clock(now + 30 * 60_000);
+    await tickFlows([implementer]);
+    const waiting = loadFlows()[0]!;
+    expect(waiting.stateDetail).toContain("waiting for reviewer account capacity");
+    expect(waiting.state).toBe("spawning");
+    expect(waiting.rounds[0]!.providerLimitWait).toMatchObject({ resetsAt: null, capacityProbes: 1 });
+    expect(waiting.rounds[0]!.providerRetryCount).toBe(2);
+    expect(launch).toHaveBeenCalledTimes(1);
+    for (let probe = 0; probe < 2; probe += 1) {
+      clock(now + 15 * 60_000);
+      await tickFlows([implementer]);
+    }
+    expect(loadFlows()[0]!.state).toBe("needs_decision");
+    expect(loadFlows()[0]!.stateDetail).toContain("capacity recovery exhausted after 3 probes");
+  } finally {
+    status.mockRestore(); launch.mockRestore(); resolve.mockRestore(); setSystemTime();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("ordinary reviewer prose mentioning retry in a minute keeps the missing-verdict budget", async () => {

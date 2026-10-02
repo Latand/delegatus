@@ -9009,7 +9009,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(switching.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
     expect(switching.runs.find((run) => run.stageId === "build")!.attempts[1]).toMatchObject({
       state: "running", conversationId: limited.conversationId,
-      usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "claude", resetsAt: null }],
+      usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "claude", resetsAt: Date.parse("2026-08-27T11:30:00Z") / 1_000 }],
     });
     expect(reseats).toEqual([{ conversationId: limited.conversationId!, accountId: SPARE_ACCOUNT }]);
     expect(continuations).toHaveLength(1);
@@ -15615,6 +15615,118 @@ for (const engine of ["claude", "codex"] as const) {
     });
   }
 }
+
+test.each(["session", "weekly"] as const)("native Claude %s reset waits without spending unknown-reset budget and retains real WIP", async (scope) => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", `You've hit your ${scope} limit`);
+  f.advance(Date.parse("2026-10-02T00:16:00Z") - f.now());
+  const resetsAt = Date.parse("2026-10-02T14:30:00Z");
+  const transcript = stageTranscript(`native-claude-${scope}-reset`, [{
+    type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: `You've hit your ${scope} limit · resets 2:30pm (UTC)` }] },
+  }]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": transcript });
+  const container = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "native-reset-wip-"));
+  const lane = loadPipelines()[0]!;
+  lane.repoDir = path.join(container, "repo");
+  const root = lane.worktreeDir = path.join(container, `repo-pipeline-${lane.id}`);
+  fs.mkdirSync(root);
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout;
+  };
+  git("init", "-b", "main");
+  fs.writeFileSync(path.join(root, "tracked.txt"), "base\n");
+  git("add", "tracked.txt");
+  git("-c", "user.name=Recovery Fixture", "-c", "user.email=noreply", "commit", "-m", "fixture");
+  fs.writeFileSync(path.join(root, "tracked.txt"), "staged work\n");
+  git("add", "tracked.txt");
+  fs.writeFileSync(path.join(root, "tracked.txt"), "unstaged work\n");
+  fs.writeFileSync(path.join(root, "untracked.txt"), "untracked work\n");
+  const head = git("rev-parse", "HEAD");
+  const index = fs.readFileSync(path.join(root, ".git", "index"));
+  savePipelines([lane]);
+  const baseExec = f.h.ports.exec;
+  f.h.ports.exec = (command, args, cwd, options) => command === "git" && args[0] === "-C" && args[1] === root
+    ? (() => { const result = spawnSync(command, args, { encoding: "utf8" }); return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr }; })()
+    : baseExec(command, args, cwd, options);
+  try {
+    for (const at of [f.now(), f.now() + 30 * 60_000, f.now() + 6 * 60 * 60_000, resetsAt, resetsAt + 59_000]) {
+      f.advance(at - f.now());
+      await tickPipelines([], f.h.ports);
+      const waiting = loadPipelines()[0]!;
+      expect(waiting.state).toBe("running");
+      expect(waiting.stateDetail).toContain("2026-10-02T14:30:00.000Z");
+      expect(waiting.runs[0]!.attempts[0]!.providerWait).toMatchObject({ tries: 0, resetsAt: resetsAt / 1_000 });
+      expect(f.sends).toHaveLength(0);
+    }
+    f.advance(1_000);
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(fs.readFileSync(path.join(root, "tracked.txt"), "utf8")).toBe("unstaged work\n");
+    expect(fs.readFileSync(path.join(root, "untracked.txt"), "utf8")).toBe("untracked work\n");
+    expect(fs.readFileSync(path.join(root, ".git", "index"))).toEqual(index);
+    expect(git("rev-parse", "HEAD")).toBe(head);
+  } finally { fs.rmSync(container, { recursive: true, force: true }); }
+});
+
+test("a native Claude weekly reset remains authoritative over an earlier cached session reset", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit");
+  f.advance(Date.parse("2026-10-02T00:16:00Z") - f.now());
+  const earlyReset = f.now() + 60 * 60_000;
+  f.h.ports.claudeAccountReset = () => earlyReset / 1_000;
+  readFixtures(f.h, { "/codex/stage-1.jsonl": stageTranscript("native-weekly-cached-session-reset", [{
+    type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: "You've hit your weekly limit · resets Oct 9 at 2:30pm (UTC)" }] },
+  }]) });
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.resetsAt).toBe(Date.parse("2026-10-09T14:30:00Z") / 1_000);
+  f.advance(earlyReset + 60_000 - f.now());
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(0);
+  expect(loadPipelines()[0]!.state).toBe("running");
+});
+
+test.each([false, true])("known native reset waiting does not exhaust a subsequent unknown-reset backoff, reopened=%s", async (reopened) => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit");
+  f.advance(Date.parse("2026-10-02T00:16:00Z") - f.now());
+  const transcript = stageTranscript("native-reset-then-unknown", [{
+    type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: "You've hit your weekly limit · resets 2:30pm (UTC)" }] },
+  }]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": transcript });
+  await tickPipelines([], f.h.ports);
+  f.advance(Date.parse("2026-10-02T14:31:00Z") - f.now());
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  if (reopened) {
+    f.advance(1_000);
+    fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: f.h.ports.now(), message: { role: "user", content: "Continue the same stage" } }) + "\n");
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerRecoveryBudget?.tries).toBe(1);
+  }
+  f.h.setConversationActive(false);
+  f.advance(1_000);
+  fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: "You've hit your weekly limit" }] } }) + "\n");
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toMatchObject({ tries: 1, resetsAt: null });
+  f.advance(30 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(2);
+  f.advance(6 * 60 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("weekly limit");
+});
 
 test("a report wins over a terminal limit without sending a continuation", async () => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit");

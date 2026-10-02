@@ -93,12 +93,59 @@ function isCodexUsageLimit(payload: RecordLike): boolean {
 }
 
 /** Claude CLI writes a synthetic assistant with this terminal API-error code
-    and notice when the account's session capacity is spent. The displayed
-    local clock label has no date, so it cannot establish a reset instant. */
+    and notice when the account's session capacity is spent. */
 function isClaudeUsageLimit(record: RecordLike, text: string): boolean {
   return record.isApiErrorMessage === true
     && record.error === "rate_limit"
     && classifyProviderCondition("claude", stringValue(record.error), text).kind === "usage_limit";
+}
+
+/** Resolve a native reset label against the closing record's date in its own
+    timezone. Never use this machine's timezone or the artifact's mtime: they
+    can differ from the provider's clock, including after a transcript replay. */
+function claudeUsageLimitResetAt(record: RecordLike, text: string): number | null {
+  const timestamp = stringValue(record.timestamp) ?? "";
+  if (!/(?:z|[+-]\d{2}:?\d{2})$/i.test(timestamp)) return null;
+  const recordedAt = Date.parse(timestamp);
+  const label = /\bresets\s+(?:([a-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:,\s*|\s+at\s+|\s+))?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*\(([^)]+)\)/i.exec(text);
+  if (!label || !Number.isFinite(recordedAt)) return null;
+  let hour = Number(label[4]);
+  const minute = Number(label[5] ?? 0);
+  if (minute > 59 || (label[6] ? hour < 1 || hour > 12 : hour > 23)) return null;
+  if (label[6]) hour = hour % 12 + (label[6].toLowerCase() === "pm" ? 12 : 0);
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: label[7]!.trim(), year: "numeric", month: "numeric", day: "numeric",
+      hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23",
+    });
+    const localTime = (instant: number) => {
+      const parts = Object.fromEntries(formatter.formatToParts(instant).map(part => [part.type, part.value]));
+      return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+    };
+    const localDate = new Date(localTime(recordedAt));
+    const month = label[1] ? ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(label[1].slice(0, 3).toLowerCase()) : localDate.getUTCMonth();
+    const day = label[2] ? Number(label[2]) : localDate.getUTCDate();
+    const year = label[3] ? Number(label[3]) : localDate.getUTCFullYear();
+    if (month < 0 || day < 1 || day > 31) return null;
+    // A clock-only notice means the next daily occurrence. A named date may
+    // cross New Year; an explicit year is never silently rolled forward.
+    for (let next = 0; next < (label[3] ? 1 : 2); next += 1) {
+      const wall = Date.UTC(year + (label[1] ? next : 0), month, day + (label[1] ? 0 : next), hour, minute);
+      const date = new Date(wall);
+      if (label[1] && (date.getUTCMonth() !== month || date.getUTCDate() !== day)) return null;
+      // Sample both sides of a timezone transition and round-trip candidates.
+      // A repeated DST clock uses the later occurrence to avoid an early retry;
+      // a nonexistent clock cannot establish a reset instant.
+      const candidates = [-86_400_000, 0, 86_400_000].map(delta => {
+        const probe = wall + delta;
+        return wall - (localTime(probe) - probe);
+      }).filter(instant => localTime(instant) === wall);
+      if (candidates.length === 0) return null;
+      const reset = Math.max(...candidates);
+      if (reset >= recordedAt) return reset / 1_000;
+    }
+  } catch { /* An absent/unsupported timezone leaves the reset unknown. */ }
+  return null;
 }
 
 const CODEX_TURN_END_TYPES = new Set(["task_complete", "turn_complete", "turn_completed", "turn_aborted"]);
@@ -211,7 +258,7 @@ function terminalProviderMessageFromRecords(
           text,
           errorClass: stringValue(record.error),
           ts: recordTs(record, fallbackTs),
-          ...(isClaudeUsageLimit(record, text) ? { usageLimit: { resetsAt: null } } : {}),
+          ...(isClaudeUsageLimit(record, text) ? { usageLimit: { resetsAt: claudeUsageLimitResetAt(record, text) } } : {}),
         }
       : null;
   }

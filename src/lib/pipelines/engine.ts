@@ -1741,6 +1741,13 @@ function recordProviderRecovery(attempt: PipelineStageAttempt, action: NonNullab
   attempt.providerRecoveries = [...(attempt.providerRecoveries ?? []), { at, action, condition, summary }].slice(-8);
 }
 
+/** Begin backoff after capacity waiting, before continuation clears the wait. */
+function providerBackoffStartedAt(attempt: PipelineStageAttempt, now: string): string {
+  const wait = attempt.providerWait;
+  return wait?.condition.kind === "usage_limit" && wait.resetsAt !== null && !wait.actionAt
+    ? now : attempt.providerRecoveryBudget?.startedAt ?? wait?.startedAt ?? now;
+}
+
 function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAttempt, condition: ProviderCondition, reason: string, ports: PipelinePorts, persist: () => void): void {
   const now = ports.now();
   const detail = `recovery after ${condition.label}: ${redactBounded(reason, 300)}`;
@@ -1769,7 +1776,10 @@ async function recoverProviderCut(
     const same = wait?.condition.kind === notice.condition.kind;
     const budget = attempt.providerRecoveryBudget ??= { tries: wait?.tries ?? 0, startedAt: wait?.startedAt ?? now };
     const tries = budget.tries;
-    const resetsAt = knownReset(notice.resetsAt, engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
+    // The closing turn's reset names the exhausted window; a cached reset
+    // can still describe an earlier session window while a weekly limit holds.
+    const resetsAt = knownReset(notice.resetsAt)
+      ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
     const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
       : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
       : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
@@ -1884,9 +1894,10 @@ async function recoverProviderCut(
   }
   if (delivered) {
     delete attempt.controllerWait;
+    const startedAt = providerBackoffStartedAt(attempt, now);
     wait.actionAt = now;
     wait.tries += 1;
-    attempt.providerRecoveryBudget = { tries: wait.tries, startedAt: wait.startedAt };
+    attempt.providerRecoveryBudget = { tries: wait.tries, startedAt };
     recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     persist();
@@ -1946,7 +1957,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
     retry.providerRecoveryBudget = { tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
-      startedAt: attempt.providerRecoveryBudget?.startedAt ?? attempt.providerWait?.startedAt ?? now };
+      startedAt: providerBackoffStartedAt(attempt, now) };
     if (attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,

@@ -1424,7 +1424,11 @@ export async function tickFlow(
                 ? resetsAt === null ? Date.now() + 30 * 60_000 : Math.max(Date.now(), resetsAt * 1_000 + 60_000)
                 : undefined;
               if (condition.kind === "usage_limit") round.providerLimitWait = {
-                resetsAt, startedAt: round.providerLimitWait?.startedAt ?? isoNow(), capacityProbes: round.providerLimitWait?.capacityProbes ?? 0,
+                resetsAt,
+                // Capacity waiting ends before a new unknown-reset backoff.
+                startedAt: round.providerLimitWait && round.providerLimitWait.resetsAt !== null
+                  ? isoNow() : round.providerLimitWait?.startedAt ?? isoNow(),
+                capacityProbes: round.providerLimitWait?.capacityProbes ?? 0,
               };
               retryHeadlessRound(flow, round, condition.label, resumeAt);
               // Provider recovery stays on the engine that was cut.

@@ -522,10 +522,10 @@ test("a Codex usage-limit terminal record carries its governing reset (#1371)", 
   });
 });
 
-test("a recorded Claude session-limit API error carries an unknown reset", async () => {
+test("a recorded Claude session-limit API error resolves its timestamped timezone reset", async () => {
   // Shape observed in a 2026-09-26 Claude stage transcript: the CLI writes a
   // synthetic assistant with error=rate_limit and stop_sequence, then appends
-  // bookkeeping. The local clock label does not identify a reset instant.
+  // bookkeeping. Resolve the local clock from the notice's own timestamp.
   const file = writeTranscript("claude-session-limit.jsonl", [
     { type: "user", timestamp: "2026-09-26T11:24:17.140Z", message: { role: "user", content: "fix the stage" } },
     { type: "assistant", timestamp: "2026-09-26T11:27:59.577Z", message: { role: "assistant", content: [{ type: "text", text: "Working on the edit" }] } },
@@ -540,9 +540,37 @@ test("a recorded Claude session-limit API error carries an unknown reset", async
     turn: "terminal",
     terminalProviderMessage: {
       text: "You've hit your session limit · resets 2:30pm (Europe/Kyiv)",
-      usageLimit: { resetsAt: null },
+      usageLimit: { resetsAt: Date.parse("2026-09-26T11:30:00Z") / 1_000 },
     },
   });
+});
+
+test.each([
+  ["2026-10-02T00:16:00Z", "2:30pm (UTC)", "2026-10-02T14:30:00Z"],
+  ["2026-10-02T23:16:00Z", "2:30pm (UTC)", "2026-10-03T14:30:00Z"],
+  ["2026-10-02T23:16:00Z", "2:30am (Asia/Kolkata)", "2026-10-03T21:00:00Z"],
+  ["2026-10-02T00:16:00Z", "12am (UTC)", "2026-10-03T00:00:00Z"],
+  ["2026-10-02T00:16:00Z", "12pm (UTC)", "2026-10-02T12:00:00Z"],
+  ["2026-10-02T00:16:00Z", "Oct 9 at 2:30pm (UTC)", "2026-10-09T14:30:00Z"],
+  ["2026-12-31T00:16:00Z", "Jan 2, 2:30pm (UTC)", "2027-01-02T14:30:00Z"],
+  ["2026-10-24T23:16:00Z", "3:30am (Europe/Kyiv)", "2026-10-25T01:30:00Z"],
+  ["2026-03-29T00:16:00Z", "3:30am (Europe/Kyiv)", null],
+  ["2026-10-02T00:16:00Z", "2:30pm", null],
+  ["2026-10-02T00:16:00Z", "2:30pm (Unknown/Zone)", null],
+  ["2026-10-02T00:16:00Z", "25:30 (UTC)", null],
+  ["2026-10-02T00:16:00Z", "2:90pm (UTC)", null],
+  ["2026-10-02T00:16:00Z", "Feb 30 at 2:30pm (UTC)", null],
+  ["2026-10-02T00:16:00Z", "Oct 1, 2026 at 2:30pm (UTC)", null],
+  ["invalid", "2:30pm (UTC)", null],
+  ["2026-10-02T00:16:00", "2:30pm (UTC)", null],
+] as const)("native Claude weekly reset at %s: %s", async (timestamp, label, expected) => {
+  const file = writeTranscript("claude-weekly-reset.jsonl", [{
+    type: "assistant", timestamp, isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: `You've hit your weekly limit · resets ${label}` }] },
+  }]);
+  expect((await durableStageTurnEvidence("claude", file))?.terminalProviderMessage?.usageLimit)
+    .toEqual({ resetsAt: expected === null ? null : Date.parse(expected) / 1_000 });
 });
 
 test("Claude limit prose without the terminal rate-limit envelope is not capacity evidence", async () => {
