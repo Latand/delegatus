@@ -10,6 +10,7 @@ function ports(turn = "idle", host = "hosted", cursor = "pending", ageMinutes = 
     runtimeSnapshot: async () => ({ sessions: [{ turn, host }] }) as Awaited<ReturnType<QuietPorts["runtimeSnapshot"]>>,
     pipelines: () => [{ state: "running", cursor: { state: cursor } }] as unknown as ReturnType<QuietPorts["pipelines"]>,
     presence: () => [{ lastInteractionAt: NOW - ageMinutes * 60_000 }] as unknown as ReturnType<QuietPorts["presence"]>,
+    registryHealth: () => [],
   };
 }
 
@@ -17,6 +18,14 @@ test("live turns and transitioning hosts block either restart", async () => {
   for (const turn of ["running", "interrupt_requested"]) expect((await probeQuiet(snapshot, ports(turn), NOW)).quiet).toBe(false);
   for (const host of ["registering", "recovering"]) expect((await probeQuiet(snapshot, ports("idle", host), NOW)).quiet).toBe(false);
   for (const host of ["hosted", "unhosted", "dead"]) expect((await probeQuiet(snapshot, ports("unknown", host), NOW)).quiet).toBe(true);
+});
+
+test("isolated record diagnostics remain visible without preventing the quiet update", async () => {
+  const p = ports();
+  p.registryHealth = () => [{ collection: "pipelines", id: "future-lane", reason: "unknown-but-preserved", detail: "unsupported role; preserved without execution" }];
+  expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: true, blockers: { unreadable: null, registryIssues: [{ id: "future-lane" }] } });
+  p.registryHealth = () => { throw new Error("corrupt pipelines SQLite row: broken-lane"); };
+  expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { unreadable: "corrupt pipelines SQLite row: broken-lane" } });
 });
 
 test("active pipeline stages and recent operator input block", async () => {

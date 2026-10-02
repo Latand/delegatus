@@ -263,7 +263,7 @@ test("captured verify-first receipt stays unknown in mounted composer and feed w
   const { host, root } = await renderInto(surface());
   try {
     const bubble = host.querySelector("[data-outbox-entry]")!;
-    expect(rowDelivery(host)).toContain("outcome is unknown");
+    expect(rowDelivery(host)).toContain("Checking delivery…");
     expect(host.textContent).not.toMatch(/not delivered/i);
     expect(bubble.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
     retryOutbox(file.conversationId!, captured.idempotencyKey);
@@ -306,10 +306,10 @@ test.each(["failed", "uncertain"] as const)("textless %s receipt polling and rem
   const check = async () => {
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
-    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     const row = mounted.host.querySelector("[data-receipt-standalone-row]")!;
-    expect(row.textContent).toMatch(/outcome is unknown/i);
-    expect(row.textContent).toContain(captured.reason!);
+    expect(row.textContent).toMatch(/checking delivery/i);
+    expect(row.textContent).toContain(translate("en", "composer.deliveryCheckingDetail"));
     expect(row.querySelector("[data-receipt-discard]")?.textContent).toBe("Discard");
     expect(row.querySelector("[data-operation]")?.getAttribute("data-operation")).toBe(captured.operationId);
     expect(row.querySelector("[data-receipt-edit], [data-outbox-retry], [data-outbox-cancel]")).toBeNull();
@@ -417,7 +417,7 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
     const controls = [...mounted.host.querySelectorAll("[data-operation]:has([data-outbox-check])")];
     expect(controls.map(node => node.getAttribute("data-operation")).sort()).toEqual([...ids].sort());
     for (const control of controls) {
-      expect(control.textContent).toMatch(/outcome is unknown/i);
+      expect(control.textContent).toMatch(/checking delivery/i);
       expect(control.querySelector("[data-outbox-check]")?.textContent).toBe(translate("en", "outbox.action.checkStatus"));
       expect(control.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
     }
@@ -425,7 +425,7 @@ test.each([captured.text, "", undefined].flatMap(text => ["delivered", "discarde
       expect(bubble.querySelectorAll("[data-outbox-retry], [data-outbox-cancel]")).toHaveLength(0);
     }
     await openRowEvidence(mounted.host);
-    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
   };
   try {
     await check([original.operationId, sibling.operationId]);
@@ -505,11 +505,11 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
   snapshotReceipts = [];
   mounted = await renderInto(surface());
   try {
-    expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host)).toContain("Checking delivery…");
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
-    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     await settle(() => { retryOutbox(file.conversationId!, captured.idempotencyKey); cancelOutbox(file.conversationId!, captured.idempotencyKey); });
     expect(calls).toHaveLength(0);
     const other = { ...file, path: "/other.jsonl", conversationId: "other-conversation" };
@@ -519,7 +519,7 @@ test("uncertainty survives reload, conversation switches, and late errors; actio
     for (const status of ["queued", "delivering", "pending", "failed"] as const) {
       snapshotReceipts = [{ ...captured, status, resend: undefined, revision: ++actionReceipt.revision }];
       await settle(() => mounted.root.render(surface()));
-      expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
+      expect(rowDelivery(mounted.host)).toContain("Checking delivery…");
       expect(mounted.host.querySelector("[data-outbox-retry]")).toBeNull();
     }
     await openRowEvidence(mounted.host);
@@ -563,7 +563,7 @@ test.each(["network", "503", "malformed", "null"])("%s after possible dispatch s
   await settle(() => composerControls(mounted.host).type("Keep the submitted message"));
   await settle(() => composerControls(mounted.host).submit());
   expect(sends).toHaveLength(1);
-  expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
+  expect(rowDelivery(mounted.host)).toContain("Checking delivery…");
   await act(async () => mounted.root.unmount());
   resetOutboxForTests();
   mounted = await renderInto(surface());
@@ -705,7 +705,7 @@ test.skipIf(!process.env.LLV_UNCERTAINTY_BROWSER)("390/430 mounted uncertainty h
       const retry = page.locator(`[data-operation="${captured.operationId}"] [data-receipt-uncertain-retry]`);
       await retry.waitFor();
       expect(await retry.innerText()).toBe("Retry");
-      expect(await page.locator(`[data-operation="${captured.operationId}"] [data-runtime-receipt-status]`).first().textContent()).toMatch(/outcome is unknown/i);
+      expect(await page.locator(`[data-operation="${captured.operationId}"] [data-runtime-receipt-status]`).first().textContent()).toMatch(/checking delivery/i);
       expect(await page.locator('body').textContent()).not.toMatch(/not delivered/i);
       const discard = page.locator(`[data-operation="${captured.operationId}"] [data-receipt-discard]`);
       expect(await discard.innerText()).toBe("Discard");
@@ -743,9 +743,9 @@ test("non-2xx original receipt retains identity and verify-first evidence throug
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
-    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.resend).toBe("verify-first");
-    expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host)).toContain("Checking delivery…");
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.reason).toBe(captured.reason);
     await act(async () => mounted.root.unmount());
     resetOutboxForTests();
@@ -753,7 +753,7 @@ test("non-2xx original receipt retains identity and verify-first evidence throug
     expect(readOutbox(file.conversationId!)[0]?.deliveryReceipt?.operationId).toBe(captured.operationId);
     expect(mounted.host.textContent).not.toMatch(/not delivered/i);
     await openRowEvidence(mounted.host);
-    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/outcome is unknown/i);
+    expect(mounted.host.querySelector("[data-runtime-receipt-status]")?.textContent).toMatch(/checking delivery/i);
     await settle(() => {
       retryOutbox(file.conversationId!, sends[0]!.idempotencyKey);
       cancelOutbox(file.conversationId!, sends[0]!.idempotencyKey);
@@ -830,7 +830,7 @@ test.each(["reservation", "idempotency"])("ambiguous %s conflict retains unknown
     resetOutboxForTests();
     mounted = await renderInto(surface());
     await settle(() => { retryOutbox(file.conversationId!, sends[0]!.idempotencyKey); cancelOutbox(file.conversationId!, sends[0]!.idempotencyKey); });
-    expect(rowDelivery(mounted.host)).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host)).toContain("Checking delivery…");
     expect(mounted.host.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
     expect(sends).toHaveLength(1);
   } finally { await act(async () => mounted.root.unmount()); }
@@ -910,7 +910,7 @@ test.each([200, 503].flatMap(httpStatus => ["conversation", "key", "operation"].
       expect(entry.deliveryReceipt).toBeUndefined();
       expect(entry.operationId).toBeUndefined();
       expect(mounted.host.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-retry], [data-outbox-cancel]")).toBeNull();
-      expect(rowDelivery(mounted.host)).toMatch(/outcome is unknown/i);
+      expect(rowDelivery(mounted.host)).toMatch(/checking delivery/i);
       if (!attempt) {
         await act(async () => mounted.root.unmount());
         resetOutboxForTests();
@@ -945,7 +945,7 @@ test.each(["POST", "DELETE"].flatMap(method => ["conversation", "key", "operatio
       body: method === "POST" ? JSON.stringify({ action: "retry-uncertain" }) : undefined }]);
     expect(mounted.host.querySelectorAll("[data-receipt-uncertain-retry]")).toHaveLength(1);
     expect(mounted.host.querySelectorAll('[data-operation="foreign-operation"]')).toHaveLength(0);
-    expect(mounted.host.textContent).toMatch(/outcome is unknown/i);
+    expect(mounted.host.textContent).toMatch(/checking delivery/i);
   } finally { await act(async () => mounted.root.unmount()); }
 });
 
@@ -1314,7 +1314,7 @@ test("issue 1538: delivered history compacts first; an unknown original survives
        end a delivery whose fate nobody has established (round-4 P2). */
     expect(rows[0]!.querySelector("[data-outbox-check]")).not.toBeNull();
     expect(rows[0]!.querySelector("[data-receipt-uncertain-retry], [data-receipt-discard], [data-outbox-operation-retry], [data-outbox-discard]")).toBeNull();
-    expect(rowDelivery(mounted.host, original)).toContain("outcome is unknown");
+    expect(rowDelivery(mounted.host, original)).toContain("Checking delivery…");
     expect(mounted.host.querySelector(`[data-outbox-retry="${original}"], [data-outbox-cancel="${original}"]`)).toBeNull();
     expect(sends).toHaveLength(7);
 
@@ -1644,7 +1644,7 @@ for (const attachment of ["none", "image", "document"] as const) {
       expect(inflight!.needsReattach).toBeUndefined();
       expect(behind).toMatchObject({ id: behindId, text: "queued behind it", state: "queued" });
       const inflightRow = mounted.host.querySelector(`[data-outbox-entry="${original.idempotencyKey}"]`)!;
-      expect(rowDelivery(mounted.host, original.idempotencyKey)).toContain("outcome is unknown");
+      expect(rowDelivery(mounted.host, original.idempotencyKey)).toContain("Checking delivery…");
       expect(inflightRow.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
       const behindRow = mounted.host.querySelector(`[data-outbox-entry="${behindId}"]`)!;
       expect(behindRow.querySelector("[data-outbox-cancel]")).not.toBeNull();

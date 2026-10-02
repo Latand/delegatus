@@ -67,6 +67,7 @@ function startAppServer(home: string): Probe {
       CODEX_HOME: path.join(home, ".codex"),
       PATH: process.env.PATH,
       TMPDIR: home,
+      LLV_STATE_DIR: path.join(home, "state"),
       ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
     },
     cwd: home,
@@ -115,6 +116,33 @@ function privateHome(): string {
   homes.push(home);
   return home;
 }
+
+test.skipIf(!installed)("real Codex succession replays full and restricted access after an app-server restart", async () => {
+  const home = privateHome();
+  for (const sandbox of ["danger-full-access", "workspace-write"] as const) {
+    const first = startAppServer(home);
+    let threadId: string;
+    try {
+      expect((await first.rpc("initialize", { clientInfo: { name: "launch-access-probe", version: "0" } })).error).toBeUndefined();
+      const started = await first.rpc("thread/start", { cwd: home, sandbox, approvalPolicy: "on-request" });
+      expect(started.error).toBeUndefined();
+      threadId = (started.result as { thread: { id: string } }).thread.id;
+      // Materialize the rollout without authentication or a provider turn.
+      expect((await first.rpc("thread/inject_items", { threadId, items: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Isolated launch access fixture" }] }] })).error).toBeUndefined();
+    } finally { first.stop(); }
+    const successor = startAppServer(home);
+    try {
+      expect((await successor.rpc("initialize", { clientInfo: { name: "launch-access-probe", version: "0" } })).error).toBeUndefined();
+      // The pre-fix resume omitted these access fields and selected readOnly.
+      const resumed = await successor.rpc("thread/resume", { threadId, sandbox, approvalPolicy: "on-request" });
+      expect(resumed.error).toBeUndefined();
+      expect(resumed.result).toMatchObject({ approvalPolicy: "on-request", sandbox: {
+        type: sandbox === "danger-full-access" ? "dangerFullAccess" : "workspaceWrite",
+        ...(sandbox === "workspace-write" ? { networkAccess: false } : {}),
+      } });
+    } finally { successor.stop(); }
+  }
+}, 60_000);
 
 interface RolloutRecord {
   type?: string;
