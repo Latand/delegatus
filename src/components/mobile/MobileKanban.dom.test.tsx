@@ -557,7 +557,7 @@ function laidOutDock() {
   prototype.getBoundingClientRect = function (this: HTMLElement) {
     const status = this.getAttribute?.("data-phone-dock-tile");
     const left = status ? order.indexOf(status) * 97 : 0;
-    const top = status ? 760 : 0;
+    const top = status ? 760 : this.hasAttribute?.("data-phone-dock") ? 744 : 0;
     return { x: left, y: top, left, top, right: left + 90, bottom: top + (status ? 80 : 90), width: 90, height: status ? 80 : 90, toJSON() {} } as DOMRect;
   };
   return () => { prototype.getBoundingClientRect = original; };
@@ -625,6 +625,22 @@ test("released over a column, a lifted card moves there with the usual receipt; 
     expect(patches).toEqual([{ id: "a2", status: "blocked" }]);
     expect(dock()).toBeNull();
     expect(ghostOf()).toBeNull();
+  } finally { restore(); }
+});
+
+test("the ghost keeps clear of the dock: a finger on a tile never has the card over its label", async () => {
+  const { files, tasks } = board();
+  const { host } = mount({ files, tasks });
+  const restore = laidOutDock();
+  try {
+    const card = q(host, '[data-phone-card="task:a2"]')!;
+    await hold(card);
+    fireOn(card, finger("pointermove", ...tileCenter("blocked")));
+    await sleep(30);
+    const [, y] = /translate3d\(([-\d.]+)px, ([-\d.]+)px/.exec(ghostOf()!.style.transform)!.slice(1).map(Number);
+    /* The card is 90 px tall in this layout, the dock's top edge is at 744. */
+    expect(y! + 90 * 1.02, "the ghost's bottom edge is above the dock").toBeLessThanOrEqual(744);
+    fireOn(card, finger("pointerup", ...tileCenter("blocked")));
   } finally { restore(); }
 });
 

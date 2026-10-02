@@ -21,6 +21,10 @@ import type { TaskStatus } from "@/lib/tasks/types";
  * that does it is armed at the press, not at the lift: a listener added to a
  * touch already under way is not one the browser waits for.
  *
+ * The ghost stays clear of the dock: a finger on a tile would otherwise be
+ * under the card, and the tile it is choosing unreadable. The ghost's bottom
+ * edge stops `DOCK_GAP_PX` above the dock and its sides stop at the screen's.
+ *
  * The move path is the desktop's (`kanban/cardDrag.ts`): the ghost moves by
  * `translate3d`, once a frame, with the card's and the dock's rectangles read
  * once at the lift, and the dock's highlight is a data attribute written
@@ -32,6 +36,9 @@ import type { TaskStatus } from "@/lib/tasks/types";
 export const CARD_LIFT_MS = 350;
 /** A release this close to where the lift happened is "in place". */
 export const LIFT_SLOP_PX = 8;
+/** The air the ghost keeps above the dock. */
+const DOCK_GAP_PX = 8;
+const LIFT_SCALE = 1.02;
 
 export interface Lift { from: TaskStatus }
 
@@ -84,7 +91,7 @@ export function beginCardLift(options: CardLiftOptions): void {
   Object.assign(ghost.style, {
     position: "fixed", left: "0", top: "0", margin: "0", width: `${rect.width}px`, zIndex: "80", pointerEvents: "none",
     boxShadow: "var(--shadow-2)", opacity: "0.96", borderRadius: "12px", willChange: "transform",
-    transform: `translate3d(${rect.left}px, ${rect.top}px, 0) scale(1.02)`,
+    transform: `translate3d(${rect.left}px, ${rect.top}px, 0) scale(${LIFT_SCALE})`,
   });
   const dimmed = element.style.opacity;
   element.style.opacity = "0.35";
@@ -92,6 +99,7 @@ export function beginCardLift(options: CardLiftOptions): void {
   document.body.appendChild(ghost);
   lifted = true;
   let tiles: Tile[] | null = null;
+  let dockTop = Infinity;
   let over: Tile | null = null;
   let pointerX = options.x;
   let pointerY = options.y;
@@ -99,15 +107,25 @@ export function beginCardLift(options: CardLiftOptions): void {
   let done = false;
 
   const measure = () => {
+    const dock = document.querySelector("[data-phone-dock]")?.getBoundingClientRect();
+    dockTop = dock && dock.height > 0 ? dock.top : Infinity;
     tiles = [...document.querySelectorAll<HTMLElement>("[data-phone-dock-tile]")].map((tile) => {
       const box = tile.getBoundingClientRect();
       return { status: tile.getAttribute("data-phone-dock-tile") as TaskStatus, element: tile, left: box.left, top: box.top, right: box.right, bottom: box.bottom };
     });
   };
+  const place = () => {
+    /* The scale grows the card by half the difference on each side; the screen's edges are for what is drawn. */
+    const pad = (rect.width * (LIFT_SCALE - 1)) / 2;
+    const room = document.documentElement.clientWidth - rect.width - 2 * pad;
+    const x = room > 0 ? Math.min(Math.max(rect.left + pointerX - options.x, pad), pad + room) : rect.left + pointerX - options.x;
+    const y = Math.min(rect.top + pointerY - options.y, dockTop - DOCK_GAP_PX - rect.height * LIFT_SCALE);
+    ghost.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${LIFT_SCALE})`;
+  };
   const apply = () => {
     frame = null;
-    ghost.style.transform = `translate3d(${rect.left + pointerX - options.x}px, ${rect.top + pointerY - options.y}px, 0) scale(1.02)`;
     if (!tiles || !tiles.length) measure();
+    place();
     const tile = tiles!.find((box) => pointerX >= box.left && pointerX < box.right && pointerY >= box.top && pointerY < box.bottom) ?? null;
     if (tile === over) return;
     over?.element.removeAttribute("data-over");

@@ -5827,6 +5827,47 @@ describe("whole-card drag on the phone", () => {
     } finally { await browser.close(); stop(); }
   }, 120_000);
 
+  browserTest("with the finger on a dock tile, the ghost is above the dock and the tile's label is uncovered, at 390 and 320", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      for (const width of [390, 320]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 640 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+          await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+          await pause(page, 800);
+          const cdp = await context.newCDPSession(page);
+          const from = await grabPoint(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 520);
+          for (const status of ["blocked", "done", "inbox"]) {
+            const tile = (await rectOf(page, `[data-phone-dock-tile="${status}"]`))!;
+            const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+            for (const [x, y] of along(from, target, 8)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+            await pause(page, 120);
+            const ghost = (await rectOf(page, "[data-phone-lift-ghost]"))!;
+            const dock = (await rectOf(page, "[data-phone-dock]"))!;
+            const label = (await page.evaluate((sel) => {
+              const tileEl = document.querySelector(sel)!;
+              const text = [...tileEl.querySelectorAll("*")].find((node) => node.children.length === 0 && (node.textContent ?? "").trim() !== "") ?? tileEl;
+              const box = text.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height };
+            }, `[data-phone-dock-tile="${status}"]`));
+            expect(ghost.y + ghost.height, `${width}px ${status}: the ghost's bottom edge is above the dock`).toBeLessThanOrEqual(dock.y + 0.5);
+            expect(label.y, `${width}px ${status}: the label is below the ghost`).toBeGreaterThanOrEqual(ghost.y + ghost.height - 0.5);
+            expect(ghost.x, `${width}px: the ghost stays on the screen`).toBeGreaterThanOrEqual(-0.5);
+            expect(ghost.x + ghost.width, `${width}px: the ghost stays on the screen`).toBeLessThanOrEqual(width + 0.5);
+            expect(await page.locator(`[data-phone-dock-tile="${status}"][data-over]`).count(), `${width}px: the finger is over ${status}`).toBe(1);
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
   browserTest("a release over a column moves the task, in place opens the menu, elsewhere does nothing; scrolling and the pager still work", async () => {
     const { base, stop } = await serveFixture();
     const browser = await launchChromium();

@@ -5,15 +5,15 @@
   "path": "hold 0.35 s, then 3 s with one move per 16 ms",
   "lift": {
     "moves": 0,
-    "frames": 45,
+    "frames": 49,
     "frameMs": {
       "p50": 16.7,
-      "p95": 33.4,
-      "max": 66.6
+      "p95": 33.2,
+      "max": 66.7
     },
     "longTasks": {
       "count": 1,
-      "longestMs": 64.75
+      "longestMs": 64.74
     },
     "moveCost": {
       "events": 0,
@@ -21,12 +21,12 @@
       "maxMs": 0
     },
     "layouts": {
-      "count": 22,
-      "totalMs": 93.22
+      "count": 25,
+      "totalMs": 95.78
     },
     "recalcs": {
-      "count": 23,
-      "totalMs": 91.8
+      "count": 26,
+      "totalMs": 97.9
     },
     "inputLagMs": {
       "p95": 0,
@@ -45,16 +45,16 @@
     "frames": 201,
     "frameMs": {
       "p50": 16.7,
-      "p95": 16.8,
+      "p95": 16.7,
       "max": 16.8
     },
     "longTasks": {
       "count": 0,
-      "longestMs": 9.55
+      "longestMs": 13.54
     },
     "moveCost": {
-      "events": 117,
-      "totalMs": 40.71,
+      "events": 134,
+      "totalMs": 42.47,
       "maxMs": 1.15
     },
     "layouts": {
@@ -62,16 +62,16 @@
       "totalMs": 0
     },
     "recalcs": {
-      "count": 109,
-      "totalMs": 36.68
+      "count": 106,
+      "totalMs": 32.86
     },
     "inputLagMs": {
-      "p95": 41.2,
-      "max": 50.2
+      "p95": 41.8,
+      "max": 43.5
     },
-    "mutations": 110,
+    "mutations": 106,
     "mutationKinds": {
-      "attributes:style on div.select-none": 109,
+      "attributes:style on div.select-none": 105,
       "attributes:data-over on div.flex": 1
     }
   }

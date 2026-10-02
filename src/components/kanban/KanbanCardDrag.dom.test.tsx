@@ -176,6 +176,66 @@ test("the click that ends a drag is swallowed, and the next one is not", async (
   expect(host.querySelector('[data-kanban-board] textarea, [data-kanban-board] input[type="text"]')).not.toBeNull();
 });
 
+test("the click after a drag that Escape cancelled is swallowed too, once the button is released", async () => {
+  const host = mount();
+  const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
+  const editing = () => host.querySelector('[data-kanban-board] textarea, [data-kanban-board] input[type="text"]');
+  nudge(title, [400, 40], [700, 90]);
+  flushSync(() => { document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event); });
+  expect(ghost(host)).toBeNull();
+  /* The button is still down; the hand comes back to the title and lets go. */
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  fire(title, point("pointermove", 100, 40));
+  fire(title, point("pointerup", 100, 40));
+  fire(title, new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+  expect(editing(), "the release's click opens nothing").toBeNull();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  fire(title, point("pointerdown", 100, 40));
+  fire(title, point("pointerup", 100, 40));
+  fire(title, new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+  expect(editing(), "the next click is the operator's").not.toBeNull();
+});
+
+test("a press after an Escape whose release never came is not swallowed", async () => {
+  const host = mount();
+  const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
+  nudge(title, [400, 40], [700, 90]);
+  flushSync(() => { document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event); });
+  fire(title, point("pointerdown", 100, 40));
+  fire(title, point("pointerup", 100, 40));
+  fire(title, new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+  expect(host.querySelector('[data-kanban-board] textarea, [data-kanban-board] input[type="text"]')).not.toBeNull();
+});
+
+test("a strip that opens under the dragged card moves its neighbours, and the drop goes where the pointer is", async () => {
+  const host = mount();
+  const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
+  /* Inbox and Assigned are 280 wide; Blocked and Done are strips of 48 until one is under the card and opens to 280. */
+  prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const column = this.classList?.contains("column") ? this.dataset.status as TaskStatus : null;
+    if (!column) return { x: 0, y: 0, top: 0, left: 0, bottom: 120, right: 100, width: 100, height: 120, toJSON() {} } as DOMRect;
+    const open = (status: TaskStatus) => status === "inbox" || status === "assigned" || host.querySelector(`.column[data-status="${status}"]`)!.classList.contains("drop");
+    const order: TaskStatus[] = ["inbox", "assigned", "blocked", "done"];
+    let left = 0;
+    for (const status of order) {
+      const width = open(status) ? 280 : 48;
+      if (status === column) return { x: left, y: 0, top: 0, left, bottom: 900, right: left + width, width, height: 900, toJSON() {} } as DOMRect;
+      left += width;
+    }
+    throw new Error("unreachable");
+  };
+  /* Blocked is 560-608 and Done 608-656 while both are strips; opened, Blocked is 560-840 and Done 840-888. */
+  nudge(title, [400, 40], [580, 90]);
+  expect(host.querySelector('.column[data-status="blocked"]')!.classList.contains("drop")).toBe(true);
+  fire(title, point("pointermove", 620, 90));
+  runFrames();
+  expect(host.querySelector('.column[data-status="blocked"]')!.classList.contains("drop"), "620 is inside the opened Blocked").toBe(true);
+  expect(host.querySelector('.column[data-status="done"]')!.classList.contains("drop")).toBe(false);
+  fire(title, point("pointerup", 620, 90));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(patches).toEqual([{ id: "a", status: "blocked" }]);
+});
+
 test("nothing is selected while a card is dragged, and selecting works again afterwards", () => {
   const host = mount();
   const card = cardOf(host);
@@ -194,7 +254,8 @@ test("nothing is selected while a card is dragged, and selecting works again aft
 test("the move path writes one transform per frame: no layout read, no left/top, no hit test", () => {
   const host = mount();
   const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
-  nudge(title, [100, 40], [130, 40]);
+  /* In Assigned, the card's own column: no strip opens, so no rectangle changes. */
+  nudge(title, [400, 40], [430, 40]);
   const moving = ghost(host)!;
   const left = moving.style.left;
   const top = moving.style.top;
@@ -203,11 +264,11 @@ test("the move path writes one transform per frame: no layout read, no left/top,
   (dom.document as unknown as { elementFromPoint: unknown }).elementFromPoint = (x: number, y: number) => { hitTests += 1; return hit(x, y); };
   const reads = rectReads;
   const queued = frames.length;
-  for (let step = 1; step <= 20; step += 1) fire(title, point("pointermove", 130 + step * 10, 40 + step * 2));
+  for (let step = 1; step <= 20; step += 1) fire(title, point("pointermove", 430 + step * 5, 40 + step * 2));
   expect(frames.length - queued, "twenty moves in one frame ask for one frame").toBeLessThanOrEqual(1);
   runFrames();
   expect(moving.style.transform).toContain("translate3d(");
-  expect(moving.style.transform).toContain("translate3d(230px, 40px, 0)");
+  expect(moving.style.transform).toContain("translate3d(130px, 40px, 0)");
   expect(moving.style.left).toBe(left);
   expect(moving.style.top).toBe(top);
   expect(rectReads, "no getBoundingClientRect between pointer start and the last frame").toBe(reads);

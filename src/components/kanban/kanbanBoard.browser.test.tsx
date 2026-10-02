@@ -14311,6 +14311,40 @@ describe("whole-card drag rendered evidence", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 
+  browserTest("a strip that opens under the card moves its neighbours: centre of the Blocked strip, then 60 px on, still lands in Blocked", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=board-order`, { width: 1440, height: 900 }, "light", "en");
+      try {
+        const source = page.locator(card("t-order-tint"));
+        await source.waitFor();
+        await foldSeat(page);
+        await source.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(200);
+        const box = (await source.boundingBox())!;
+        const strip = (await page.locator('.column[data-status="blocked"]').boundingBox())!;
+        expect(strip.width, "Blocked starts as a strip").toBeLessThan(100);
+        const centre = strip.x + strip.width / 2;
+        await page.mouse.move(box.x + 8, box.y + 8);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 120, box.y + 80, { steps: 6 });
+        await page.mouse.move(centre, box.y + 80, { steps: 10 });
+        await page.waitForTimeout(400);
+        await page.mouse.move(centre + 60, box.y + 80, { steps: 8 });
+        await page.waitForTimeout(400);
+        const dropping = await page.evaluate(() => [...document.querySelectorAll(".column.drop")].map((column) => (column as HTMLElement).dataset.status));
+        expect(dropping, "the column under the pointer is the one that takes it").toEqual(["blocked"]);
+        await page.mouse.up();
+        await page.waitForTimeout(300);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map((patch) => [patch.id, patch.body.status])).toEqual([["t-order-tint", "blocked"]]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
   browserTest("a 3 s drag over a 48-card board holds the display rate", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     const server = await serveEvidenceFixture(OUT);

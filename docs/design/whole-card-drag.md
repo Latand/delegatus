@@ -49,7 +49,12 @@ Measured in a Chromium trace (`src/components/kanban/dragFrameMeter.ts`) over a
 - The card's and the columns' rectangles are read once at the start of the drag
   (again after a scroll or resize), and the column under the pointer is found by
   comparing with them: no hit test, no `display` toggle, no layout read in the
-  move path.
+  move path. The one exception is a strip column opening under the card, which
+  moves its neighbours: moves in the 250 ms after such a change read the
+  rectangles again, so the drop lands where the pointer is.
+- On the phone the ghost stops above the dock and inside the screen, so the tile
+  under the finger stays readable. A drag that Escape cancelled keeps swallowing
+  the click until the button is released.
 - The hint is a node appended by hand; nothing renders in React during a drag.
 - While a card is held the board's live animations are paused (`data-card-drag`
   on the board, on `body` on the phone). The selectors name classes: a `*` or an

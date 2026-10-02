@@ -4,32 +4,32 @@
   "cpuThrottling": 1,
   "path": "3 s, one move per 8 ms",
   "moves": 375,
-  "frames": 220,
+  "frames": 221,
   "frameMs": {
     "p50": 16.7,
-    "p95": 16.7,
+    "p95": 16.8,
     "max": 16.8
   },
   "longTasks": {
     "count": 0,
-    "longestMs": 14.95
+    "longestMs": 13.57
   },
   "moveCost": {
-    "events": 357,
-    "totalMs": 45.21,
-    "maxMs": 0.93
+    "events": 351,
+    "totalMs": 49,
+    "maxMs": 0.69
   },
   "layouts": {
-    "count": 12,
-    "totalMs": 18.27
+    "count": 11,
+    "totalMs": 15.73
   },
   "recalcs": {
-    "count": 185,
-    "totalMs": 75.19
+    "count": 235,
+    "totalMs": 76.42
   },
   "inputLagMs": {
     "p95": 8.6,
-    "max": 11.7
+    "max": 9
   },
   "mutations": 192,
   "mutationKinds": {

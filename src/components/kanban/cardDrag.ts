@@ -22,13 +22,21 @@ import type { TaskStatus } from "@/lib/tasks/types";
  *   - the card's and the columns' rectangles are read once, when the drag
  *     starts (and again after a scroll), never in the move path;
  *   - the column under the pointer is found by comparing with those rectangles,
- *     so no hit test and no `display` toggle are needed;
+ *     so no hit test and no `display` toggle are needed. The one move that
+ *     changes the layout is the one that changes the column: a strip opening
+ *     under the card shifts its neighbours, so a move that comes while it is
+ *     opening reads the rectangles again, until the opening is over (a pointer
+ *     that stands still is not tested again: the columns moving under it would
+ *     flip the target back and forth), and only then;
  *   - while a card is held, the board takes no pointer events (CSS), so no
  *     hover restyles the cards the ghost passes over;
  *   - nothing is rendered by React: the hint is a node appended by hand.
  */
 
 export const DRAG_START_PX = 8;
+/** How long a column opening or closing keeps moving its neighbours: the board's
+    grid transition (`--motion-base`, 200 ms) and a frame to spare. */
+const SETTLE_MS = 250;
 
 /** What a press on these may never start a drag from: text being edited, and the
     panes that exist to be read and selected. */
@@ -74,6 +82,9 @@ export function startCardGesture(options: CardDragOptions): void {
   let pointerY = startY;
   let frame: number | null = null;
   let over: ColumnRect | null = null;
+  let settleUntil = 0;
+  let measuredAt = 0;
+  let released = false;
 
   /* A press is a click in waiting, and a hand that moves is not a text selection. */
   const noSelect = (event: Event) => { event.preventDefault(); };
@@ -84,6 +95,7 @@ export function startCardGesture(options: CardDragOptions): void {
 
   const measure = () => {
     stale = false;
+    measuredAt = performance.now();
     columns = [...root.querySelectorAll<HTMLElement>(".column[data-status]")].map((column) => {
       const rect = column.getBoundingClientRect();
       return { status: column.dataset.status as TaskStatus, element: column, left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
@@ -94,13 +106,19 @@ export function startCardGesture(options: CardDragOptions): void {
   const apply = () => {
     frame = null;
     if (!ghost) return;
-    if (stale) measure();
+    /* The rectangles read before a strip finished opening are not the ones it ends with. */
+    if (stale || measuredAt < settleUntil) measure();
     ghost.style.transform = `translate3d(${origin.left + pointerX - startX}px, ${origin.top + pointerY - startY}px, 0) rotate(1.5deg)`;
     const column = columns.find((rect) => pointerX >= rect.left && pointerX < rect.right && pointerY >= rect.top && pointerY < rect.bottom) ?? null;
-    if (column === over) return;
-    over?.element.classList.remove("drop");
-    over = column;
-    column?.element.classList.toggle("drop", column.status !== status);
+    /* By element: a measure makes new rectangles for the same columns. */
+    if (column?.element !== over?.element) {
+      const restyled = (over !== null && over.status !== status) || (column !== null && column.status !== status);
+      over?.element.classList.remove("drop");
+      over = column;
+      column?.element.classList.toggle("drop", column.status !== status);
+      /* A strip that opens or closes moves the columns beside it, so the rectangles read at the start are stale. */
+      if (restyled) settleUntil = performance.now() + SETTLE_MS;
+    }
   };
   const schedule = () => { if (frame === null) frame = requestAnimationFrame(apply); };
 
@@ -155,8 +173,28 @@ export function startCardGesture(options: CardDragOptions): void {
     if (!started) return;
     window.removeEventListener("scroll", invalidate, true);
     window.removeEventListener("resize", invalidate);
-    /* The release's click comes right behind it, in the same task; one task later it is the operator's next. */
-    setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    /* The release's click comes right behind it, in the same task; one task later it is the operator's next.
+       A drag that ended with the button still down (Escape) leaves that click for the release to come: it is
+       swallowed until then, or until the next press, whose own click is the operator's. */
+    const endSwallow = () => {
+      document.removeEventListener("pointerup", lateEnd, true);
+      document.removeEventListener("pointercancel", lateEnd, true);
+      document.removeEventListener("pointerdown", lateStop, true);
+      setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    };
+    const lateEnd = (event: PointerEvent) => { if (event.pointerId === pointerId) endSwallow(); };
+    const lateStop = () => {
+      document.removeEventListener("pointerup", lateEnd, true);
+      document.removeEventListener("pointercancel", lateEnd, true);
+      document.removeEventListener("pointerdown", lateStop, true);
+      window.removeEventListener("click", swallow, true);
+    };
+    if (released) endSwallow();
+    else {
+      document.addEventListener("pointerup", lateEnd, true);
+      document.addEventListener("pointercancel", lateEnd, true);
+      document.addEventListener("pointerdown", lateStop, true);
+    }
     try { element.releasePointerCapture(pointerId); } catch { /* it may be gone already */ }
     element.classList.remove("dragging");
     root.removeAttribute("data-card-drag");
@@ -166,8 +204,8 @@ export function startCardGesture(options: CardDragOptions): void {
     options.onActive(false);
     if (!cancel && over && over.status !== status) options.onDrop(over.status);
   };
-  const up = (event: PointerEvent) => { if (event.pointerId === pointerId) finish(false); };
-  const cancelled = (event: PointerEvent) => { if (event.pointerId === pointerId) finish(true); };
+  const up = (event: PointerEvent) => { if (event.pointerId === pointerId) { released = true; finish(false); } };
+  const cancelled = (event: PointerEvent) => { if (event.pointerId === pointerId) { released = true; finish(true); } };
   const escape = (event: KeyboardEvent) => {
     if (event.key === "Escape" && started) {
       event.stopPropagation();
