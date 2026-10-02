@@ -44,5 +44,7 @@ test("search_transcripts reads the HTTP body index with cross-project pagination
   expect(reads).toEqual([
     "/api/search/transcripts?q=%23%D1%82%D0%B5%D0%B3&project=reports&cursor=cursor-a&limit=25",
   ]);
-  expect(result).toEqual(indexedPage);
+  expect(result).toEqual({ ...indexedPage, stats: { conversationsIndexed: 12, messagesIndexed: 34 } });
+  const full = await bindings.search_transcripts({ query: "#тег", full: true });
+  expect(full).toEqual(indexedPage);
 });

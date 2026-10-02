@@ -429,7 +429,7 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     expect(tool?.description).toContain("has this been solved before?");
     expect(tool?.description).toContain("conversation_messages");
     expect(tool?.description).toContain("byteOffset");
-    expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["clientRequestId", "query"]));
+    expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",
       "query",
@@ -697,11 +697,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    expect(onFail?.properties?.onExhausted?.description).toContain("without asking this stage again");
-    /* #2187: the default completes after the last fix; stopping there is asked for. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("the fix stage takes the last findings and the lane continues or completes");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after that fix the lane waits for the operator in needs_review");
-    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the fix");
+    expect(onFail?.properties?.onExhausted?.description).toContain("re-checks the fix once more");
+    /* The terminal gate rechecks the last fix; stopping there is explicit. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review");
+    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
     expect(tool?.description).toContain("onExhausted");
     expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
     expect(stage?.kind?.description).toContain("convertedStages");

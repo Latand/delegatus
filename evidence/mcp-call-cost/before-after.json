@@ -1,0 +1,488 @@
+{
+  "base": "473c9371fc524ebb5cd903955aad4b976dd3702c",
+  "method": "Equivalent generated fixtures; fresh isolated state; real MCP SDK and loopback Viewer routes. Tokens are minified JSON chars / 4. Client monotonic p50/p95 on shared host. Explicit read keys and src are omitted where safe in candidate requests; status-only view is selected explicitly.",
+  "seed": {
+    "tasks": 107,
+    "pipelines": 27,
+    "stagesPerPipeline": 2,
+    "attemptsPerStage": 6,
+    "transcriptMessages": 1000,
+    "transcriptBytes": 1232547
+  },
+  "before": [
+    {
+      "key": "get_pipeline/stage",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 5.37,
+      "p95ms": 7.62,
+      "maxMs": 7.78,
+      "inTokP50": 18.25,
+      "outTokP50": 204.5
+    },
+    {
+      "key": "get_pipeline/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 5.1,
+      "p95ms": 7.13,
+      "maxMs": 8.34,
+      "inTokP50": 17.5,
+      "outTokP50": 180.75
+    },
+    {
+      "key": "get_pipeline/full",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 6.5,
+      "p95ms": 6.75,
+      "maxMs": 6.75,
+      "inTokP50": 16.5,
+      "outTokP50": 93653.5
+    },
+    {
+      "key": "get_pipeline/default",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 11.25,
+      "p95ms": 18.47,
+      "maxMs": 20.43,
+      "inTokP50": 13.75,
+      "outTokP50": 94157.75
+    },
+    {
+      "key": "list_tasks/limit200",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 20.72,
+      "p95ms": 24.43,
+      "maxMs": 47.56,
+      "inTokP50": 17.25,
+      "outTokP50": 6094.5
+    },
+    {
+      "key": "list_tasks/limit5",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 5.54,
+      "p95ms": 10.29,
+      "maxMs": 10.72,
+      "inTokP50": 16.75,
+      "outTokP50": 570.5
+    },
+    {
+      "key": "list_pipelines/open",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 13.45,
+      "p95ms": 20.28,
+      "maxMs": 21.7,
+      "inTokP50": 21,
+      "outTokP50": 1495.75
+    },
+    {
+      "key": "list_pipelines/status-only",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 14.78,
+      "p95ms": 19.59,
+      "maxMs": 20.4,
+      "inTokP50": 21,
+      "outTokP50": 1495.75
+    },
+    {
+      "key": "search_transcripts/indexed3",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 9.68,
+      "p95ms": 14.06,
+      "maxMs": 18.05,
+      "inTokP50": 20.75,
+      "outTokP50": 448.5
+    },
+    {
+      "key": "conversation_messages/page10",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 24.23,
+      "p95ms": 33.9,
+      "maxMs": 39.29,
+      "inTokP50": 44,
+      "outTokP50": 3183
+    },
+    {
+      "key": "resources/system-summary",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 6.4,
+      "p95ms": 9.6,
+      "maxMs": 10.67,
+      "inTokP50": 7.75,
+      "outTokP50": 1536
+    },
+    {
+      "key": "agent_activity/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 4.55,
+      "p95ms": 7.63,
+      "maxMs": 9.23,
+      "inTokP50": 14.25,
+      "outTokP50": 563.5
+    },
+    {
+      "key": "update_task/status",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 10.85,
+      "p95ms": 14.5,
+      "maxMs": 19.5,
+      "inTokP50": 24,
+      "outTokP50": 167.5
+    },
+    {
+      "key": "pipeline_action/routine",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 8.51,
+      "p95ms": 10.91,
+      "maxMs": 11.2,
+      "inTokP50": 18,
+      "outTokP50": 164.75
+    },
+    {
+      "key": "stage_report/forge-fast",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 21.66,
+      "p95ms": 29.49,
+      "maxMs": 31.7,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "list_conversations/isolated-scan",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 17.78,
+      "p95ms": 17.78,
+      "maxMs": 17.78,
+      "inTokP50": 14.25,
+      "outTokP50": 194.25
+    },
+    {
+      "key": "stage_report/forge-delay1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1227.4,
+      "p95ms": 1227.52,
+      "maxMs": 1227.52,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "get_pipeline/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1227.65,
+      "p95ms": 1236.99,
+      "maxMs": 1236.99,
+      "inTokP50": 18.25,
+      "outTokP50": 204.5
+    },
+    {
+      "key": "stage_report/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1230.17,
+      "p95ms": 1240.39,
+      "maxMs": 1240.39,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "pipeline_action/retry-remote-fast",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 44.83,
+      "p95ms": 44.83,
+      "maxMs": 44.83,
+      "inTokP50": 19.5,
+      "outTokP50": 232.25
+    },
+    {
+      "key": "pipeline_action/retry-remote1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 3626.36,
+      "p95ms": 3630.02,
+      "maxMs": 3630.02,
+      "inTokP50": 19.5,
+      "outTokP50": 223
+    },
+    {
+      "key": "create_pipeline/draft-admission",
+      "n": 5,
+      "ok": 5,
+      "p50ms": 17.16,
+      "p95ms": 23.69,
+      "maxMs": 23.69,
+      "inTokP50": 635.25,
+      "outTokP50": 280.75
+    },
+    {
+      "key": "request_attention/browser-arrival1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 1260.43,
+      "p95ms": 1261.22,
+      "maxMs": 1261.22,
+      "inTokP50": 30,
+      "outTokP50": 326.5
+    }
+  ],
+  "after": [
+    {
+      "key": "get_pipeline/stage",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.31,
+      "p95ms": 2.16,
+      "maxMs": 5.46,
+      "inTokP50": 10.75,
+      "outTokP50": 202.75
+    },
+    {
+      "key": "get_pipeline/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.02,
+      "p95ms": 2.07,
+      "maxMs": 2.75,
+      "inTokP50": 10,
+      "outTokP50": 179
+    },
+    {
+      "key": "get_pipeline/full",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 5.14,
+      "p95ms": 5.43,
+      "maxMs": 5.43,
+      "inTokP50": 9.25,
+      "outTokP50": 93652
+    },
+    {
+      "key": "get_pipeline/default",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 0.95,
+      "p95ms": 1.24,
+      "maxMs": 1.44,
+      "inTokP50": 6.25,
+      "outTokP50": 179
+    },
+    {
+      "key": "list_tasks/limit200",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 15.04,
+      "p95ms": 20.86,
+      "maxMs": 44.35,
+      "inTokP50": 9.75,
+      "outTokP50": 6031.75
+    },
+    {
+      "key": "list_tasks/limit5",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.75,
+      "p95ms": 2.02,
+      "maxMs": 2.03,
+      "inTokP50": 9.25,
+      "outTokP50": 508
+    },
+    {
+      "key": "list_pipelines/open",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 8.7,
+      "p95ms": 13.57,
+      "maxMs": 18.4,
+      "inTokP50": 13.5,
+      "outTokP50": 1444.5
+    },
+    {
+      "key": "list_pipelines/status-only",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 8.16,
+      "p95ms": 10.7,
+      "maxMs": 12.78,
+      "inTokP50": 18,
+      "outTokP50": 654.25
+    },
+    {
+      "key": "search_transcripts/indexed3",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 3.21,
+      "p95ms": 7.98,
+      "maxMs": 10.9,
+      "inTokP50": 13.25,
+      "outTokP50": 422
+    },
+    {
+      "key": "conversation_messages/page10",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 17.62,
+      "p95ms": 21.67,
+      "maxMs": 25.15,
+      "inTokP50": 36.5,
+      "outTokP50": 3123.75
+    },
+    {
+      "key": "resources/system-summary",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 0.37,
+      "p95ms": 0.6,
+      "maxMs": 0.6,
+      "inTokP50": 0.5,
+      "outTokP50": 143.75
+    },
+    {
+      "key": "agent_activity/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.55,
+      "p95ms": 2.19,
+      "maxMs": 4.09,
+      "inTokP50": 14.25,
+      "outTokP50": 523.75
+    },
+    {
+      "key": "update_task/status",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 5.89,
+      "p95ms": 12.04,
+      "maxMs": 19.64,
+      "inTokP50": 24,
+      "outTokP50": 143.75
+    },
+    {
+      "key": "pipeline_action/routine",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 2.96,
+      "p95ms": 4.58,
+      "maxMs": 7.9,
+      "inTokP50": 18,
+      "outTokP50": 78.25
+    },
+    {
+      "key": "stage_report/forge-fast",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 15.2,
+      "p95ms": 24.84,
+      "maxMs": 28.24,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "list_conversations/isolated-scan",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 8.39,
+      "p95ms": 8.39,
+      "maxMs": 8.39,
+      "inTokP50": 6.75,
+      "outTokP50": 192.5
+    },
+    {
+      "key": "stage_report/forge-delay1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1216.94,
+      "p95ms": 1218.41,
+      "maxMs": 1218.41,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "get_pipeline/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1220.31,
+      "p95ms": 1222.24,
+      "maxMs": 1222.24,
+      "inTokP50": 10.75,
+      "outTokP50": 202.75
+    },
+    {
+      "key": "stage_report/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1220.76,
+      "p95ms": 1222.73,
+      "maxMs": 1222.73,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "pipeline_action/retry-remote-fast",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 32.82,
+      "p95ms": 32.82,
+      "maxMs": 32.82,
+      "inTokP50": 19.5,
+      "outTokP50": 145.75
+    },
+    {
+      "key": "pipeline_action/retry-remote1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 3620.4,
+      "p95ms": 3649.17,
+      "maxMs": 3649.17,
+      "inTokP50": 19.5,
+      "outTokP50": 136.5
+    },
+    {
+      "key": "create_pipeline/draft-admission",
+      "n": 5,
+      "ok": 5,
+      "p50ms": 19.07,
+      "p95ms": 41.35,
+      "maxMs": 41.35,
+      "inTokP50": 608.5,
+      "outTokP50": 280.75
+    },
+    {
+      "key": "request_attention/browser-arrival1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 1259.05,
+      "p95ms": 1259.99,
+      "maxMs": 1259.99,
+      "inTokP50": 30,
+      "outTokP50": 326.5
+    }
+  ],
+  "discoveryBefore": {
+    "tools": 51,
+    "totalTok": 40119.25,
+    "commonPrefixChars": 0,
+    "repeatedPrefixTok": 0
+  },
+  "discoveryAfter": {
+    "tools": 51,
+    "totalTok": 40514.5,
+    "commonPrefixChars": 0,
+    "repeatedPrefixTok": 0
+  }
+}
