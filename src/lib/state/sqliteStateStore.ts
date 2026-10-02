@@ -40,9 +40,9 @@ function injectWriteFault(site: WriteFault["site"], collection?: string): void {
 }
 
 type AbandonedLease = { filename: string; collection: string; token: string; abandonedAt: number };
-type AbandonedLeases = { entries: Map<string, Map<string, Map<string, AbandonedLease>>>; timer: ReturnType<typeof setTimeout> | null; delay: number };
+type AbandonedLeases = { entries: Map<string, Map<string, Map<string, AbandonedLease>>>; timer: ReturnType<typeof setTimeout> | null; deadline?: number; delay: number };
 const leaseGlobal = globalThis as typeof globalThis & { __llvAbandonedStateLeases?: AbandonedLeases };
-const abandoned = leaseGlobal.__llvAbandonedStateLeases ??= { entries: new Map(), timer: null, delay: 250 };
+const abandoned: AbandonedLeases = leaseGlobal.__llvAbandonedStateLeases ??= { entries: new Map(), timer: null, delay: 250 };
 function abandonedTokens(filename: string, collection: string) {
   return abandoned.entries.get(path.resolve(filename))?.get(collection);
 }
@@ -68,9 +68,17 @@ function deleteLease(lease: AbandonedLease): void {
   finally { db.close(); }
 }
 function scheduleAbandonedRetry(): void {
-  if (abandoned.timer || !abandoned.entries.size) return;
+  if (!abandoned.entries.size) return;
+  const deadline = Date.now() + abandoned.delay;
+  // New abandoned tokens may shorten a pending retry, never postpone it.
+  if (abandoned.timer) {
+    if (abandoned.deadline === undefined || abandoned.deadline <= deadline) return;
+    clearTimeout(abandoned.timer);
+  }
+  abandoned.deadline = deadline;
   abandoned.timer = setTimeout(() => {
     abandoned.timer = null;
+    abandoned.deadline = undefined;
     for (const collections of abandoned.entries.values()) for (const tokens of collections.values()) for (const lease of tokens.values()) {
       try { deleteLease(lease); forgetAbandoned(lease); }
       catch (error) { classifyStateError(error, `${lease.collection} release`); }
@@ -90,8 +98,6 @@ function abandonLease(lease: AbandonedLease, error: unknown): void {
     tokens.set(lease.token, lease);
     console.warn(`[state lease] abandoned ${lease.collection}: ${String(classifyStateError(error, `${lease.collection} release`))}`);
   }
-  if (abandoned.timer) clearTimeout(abandoned.timer);
-  abandoned.timer = null;
   abandoned.delay = 250;
   scheduleAbandonedRetry();
 }

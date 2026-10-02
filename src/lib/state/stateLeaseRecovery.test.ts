@@ -66,6 +66,28 @@ test("abandoned release retries without another store call", async () => {
   expect(token(c)).toBeDefined();
   await until(() => token(c) === undefined);
 });
+test("continuous failed releases cannot postpone another collection's abandoned retry", async () => {
+  const first = setup();
+  const noisy = setup("noisy", first.filename);
+  injectStateWriteFaultForTests({ site: "release", collection: "probe", times: 1, error: full() });
+  first.boundedPatch(1, (tx) => tx.put({ key: "x", value: 1 }));
+  expect(token(first)).toBeDefined();
+  injectStateWriteFaultForTests({ site: "release", collection: "noisy", error: Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }) });
+  let value = 0;
+  const traffic = setInterval(() => noisy.boundedPatch(1, (tx) => tx.put({ key: "x", value: ++value })), 100);
+  try {
+    await until(() => token(first) === undefined, 5_250);
+    expect(value).toBeGreaterThan(0);
+  } finally {
+    clearInterval(traffic);
+    injectStateWriteFaultForTests(null);
+    await until(() => {
+      const db = new Database(first.filename, { readonly: true });
+      try { return db.query("SELECT * FROM state_leases").get() === null; }
+      finally { db.close(); }
+    }, 6_000);
+  }
+}, 15_000);
 test("expired live owner is fenced inside the write transaction", async () => {
   const c = setup();
   let enter!: () => void, resume!: () => void;

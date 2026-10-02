@@ -784,6 +784,38 @@ test("a settled lane trims only its own build cache without a merged PR", async 
   for (const name of [".env", "untracked", ".git", "node_modules"]) expect(fs.existsSync(path.join(dir, name))).toBe(true);
   expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "no-merged-pr" }));
 });
+test.each(["nested-worktree", "lock", "prunable", "unreadable"])("cache trim refreshes Git guards after measurement: %s", async (guard) => {
+  const { root, dir, owner } = cacheLane();
+  const next = path.join(dir, ".next");
+  const privateFile = path.join(next, "checkout", "private-work");
+  let measured = false;
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [owner],
+    measure: async () => {
+      if (guard === "nested-worktree") {
+        git(["worktree", "add", "-q", "-b", "private", path.dirname(privateFile), "main"], root);
+        fs.writeFileSync(privateFile, "keep private work");
+      }
+      if (guard === "lock") git(["worktree", "lock", dir], root);
+      measured = true;
+      return 100;
+    },
+    git: async (args, cwd) => {
+      if (measured && args[0] === "worktree" && args[1] === "list") {
+        if (guard === "unreadable") return { code: 1, stdout: "", stderr: "metadata unavailable" };
+        if (guard === "prunable") return { code: 0, stdout: `worktree ${root}\0HEAD abc\0\0worktree ${dir}\0HEAD abc\0prunable metadata missing\0\0`, stderr: "" };
+      }
+      return realGit(args, cwd);
+    },
+  }));
+  expect(measured).toBe(true);
+  expect(report.trimmed).toEqual([]);
+  expect(fs.readFileSync(path.join(next, "cache/x"), "utf8")).toBe("cache");
+  if (guard === "nested-worktree") {
+    expect(fs.readFileSync(privateFile, "utf8")).toBe("keep private work");
+    expect(fs.existsSync(path.join(path.dirname(privateFile), ".git"))).toBe(true);
+  }
+});
 test.each(["open", "shared-open", "process", "conversation", "main", "unowned", "wrong-name", "registered", "locked", "late-process"])("build-cache guard: %s", async (guard) => {
   const { root, dir, owner } = cacheLane();
   let scans = 0;

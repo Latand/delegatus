@@ -807,3 +807,85 @@ test("write-free health updates every scope without changing rows or conditional
     expect(cache.readScope("/pin").systemHealth.storage?.writes?.state).toBe("ok");
   } finally { cache.dispose(); }
 });
+
+test("health failure and recovery bypass a hung catalog and fence its late health", async () => {
+  let state: "ok" | "disk-full" = "ok";
+  let release!: (response: Response) => void;
+  let catalogCalls = 0;
+  const cache = createFilesClientCache(async (url) => {
+    if (url.includes("view=storage-health")) return Response.json({ state, freeBytes: 1024 ** 3, since: null });
+    if (++catalogCalls === 2) return new Promise<Response>((resolve) => { release = resolve; });
+    return Response.json({ files: [file("/warm", "Warm")] });
+  });
+  try {
+    await cache.revalidate();
+    const pending = cache.revalidate();
+    await Bun.sleep(0);
+    state = "disk-full";
+    const failure = cache.revalidateWriteHealth();
+    expect(await Promise.race([failure.then(() => true), Bun.sleep(100).then(() => false)])).toBe(true);
+    expect(cache.read().systemHealth.storage?.writes?.state).toBe("disk-full");
+    state = "ok";
+    await cache.revalidateWriteHealth();
+    release(Response.json({ files: [file("/late", "Late")], systemHealth: { storage: { writes: { state: "disk-full", freeBytes: 0, since: null } } } }));
+    await pending;
+    expect(cache.read().files[0]?.path).toBe("/late");
+    expect(cache.read().systemHealth.storage?.writes?.state).toBe("ok");
+  } finally { cache.dispose(); }
+});
+
+test.each(["fetch", "body"])("health abort settles even when %s ignores cancellation and permits the next read", async (phase) => {
+  let calls = 0;
+  let release!: () => void;
+  const hung = new Promise<void>((resolve) => { release = resolve; });
+  const cache = createFilesClientCache(async () => {
+    if (++calls === 1) {
+      if (phase === "fetch") await hung;
+      else return { ok: true, status: 200, json: async () => { await hung; return { state: "disk-full", freeBytes: 0, since: null }; } } as Response;
+      return Response.json({ state: "disk-full", freeBytes: 0, since: null });
+    }
+    return Response.json({ state: "ok", freeBytes: 1024 ** 3, since: null });
+  });
+  try {
+    const controller = new AbortController();
+    const result = cache.revalidateWriteHealth(controller.signal).then(() => true, () => true);
+    await Bun.sleep(0);
+    controller.abort();
+    expect(await Promise.race([result, Bun.sleep(100).then(() => false)])).toBe(true);
+    await cache.revalidateWriteHealth();
+    release();
+    await Bun.sleep(0);
+    expect(cache.read().systemHealth.storage?.writes?.state).toBe("ok");
+  } finally { release(); cache.dispose(); }
+});
+
+test("cache disposal settles a pending health read without a caller signal", async () => {
+  let release!: (response: Response) => void;
+  let signal: AbortSignal | null | undefined;
+  const cache = createFilesClientCache(async (_url, init) => {
+    signal = init?.signal;
+    return new Promise<Response>((resolve) => { release = resolve; });
+  });
+  const result = cache.revalidateWriteHealth().then(() => true, () => true);
+  cache.dispose();
+  expect(signal?.aborted).toBe(true);
+  expect(await Promise.race([result, Bun.sleep(100).then(() => false)])).toBe(true);
+  release(Response.json({ state: "disk-full", freeBytes: 0, since: null }));
+  await Bun.sleep(0);
+  expect(cache.read().systemHealth.storage?.writes).toBeUndefined();
+});
+
+test("an older health answer cannot replace a newer catalog health", async () => {
+  let release!: (response: Response) => void;
+  const cache = createFilesClientCache(async (url) => {
+    if (url.includes("view=storage-health")) return new Promise<Response>((resolve) => { release = resolve; });
+    return Response.json({ files: [], systemHealth: { storage: { writes: { state: "ok", freeBytes: 1024 ** 3, since: null } } } });
+  });
+  try {
+    const health = cache.revalidateWriteHealth();
+    await cache.revalidate();
+    release(Response.json({ state: "disk-full", freeBytes: 0, since: null }));
+    await health;
+    expect(cache.read().systemHealth.storage?.writes?.state).toBe("ok");
+  } finally { cache.dispose(); }
+});

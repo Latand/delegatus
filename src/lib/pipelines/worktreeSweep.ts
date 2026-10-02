@@ -603,21 +603,30 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       });
       if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(readGuards(), worktree)) continue;
       const next = path.join(worktree, ".next");
-      const safeDirectory = () => {
+      const safeDirectory = (worktrees = listed) => {
         try {
           if (!fs.lstatSync(worktree).isDirectory() || !fs.lstatSync(next).isDirectory()) return false;
           const realWorktree = fs.realpathSync(worktree);
           const realNext = fs.realpathSync(next);
           return realNext === path.join(realWorktree, ".next")
-            && !listed.some((other) => inside(resolve(other.path), next));
+            && !worktrees.some((other) => inside(resolve(other.path), next));
         } catch { return false; }
       };
       if (!safeDirectory()) continue;
       const bytes = await measure(next);
+      // The cache measurement yields; Git locks and nested checkouts may have
+      // appeared meanwhile. Unknown metadata cannot authorize recursive removal.
+      let currentListing;
+      try { currentListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root); }
+      catch { continue; }
+      if (currentListing.code !== 0) continue;
+      const currentWorktrees = parseWorktreeList(currentListing.stdout);
+      const currentEntry = currentWorktrees.find((other) => resolve(other.path) === worktree);
+      if (!currentEntry || currentEntry.bare || currentEntry.locked || currentEntry.prunable) continue;
       // Measurement yields: refresh both activity and directory guards last.
       const nowOwners = ownershipPipelines().filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
       if (!nowOwners.some((pipeline) => pipeline.id === owner.id) || nowOwners.some(pipelineHoldsCheckout)
-        || heldBy(readGuards(), worktree) || !safeDirectory()) continue;
+        || heldBy(readGuards(), worktree) || !safeDirectory(currentWorktrees)) continue;
       try {
         if (!dryRun) await fs.promises.rm(next, { recursive: true });
         report.trimmed.push({ path: next, bytes, pipelineId: owner.id });

@@ -296,6 +296,14 @@ export function createFilesClientCache(
   let snapshot = EMPTY;
   // Write health describes the machine now, independently of a scope's row stamp.
   let currentStateWrites: NonNullable<NonNullable<FilesData["systemHealth"]>["storage"]>["writes"];
+  let requestedWriteHealth = 0;
+  let appliedWriteHealth = 0;
+  const healthControllers = new Set<AbortController>();
+  const acceptWriteHealth = (writes: typeof currentStateWrites, request: number) => {
+    if (!writes || request < appliedWriteHealth) return;
+    appliedWriteHealth = request;
+    currentStateWrites = writes;
+  };
   const writeHealthViews = new WeakMap<FilesData, FilesData>();
   const withStateWrites = (data: FilesData): FilesData => {
     if (!currentStateWrites || data.systemHealth?.storage?.writes === currentStateWrites) return data;
@@ -500,7 +508,7 @@ export function createFilesClientCache(
     if (disposed) return;
     for (const [listener, scope] of listeners) {
       if (requestScope !== undefined) {
-        if (requestScope === scope) listener(withCatalogFailures(withSpawnedOverlays(snapshot)), priority);
+        if (requestScope === scope) listener(withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), priority);
         continue;
       }
       listener(exactScopeRepresentation(scope), priority);
@@ -580,9 +588,9 @@ export function createFilesClientCache(
      The scope keeps it as the server's representation — its ETag is what the
      next conditional request names — and shows the newest rows with its own
      pin rows; its listeners hear only if that changed what they see. */
-  const refuseOlder = (url: string, data: FilesData, etag: string | undefined, raw: RawFilesResponse | undefined, built: FilesBuilt | undefined): FilesData => {
+  const refuseOlder = (url: string, data: FilesData, etag: string | undefined, raw: RawFilesResponse | undefined, built: FilesBuilt | undefined, healthRequest?: number): FilesData => {
     const before = exactScopeRepresentation(url);
-    currentStateWrites = data.systemHealth?.storage?.writes ?? currentStateWrites;
+    if (healthRequest !== undefined) acceptWriteHealth(data.systemHealth?.storage?.writes, healthRequest);
     const previous = representations.get(url);
     rememberRepresentation(url, data, etag, raw, built);
     /* A 304 confirming the same old rows keeps the view it already had. */
@@ -658,6 +666,7 @@ export function createFilesClientCache(
       completionRetry.controller = new AbortController();
     }
     const generation = ++requestedGeneration;
+    const healthRequest = ++requestedWriteHealth;
     const representation = representations.get(url);
     /* Only a tab holding the server's exact representation can apply a delta
        to it; otherwise the conditional request asks for the whole body. */
@@ -749,11 +758,11 @@ export function createFilesClientCache(
     const incoming = built ? { ...parsedData, builtGeneration: built.generation } : parsedData;
     if (filesBuiltBefore(built, shownBuilt)) {
       const raw = Array.isArray(parsed) ? undefined : rawSharingRows(parsed as unknown as RawFilesResponse, incoming);
-      const refused = refuseOlder(url, incoming, etag ?? undefined, etag ? raw : undefined, built);
+      const refused = refuseOlder(url, incoming, etag ?? undefined, etag ? raw : undefined, built, healthRequest);
       scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
       return refused;
     }
-    currentStateWrites = incoming.systemHealth?.storage?.writes ?? currentStateWrites;
+    acceptWriteHealth(incoming.systemHealth?.storage?.writes, healthRequest);
     retireConfirmedSpawnOverlays(incoming);
     /* A restarted server can acknowledge a pinned target generation with its
        global-only stale snapshot before the pin hydration resumes. Keep the
@@ -1022,28 +1031,45 @@ export function createFilesClientCache(
     };
   };
 
-  const revalidateWriteHealth = (signal?: AbortSignal): Promise<void> => {
-    // Serialize with catalog reads so an older answer cannot replace newer health.
-    const result = requestQueue.then(async () => {
-      if (disposed || signal?.aborted) return;
-      const response = await fetcher("/api/files?view=storage-health", { signal, cache: "no-store" });
+  const revalidateWriteHealth = async (signal?: AbortSignal): Promise<void> => {
+    if (disposed || signal?.aborted) return;
+    const request = ++requestedWriteHealth;
+    const controller = new AbortController();
+    healthControllers.add(controller);
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    // Bound the whole fetch/body read even if the transport ignores AbortSignal.
+    let rejectAbort!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      rejectAbort = () => reject(new DOMException("storage health aborted", "AbortError"));
+      controller.signal.addEventListener("abort", rejectAbort, { once: true });
+    });
+    const read = async () => {
+      const response = await fetcher("/api/files?view=storage-health", { signal: controller.signal, cache: "no-store" });
+      if (disposed || controller.signal.aborted) return;
       if (response.status === 401 || response.status === 403) hooks.accessDenied?.();
       if (!response.ok) throw new Error(`storage health request failed: ${response.status}`);
       const writes = await response.json() as StateWriteHealth;
       if ((writes.state !== "ok" && writes.state !== "disk-full")
         || (writes.freeBytes !== null && (typeof writes.freeBytes !== "number" || !Number.isFinite(writes.freeBytes)))
         || (writes.since !== null && typeof writes.since !== "string")) throw new Error("invalid storage write health");
-      if (disposed || signal?.aborted || equalValue(currentStateWrites, writes)) return;
-      currentStateWrites = writes;
-      publish(undefined, "urgent");
-    });
-    requestQueue = result.then(() => undefined, () => undefined);
-    return result;
+      if (disposed || controller.signal.aborted || request < appliedWriteHealth) return;
+      const changed = !equalValue(currentStateWrites, writes);
+      acceptWriteHealth(writes, request);
+      if (changed) publish(undefined, "urgent");
+    };
+    try { await Promise.race([read(), cancelled]); }
+    finally {
+      signal?.removeEventListener("abort", abort);
+      controller.signal.removeEventListener("abort", rejectAbort);
+      healthControllers.delete(controller);
+    }
   };
 
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    for (const controller of healthControllers) controller.abort();
     for (const requestScope of [...completionRetries.keys()]) cancelCompletionRetry(requestScope);
     listeners.clear();
   };

@@ -31,6 +31,7 @@ let healthReads = 0;
 let catalogReads = 0;
 let interval: ReturnType<typeof spyOn>;
 let serveHealth: (signal?: AbortSignal | null) => Promise<Response>;
+let serveCatalog: (() => Promise<Response>) | undefined;
 const directory = process.env.LLV_STATE_DIR!;
 const filename = path.join(directory, "state.sqlite");
 const options = { collection: "health-probe", schemaVersion: 1, busyMessage: "probe busy",
@@ -46,6 +47,7 @@ beforeEach(() => {
   tick = undefined;
   healthReads = 0;
   catalogReads = 0;
+  serveCatalog = undefined;
   // Drive the installed cadence deterministically, without waiting ten seconds.
   interval = spyOn(globalThis, "setInterval").mockImplementation(((handler: () => void, delay: number) => {
     expect(delay).toBe(10_000);
@@ -56,6 +58,7 @@ beforeEach(() => {
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input).includes("view=storage-health")) { healthReads++; return serveHealth(init?.signal); }
     catalogReads++;
+    if (serveCatalog) return serveCatalog();
     return Response.json({ files: [], systemHealth: { storage: { incidents: [], writes: stateWriteHealth(directory) } } }, { headers: { etag: '"stable"' } });
   }) as unknown as typeof fetch;
 });
@@ -125,4 +128,55 @@ test("health reads never overlap and abort when the live view unmounts", async (
   expect(healthReads).toBe(1);
   flushSync(() => root?.unmount()); root = null;
   expect(signal?.aborted).toBe(true);
+});
+
+test.each([false, true])("hung catalog cannot block live failure and recovery alerts (phone=%s)", async (isPhone) => {
+  phone = isPhone;
+  const host = await mount();
+  let release!: (response: Response) => void;
+  serveCatalog = () => new Promise<Response>((resolve) => { release = resolve; });
+  window.dispatchEvent(new Event("llv:files-changed"));
+  await settle();
+  expect(catalogReads).toBe(2);
+  failCommit();
+  tick?.(); await settle();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  release(Response.json({ files: [], systemHealth: { storage: { writes: { state: "ok", freeBytes: 1024 ** 3, since: null } } } }));
+  await settle();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  window.dispatchEvent(new Event("llv:files-changed"));
+  await settle();
+  store.boundedPatch(1, (tx) => tx.put({ key: "recovered" }));
+  tick?.(); await settle();
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  release(Response.json({ files: [], systemHealth: { storage: { writes: { state: "disk-full", freeBytes: 0, since: null } } } }));
+  await settle();
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(healthReads).toBe(2);
+});
+
+test("health timeout frees polling when fetch ignores abort", async () => {
+  const host = await mount();
+  let expire!: () => void;
+  const originalTimeout = globalThis.setTimeout;
+  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, delay?: number) => {
+    if (delay === 10_000) { expire = handler; return 456; }
+    return originalTimeout(handler, delay);
+  }) as typeof setTimeout);
+  let release!: (response: Response) => void;
+  let signal: AbortSignal | null | undefined;
+  serveHealth = (next) => { signal = next; return new Promise((resolve) => { release = resolve; }); };
+  try {
+    tick?.(); await settle();
+    expire(); await settle();
+    expect(signal?.aborted).toBe(true);
+    failCommit();
+    serveHealth = async () => Response.json(stateWriteHealth(directory));
+    tick?.(); await settle();
+    expect(healthReads).toBe(2);
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    release(Response.json({ state: "ok", freeBytes: 1024 ** 3, since: null }));
+    await settle();
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  } finally { timeout.mockRestore(); }
 });
