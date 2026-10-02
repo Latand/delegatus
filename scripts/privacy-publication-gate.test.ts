@@ -381,12 +381,14 @@ test("prepared text keeps known-value configurations independent", async () => {
   };
   const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
   const texts = ["freshwater", "x".repeat(100_000) + " freshwater"];
+  const staticFindingText = ["pass", "word"].join("") + '="shared classifier cache credential"';
   try {
     for (const [index, value] of ["freshwater", "saltwater", "freshwater"].entries()) {
       Object.assign(process.env, environment, { LLV_PRIVACY_KNOWN_VALUES: value });
       const modulePath = `${gate}?independent-preparation=${index}`;
       const scanner: typeof import("./privacy-publication-gate") = await import(modulePath);
       for (const text of texts) expect(scanner.sensitiveClasses(text).has("known_value")).toBe(value === "freshwater");
+      expect(scanner.sensitiveClasses(staticFindingText).has("credential")).toBe(true);
     }
   } finally {
     for (const [key, value] of Object.entries(saved)) {

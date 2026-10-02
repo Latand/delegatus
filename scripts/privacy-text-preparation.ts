@@ -1,5 +1,11 @@
 type NormalizedText = { compact: string; error: boolean; exactSearchable: string; searchable: string };
-type PreparedText = { normalized: NormalizedText; known: NormalizedText };
+type PreparedText = {
+  normalized: NormalizedText;
+  known: NormalizedText;
+  // These detections depend only on publication text and the fixed public
+  // catalog. Per-inspector known-value configuration remains uncached.
+  staticFindings?: readonly string[];
+};
 
 // Preparation depends on publication bytes and the fixed public catalog;
 // known-value configuration is applied afterwards by each inspector. Keep at

@@ -1643,78 +1643,82 @@ function hasEmailAddress(text: string, source?: EmailTextView["source"]): boolea
 }
 
 export function sensitiveClasses(text: string): Set<FindingClass> {
-  const findings = new Set<FindingClass>();
-  const { normalized, known } = preparedPrivacyText(text, () => {
+  const prepared = preparedPrivacyText(text, () => {
     const normalized = normalizedSensitiveText(text);
     const masked = maskApprovedPublicValues(text);
     return { normalized, known: masked === text ? normalized : normalizedSensitiveText(masked) };
   });
+  const { normalized, known } = prepared;
+  const findings = new Set<FindingClass>(prepared.staticFindings as readonly FindingClass[] | undefined);
   const { error, searchable: searchableText } = normalized;
-  if (error || known.error) findings.add("inspection_error");
+  if (prepared.staticFindings === undefined) {
+    if (error || known.error) findings.add("inspection_error");
+    const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
+    for (let match = unixHomePattern.exec(searchableText); match; match = unixHomePattern.exec(searchableText)) {
+      if (match[1].toLowerCase() === "user") continue;
+      findings.add("home_path");
+      break;
+    }
+    const windowsHomePattern = /(?:^|[\s"'(])[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|$)/gim;
+    for (let match = windowsHomePattern.exec(searchableText); match; match = windowsHomePattern.exec(searchableText)) {
+      if (match[1].toLowerCase() === "user") continue;
+      findings.add("home_path");
+      break;
+    }
+    // Decode encoded boundaries without removing their default-ignorable code
+    // points. Both the original and decoded characters must meet the unit rule.
+    if (emailTextViews(text).some((view) => hasEmailAddress(view.text, view.source))) findings.add("email_address");
+    const credentialAssignmentPattern = /(?:api[_-]?(?:key|token)|access[_-]?token|authorization|password|secret)\s*[:=]\s*(?:"[^"\r\n]{12,}"|'[^'\r\n]{12,}'|[^\s"'`]{12,})/i;
+    if (credentialAssignmentPattern.test(searchableText)) {
+      findings.add("credential");
+    }
+    if (/\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/.test(searchableText)) {
+      findings.add("credential");
+    }
+    const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
+    const splitTokenPrefix = new RegExp([
+      `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
+      `g${separator}h${separator}[pousr]`,
+      `x${separator}o${separator}x${separator}[baprs]`,
+      `s${separator}k`,
+    ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
+    for (const line of searchableText.split(/\r?\n/)) {
+      splitTokenPrefix.lastIndex = 0;
+      for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
+        const compactTail = compactSensitiveText(line.slice(match.index));
+        if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
+          findings.add("credential");
+          break;
+        }
+      }
+      if (findings.has("credential")) break;
+    }
+    if (/\bauthorization\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(searchableText)) {
+      findings.add("credential");
+    }
+    if (/https?:\/\/[^\s/@:]+:[^\s/@]+@/i.test(searchableText)) {
+      findings.add("credential");
+    }
+    if (credentialInputPattern.test(searchableText)) {
+      findings.add("credential");
+    }
+    if (/\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/.test(searchableText)) {
+      findings.add("private_network");
+    }
+    if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(searchableText)) {
+      findings.add("resource_identifier");
+    }
+    if (/(?:^|\n)\s*(?:assistant|prompt|transcript|user)\s*:\s*\S/im.test(searchableText)) {
+      findings.add("transcript_content");
+    }
+    prepared.staticFindings = [...findings];
+  }
   const normalizedText = known.searchable.toLocaleLowerCase("en-US");
   if (knownValues.values.some((entry) => entry.exactOnly
     ? known.exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
     : normalizedText.includes(entry.value.toLocaleLowerCase("en-US")))
     || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true)) {
     findings.add("known_value");
-  }
-  const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
-  for (let match = unixHomePattern.exec(searchableText); match; match = unixHomePattern.exec(searchableText)) {
-    if (match[1].toLowerCase() === "user") continue;
-    findings.add("home_path");
-    break;
-  }
-  const windowsHomePattern = /(?:^|[\s"'(])[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|$)/gim;
-  for (let match = windowsHomePattern.exec(searchableText); match; match = windowsHomePattern.exec(searchableText)) {
-    if (match[1].toLowerCase() === "user") continue;
-    findings.add("home_path");
-    break;
-  }
-  // Decode encoded boundaries without removing their default-ignorable code
-  // points. Both the original and decoded characters must meet the unit rule.
-  if (emailTextViews(text).some((view) => hasEmailAddress(view.text, view.source))) findings.add("email_address");
-  const credentialAssignmentPattern = /(?:api[_-]?(?:key|token)|access[_-]?token|authorization|password|secret)\s*[:=]\s*(?:"[^"\r\n]{12,}"|'[^'\r\n]{12,}'|[^\s"'`]{12,})/i;
-  if (credentialAssignmentPattern.test(searchableText)) {
-    findings.add("credential");
-  }
-  if (/\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/.test(searchableText)) {
-    findings.add("credential");
-  }
-  const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
-  const splitTokenPrefix = new RegExp([
-    `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
-    `g${separator}h${separator}[pousr]`,
-    `x${separator}o${separator}x${separator}[baprs]`,
-    `s${separator}k`,
-  ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
-  for (const line of searchableText.split(/\r?\n/)) {
-    splitTokenPrefix.lastIndex = 0;
-    for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
-      const compactTail = compactSensitiveText(line.slice(match.index));
-      if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
-        findings.add("credential");
-        break;
-      }
-    }
-    if (findings.has("credential")) break;
-  }
-  if (/\bauthorization\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(searchableText)) {
-    findings.add("credential");
-  }
-  if (/https?:\/\/[^\s/@:]+:[^\s/@]+@/i.test(searchableText)) {
-    findings.add("credential");
-  }
-  if (credentialInputPattern.test(searchableText)) {
-    findings.add("credential");
-  }
-  if (/\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/.test(searchableText)) {
-    findings.add("private_network");
-  }
-  if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(searchableText)) {
-    findings.add("resource_identifier");
-  }
-  if (/(?:^|\n)\s*(?:assistant|prompt|transcript|user)\s*:\s*\S/im.test(searchableText)) {
-    findings.add("transcript_content");
   }
   return findings;
 }
