@@ -9,10 +9,67 @@ const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord, withPipelineMutation } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
+const { publishPipelineBranch } = await import("./git");
 const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
 afterAll(() => { restore(); fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); });
 const HEAD = "a".repeat(40);
+
+test("unsupported inherited locks settle visibly before any Git command", async () => {
+  const lane = pipelineCorpus(2, 1)[1]!;
+  lane.state = "running"; lane.closedAt = null; lane.publication = "internal";
+  lane.lastPassedCommit = HEAD;
+  lane.cursor = { stageId: "build", state: "committing", input: null, activatedBy: null };
+  lane.runs[0]!.attempts[0]!.state = "committing";
+  savePipelines([lane]);
+  let commands = 0;
+  const ports = { ...defaultPipelinePorts(), getFlow: () => null,
+    exec: async () => { commands++; return { code: 0, stdout: HEAD, stderr: "" }; } };
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  // Exercise the unsupported admission branch without claiming device proof.
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  try {
+    expect(await settlePendingStageGit(ports)).toBe(true);
+    expect(findPipelineRecord(lane.id)).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("WSL 2") });
+    const h = setupRetry();
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    await settlePendingRemoteActions(h.ports);
+    expect(findPipelineRecord(h.lane.id)).toMatchObject({ remoteAction: { state: "settled", error: expect.stringContaining("WSL 2") } });
+    expect(h.remoteCalls()).toBe(0);
+    expect(await publishPipelineBranch(h.lane, ports.exec, { acceptedSha: HEAD })).toMatchObject({ ok: false, error: expect.stringContaining("WSL 2") });
+    expect(commands).toBe(0);
+  } finally { Object.defineProperty(process, "platform", platform); }
+});
+
+test("superseded stage Git leaves the current task note untouched", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const lane = pipelineCorpus(2, 1)[1]!;
+  lane.state = "running"; lane.closedAt = null; lane.publication = "internal";
+  lane.lastPassedCommit = HEAD;
+  lane.cursor = { stageId: "build", state: "committing", input: null, activatedBy: null };
+  lane.runs[0]!.attempts[0]!.state = "committing";
+  lane.taskIds = ["current-note-task"];
+  savePipelines([lane]);
+  const note = { text: "The current lane is paused for a different decision.", author: { kind: "orchestrator" as const }, updatedAt: new Date().toISOString() };
+  saveTasks([{ id: lane.taskIds[0]!, project: lane.project, text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt, note }]);
+  let observed!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => { observed = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const ports = { ...defaultPipelinePorts(), getFlow: () => null,
+    exec: async (_command: string, args: string[]) => {
+      if (args[0] === "status") { observed(); await held; return { code: 1, stdout: "", stderr: "old stage observation failed" }; }
+      return { code: 0, stdout: args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? lane.branch : "", stderr: "" };
+    },
+  };
+  const settlement = settlePendingStageGit(ports);
+  await entered;
+  try {
+    expect((await patchPipeline(lane.id, { action: "pause" }, ports)).error).toBeUndefined();
+    release(); await settlement;
+    expect(findPipelineRecord(lane.id)!.state).toBe("paused");
+    expect(loadTasks()[0]!.note).toEqual(note);
+  } finally { release(); await settlement; }
+});
 
 test("review flow identity Git yields to a pause before the controller lease", async () => {
   const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");

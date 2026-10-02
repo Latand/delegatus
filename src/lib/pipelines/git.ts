@@ -6,7 +6,7 @@ import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provis
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
-import { tryLockFenceExclusive, type HeldFenceLock } from "@/runtime-host/fenceLock";
+import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
 import type { Pipeline } from "./types";
@@ -1057,9 +1057,12 @@ export interface PipelinePublishRequest {
 /** Acquire a kernel lock on the parent's open file description BEFORE any
     publisher child exists. Descriptor 3 is inherited explicitly by each Git
     child, so parent death cannot open a pre-lock launch window. */
-const platformLocks = new Map<number, HeldFenceLock>();
+export function assertInheritedPipelineLockSupport(platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") throw new Error("Pipeline Git requires inherited kernel locks; run Delegatus under WSL 2 on Windows");
+}
 
 export async function acquirePublicationFileLock(lock: string): Promise<number | null> {
+  assertInheritedPipelineLockSupport();
   let descriptor: number;
   try { descriptor = fs.openSync(lock, "a", 0o600); }
   catch { return null; }
@@ -1068,17 +1071,17 @@ export async function acquirePublicationFileLock(lock: string): Promise<number |
     if (held) {
       // POSIX locks follow the inherited open file description. Closing the
       // parent's descriptor leaves any still-owned child holding the fence.
-      if (process.platform === "win32") platformLocks.set(descriptor, held);
       return descriptor;
     }
-  } catch { /* Unsupported locking fails closed. */ }
+  } catch {
+    fs.closeSync(descriptor);
+    throw new Error("Pipeline kernel locking is unavailable in this runtime");
+  }
   fs.closeSync(descriptor);
   return null;
 }
 
 export function releasePublicationFileLock(descriptor: number): void {
-  const held = platformLocks.get(descriptor);
-  if (held) { platformLocks.delete(descriptor); held.release(); }
   fs.closeSync(descriptor);
 }
 
@@ -1122,7 +1125,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  const descriptor = await acquirePublicationFileLock(lock);
+  let descriptor: number | null;
+  try { descriptor = await acquirePublicationFileLock(lock); }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
   if (descriptor === null) {
     const current = findPipelineRecord(pipeline.id);
     const error = deliveryOwnerError(current ?? pipeline, current);

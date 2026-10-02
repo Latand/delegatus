@@ -1686,9 +1686,23 @@ async function unregisteredStageHostDeathEvidence(
     : null;
 }
 
+const stageSettlementEffects = new WeakMap<Pipeline, Array<() => void>>();
+
+function writeEngineParkedTaskNote(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
+  const effects = stageSettlementEffects.get(pipeline);
+  if (effects) effects.push(() => writeParkedTaskNote(pipeline, detail, attempt, reason));
+  else writeParkedTaskNote(pipeline, detail, attempt, reason);
+}
+
+function clearEngineTaskNote(pipeline: Pipeline): void {
+  const effects = stageSettlementEffects.get(pipeline);
+  if (effects) effects.push(() => clearEngineParkedTaskNote(pipeline));
+  else clearEngineParkedTaskNote(pipeline);
+}
+
 function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
   const noteReason = reason ?? (detail.startsWith("rate limited until ") ? { kind: "quota-reset" as const } : undefined);
-  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeParkedTaskNote(pipeline, detail, attempt, noteReason);
+  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeEngineParkedTaskNote(pipeline, detail, attempt, noteReason);
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt) attempt.error = detail;
   pipeline.state = "needs_decision";
@@ -2636,7 +2650,7 @@ function advancePipeline(
     return;
   }
   if (successor.next === null) {
-    clearEngineParkedTaskNote(pipeline);
+    clearEngineTaskNote(pipeline);
     pipeline.cursor = null;
     pipeline.state = "completed";
     pipeline.stateDetail = detail;
@@ -2704,7 +2718,7 @@ function parkForReview(
   pipeline.state = "needs_review";
   pipeline.pausedState = null;
   pipeline.stateDetail = reviewPendingDetail(pipeline.reviewPending);
-  writeParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
+  writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
@@ -2737,7 +2751,7 @@ function keepPassedStageUnpublished(
   const message = `passed but unpublished: ${detail}`;
   // The initial durable reservation is in flight, not a blocked publication.
   if (pipeline.stateDetail !== message && !/reserved for execution|awaiting durable delivery admission/.test(detail)) {
-    writeParkedTaskNote(pipeline, message, attempt);
+    writeEngineParkedTaskNote(pipeline, message, attempt);
   }
   attempt.error = message;
   pipeline.state = "running";
@@ -3829,7 +3843,7 @@ async function spawnRunStage(
       } else attempt.effectiveRole.serviceTier = spawned.serviceTier;
     }
     attempt.state = "running";
-    clearEngineParkedTaskNote(pipeline);
+    clearEngineTaskNote(pipeline);
     setCursorState(pipeline, stage.id, "running");
     if (pipeline.stateDetail?.startsWith("rate limited until ")
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
@@ -5929,7 +5943,20 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     if (action?.state !== "pending") continue;
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-    const descriptor = await acquirePublicationFileLock(lock);
+    let descriptor: number | null;
+    try { descriptor = await acquirePublicationFileLock(lock); }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : "Pipeline locking unavailable";
+      await withPipelineMutation((pipelines, persist) => {
+        const current = pipelines.find((pipeline) => pipeline.id === preview.id);
+        if (!current || current.remoteAction?.id !== action.id || current.remoteAction.state !== "pending") return;
+        current.remoteAction = { ...action, state: "settled", settledAt: ports.now(), error: detail };
+        if (remoteActionFence(current) === action.fence) current.stateDetail = detail;
+        if (current.delivery) deliveryJournal(current, "recovery", `${action.action} remote verification refused: ${detail}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
+        persist();
+      });
+      continue;
+    }
     if (descriptor === null) continue;
     const abort = new AbortController();
     const matches = (pipeline: Pipeline | null) => pipeline?.remoteAction?.id === action.id
@@ -6056,7 +6083,17 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-    const descriptor = await acquirePublicationFileLock(lock);
+    let descriptor: number | null;
+    try { descriptor = await acquirePublicationFileLock(lock); }
+    catch (error) {
+      await withPipelineMutation((pipelines, persist) => {
+        const current = pipelines.find((pipeline) => pipeline.id === preview.id);
+        if (!current || !matches(current)) return;
+        park(current, error instanceof Error ? error.message : "Pipeline locking unavailable", currentAttempt(current, stage.id));
+        persist([current]); changed = true;
+      });
+      continue;
+    }
     if (descriptor === null) continue;
     const abort = new AbortController();
     const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
@@ -6067,6 +6104,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       return await ports.exec(command, args, cwd, env, { signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : 60_000 });
     };
     const candidate = structuredClone(preview);
+    const effects: Array<() => void> = [];
+    stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
     const candidateAttempt = currentAttempt(candidate, candidateStage.id)!;
     const outside = { ...ports, exec, deferStageGit: false };
@@ -6088,10 +6127,11 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
         Object.assign(current, candidate);
+        for (const effect of effects) effect();
         persist([current]);
         changed = true;
       });
-    } finally { clearInterval(watch); releasePublicationFileLock(descriptor); }
+    } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); releasePublicationFileLock(descriptor); }
   }
   return changed;
 }
