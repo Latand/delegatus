@@ -919,6 +919,19 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       if (historyOwnerRef.current === owner && olderRequestRef.current === request) olderRequestRef.current = null;
     });
   };
+  /* A load that settles while the reader already sits at the top has nothing
+     left to move the scroller: its rows arrive hidden, no scroll event fires,
+     and the scroll handler (which skipped the reveal while the load was in
+     flight) never runs again. Look again when the load settles. */
+  const wasLoadingOlderRef = useRef(false);
+  useEffect(() => {
+    const settled = wasLoadingOlderRef.current && !tail.loadingOlder;
+    wasLoadingOlderRef.current = tail.loadingOlder;
+    const el = scroller.current;
+    if (!settled || tail.loading || !el) return;
+    if (el.scrollTop < 120 && canRevealOlder) revealOlder();
+    else if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
+  });
 
   const lastItem = feed.items.at(-1)?.item;
   const transcriptWorking: { icon: LucideIcon; label: string } =
