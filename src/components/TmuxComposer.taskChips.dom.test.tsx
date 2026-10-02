@@ -397,3 +397,34 @@ test("the parked task row restores its chips before Attach again removes the row
   expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("start this one");
   expect(readTaskChips("atlas")).toEqual([{ id: TASK_A, title: "Original" }]);
 });
+
+
+test("a seat rotation is observed after the identity TTL even when the chip list never changes", async () => {
+  let seat = COMPOSING;
+  let refresh!: () => void;
+  const originalInterval = globalThis.setInterval;
+  const timer = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay: number, ...args: unknown[]) => {
+    if (callback.name === "refreshSeat") refresh = callback;
+    return originalInterval(callback, delay, ...args);
+  }) as typeof setInterval);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (...args) => String(args[0]) === "/api/orchestrator/seat?project=atlas"
+    ? new Response(JSON.stringify({ exists: true, seat: { conversationId: seat } }), { headers: { "content-type": "application/json" } })
+    : originalFetch(...args)) as typeof fetch;
+  try {
+    const host = await mountComposer(COMPOSING, null);
+    await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Original" }); });
+    for (let i = 0; i < 6; i++) await settle();
+    expect(chips(host)).toHaveLength(1);
+    const captured = readTaskChips("atlas");
+    seat = WORKER;
+    resetManagerIdentityForTest();
+    await act(async () => { refresh(); });
+    for (let i = 0; i < 6; i++) await settle();
+    expect(readTaskChips("atlas")).toBe(captured);
+    expect(chips(host)).toHaveLength(0);
+    await sendThrough(host, COMPOSING, "ordinary worker words");
+    expect(sent[0]?.selectedContext?.tasks).toBeUndefined();
+    expect(readTaskChips("atlas")).toBe(captured);
+  } finally { timer.mockRestore(); }
+});

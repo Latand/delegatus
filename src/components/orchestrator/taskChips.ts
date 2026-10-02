@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { MAX_SELECTED_TASKS, type SelectedTaskRef } from "@/lib/selection/selectedContext";
-import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
+import { designatedManagerConversationId, MANAGER_IDENTITY_TTL_MS } from "@/components/voice/managerIdentity";
 import type { TaskColor } from "@/lib/tasks/types";
 
 /**
@@ -196,10 +196,14 @@ export function useSeatChipProject(conversationId: string, project: string | und
   useEffect(() => {
     if (!probe || !conversationId.startsWith("conversation_")) return;
     let live = true;
-    void designatedManagerConversationId(probe).then((seat) => {
-      if (live) setSeatOf(seat === conversationId ? { conversationId, project: probe } : null);
-    });
-    return () => { live = false; };
+    const refreshSeat = () => {
+      void designatedManagerConversationId(probe).then((seat) => {
+        if (live) setSeatOf(seat === conversationId ? { conversationId, project: probe } : null);
+      });
+    };
+    refreshSeat();
+    const timer = setInterval(refreshSeat, MANAGER_IDENTITY_TTL_MS);
+    return () => { live = false; clearInterval(timer); };
   }, [probe, waitingChips, conversationId]);
   if (explicit) return explicit;
   return seatOf && seatOf.conversationId === conversationId && seatOf.project === probe ? probe : null;

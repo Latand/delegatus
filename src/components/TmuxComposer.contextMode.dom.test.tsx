@@ -18,6 +18,7 @@ import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 
 import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
 import { TmuxComposer } from "./TmuxComposer";
+import { resetManagerIdentityForTest } from "./voice/managerIdentity";
 import { CONTEXT_AUTO_STORAGE_KEY, CONTEXT_EXIT_AFTER_MS } from "./composerContextMode";
 import { withComposerSubmission } from "@/lib/composerSubmissionPayloads";
 import { resetRetainedQueueAdmissionsForTests } from "./retainedQueueAdmissions";
@@ -160,6 +161,7 @@ function sessionView(): RuntimeSessionView {
 beforeEach(() => {
   observed = {};
   discoveredSeat = false;
+  resetManagerIdentityForTest();
   queueWrites = [];
   queueEntries = [];
   sends = [];
@@ -242,7 +244,8 @@ const file = {
 
 async function mount(taskChipsFor?: string): Promise<{ host: HTMLElement; root: Root }> {
   globalThis.fetch = (async (input: string) => {
-    if (String(input) === "/api/orchestrator/seat?project=viewer" && discoveredSeat) return new Response(JSON.stringify({ exists: true, seat: { conversationId: CARD } }), { headers: { "content-type": "application/json" } });
+    if (String(input) === "/api/orchestrator/seat?project=viewer") return new Response(JSON.stringify({ exists: discoveredSeat, seat: discoveredSeat ? { conversationId: CARD } : null }), { headers: { "content-type": "application/json" } });
+    if (String(input).startsWith("/api/bridge")) return new Response(JSON.stringify({ prelude: null }), { headers: { "content-type": "application/json" } });
     if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
     return new Promise(() => {}) as unknown as Response;
   }) as unknown as typeof fetch;
@@ -771,7 +774,6 @@ test("the failed context history row's Edit action restores its visual task refe
 
 test("a fresh phone seat recovers receipt tasks even with no unsent chips to trigger discovery", async () => {
   discoveredSeat = true;
-  const { resetManagerIdentityForTest } = await import("./voice/managerIdentity");
   resetManagerIdentityForTest();
   const wireText = taskReferencePrelude([CHIP]) + "\nstart this one";
   durableReceipts = [{ operationId: "phone-recovered", idempotencyKey: "phone-key", conversationId: CARD,
