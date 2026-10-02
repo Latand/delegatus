@@ -237,17 +237,59 @@ test("finishMerge refuses when the repo checkout left the base branch", async ()
   if (!res.ok) expect(res.error).toContain("feature/elsewhere");
 });
 
-test("finishMerge aborts and surfaces a merge conflict", async () => {
+test("finishMerge leaves failed merge state for explicit recovery", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
+  const originalHead = "a".repeat(40);
+  const targetHead = "b".repeat(40);
+  const expectedTree = "c".repeat(40);
+  let mergeHeadChecks = 0;
   const { exec, calls } = fakeExec((call) => {
     if (call.args[1] === "--abbrev-ref") return ok("main\n");
+    if (call.args[0] === "rev-parse" && call.args[1] === "HEAD") return ok(`${originalHead}\n`);
+    if (call.args[0] === "rev-parse" && call.args[1] === `${wf.branch}^{commit}`) return ok(`${targetHead}\n`);
+    if (call.args[1] === "--verify" && call.args[2] === "-q" && call.args[3] === "MERGE_HEAD") {
+      mergeHeadChecks += 1;
+      return mergeHeadChecks === 1 ? fail("no merge in progress") : ok("target\n");
+    }
+    if (call.args[0] === "merge-tree") return ok(`${expectedTree}\n`);
     if (call.args[0] === "merge" && call.args[1] === "--no-ff") return fail("CONFLICT (content): README.md");
     return ok();
   });
   const res = (await finishMerge(wf, exec));
   expect(res.ok).toBe(false);
-  if (!res.ok) expect(res.error).toContain("CONFLICT");
-  expect(calls.at(-1)?.args).toEqual(["merge", "--abort"]);
+  if (!res.ok) {
+    expect(res.error).toContain("repository changes or merge state");
+    expect(res.recoveryRequired).toBe(true);
+  }
+  expect(calls.some((call) => call.args[0] === "merge" && call.args[1] === "--abort")).toBe(false);
+});
+
+test("finishMerge preserves staged operator changes made after merge failure", async () => {
+  const box = await makeIdentityIsolatedRepo();
+  const hook = path.join(box.repo, ".git", "hooks", "prepare-commit-msg");
+  fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const originalHead = await box.run("rev-parse", "HEAD");
+  let stagedAfterOwnershipProbe = false;
+  const cleanupExec: ExecPort = async (command, args, cwd, env, options) => {
+    const result = await realExec(command, args, cwd, env, options);
+    if (args[0] === "status" && args[1] === "--porcelain" && !stagedAfterOwnershipProbe) {
+      fs.writeFileSync(path.join(box.repo, "base.txt"), "operator edit\n");
+      const add = await realExec("git", ["add", "base.txt"], box.repo);
+      if (add.code !== 0) throw new Error(add.stderr || "staging operator edit failed");
+      stagedAfterOwnershipProbe = true;
+    }
+    return result;
+  };
+
+  const result = await finishMerge(box.wf, box.exec, cleanupExec);
+
+  expect(stagedAfterOwnershipProbe).toBe(true);
+  expect(result.ok).toBe(false);
+  expect(await box.run("rev-parse", "HEAD")).toBe(originalHead);
+  expect(await box.run("show", ":base.txt")).toBe("operator edit");
+  expect(await box.run("diff", "--cached", "--", "base.txt")).toContain("operator edit");
+  expect((await box.exec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], box.repo)).code).toBe(0);
+  if (!result.ok) expect(result.recoveryRequired).toBe(true);
 });
 
 test("finishMerge supplies a controller identity when Git has none", async () => {

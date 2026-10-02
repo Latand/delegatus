@@ -256,37 +256,23 @@ export async function finishMerge(wf: Workflow, exec: ExecPort, cleanupExec: Exe
   }
   const merge = (await exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir, controllerCommitIdentityEnv()));
   if (merge.code !== 0) {
-    /* Cancellation may arrive after merge populated the index. Abort only when
-       the worktree still exactly matches the merge this workflow started. */
-    const [headAfter, mergeHead, indexTree, unstaged, untracked] = await Promise.all([
+    /* A merge can fail after populating the index. Even a fresh ownership
+       snapshot cannot make `merge --abort` safe: an operator can stage a
+       tracked edit between the snapshot and Git's destructive reset. Leave
+       any state Git produced intact and ask for explicit recovery. */
+    const [headAfter, mergeHead, status] = await Promise.all([
       cleanupExec("git", ["rev-parse", "HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
       cleanupExec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
-      cleanupExec("git", ["write-tree"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
-      cleanupExec("git", ["diff-files", "--quiet"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
-      cleanupExec("git", ["ls-files", "--others", "--exclude-standard", "-z"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["status", "--porcelain"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
     ]);
-    const cleanupOwnedMerge = headAfter.code === 0 && headAfter.stdout.trim() === originalHead
-      && mergeHead.code === 0 && mergeHead.stdout.trim() === target.stdout.trim()
-      && indexTree.code === 0 && indexTree.stdout.trim() === expectedTree
-      && unstaged.code === 0 && untracked.code === 0 && !untracked.stdout;
-    if (cleanupOwnedMerge) {
-      await cleanupExec("git", ["merge", "--abort"], wf.repoDir, undefined, { timeoutMs: 5_000 });
-      const [restoredHead, remainingMerge, status] = await Promise.all([
-        cleanupExec("git", ["rev-parse", "HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
-        cleanupExec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
-        cleanupExec("git", ["status", "--porcelain"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
-      ]);
-      if (restoredHead.code !== 0 || restoredHead.stdout.trim() !== originalHead
-        || remainingMerge.code === 0 || status.code !== 0 || status.stdout.trim()) {
-        return { ok: false, error: "git merge was interrupted; repository recovery is required because its state did not restore cleanly", recoveryRequired: true };
-      }
-    } else {
-      const status = await cleanupExec("git", ["status", "--porcelain"], wf.repoDir, undefined, { timeoutMs: 5_000 });
-      const restoredWithoutMerge = headAfter.code === 0 && headAfter.stdout.trim() === originalHead
-        && mergeHead.code !== 0 && status.code === 0 && !status.stdout.trim();
-      if (!restoredWithoutMerge) {
-        return { ok: false, error: "git merge was interrupted; repository recovery is required because new or unexpected changes prevent safe cleanup", recoveryRequired: true };
-      }
+    const safelyUnchanged = headAfter.code === 0 && headAfter.stdout.trim() === originalHead
+      && mergeHead.code === 1 && status.code === 0 && !status.stdout.trim();
+    if (!safelyUnchanged) {
+      return {
+        ok: false,
+        error: "git merge failed with repository changes or merge state still present; repository recovery is required before retrying",
+        recoveryRequired: true,
+      };
     }
     return failure("git merge", merge);
   }

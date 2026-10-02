@@ -540,23 +540,28 @@ test.each((["finishing", "provisioning"] as const).flatMap((phase) => (["pause",
     } finally { release(); await work; }
 });
 
-test("pausing while the merge commit hook runs aborts only the workflow merge", async () => {
+test.each(["pause", "close"] as const)("workflow %s during its merge preserves pending state for recovery", async (action) => {
   const h = makeHarness();
   const merge = await prepareMergeCancellation(h);
   const work = tickWorkflows([], h.ports);
   try {
     await waitForFile(merge.ready);
     expect(git(merge.repoDir, "rev-parse", "MERGE_HEAD")).not.toBe("");
-    await patchWorkflow(merge.workflow.id, { action: "pause" }, h.ports);
+    await patchWorkflow(merge.workflow.id, { action }, h.ports);
+    const controlled = load(merge.workflow.id);
     await Bun.sleep(75);
     fs.writeFileSync(merge.release, "continue");
     await work;
 
-    expect(load(merge.workflow.id)).toMatchObject({ state: "paused", pausedState: "finishing" });
-    expect(load(merge.workflow.id).stateDetail).toBe("paused by operator");
+    const after = load(merge.workflow.id);
+    expect(after.state).toBe(action === "pause" ? "paused" : "closed");
+    expect(after.controlGeneration).toBe(controlled.controlGeneration);
+    expect(after.closedAt).toBe(controlled.closedAt);
+    expect(after.stateDetail).toContain("recovery");
+    if (action === "pause") expect(after.pausedState).toBe("finishing");
     expect(git(merge.repoDir, "rev-parse", "HEAD")).toBe(merge.base);
-    expect(spawnSync("git", ["rev-parse", "--verify", "MERGE_HEAD"], { cwd: merge.repoDir }).status).not.toBe(0);
-    expect(git(merge.repoDir, "status", "--porcelain")).toBe("");
+    expect(spawnSync("git", ["rev-parse", "--verify", "MERGE_HEAD"], { cwd: merge.repoDir }).status).toBe(0);
+    expect(git(merge.repoDir, "show", ":feature.txt")).toBe("feature");
   } finally {
     fs.writeFileSync(merge.release, "continue");
     await work;
