@@ -94,6 +94,7 @@ import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntim
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { collectStageProvenance } from "./stageProvenance";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
@@ -197,6 +198,8 @@ export type StageInterruption = Pick<InterruptionObligation, "state" | "recorded
 
 export interface PipelinePorts {
   exec: ExecPort;
+  /** Protection observations collected outside the mutation lease for this tick. */
+  stageBranchProtections?: ReadonlyMap<string, StageBranchProtection>;
   /** Asynchronous Git used only by the provisioning pre-pass. */
   provisionExec?: ProvisionExecPort;
   preflightRepo(repoDir: string): PipelineRepoPreflight;
@@ -2931,11 +2934,23 @@ function commitPassedStage(
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
+  persist: () => void,
 ): void {
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
-  let result = commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
+  let result = allowCommit
+    ? commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelines, attempt.branchAdoption, (intent) => {
+      attempt.branchAdoption = intent;
+      persist();
+    }, ports.stageBranchProtections?.get(pipeline.id))
+    : commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
   if (!result.ok) {
+    if (result.deferred) {
+      // Keep the durable committing cursor. The next tick repeats the forge
+      // observation outside the mutation lease, then retries this settlement.
+      persist();
+      return;
+    }
     park(pipeline, result.error, attempt);
     return;
   }
@@ -3195,7 +3210,7 @@ function settleStageVerdict(
   attempt.state = "committing";
   setCursorState(pipeline, stage.id, "committing");
   persist();
-  commitPassedStage(pipeline, stage, attempt, ports);
+  commitPassedStage(pipeline, stage, attempt, ports, persist);
 }
 
 function fixerSelfFailCanGoToReview(
@@ -3966,7 +3981,7 @@ async function tickRunStage(
   }
 
   if (attempt.state === "committing") {
-    commitPassedStage(pipeline, stage, attempt, ports);
+    commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
 
@@ -4612,7 +4627,7 @@ async function tickReviewStage(
     return;
   }
   if (attempt.state === "committing") {
-    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
+    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
   const implementer = latestAcceptedRun(pipeline, stage.id);
@@ -4773,7 +4788,7 @@ async function tickReviewStage(
     attempt.state = "committing";
     setCursorState(pipeline, stage.id, "committing");
     persist();
-    commitPassedStage(pipeline, stage, attempt, ports);
+    commitPassedStage(pipeline, stage, attempt, ports, persist);
   } else {
     const terminalError = terminalReviewFlowError(flow);
     if (terminalError) {
@@ -6004,6 +6019,7 @@ async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: Pipeline
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
   if (tickStore.__llvPipelineTick) return { pipelines: [], changed: false };
   tickStore.__llvPipelineTick = true;
+  const previousStageBranchProtections = ports.stageBranchProtections;
   let followUp = false;
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
@@ -6019,6 +6035,30 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     /* Before the lease, never under it (#1799). */
     const provisioned = await provisionPendingPipelines(ports);
+    const stageBranchProtections = new Map<string, StageBranchProtection>();
+    await Promise.all(loadPipelinesForProjection().map(async (pipeline) => {
+      const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+      if (!attempt || attempt.effectiveRole.access !== "read-write" || (pipeline.state !== "running" && pipeline.state !== "needs_decision")) return;
+      const sourceBranch = attempt.branchAdoption?.branch ?? ports.exec("git", ["branch", "--show-current"], pipeline.worktreeDir).stdout.trim();
+      const deliveryBranch = pipeline.delivery?.disposition === "owner" ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
+      if (!sourceBranch || sourceBranch === pipeline.branch || sourceBranch === deliveryBranch) return;
+      const pathname = (attempt.conversationId ? ports.pathForConversation(attempt.conversationId) : null) ?? attempt.agentPath;
+      const durable = attempt.state !== "committing" && pathname && ports.sourcePathAllowed(pathname)
+        ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report?.at ?? attempt.startedAt, attempt.startedAt) : null;
+      const entry = entries.find((item) => item.path === pathname);
+      const parsed = entry ? parseStageVerdict(ports.lastMessage(entry)?.text ?? "") : null;
+      const durableParsed = durable?.turn === "terminal" ? parseStageVerdict(durable.terminalProviderMessage?.text ?? durable.message?.text ?? "") : null;
+      const durablePass = durableParsed && !("failureReason" in durableParsed) && durableParsed.verdict.status === "pass";
+      if (attempt.state !== "committing" && attempt.report?.verdict.status !== "pass" && !durablePass
+        && (!parsed || "failureReason" in parsed || parsed.verdict.status !== "pass")) return;
+      if (durable && liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(ports.now())).length) return;
+      if (attempt.state !== "committing" && attempt.conversationId && await ports.conversationAgentActive(attempt.conversationId) === true) {
+        if (durable?.turn !== "terminal") return;
+      }
+      const protection = await observeStageBranchProtection(pipeline, ports.exec, ports.provisionExec ?? realProvisionExec);
+      if (protection) stageBranchProtections.set(pipeline.id, protection);
+    }));
+    ports.stageBranchProtections = stageBranchProtections;
     // Reconcile only this owner's reservation, with the existing kernel fence.
     // Remote reads must finish before entering the pipeline mutation lease.
     for (const pipeline of loadPipelinesForProjection()) {
@@ -6175,6 +6215,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     console.error("[pipelines] skipping tick; registry unreadable", error);
     return { pipelines: [], changed: false };
   } finally {
+    ports.stageBranchProtections = previousStageBranchProtections;
     tickStore.__llvPipelineTick = false;
     /* Scheduled after the re-entry guard clears so the microtask tick cannot
        be swallowed by it. */
