@@ -280,6 +280,8 @@ export interface RuntimeSession {
     runtimeSettings?: RuntimeSettingsCapability;
   };
   activeTurnId: string | null;
+  /** Client-retained terminal identity, so batched renders need no running frame. */
+  settledTurnId?: string | null;
   pendingReconfigure?: RuntimePendingReconfigure | null;
   /** Unresolved drift notice, if any. */
   drift?: RuntimeDrift | null;
@@ -420,12 +422,13 @@ function byId<T extends { id: string }>(list: T[]): Record<string, T> {
  * each scope head from its entity revision so the first streamed event for a
  * scope must be exactly `revision + 1`.
  */
-export function installSnapshot(snapshot: RuntimeSnapshot): RuntimeStore {
+export function installSnapshot(snapshot: RuntimeSnapshot, previous?: RuntimeStore): RuntimeStore {
   const scopeHeads: Record<string, number> = {};
   const sessions: Record<string, RuntimeSession> = {};
   for (const session of snapshot.sessions) {
     sessions[session.conversationId] = {
       ...session,
+      settledTurnId: retainedSettledTurnId(session, previous?.sessions[session.conversationId]),
       attentionIds: [...session.attentionIds],
       recentReceipts: [...session.recentReceipts],
       ...(session.voiceDeliveries
@@ -562,6 +565,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
           p.acknowledgedVoiceDeliveryIds ?? prev?.acknowledgedVoiceDeliveryIds,
         ),
       };
+      merged.settledTurnId = retainedSettledTurnId(merged, prev);
       store.sessions = { ...store.sessions, [id]: merged };
       break;
     }
@@ -571,6 +575,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
         ...s,
         turn: "running",
         activeTurnId: p.turnId ?? s.activeTurnId,
+        settledTurnId: p.turnId && p.turnId !== s.settledTurnId ? null : s.settledTurnId,
       }));
       break;
     }
@@ -693,6 +698,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
         ...s,
         turn: "idle",
         activeTurnId: null,
+        settledTurnId: p.turnId ?? s.activeTurnId ?? s.settledTurnId ?? null,
         voiceDeliveries: p.turnId
           ? completeVoiceTurn(
             s.voiceDeliveries,
@@ -809,6 +815,16 @@ function baseSession(id: string, p: Partial<RuntimeSession>): RuntimeSession {
     pendingReconfigure: p.pendingReconfigure ?? null,
     drift: null,
   };
+}
+
+/** Recovery preserves terminal evidence only within the same native session,
+ * artifact and turn. A successor gets its own lifecycle evidence. */
+function retainedSettledTurnId(session: RuntimeSession, prior?: RuntimeSession): string | null {
+  if (!prior || prior.sessionKey.engine !== session.sessionKey.engine
+    || prior.sessionKey.sessionId !== session.sessionKey.sessionId
+    || prior.artifactPath !== session.artifactPath
+    || (session.activeTurnId && session.activeTurnId !== prior.settledTurnId)) return null;
+  return prior.settledTurnId ?? null;
 }
 
 function updateSession(store: RuntimeStore, id: string, revision: number, fn: (s: RuntimeSession) => RuntimeSession): void {
