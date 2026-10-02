@@ -1,4 +1,4 @@
-import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync as rawSpawnSync, type SpawnSyncReturns } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
