@@ -7,11 +7,14 @@ import { applySpawnedConversationSnapshot } from "@/hooks/useFiles";
 import { requestFilesRefresh } from "@/lib/filesEvents";
 import { useLocale } from "@/lib/i18n";
 import { derivedSpawnTitle } from "@/lib/title";
+import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
+import type { FileEntry } from "@/lib/types";
 
 import {
   classifySpawnResponse,
   createSpawnAttempt,
   provisionalSpawnFile,
+  type SpawnOutcome,
   type SpawnResponseBody,
 } from "../draftSpawn";
 import {
@@ -55,6 +58,49 @@ export interface SeatConfirmLaunch {
   cwd: string;
   /** The text delivered as the first message, for the optimistic bubble. */
   firstMessage: string;
+}
+
+/** The provisional conversation window for a seat the panel just confirmed.
+    The seat's first message is its mandate, which the window renders as the
+    mandate card and never as the operator's bubble, so the card says so from
+    the first paint instead of waiting for the files poll to name it. The
+    qualifier follows the rule the server applies: a numeric `promptVersion`
+    names an approved default, anything else stays unqualified until the poll
+    says more. */
+export function seatProvisionalFile(input: {
+  clientRequestId: string;
+  at: number;
+  project: string;
+  body: Record<string, unknown>;
+  launch: SeatConfirmLaunch;
+  outcome: Extract<SpawnOutcome, { kind: "launched" }>;
+}): FileEntry | null {
+  const { clientRequestId, at, project, body, launch, outcome } = input;
+  const { draft, cwd, firstMessage } = launch;
+  return provisionalSpawnFile(
+    createSpawnAttempt(clientRequestId, at, {
+      title: derivedSpawnTitle("orchestrator", firstMessage, project),
+      engine: draft.engine,
+      model: draft.model,
+      cwd,
+      effort: draft.effort,
+      fast: draft.engine === "codex" && draft.speed ? draft.speed === "fast" : null,
+      accountId: draft.launchAccountId,
+      ["prompt"]: firstMessage,
+      images: [],
+      src: "",
+    }),
+    outcome,
+    project,
+    seatMandateDelivery(body.promptVersion),
+  );
+}
+
+/** How a seat's confirm names its mandate before the server has: a numeric
+    `promptVersion` is an approved default, anything else (an edited mandate)
+    stays unqualified until the files poll says more. */
+export function seatMandateDelivery(promptVersion: unknown): MandateDelivery {
+  return typeof promptVersion === "number" ? { kind: "version", version: promptVersion } : { kind: "unqualified" };
 }
 
 export interface SeatConfirmFlow {
@@ -112,6 +158,7 @@ export function useSeatConfirm(options: {
     setSubmitting(true);
     setFailure(null);
     const at = Date.now();
+    let accepted = false;
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -134,26 +181,18 @@ export function useSeatConfirm(options: {
            of waiting a poll for the files feed to catch up. */
         const outcome = classifySpawnResponse(response.status, response.ok, body);
         if (outcome.kind === "launched") {
-          const { draft, cwd, firstMessage } = input.launch;
-          const provisional = provisionalSpawnFile(
-            createSpawnAttempt(clientRequestId, at, {
-              title: derivedSpawnTitle("orchestrator", firstMessage, project),
-              engine: draft.engine,
-              model: draft.model,
-              cwd,
-              effort: draft.effort,
-              fast: draft.engine === "codex" && draft.speed ? draft.speed === "fast" : null,
-              accountId: draft.launchAccountId,
-              ["prompt"]: firstMessage,
-              images: [],
-              src: "",
-            }),
-            outcome,
+          const provisional = seatProvisionalFile({
+            clientRequestId,
+            at,
             project,
-          );
+            body: input.body,
+            launch: input.launch,
+            outcome,
+          });
           if (provisional) applySpawnedConversationSnapshot(provisional);
         }
         requestFilesRefresh();
+        accepted = true;
       } else {
         const classified = classifySeatFailure(response.status, body, clientRequestId);
         /* A terminal refusal is durably recorded server-side; the next attempt
@@ -167,13 +206,15 @@ export function useSeatConfirm(options: {
       setFailure({ kind: "ambiguous", error: t("orchPanel.transportLost"), clientRequestId });
     } finally {
       inFlight.current = false;
-      /* The draft keeps its submitting face until the durable read says where the seat landed. Let go first, and
-         the panel shows the draft again for the frames the read takes (a short draft over the board, then the
-         live seat at its full height), and the whole board jumps up and back down. */
+      /* After an accepted POST the panel stays on «creating» until the durable
+         read has answered: `status` is still the pre-Confirm read until then
+         (no seat, no pending intent), and clearing `submitting` first would
+         paint the create draft over the seat's first paint. */
+      if (!accepted) setSubmitting(false);
       try {
         await refresh();
       } finally {
-        setSubmitting(false);
+        if (accepted) setSubmitting(false);
       }
     }
   }, [url, project, storage, field, refresh, t]);
