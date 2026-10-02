@@ -188,7 +188,6 @@ test("each platform job keeps its name and is skipped only on a scope that ran a
   const platform = Bun.YAML.parse(fs.readFileSync(path.join(repositoryRoot, ".github", "workflows", "platform-tests.yml"), "utf8")) as {
     jobs: Record<string, { if?: string; needs?: string }>;
   };
-  // The Linux leg is cheap and stays unconditional.
-  expect(platform.jobs["linux-platform"]).not.toHaveProperty("if");
-  expect(platform.jobs["linux-platform"]).not.toHaveProperty("needs");
+  // Linux runs locally from the Windows leg's same explicit list.
+  expect(platform.jobs["linux-platform"]).toBeUndefined();
 });
