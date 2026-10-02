@@ -404,3 +404,64 @@ test("a delayed ordinary refresh cannot overwrite a newer revision hydration", a
   flushSync(() => { root.unmount(); });
   host.remove();
 });
+
+/** Costs a millisecond, so a render of many rows is long enough to be interrupted. */
+function spendOneMillisecond() {
+  const until = performance.now() + 1;
+  while (performance.now() < until) { /* busy */ }
+}
+
+function Row({ path }: { path: string }) {
+  spendOneMillisecond();
+  return <i>{path}</i>;
+}
+
+function StreamedProbe({ tick }: { tick: number }) {
+  const data = useFiles();
+  return (
+    <div data-tick={tick}>
+      <b>{data.files[0]?.path ?? "empty"}</b>
+      {Array.from({ length: 60 }, (_, index) => <Row key={`r${index}`} path={data.files[0]?.path ?? ""} />)}
+    </div>
+  );
+}
+
+test("a catalog update commits while a stream of urgent renders keeps interrupting it", async () => {
+  let generation = 0;
+  globalThis.fetch = mock(async () => new Response(JSON.stringify({
+    files: [{ path: `/sessions/generation-${generation}.jsonl` }],
+  }))) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  let tick = 0;
+  const render = () => { root.render(<StreamedProbe tick={tick} />); };
+  flushSync(render);
+  for (let waited = 0; waited < 2_000 && host.querySelector("b")?.textContent !== "/sessions/generation-0.jsonl"; waited += 20) {
+    await Bun.sleep(20);
+  }
+  expect(host.querySelector("b")?.textContent).toBe("/sessions/generation-0.jsonl");
+  /* Each tick is an urgent render landing inside the 60 ms transition render. */
+  const stream = setInterval(() => {
+    tick += 1;
+    flushSync(render);
+  }, 5);
+  try {
+    generation = 1;
+    const sentAt = performance.now();
+    window.dispatchEvent(new dom.Event(FLOWS_CHANGED_EVENT) as unknown as Event);
+    let landedAfter = Number.POSITIVE_INFINITY;
+    while (performance.now() - sentAt < 3_000) {
+      await Bun.sleep(10);
+      if (host.querySelector("b")?.textContent === "/sessions/generation-1.jsonl") {
+        landedAfter = performance.now() - sentAt;
+        break;
+      }
+    }
+    expect(landedAfter).toBeLessThan(1_000);
+  } finally {
+    clearInterval(stream);
+    flushSync(() => { root.unmount(); });
+    host.remove();
+  }
+});

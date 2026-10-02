@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
@@ -21,6 +21,7 @@ import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
 
+import { createBoundedPublisher, type BoundedPublisher } from "./boundedTransition";
 import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
 
 /** The universal fallback cadence — also the only source for legacy sessions. */
@@ -1210,17 +1211,30 @@ export function filesPollCadence(connection: "live" | "reconnecting" | "degraded
 export function useFiles(_project?: string | null, pinnedPath?: string | null): FilesData {
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
+  const committedRef = useRef(data);
+  const publisherRef = useRef<BoundedPublisher<FilesData> | null>(null);
+  useEffect(() => {
+    committedRef.current = data;
+    publisherRef.current?.settled();
+  }, [data]);
   useEffect(() => {
     let alive = true;
     const cache = filesClientCache;
-    const publishBackgroundData = (next: FilesData) => {
-      if (!alive) return;
-      /* Scanner generations can change one live row inside a large catalog.
-         Keep that reconciliation interruptible so reload, typing and board
-         gestures do not wait behind a synchronous whole-Viewer render. */
-      startTransition(() => {
+    /* Scanner generations can change one live row inside a large catalog.
+       Keep that reconciliation interruptible so reload, typing and board
+       gestures do not wait behind a synchronous whole-Viewer render. A stream
+       of live events keeps interrupting a transition, so one that has not
+       committed within the deadline is applied urgently instead of waiting for
+       React to expire the starved lane. */
+    const publisher = createBoundedPublisher<FilesData>({
+      apply: (next) => {
         if (alive) setData(next);
-      });
+      },
+      committed: () => committedRef.current,
+    });
+    publisherRef.current = publisher;
+    const publishBackgroundData = (next: FilesData) => {
+      if (alive) publisher.publish(next);
     };
     const unsubscribeCache = cache.subscribe((next, priority) => {
       if (priority === "urgent") {
@@ -1409,6 +1423,8 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
 
     return () => {
       alive = false;
+      publisher.dispose();
+      if (publisherRef.current === publisher) publisherRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
       inflight.abort();
       if (timer) clearInterval(timer);
