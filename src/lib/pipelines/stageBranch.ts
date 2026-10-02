@@ -64,16 +64,27 @@ export function commitAndAdoptStageBranch(
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
   const refused = (reason: string): PipelineGitResult => ({ ok: false, error: `adopting the stage branch: ${reason}` });
-  const commonDirectory = (repoDir: string): string | null => {
-    const result = exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
-    return result.code === 0 && result.stdout.trim() ? path.resolve(result.stdout.trim()) : null;
+  const commonDirectories = (candidate: Pipeline): { directories: Set<string>; unresolved: boolean } => {
+    const directories = new Set<string>();
+    let unresolved = false;
+    for (const directory of new Set([candidate.repoDir, candidate.worktreeDir])) {
+      const result = exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], directory);
+      if (result.code === 0 && result.stdout.trim()) directories.add(path.resolve(result.stdout.trim()));
+      else unresolved = true;
+    }
+    return { directories, unresolved };
   };
-  const pipelineCommonDir = commonDirectory(pipeline.repoDir);
+  const pipelineIdentity = commonDirectories(pipeline);
   const others = pipelines().filter((other) => {
     if (other.id === pipeline.id) return false;
-    if (other.repoDir === pipeline.repoDir || (pipeline.delivery
-      && other.delivery?.target.repository === pipeline.delivery.target.repository)) return true;
-    return pipelineCommonDir !== null && commonDirectory(other.repoDir) === pipelineCommonDir;
+    if (other.repoDir === pipeline.repoDir || other.worktreeDir === pipeline.worktreeDir
+      || (pipeline.delivery && other.delivery?.target.repository === pipeline.delivery.target.repository)) return true;
+    const otherIdentity = commonDirectories(other);
+    if ([...pipelineIdentity.directories].some((directory) => otherIdentity.directories.has(directory))) return true;
+    // A failed path may be the removed seed checkout of a still-live lane.
+    // Keep its branch claim in force unless both repositories are resolved
+    // and prove that they are separate.
+    return pipelineIdentity.unresolved || otherIdentity.unresolved;
   });
   const ownedByOther = (name: string) => others.some((other) => other.branch === name
     || (other.delivery?.active && other.delivery.target.branch === `refs/heads/${name}`));

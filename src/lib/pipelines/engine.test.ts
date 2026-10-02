@@ -894,8 +894,9 @@ test("a stage branch is adopted onto an owned delivery branch when the lane ref 
   }
 });
 
-test("linked-worktree pipeline ownership refuses a foreign stage branch before committing", async () => {
-  const fixture = await realWorktreeLane("stage-branch-linked-owner", [
+for (const removeOwnerSeed of [false, true]) {
+test(`linked-worktree pipeline ownership refuses a foreign stage branch before committing (removed seed: ${removeOwnerSeed})`, async () => {
+  const fixture = await realWorktreeLane(`stage-branch-linked-owner-${removeOwnerSeed}`, [
     { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
     { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
   ]);
@@ -907,11 +908,14 @@ test("linked-worktree pipeline ownership refuses a foreign stage branch before c
     fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep this work\n");
     const sourceTip = git(worktree, "rev-parse", `refs/heads/${source}`);
     const laneTip = git(worktree, "rev-parse", `refs/heads/${lane.branch}`);
+    const seed = path.join(root, "owner-seed");
+    git(worktree, "worktree", "add", "-b", "owner-seed", seed, lane.branch);
     const linked = path.join(root, "linked");
-    git(worktree, "worktree", "add", linked, "-b", "other-lane-current");
+    git(seed, "worktree", "add", "-b", "other-lane-current", linked);
+    if (removeOwnerSeed) git(worktree, "worktree", "remove", seed);
     const other = structuredClone(lane);
     other.id = "other-pipeline";
-    other.repoDir = linked;
+    other.repoDir = removeOwnerSeed ? seed : linked;
     other.worktreeDir = linked;
     other.branch = source;
     const { commitAndAdoptStageBranch } = await import("./stageBranch");
@@ -926,6 +930,7 @@ test("linked-worktree pipeline ownership refuses a foreign stage branch before c
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+}
 
 test("a busy-to-terminal stage retries settlement after collecting fresh branch protection", async () => {
   const fixture = await realWorktreeLane("stage-branch-busy", [
