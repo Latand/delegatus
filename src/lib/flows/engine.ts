@@ -1,4 +1,5 @@
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -204,6 +205,7 @@ export function reserveReviewerSpawn(
   accountId: string | null,
   registry: AgentRegistry = agentRegistry(),
 ): Exclude<SpawnBeginResult, { kind: "conflict" }> {
+  agentPublicationIdentityEnv(process.env);
   const implementer = flow.implementerConversationId?.startsWith("conversation_")
     ? registry.conversation(flow.implementerConversationId as `conversation_${string}`)
     : null;
@@ -872,7 +874,7 @@ async function launchReviewer(
     return;
   }
   const spawnCapability = agentRegistry().rotateSpawnCapabilityForReceipt(reservation.receipt.launchId);
-  const launched = startHeadlessReview(
+  const launched = await startHeadlessReview(
     flow.id,
     round.n,
     role,
