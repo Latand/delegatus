@@ -313,7 +313,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
       const previousFiles = state.store.filesRevision;
       hasSnapshot = true;
       setState({
-        store: installSnapshot(snapshot),
+        store: installSnapshot(snapshot, state.store),
         lastEventAt: deps.now(),
         structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
       });
@@ -496,7 +496,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
         || (snapshot.snapshotSeq === state.store.cursor && state.store === before)) {
         const previousFiles = state.store.filesRevision;
         setState({
-          store: installSnapshot(snapshot),
+          store: installSnapshot(snapshot, state.store),
           lastEventAt: deps.now(),
           structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
         });
@@ -542,7 +542,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
       fallbackAppliedSerial = Math.max(fallbackAppliedSerial, myPollSerial);
       const prevFiles = state.store.filesRevision;
       setState({
-        store: installSnapshot(snapshot),
+        store: installSnapshot(snapshot, state.store),
         lastEventAt: deps.now(),
         connection: "degraded",
         structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
@@ -605,7 +605,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
         // dead-host Re-check must too, or a tab keeps a stale gate after a
         // rollback flip (issue #241 finding 1).
         setState({
-          store: installSnapshot(snapshot),
+          store: installSnapshot(snapshot, state.store),
           lastEventAt: deps.now(),
           structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
         });

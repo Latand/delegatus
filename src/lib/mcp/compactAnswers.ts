@@ -80,18 +80,17 @@ function stageRuntime(stage: PipelineStage, pipeline: Pipeline) {
 
 /**
  * What a `pipeline_action` answers: where the lane stands after the action, and
- * the digests the next guarded edit names. The same shape `pause` has always
- * answered with, now for every action.
+ * the digests when an edit or full answer asks for them. Routine actions
+ * keep the revision while get_pipeline remains the guarded read.
  */
-export function pipelineActionAcknowledgement(pipeline: Pipeline) {
+export function pipelineActionAcknowledgement(pipeline: Pipeline, includeDigests = false) {
   return {
     pipelineId: pipeline.id,
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
     ...finishesTaskFields(pipeline),
-    stageDigests: stageDigests(pipeline.stages ?? []),
-    graphDigest: graphDigest(pipeline.stages ?? []),
+    ...(includeDigests ? { stageDigests: stageDigests(pipeline.stages ?? []), graphDigest: graphDigest(pipeline.stages ?? []) } : {}),
   };
 }
 

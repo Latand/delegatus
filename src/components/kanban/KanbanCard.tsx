@@ -29,6 +29,7 @@ import { TaskMotionLine } from "./TaskMotionLine";
 import { TaskStepsLine } from "./TaskStepsLine";
 import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { useSeatSignal } from "./kanbanSeatStore";
+import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -643,6 +644,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
       {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
+      <TaskStatusNote note={card.task?.note} nowMs={nowMs} />
       {/* #2059: the task's own links and every pipeline's, deduplicated, and
           still there when the card is collapsed and its pipelines are not. */}
       {card.task ? (
@@ -675,6 +677,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
+      {!collapsed ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} full /> : null}
       {/* The standing tick notice opens the panel that holds the setting it
           describes. */}
       {!collapsed && card.task && isSeatTickNotice(card.task.text) ? <SeatTickNoticeButton project={card.project} /> : null}

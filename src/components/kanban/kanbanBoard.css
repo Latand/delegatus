@@ -1613,3 +1613,10 @@
 .hold-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .hold-actions button { padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px; }
 @media (pointer: coarse) { .hold-editor input, .hold-editor select, .hold-actions button { min-height: 44px; } }
+/* A resting card keeps its note quiet; the existing task focus/reader shows
+   the full text below the description without repeating it under the title. */
+.kb .card [data-task-note="full"] { display: none; }
+.kb .card:not(.folded):focus-within [data-task-note="full"],
+.kb .card:not(.folded).has-reader [data-task-note="full"] { display: flex; }
+.kb .card:not(.folded):focus-within [data-task-note="compact"],
+.kb .card:not(.folded).has-reader [data-task-note="compact"] { display: none; }

@@ -167,6 +167,8 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Current situation, replaced by each writer; no thread. */
+  note?: TaskNote;
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
@@ -255,4 +257,16 @@ export interface BoardTask {
   chosen?: true;
   createdAt: string;
   updatedAt: string; // bumped by every PATCH
+}
+
+export const TASK_NOTE_LIMIT = 280;
+export type TaskNoteAuthor =
+  | { kind: "operator" }
+  // Engine fallback omits conversationId; an orchestrator tool write retains it.
+  | { kind: "orchestrator"; conversationId?: string | null }
+  | { kind: "agent"; conversationId: string | null };
+export interface TaskNote {
+  text: string;
+  author: TaskNoteAuthor;
+  updatedAt: string;
 }

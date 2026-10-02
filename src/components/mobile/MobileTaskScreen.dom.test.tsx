@@ -507,3 +507,14 @@ test("an ordinary task has no tick control", () => {
   const { host } = mount(taskPorts([]), noPipelinePorts);
   expect(q(host, "[data-phone-task-tick-open]")).toBeNull();
 });
+
+test("the opened phone task shows the full passive note beneath its description", () => {
+  const note = { text: "Review is running. The route checks are next.", author: { kind: "agent" as const, conversationId: "conversation_fixture" }, updatedAt: iso(120) };
+  const { host } = mount(taskPorts([]), noPipelinePorts, { ...theTask, note });
+  const line = q(host, "[data-task-note=full]");
+  expect(line?.textContent).toContain(note.text);
+  expect(line?.querySelectorAll("button,input,textarea")).toHaveLength(0);
+  expect(line?.querySelector("time")?.getAttribute("datetime")).toBe(note.updatedAt);
+  const description = q(host, "[data-phone-task-description]")!;
+  expect(description.compareDocumentPosition(line!) & 4).toBe(4);
+});

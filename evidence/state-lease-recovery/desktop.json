@@ -1,0 +1,62 @@
+[
+  {
+    "scheme": "light",
+    "locale": "en",
+    "geometry": {
+      "x": 248,
+      "y": 844,
+      "width": 1192,
+      "height": 56,
+      "right": 1440,
+      "bottom": 900,
+      "overlaps": 0,
+      "clipped": false
+    },
+    "pageErrors": []
+  },
+  {
+    "scheme": "light",
+    "locale": "uk",
+    "geometry": {
+      "x": 248,
+      "y": 844,
+      "width": 1192,
+      "height": 56,
+      "right": 1440,
+      "bottom": 900,
+      "overlaps": 0,
+      "clipped": false
+    },
+    "pageErrors": []
+  },
+  {
+    "scheme": "dark",
+    "locale": "en",
+    "geometry": {
+      "x": 248,
+      "y": 844,
+      "width": 1192,
+      "height": 56,
+      "right": 1440,
+      "bottom": 900,
+      "overlaps": 0,
+      "clipped": false
+    },
+    "pageErrors": []
+  },
+  {
+    "scheme": "dark",
+    "locale": "uk",
+    "geometry": {
+      "x": 248,
+      "y": 844,
+      "width": 1192,
+      "height": 56,
+      "right": 1440,
+      "bottom": 900,
+      "overlaps": 0,
+      "clipped": false
+    },
+    "pageErrors": []
+  }
+]
