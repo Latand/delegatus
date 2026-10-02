@@ -10,17 +10,20 @@ export async function confirmedSend(file: RegistryFile, operationId: string): Pr
     || owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)) return false;
   const delivery = file.heldDeliveries[owner.deliveryId];
   const conversation = file.conversations[owner.conversationId];
-  // Use the generation the attempt actually targeted, including after reseating.
-  const generation = delivery?.generationId
-    ? conversation?.generations.find((candidate) => candidate.id === delivery.generationId)
-    : conversation?.generations.at(-1);
+  // The operation owner survives reservation retention and records the
+  // generation this attempt targeted, including after a successor is committed.
+  const targetGenerationId = owner.targetGenerationId ?? delivery?.generationId;
+  const generation = targetGenerationId
+    ? conversation?.generations.find((candidate) => candidate.id === targetGenerationId)
+    : null;
   if (!conversation || !generation) return false;
   try {
     if (conversation.engine === "codex") {
-      if (!delivery) return false;
+      const text = owner.evidenceText ?? delivery?.text;
+      if (text === undefined || text === null) return false;
       const { readCodexConfirmedDelivery } = await import("./codexAppServerHost");
       return Boolean(await readCodexConfirmedDelivery(generation.path, {
-        id: operationId, text: delivery.text, contentDigest: owner.contentDigest ?? undefined,
+        id: operationId, text, contentDigest: owner.contentDigest ?? undefined,
       }));
     }
     if (conversation.engine !== "claude") return false;
@@ -34,18 +37,31 @@ export async function confirmedSend(file: RegistryFile, operationId: string): Pr
     const users = readClaudeTranscriptUsers(generation.path);
     const consumed = new Set(states.filter((state) => state.delivered && state.engineMessageId)
       .map((state) => state.engineMessageId));
-    for (const state of states) {
-      if (state.delivered) continue;
+    const candidates = users.filter((user) => user.uuid && !consumed.has(user.uuid));
+    const matchesState = (user: typeof users[number], state: typeof states[number]): boolean => {
+      const timestamp = Date.parse(user.timestamp ?? "");
       const queuedAt = Date.parse(state.queuedAt ?? "");
-      if (!Number.isFinite(queuedAt)) continue;
-      const user = users.find((candidate) => candidate.uuid && !consumed.has(candidate.uuid)
-        && candidate.contentDigest === state.entry.contentDigest
-        && Number.isFinite(Date.parse(candidate.timestamp ?? ""))
-        && Date.parse(candidate.timestamp!) >= queuedAt);
-      if (!user) continue;
-      consumed.add(user.uuid);
-      if (state.entry.id === operationId) return true;
-    }
+      return Number.isFinite(timestamp) && Number.isFinite(queuedAt) && timestamp >= queuedAt
+        && (user.contentDigest === state.entry.contentDigest
+          || (state.entry.content.images.length > 0
+            && user.imageCount === state.entry.content.images.length
+            && user.text === state.entry.content.text));
+    };
+    const targetCandidates = candidates.filter((user) => {
+      const timestamp = Date.parse(user.timestamp ?? "");
+      const queuedAt = Date.parse(target.queuedAt ?? "");
+      return Number.isFinite(timestamp) && Number.isFinite(queuedAt) && timestamp >= queuedAt
+        && (user.contentDigest === owner.contentDigest
+          || ((owner.evidenceImageCount ?? 0) > 0
+            && user.imageCount === owner.evidenceImageCount
+            && user.text === (owner.evidenceText ?? target.entry.content.text)));
+    });
+    if (targetCandidates.length !== 1) return false;
+    const user = targetCandidates[0]!;
+    const matchingStates = states.filter((state) => !state.delivered && matchesState(user, state));
+    if (matchingStates.length === 1 && matchingStates[0]?.entry.id === operationId) return true;
+    // A canonical Claude user turn has no operation key. Content and time
+    // cannot distinguish competing sends or duplicate transcript turns.
   } catch {
     // A failed evidence read never becomes a safe resend or a delivered claim.
   }

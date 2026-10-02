@@ -676,6 +676,11 @@ export interface DeliveryOperationOwner {
   command: HeldDeliveryCommand;
   requestDigest: string;
   contentDigest: string | null;
+  /** Recipient evidence stays tied to the generation that received the send
+      after the reservation is compacted or a successor is committed. */
+  targetGenerationId?: string | null;
+  evidenceText?: string | null;
+  evidenceImageCount?: number;
   createdAt: string;
   /** The attempt this row REPLACES, when a retry minted a fresh operation for a
       send that already had one (#1131).
@@ -2447,6 +2452,9 @@ function syncDeliveryOperationOwnerState(
 ): void {
   const owner = file.deliveryOperationOwners[delivery.command.operationId];
   if (owner?.deliveryId !== delivery.id) return;
+  if (delivery.generationId) owner.targetGenerationId = delivery.generationId;
+  owner.evidenceText ??= delivery.text;
+  owner.evidenceImageCount ??= delivery.runtimeImages.length;
   const terminalState = terminalDeliveryState(delivery);
   owner.terminalState = terminalState;
   if (terminalState === null) {
@@ -2760,6 +2768,15 @@ function normalizeDeliveryOperationOwners(
         contentDigest: typeof owner.contentDigest === "string"
           ? owner.contentDigest
           : referencedDelivery?.contentDigest ?? settledDelivery?.contentDigest ?? null,
+        targetGenerationId: typeof owner.targetGenerationId === "string"
+          ? owner.targetGenerationId
+          : referencedDelivery?.generationId ?? settledDelivery?.generationId ?? null,
+        evidenceText: typeof owner.evidenceText === "string"
+          ? owner.evidenceText
+          : referencedDelivery?.text ?? settledDelivery?.text ?? null,
+        evidenceImageCount: Number.isSafeInteger(owner.evidenceImageCount) && owner.evidenceImageCount! >= 0
+          ? owner.evidenceImageCount
+          : referencedDelivery?.runtimeImages.length ?? settledDelivery?.runtimeImages.length ?? 0,
         createdAt: typeof owner.createdAt === "string"
           ? owner.createdAt
           : referencedDelivery?.createdAt ?? settledDelivery?.createdAt ?? LEGACY_POLICY_RESTARTED_AT,
@@ -2799,6 +2816,9 @@ function normalizeDeliveryOperationOwners(
       command: delivery.command,
       requestDigest: delivery.requestDigest,
       contentDigest: delivery.contentDigest,
+      targetGenerationId: delivery.generationId,
+      evidenceText: delivery.text,
+      evidenceImageCount: delivery.runtimeImages.length,
       createdAt: delivery.createdAt,
       retryOfOperationId: null,
       terminalState: terminalDeliveryState(delivery),
@@ -2913,6 +2933,9 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       command: delivery.command,
       requestDigest: delivery.requestDigest,
       contentDigest: delivery.contentDigest,
+      targetGenerationId: delivery.generationId,
+      evidenceText: delivery.text,
+      evidenceImageCount: delivery.runtimeImages.length,
       createdAt: delivery.createdAt,
       retryOfOperationId: null,
       terminalState: null,
@@ -8735,6 +8758,9 @@ export class AgentRegistry {
         command: held.command,
         requestDigest: held.requestDigest!,
         contentDigest: held.contentDigest,
+        targetGenerationId: held.generationId,
+        evidenceText: held.text,
+        evidenceImageCount: held.runtimeImages.length,
         createdAt: held.createdAt,
         retryOfOperationId: null,
         terminalState: null,
@@ -9016,6 +9042,9 @@ export class AgentRegistry {
           command: delivery.command,
           requestDigest: delivery.requestDigest ?? "",
           contentDigest: delivery.contentDigest,
+          targetGenerationId: delivery.generationId,
+          evidenceText: delivery.text,
+          evidenceImageCount: delivery.runtimeImages.length,
         }
         : null);
       if (!source?.requestDigest) return false;
@@ -9027,6 +9056,9 @@ export class AgentRegistry {
         command: { ...source.command, operationId: retryOperationId },
         requestDigest: source.requestDigest,
         contentDigest: source.contentDigest,
+        targetGenerationId: source.targetGenerationId ?? delivery?.generationId ?? null,
+        evidenceText: source.evidenceText ?? delivery?.text ?? null,
+        evidenceImageCount: source.evidenceImageCount ?? delivery?.runtimeImages.length ?? 0,
         createdAt: now(),
         retryOfOperationId: previousOperationId,
         terminalState: null,
