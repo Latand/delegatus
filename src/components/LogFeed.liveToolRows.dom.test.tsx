@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
+import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { enqueueOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setLocale } from "@/lib/i18n";
 import { appendRuntimeLiveTurnDelta, projectRuntimeLiveTurnItem, type RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
@@ -123,6 +124,13 @@ const sessionState = { session };
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualLogTail = await import("@/hooks/useLogTail");
 const actualToolCues = await import("@/hooks/useToolActivityCues");
+const actualDeputy = await import("./conversation/DeputyBlock");
+const actualMobile = await import("@/hooks/useIsMobile");
+let phone = false;
+mock.module("@/hooks/useIsMobile", () => ({ ...actualMobile, useIsMobile: () => phone }));
+mock.module("./conversation/DeputyBlock", () => ({ ...actualDeputy,
+  DeputyBlock: () => <div data-deputy-block="fixture">Deputy answer</div>,
+}));
 const inertRuntime = { enabled: true, connection: "live" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
@@ -168,6 +176,7 @@ const { resetCanonicalAssistantClaimsForTests } = await import("./conversation/l
 
 const roots = new Set<Root>();
 beforeEach(() => {
+  phone = false;
   setLocale("en");
   dom.sessionStorage.clear();
   resetOutboxForTests();
@@ -184,6 +193,8 @@ afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
   mock.module("@/hooks/useLogTail", () => actualLogTail);
   mock.module("@/hooks/useToolActivityCues", () => actualToolCues);
+  mock.module("./conversation/DeputyBlock", () => actualDeputy);
+  mock.module("@/hooks/useIsMobile", () => actualMobile);
 });
 
 const file: FileEntry = {
@@ -207,7 +218,7 @@ const file: FileEntry = {
   conversationId: CONVERSATION_ID,
 } as FileEntry;
 
-function render(): { host: HTMLElement; root: Root; paint: () => void } {
+function render(deputies?: SeatDeputyView[]): { host: HTMLElement; root: Root; paint: () => void } {
   const host = dom.document.createElement("div");
   dom.document.body.append(host);
   const root = createRoot(host as unknown as HTMLElement);
@@ -216,6 +227,7 @@ function render(): { host: HTMLElement; root: Root; paint: () => void } {
     root.render(
       <LogFeed
         file={file}
+        deputies={deputies}
         showSvc={false}
         lineFilter=""
         onStatus={() => undefined}
@@ -449,4 +461,29 @@ test("streaming markdown holds unfinished fences and tables until completion", (
   tailState.lines = [JSON.stringify(record)];
   paint();
   expect(host.querySelector('[data-feed-source-id="markdown-answer"]')).toBe(row);
+});
+
+test.each([false, true])("pending replies retain the seat continuation after a deputy (phone=%s)", (mobile) => {
+  phone = mobile;
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(0), message: { content: "Original request" } })];
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "after-deputy", "Seat resumes", AT(2)) };
+  const { host, paint } = render([{ askId: "deputy", startedAt: AT(1), state: "ended" } as SeatDeputyView]);
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.querySelector('[data-seat-speaker="resumes"]')?.textContent).toContain("Original request");
+  const record = { type: "assistant", uuid: "seat-reply", timestamp: AT(3), message: { content: [{ type: "text", text: "Seat resumes" }] } };
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(sessionState.session.liveTurn, "after-deputy", record, "completed", AT(3)) };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(row.querySelector('[data-seat-speaker="resumes"]')?.textContent).toContain("Original request");
+  tailState.lines = [...tailState.lines, JSON.stringify(record)];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="seat-reply"]')).toBe(row);
+  expect(row.querySelectorAll('[data-seat-speaker="resumes"]')).toHaveLength(1);
+});
+
+test("a pending seat reply keeps the live speaker lead while a deputy is active", () => {
+  tailState.lines = [0, 2].map(second => JSON.stringify({ type: "user", timestamp: AT(second), message: { content: `Request ${second}` } }));
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "active-deputy", "Seat reply", AT(3)) };
+  const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "running" } as SeatDeputyView]);
+  expect(host.querySelector('[data-live-turn] [data-seat-speaker="live"]')).not.toBeNull();
 });

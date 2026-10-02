@@ -1415,6 +1415,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       }
       else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
     }
+    if (liveTail.handoff.pending.length || liveTail.handoff.bindings.size) {
+      const rowInstants = new Map<string, number | null>();
+      for (const entry of visibleItems) {
+        rowInstants.set(entry.key, transcriptInstant(entry.item));
+        if (entry.anchorKey) rowInstants.set(entry.anchorKey, transcriptInstant(entry.item));
+      }
+      const withAnswers = mergeAssistantRows(rows, liveTail.handoff, ({ key, live }) => ({
+        kind: "item", key, anchorKey: key, live,
+        item: { kind: "prose", ts: live.startedAt ?? live.completedAt, text: live.text,
+          engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : "claude",
+          ...(live.itemId ? { sourceId: live.itemId } : {}) },
+      }), row => row.kind === "message"
+        ? row.entry?.at ?? rowInstants.get(row.anchorKey ?? row.key) ?? null
+        : row.kind === "delta" ? row.instant ?? null
+          : row.kind === "item" ? transcriptInstant(row.item) : null);
+      rows.splice(0, rows.length, ...withAnswers);
+    }
     /* A block splits the seat's own answer, so the first seat row after one
        names the seat head it continues (docs/design/ghost-seat.md §6.1). */
     if (deputies.length) {
@@ -1431,21 +1448,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         if (row.kind === "item" || row.kind === "delta") rows[index] = { ...row, resumes: { ask } };
       }
     }
-    if (!liveTail.handoff.pending.length && !liveTail.handoff.bindings.size) return rows;
-    const rowInstants = new Map<string, number | null>();
-    for (const entry of visibleItems) {
-      rowInstants.set(entry.key, transcriptInstant(entry.item));
-      if (entry.anchorKey) rowInstants.set(entry.anchorKey, transcriptInstant(entry.item));
-    }
-    return mergeAssistantRows(rows, liveTail.handoff, ({ key, live }) => ({
-      kind: "item", key, anchorKey: key, live,
-      item: { kind: "prose", ts: live.startedAt ?? live.completedAt, text: live.text,
-        engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : "claude",
-        ...(live.itemId ? { sourceId: live.itemId } : {}) },
-    }), row => row.kind === "message"
-      ? row.entry?.at ?? rowInstants.get(row.anchorKey ?? row.key) ?? null
-      : row.kind === "delta" ? row.instant ?? null
-        : row.kind === "item" ? transcriptInstant(row.item) : null);
+    return rows;
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1755,7 +1758,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               /* On the phone a prose row names its speaker in its own header,
                  so the continuation joins that header rather than stacking a
                  second name over it (ghost-seat.md §6.1). */
-              const foldResumes = resumes !== undefined && phone && item.kind === "prose";
+              const foldResumes = resumes !== undefined && phone && item.kind === "prose" && row.live?.phase !== "streaming";
               return (
                 /* Session-stable keys: a row keeps its DOM node while the
                    window slides. Compact panes live on the zoomable canvas:
@@ -1774,7 +1777,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
                   className={compact ? "feed-cv" : undefined}
                 >
-                  {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
+                  {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} />
+                    : row.live && !resumes && deputies.some(deputy => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null}
                   {row.live?.omittedChars ? <div data-live-turn-omitted-chars className="my-1 text-caption text-muted">
                     {t("feed.liveOmittedChars", { chars: row.live.omittedChars })}
                   </div> : null}
