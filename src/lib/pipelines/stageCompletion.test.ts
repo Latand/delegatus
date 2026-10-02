@@ -281,6 +281,7 @@ test("a long stage_report finding survives settlement and the fix relay intact",
   const result = await h.report(2, { verdict: "fail", findings: [{ severity: "P1", text: body }] });
   expect(result.report?.verdict.findings).toEqual([`P1 — ${body}`]);
   await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await settlePendingStageProvenance(h.ports);
   await tickPipelines([], h.ports);
   expect(attemptsOf("verify")[0]!.verdict?.rankedFindings).toEqual([{ severity: "P1", text: body }]);
   expect(attemptsOf("build")[1]!.input).toContain(`P1 — ${body}`);
@@ -483,6 +484,29 @@ test("a second call replaces the first before settlement, and is refused after i
   expect(attemptsOf("build")[0]!.verdict).toEqual({ status: "pass" });
   expect(attemptsOf("build")[0]!.report).toMatchObject({ seq: 2 });
   expect(current().stageReports).toHaveLength(2);
+});
+
+test("replaced pending stage report provenance settles as superseded while the newer report is observed", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  await h.report(1, { verdict: "pass", summary: "First report." });
+  await h.report(1, { verdict: "pass", summary: "Replacement report." });
+
+  expect(current().stageReports).toMatchObject([
+    { seq: 1, replaces: null, provenanceState: "unknown", provenanceAt: expect.any(String) },
+    { seq: 2, replaces: 1, provenanceState: "pending" },
+  ]);
+  await settlePendingStageProvenance(h.ports);
+  expect(attemptsOf("build")[0]!.report).toMatchObject({ seq: 2, summary: "Replacement report.", provenance: { state: "complete", head: HEAD } });
+  expect(current().stageReports).toMatchObject([
+    { seq: 1, provenanceState: "unknown", provenanceAt: expect.any(String) },
+    { seq: 2, provenanceState: "complete", provenanceAt: expect.any(String) },
+  ]);
+  await settlePendingStageProvenance(h.ports);
+  expect(current().stageReports).toMatchObject([
+    { seq: 1, provenanceState: "unknown", provenanceAt: expect.any(String) },
+    { seq: 2, provenanceState: "complete", provenanceAt: expect.any(String) },
+  ]);
 });
 
 test("the tool call wins when the turn also ends in a fenced JSON verdict", async () => {

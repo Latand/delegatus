@@ -6395,7 +6395,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       const delivery = pipeline.delivery;
       if (publishesRemoteBranch(pipeline) && delivery?.active && delivery.ownerId === pipeline.id
         && delivery.operation?.state === "running" && delivery.operation.epoch === delivery.epoch
-        && (pipeline.state === "running" || pipeline.state === "needs_decision")) {
+        && ["running", "needs_decision", "paused", "closed"].includes(pipeline.state)) {
         await reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null);
       }
     }
@@ -9588,6 +9588,7 @@ export async function reportStageCompletion(
       provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,
     };
+    const replacedPendingSeq = prior?.provenance.state === "pending" ? prior.seq : null;
     attempt.report = report;
     const entry: PipelineStageReportEntry = {
       seq,
@@ -9601,8 +9602,11 @@ export async function reportStageCompletion(
       provenanceState: "pending",
       summary: report.summary,
     };
-    /* Replaced, never pushed into: loaded records share leaves with the cache. */
-    pipeline.stageReports = [...entries, entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
+    /* A replaced intent no longer has a report to observe. Settle its journal
+       row atomically so pending always names work the next tick can perform. */
+    pipeline.stageReports = [...entries.map((existing) => existing.seq === replacedPendingSeq
+      ? { ...existing, provenanceState: "unknown" as const, provenanceAt: report.at }
+      : existing), entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
     persist();
     return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null };
   });

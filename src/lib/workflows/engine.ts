@@ -479,7 +479,20 @@ async function tickFinishing(wf: Workflow, ports: WorkflowPorts): Promise<void> 
   const flow = wf.flowId ? ports.getFlow(wf.flowId) : null;
   const fence = workflowGitFence(wf, ports);
   let res: Awaited<ReturnType<typeof runFinish>>;
-  try { res = await runFinish(wf, prBody(wf, flow?.rounds ?? []), fence.exec); if (!fence.current()) return; }
+  try {
+    res = await runFinish(wf, prBody(wf, flow?.rounds ?? []), fence.exec, ports.exec);
+    if (!fence.current()) {
+      if (!res.ok && res.recoveryRequired) {
+        const current = loadWorkflows();
+        const paused = current.find((item) => item.id === wf.id);
+        if (paused && (paused.state === "paused" || paused.state === "closed")) {
+          paused.stateDetail = res.error;
+          saveWorkflows(current);
+        }
+      }
+      return;
+    }
+  }
   finally { fence.release(); }
   if (!res.ok) {
     park(wf, res.error);

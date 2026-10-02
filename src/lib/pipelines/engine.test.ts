@@ -12438,6 +12438,32 @@ async function interruptedPublication() {
   return { h, box, pipeline: loadPipelines()[0]! };
 }
 
+test.each(["paused", "closed"] as const)("a quiescent accepted publication settles while its lane is %s without reopening or republishing", async (state) => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operationId = pipeline.delivery!.operation!.id;
+  box.setRemote(box.passedSha);
+  pipeline.state = state;
+  pipeline.pausedState = state === "paused" ? "running" : null;
+  if (state === "closed") { pipeline.closedAt = "2026-10-02T00:00:00.000Z"; pipeline.cursor = null; }
+  savePipelines([pipeline]);
+  const pushesBefore = box.order.filter((item) => item.startsWith("push:")).length;
+
+  const descriptor = fs.openSync(pipeline.delivery!.operation!.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state, delivery: { operation: { id: operationId, state: "running" } } });
+  } finally { fs.closeSync(descriptor); }
+
+  await tickPipelines([], h.ports);
+
+  const settled = loadPipelines()[0]!;
+  expect(settled).toMatchObject({ state, delivery: { operation: { id: operationId, state: "settled", result: { ok: true, sha: box.passedSha } } }, publishedCommit: box.passedSha });
+  expect(box.order.filter((item) => item.startsWith("push:"))).toHaveLength(pushesBefore);
+  if (state === "paused") expect(settled.cursor).toMatchObject({ stageId: "build", state: "committing" });
+  else expect(settled.cursor).toBeNull();
+});
+
 test("a same-owner publication waits through another tick, then advances once settled (#1939)", async () => {
   const { h, box, pipeline } = await interruptedPublication();
   const operation = pipeline.delivery!.operation!;

@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import path from "node:path";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import type { Flow } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
+import { realExec } from "./provision";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-engine-test-"));
 const { createWorkflowFromRequest, patchWorkflow, tickWorkflows } = await import("./engine");
@@ -160,6 +162,59 @@ function load(id: string): Workflow {
   const wf = loadWorkflows().find((item) => item.id === id);
   if (!wf) throw new Error("workflow disappeared from the store");
   return wf;
+}
+
+function git(cwd: string, ...args: string[]): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+async function prepareMergeCancellation(harness: ReturnType<typeof makeHarness>) {
+  const wf = await createWf(harness.ports);
+  const repoDir = path.join(process.env.LLV_STATE_DIR!, `merge-cancel-${wf.id}`);
+  fs.mkdirSync(repoDir, { recursive: true });
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.name", "Workflow Test");
+  git(repoDir, "config", "user.email", "noreply@example.invalid");
+  fs.writeFileSync(path.join(repoDir, "base.txt"), "base\n");
+  git(repoDir, "add", "base.txt");
+  git(repoDir, "commit", "-m", "base");
+  const base = git(repoDir, "rev-parse", "HEAD");
+  git(repoDir, "switch", "-c", wf.branch);
+  fs.writeFileSync(path.join(repoDir, "feature.txt"), "feature\n");
+  git(repoDir, "add", "feature.txt");
+  git(repoDir, "commit", "-m", "feature");
+  git(repoDir, "switch", "main");
+
+  const hooks = path.join(repoDir, ".git", "hooks");
+  fs.mkdirSync(hooks, { recursive: true });
+  const ready = path.join(repoDir, ".git", "merge-hook-ready");
+  const release = path.join(repoDir, ".git", "merge-hook-release");
+  fs.writeFileSync(path.join(hooks, "prepare-commit-msg"),
+    `#!/bin/sh\ntouch ${JSON.stringify(ready)}\nwhile [ ! -f ${JSON.stringify(release)} ]; do sleep 0.02; done\n`, { mode: 0o700 });
+
+  const workflows = loadWorkflows();
+  const current = workflows.find((item) => item.id === wf.id)!;
+  current.state = "finishing";
+  current.repoDir = repoDir;
+  current.worktreeDir = path.join(repoDir, "workflow-worktree");
+  current.baseRef = base;
+  current.baseBranch = "main";
+  current.template.finish = "merge";
+  saveWorkflows(workflows);
+
+  const original = harness.ports.exec;
+  harness.ports.exec = (command, args, cwd, env, options) => cwd === repoDir
+    ? realExec(command, args, cwd, env, options)
+    : original(command, args, cwd, env, options);
+  return { workflow: current, repoDir, base, ready, release };
+}
+
+async function waitForFile(filename: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(filename) && Date.now() < deadline) await Bun.sleep(10);
+  expect(fs.existsSync(filename)).toBe(true);
 }
 
 /** Marks the agent's turn as finished with the given last message. */
@@ -483,6 +538,50 @@ test.each((["finishing", "provisioning"] as const).flatMap((phase) => (["pause",
       expect(h.calls.some((call) => call.includes("git push") || call.includes("gh pr create") || call.includes("git worktree add"))).toBe(false);
       expect(load(wf.id)).toMatchObject({ state: action === "cycle" ? phase : action === "close" ? "closed" : "paused", prUrl: null });
     } finally { release(); await work; }
+});
+
+test("pausing while the merge commit hook runs aborts only the workflow merge", async () => {
+  const h = makeHarness();
+  const merge = await prepareMergeCancellation(h);
+  const work = tickWorkflows([], h.ports);
+  try {
+    await waitForFile(merge.ready);
+    expect(git(merge.repoDir, "rev-parse", "MERGE_HEAD")).not.toBe("");
+    await patchWorkflow(merge.workflow.id, { action: "pause" }, h.ports);
+    await Bun.sleep(75);
+    fs.writeFileSync(merge.release, "continue");
+    await work;
+
+    expect(load(merge.workflow.id)).toMatchObject({ state: "paused", pausedState: "finishing" });
+    expect(load(merge.workflow.id).stateDetail).toBe("paused by operator");
+    expect(git(merge.repoDir, "rev-parse", "HEAD")).toBe(merge.base);
+    expect(spawnSync("git", ["rev-parse", "--verify", "MERGE_HEAD"], { cwd: merge.repoDir }).status).not.toBe(0);
+    expect(git(merge.repoDir, "status", "--porcelain")).toBe("");
+  } finally {
+    fs.writeFileSync(merge.release, "continue");
+    await work;
+  }
+});
+
+test("merge cancellation preserves new operator files and records recovery when ownership is uncertain", async () => {
+  const h = makeHarness();
+  const merge = await prepareMergeCancellation(h);
+  const work = tickWorkflows([], h.ports);
+  try {
+    await waitForFile(merge.ready);
+    await patchWorkflow(merge.workflow.id, { action: "pause" }, h.ports);
+    fs.writeFileSync(path.join(merge.repoDir, "operator-note.txt"), "keep this\n");
+    await Bun.sleep(75);
+    fs.writeFileSync(merge.release, "continue");
+    await work;
+
+    expect(load(merge.workflow.id)).toMatchObject({ state: "paused", stateDetail: expect.stringContaining("recovery") });
+    expect(fs.readFileSync(path.join(merge.repoDir, "operator-note.txt"), "utf8")).toBe("keep this\n");
+    expect(spawnSync("git", ["rev-parse", "--verify", "MERGE_HEAD"], { cwd: merge.repoDir }).status).toBe(0);
+  } finally {
+    fs.writeFileSync(merge.release, "continue");
+    await work;
+  }
 });
 
 test("a finish failure parks; retry-stage reruns the finish", async () => {

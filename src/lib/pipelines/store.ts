@@ -355,6 +355,8 @@ function isStageReportEntry(value: unknown): boolean {
     && ["pass", "fail", "needs_decision"].includes(String(entry.status))
     && Number.isSafeInteger(entry.findings) && (entry.findings as number) >= 0
     && (entry.replaces === null || (Number.isSafeInteger(entry.replaces) && (entry.replaces as number) >= 1))
+    && (entry.provenanceState === undefined || ["pending", "complete", "unknown"].includes(String(entry.provenanceState)))
+    && (entry.provenanceAt === undefined || typeof entry.provenanceAt === "string")
     && isNullableString(entry.summary);
 }
 
@@ -1042,6 +1044,12 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
       : undefined,
     restored: undefined,
     stages: pipeline.stages.map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
+    stageReports: pipeline.stageReports?.map((entry) => ({
+      ...entry,
+      ...(entry.provenanceAt === undefined ? {} : {
+        provenanceAt: typeof entry.provenanceAt === "string" ? entry.provenanceAt : entry.at,
+      }),
+    })),
     cursor: pipeline.cursor
       ? { ...pipeline.cursor, input: pipeline.cursor.input ?? null, activatedBy: pipeline.cursor.activatedBy ?? null }
       : null,

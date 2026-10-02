@@ -199,7 +199,7 @@ export function setupStatus(wf: Workflow, now: number = Date.now()): SetupStatus
   return { status: "failed", detail: "setup was interrupted before it finished" };
 }
 
-export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string };
+export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string; recoveryRequired?: boolean };
 
 /** First line of the task as the PR title, in the repo's usual short form. */
 export function prTitle(wf: Workflow): string {
@@ -231,24 +231,69 @@ export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Prom
 }
 
 /** Merge the wf/ branch into the base branch locally, without pushing (W7). */
-export async function finishMerge(wf: Workflow, exec: ExecPort): Promise<FinishResult> {
+export async function finishMerge(wf: Workflow, exec: ExecPort, cleanupExec: ExecPort = exec): Promise<FinishResult> {
   const head = (await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.repoDir));
   if (head.code !== 0) return failure("resolving the repo branch", head);
   const current = head.stdout.trim();
   if (current !== wf.baseBranch) {
     return { ok: false, error: `the repo checkout is on ${current}; check out ${wf.baseBranch} before merging` };
   }
+  const before = await exec("git", ["rev-parse", "HEAD"], wf.repoDir);
+  const dirty = await exec("git", ["status", "--porcelain"], wf.repoDir);
+  const existingMerge = await exec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir);
+  if (before.code !== 0 || dirty.code !== 0 || dirty.stdout.trim() || existingMerge.code !== 1) {
+    return { ok: false, error: "the repo checkout is dirty or already merging; inspect it before finishing this workflow" };
+  }
+  const originalHead = before.stdout.trim();
+  const target = await exec("git", ["rev-parse", `${wf.branch}^{commit}`], wf.repoDir);
+  if (target.code !== 0 || !/^[0-9a-f]{40}$/i.test(target.stdout.trim())) {
+    return { ok: false, error: "resolving the workflow branch head failed; inspect the repo before retrying" };
+  }
+  const expected = await exec("git", ["merge-tree", "--write-tree", originalHead, target.stdout.trim()], wf.repoDir);
+  const expectedTree = expected.code === 0 ? expected.stdout.trim().split("\n")[0] : "";
+  if (!/^[0-9a-f]{40}$/i.test(expectedTree)) {
+    return { ok: false, error: "the workflow merge could not be previewed safely; inspect the repo before retrying" };
+  }
   const merge = (await exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir, controllerCommitIdentityEnv()));
   if (merge.code !== 0) {
-    /* Leave the checkout clean: an aborted merge is retryable after the user
-       resolves whatever blocked it. */
-    (await exec("git", ["merge", "--abort"], wf.repoDir));
+    /* Cancellation may arrive after merge populated the index. Abort only when
+       the worktree still exactly matches the merge this workflow started. */
+    const [headAfter, mergeHead, indexTree, unstaged, untracked] = await Promise.all([
+      cleanupExec("git", ["rev-parse", "HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["write-tree"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["diff-files", "--quiet"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["ls-files", "--others", "--exclude-standard", "-z"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+    ]);
+    const cleanupOwnedMerge = headAfter.code === 0 && headAfter.stdout.trim() === originalHead
+      && mergeHead.code === 0 && mergeHead.stdout.trim() === target.stdout.trim()
+      && indexTree.code === 0 && indexTree.stdout.trim() === expectedTree
+      && unstaged.code === 0 && untracked.code === 0 && !untracked.stdout;
+    if (cleanupOwnedMerge) {
+      await cleanupExec("git", ["merge", "--abort"], wf.repoDir, undefined, { timeoutMs: 5_000 });
+      const [restoredHead, remainingMerge, status] = await Promise.all([
+        cleanupExec("git", ["rev-parse", "HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+        cleanupExec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+        cleanupExec("git", ["status", "--porcelain"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      ]);
+      if (restoredHead.code !== 0 || restoredHead.stdout.trim() !== originalHead
+        || remainingMerge.code === 0 || status.code !== 0 || status.stdout.trim()) {
+        return { ok: false, error: "git merge was interrupted; repository recovery is required because its state did not restore cleanly", recoveryRequired: true };
+      }
+    } else {
+      const status = await cleanupExec("git", ["status", "--porcelain"], wf.repoDir, undefined, { timeoutMs: 5_000 });
+      const restoredWithoutMerge = headAfter.code === 0 && headAfter.stdout.trim() === originalHead
+        && mergeHead.code !== 0 && status.code === 0 && !status.stdout.trim();
+      if (!restoredWithoutMerge) {
+        return { ok: false, error: "git merge was interrupted; repository recovery is required because new or unexpected changes prevent safe cleanup", recoveryRequired: true };
+      }
+    }
     return failure("git merge", merge);
   }
   return { ok: true, prUrl: null };
 }
 
-export async function runFinish(wf: Workflow, prBody: string, exec: ExecPort): Promise<FinishResult> {
+export async function runFinish(wf: Workflow, prBody: string, exec: ExecPort, cleanupExec: ExecPort = exec): Promise<FinishResult> {
   /* Review rounds cover uncommitted changes too, while push and merge only
      carry commits — finishing a dirty worktree would publish less than what
      was approved. Park until every approved change is committed. */
@@ -263,5 +308,5 @@ export async function runFinish(wf: Workflow, prBody: string, exec: ExecPort): P
       error: `the worktree has uncommitted changes (${names.join(", ")}${more}) — commit them, then retry the finish`,
     };
   }
-  return wf.template.finish === "merge" ? (await finishMerge(wf, exec)) : (await finishPr(wf, prBody, exec));
+  return wf.template.finish === "merge" ? (await finishMerge(wf, exec, cleanupExec)) : (await finishPr(wf, prBody, exec));
 }
