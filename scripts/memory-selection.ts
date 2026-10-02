@@ -78,7 +78,7 @@ export function samplePrompts(messages: Message[], limit: number) {
 /** Literal Phase 1 query is retained as a diagnostic. The experimental OR
  * query changes recall only; both ranking arms receive the same eight hits. */
 export function queryFor(text: string, mode: "strict" | "recall"): string | null {
-  let terms = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  let terms: string[] = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
   if (mode === "recall") {
     const stop = new Set("this that with from have your please read work task into will then what when where which about after before there their them they only need want should would could these those using agent project request current through under first just also code does more some than the and for are you how can our all any not but use run its мені треба будь ласка щоб що для або про як це так вже його вона він они это как для или что при без все уже ещё только нужно надо прочитай роботу зроби сделать".split(" "));
     terms = [...new Set(terms.map(term => term.toLowerCase()))].filter(term => term.length >= 4 && !stop.has(term));
@@ -238,7 +238,7 @@ export function parseAnswer(body: unknown, ids: string[]) {
 /** A durable reservation precedes every network call. An ambiguous outcome
  * blocks automatic retries, including after restart. One lock spans the run. */
 export async function paidReplay(sample: Sample, labels: Labels, ledgerPath: string,
-  probePath: string, request: typeof fetch = fetch): Promise<Ledger> {
+  probePath: string, request: (url: string, init: RequestInit) => Promise<Response> = fetch): Promise<Ledger> {
   validateLabels(sample, labels);
   // Checking the environment first prevents the helper's file fallback.
   if (!process.env.OPENROUTER_API_KEY?.trim()) throw new Error("OPENROUTER_API_KEY required in process environment");

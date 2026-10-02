@@ -112,7 +112,7 @@ const response = () => Response.json({ answers: Object.fromEntries(c.candidates.
 test("USD cap refuses before fetch, including the probe cost", async () => {
   const { ledger, probe } = setup(CAP_USD - 0.005);
   let calls = 0;
-  await expect(paidReplay(sample, labels, ledger, probe, (async () => { calls++; return response(); }) as typeof fetch)).rejects.toThrow("Budget");
+  await expect(paidReplay(sample, labels, ledger, probe, async () => { calls++; return response(); })).rejects.toThrow("Budget");
   expect(calls).toBe(0);
 });
 
@@ -122,7 +122,7 @@ test("reservation is durable before fetch; completed replay spends nothing twice
     calls++;
     expect(JSON.parse(fs.readFileSync(ledger, "utf8")).receipts[1].status).toBe("reserved");
     return response();
-  }) as typeof fetch;
+  });
   const result = await paidReplay(sample, labels, ledger, probe, fake);
   expect(charged(result.receipts)).toBeCloseTo(0.00011, 9);
   await paidReplay(sample, labels, ledger, probe, fake);
@@ -137,7 +137,7 @@ test.each(["network", "http", "shape"])("%s failure burns reservation and blocks
     if (kind === "network") throw new Error("lost reply");
     if (kind === "http") return new Response("private error", { status: 503 });
     return Response.json({});
-  }) as typeof fetch;
+  });
   await expect(paidReplay(sample, labels, ledger, probe, fake)).rejects.toThrow();
   expect(charged(JSON.parse(fs.readFileSync(ledger, "utf8")).receipts)).toBeCloseTo(0.01001, 9);
   await expect(paidReplay(sample, labels, ledger, probe, fake)).rejects.toThrow("Unsettled");
