@@ -43,6 +43,90 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("batched turn settlement", () => {
+  browserTest("retained terminal events settle desktop and phone before a different turn starts", async () => {
+    const out = path.resolve(".artifacts/batched-turn-settlement");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        for (const lateTurn of ["running", "unknown"] as const) {
+          const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width === 390, isMobile: width === 390 });
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          try {
+            await context.addInitScript(({ locale }) => {
+              localStorage.setItem("llv_lang", locale);
+              // The fixture installs its silent transport. Capture its runtime
+              // source and drive the real bus's canonical event entry point.
+              let installed = window.EventSource;
+              Object.defineProperty(window, "EventSource", { configurable: true,
+                get: () => installed,
+                set: (Source: typeof EventSource) => {
+                  installed = class extends Source {
+                    constructor(url: string | URL) {
+                      super(url);
+                      if (String(url).startsWith("/api/runtime/stream")) {
+                        Object.assign(window, { settlementSource: this });
+                        setTimeout(() => this.onopen?.(new Event("open")), 0);
+                      }
+                    }
+                  };
+                },
+              });
+            }, { locale });
+            await page.goto(`${server.base}?runtime=structured#c=conversation_search-ver-2`);
+            const stateSelector = width === 390 ? "[data-mobile2-chat-state]" : '[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]';
+            await page.locator(stateSelector).waitFor();
+            if (width === 390) expect(await page.locator(stateSelector).innerText()).toContain(translate(locale, "mobile2.chat.stateWorking"));
+            await page.waitForFunction(() => Boolean((window as unknown as { settlementSource?: EventSource }).settlementSource?.onmessage));
+            const initialCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            const send = async (successor: boolean) => page.evaluate(({ lateTurn, successor }) => {
+              const source = (window as unknown as { settlementSource: EventSource }).settlementSource;
+              const conversationId = "conversation_search-ver-2";
+              const events = successor ? [{ kind: "turn-started", revision: 5, payload: { conversationId, turnId: "turn-2" } }]
+                : [
+                  { kind: "turn-started", revision: 2, payload: { conversationId, turnId: "turn-1" } },
+                  { kind: "turn-ended", revision: 3, payload: { conversationId, turnId: "turn-1", outcome: "completed" } },
+                  { kind: "session-status", revision: 4, payload: { conversationId, turn: lateTurn, activeTurnId: lateTurn === "running" ? "turn-1" : null } },
+                ];
+              for (const event of events) source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({
+                schemaVersion: 1, seq: 100 + event.revision, eventId: `settlement-${event.revision}`,
+                scope: { type: "session", id: conversationId }, ...event,
+              }) }));
+            }, { lateTurn, successor });
+            await send(false);
+            await page.waitForFunction(({ width, working }) => width === 390
+              ? !document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working)
+              : !document.querySelector('[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]'),
+            { width, working: translate(locale, "mobile2.chat.stateWorking") });
+            const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            if (width === 1440) {
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
+              expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
+            }
+            const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${lateTurn}.png`) });
+            await send(true);
+            if (width === 1440) {
+              await page.locator(stateSelector).waitFor();
+              expect(await page.locator("[data-bar-working]").innerText()).toBe(initialCount!);
+            } else {
+              await page.waitForFunction((working) => document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working), translate(locale, "mobile2.chat.stateWorking"));
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ locale, width, lateTurn, initialCount, settledCount, phoneState, pageErrors });
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("shipped role defaults rendered evidence", () => {
   browserTest("default xhigh rows keep their chosen effort without a downgrade nudge in every locale and layout", async () => {
     const out = path.resolve(".artifacts/role-defaults");
@@ -15117,4 +15201,58 @@ describe("launch layout shift rendered evidence", () => {
       if (label === "after") expect(reading.clsWithoutMandate, `${reading.viewport} cumulative layout shift of creating an orchestrator, the mandate bubble's hand-over apart`).toBeLessThan(LAUNCH_CLS_LIMIT);
     }
   }, 240_000);
+});
+
+describe("passive task status note", () => {
+  browserTest("notes stay within two lines on desktop and phone, with full text in the task", async () => {
+    const out = path.resolve(".artifacts/card-status-note");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const surface = page.locator(width === 390 ? '[data-phone-card="task:t-note"]' : card("t-note"));
+          await surface.waitFor();
+          await surface.scrollIntoViewIfNeeded();
+          const line = surface.locator('[data-task-note="compact"]');
+          const text = await line.locator("[data-task-note-text]").textContent();
+          const geometry = await line.locator("[data-task-note-text]").evaluate(element => {
+            const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+            return { height: rect.height, lineHeight: parseFloat(style.lineHeight), clamp: style.webkitLineClamp, fullHeight: element.scrollHeight };
+          });
+          expect(geometry.clamp).toBe("2");
+          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight * 2 + 1);
+          expect(geometry.fullHeight).toBeGreaterThan(geometry.height);
+          expect(await line.locator("button,input,textarea").count()).toBe(0);
+          expect(await line.locator("time").textContent()).toBeTruthy();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-card.png`) });
+          if (width === 390) await surface.click();
+          else await surface.focus();
+          const full = page.locator('[data-task-note="full"]').filter({ hasText: text! }).first();
+          await full.waitFor();
+          expect(await full.locator("[data-task-note-text]").textContent()).toBe(text);
+          expect(await full.locator("[data-task-note-text]").evaluate(element => getComputedStyle(element).webkitLineClamp)).toBe("none");
+          await full.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-task.png`) });
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          if (width === 1440) {
+            // A folded task retains its compact note even with a reader open.
+            await surface.locator("button.fold").click();
+            await surface.evaluate(element => element.classList.add("has-reader"));
+            expect(await line.isVisible()).toBe(true);
+            expect(await surface.locator('[data-task-note="full"]').count()).toBe(0);
+          }
+          cases.push({ locale, width, geometry, overflow, passive: true, fullText: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/card-status-note", { recursive: true });
+      fs.writeFileSync("evidence/card-status-note/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });

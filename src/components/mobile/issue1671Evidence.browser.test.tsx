@@ -6057,6 +6057,104 @@ describe("agent memory isolation", () => {
     } finally { await browser.close(); server.stop(); }
   }, 90000);
 });
+browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium().catch((error) => { stop(); throw error; });
+  const out = path.resolve(".artifacts/stage-open-agent");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  try {
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const state of ["running", "passed", "failed", "needs_decision"]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390, colorScheme: "dark" });
+      try {
+        await context.addInitScript((locale) => localStorage.setItem("llv_lang", locale), lang);
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?kanban=1&stage-agent=${state}#p=atlas`);
+        if (width === 390) {
+          await page.locator('[data-phone-card="task:t-data"]').waitFor();
+          await page.locator('[data-phone-card="task:t-data"]').click();
+          if (state === "passed") await page.locator('[data-phone-task-ended]').click();
+          await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click();
+        } else {
+          await page.locator('.card[data-id="task:t-data"]').waitFor();
+          await page.locator('.card[data-id="task:t-data"] [data-open-stages="lane-decision"]').click();
+        }
+        const stage = page.locator(width === 390 ? '[data-mobile2-pipeline="lane-decision"] .pb-stage[data-stage="design"]' : '[data-stages-sheet] .pane[data-stage="design"]');
+        const open = stage.locator('[data-open-conversation="design"]');
+        await open.waitFor();
+        expect(await open.innerText()).toBe(lang === "uk" ? "Відкрити агента" : "Open agent");
+        const box = await open.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThan(50);
+        if (width === 390) expect(box!.height).toBeGreaterThanOrEqual(44);
+        const question = stage.locator('[data-stage-question="design"]');
+        if (state === "needs_decision") {
+          expect(await question.innerText()).toContain("Яке компонування обрати?");
+          const geometry = await question.evaluate((element) => ({ width: element.clientWidth, scroll: element.scrollWidth, whiteSpace: getComputedStyle(element).whiteSpace }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
+          expect(geometry.whiteSpace).toBe("pre-wrap");
+          if (width === 1440) {
+            expect(await question.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+            await question.focus();
+            await page.keyboard.press("End");
+            await page.waitForFunction(() => {
+              const element = document.querySelector('[data-stage-question="design"]');
+              return !!element && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+            }, undefined, { timeout: 5_000 });
+            const buttonReachable = await open.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+            });
+            expect(buttonReachable).toBe(true);
+          }
+        } else expect(await question.count()).toBe(0);
+        await stage.screenshot({ path: path.join(out, `${width}-${lang}-${state}.png`) });
+        if (width === 390) {
+          await stage.locator('details summary').click();
+          expect(await stage.locator('[data-open-attempt="1"]').isVisible()).toBe(true);
+          await stage.locator('[data-open-attempt="1"]').click();
+          await page.locator('[data-mobile2-conversation]').waitFor();
+          await page.goBack();
+          await open.waitFor();
+        } else {
+          await stage.locator('[data-attempt="1"]').click();
+          expect(await stage.locator('[data-kanban-reader]').count()).toBe(1);
+        }
+        if (width === 1440) expect(await stage.locator('[data-attempt="1"]').isVisible()).toBe(true);
+        await open.click();
+        if (width === 1440) {
+          await page.locator('[data-stages-sheet]').waitFor({ state: "detached", timeout: 5_000 });
+        }
+        const reader = page.locator(width === 390 ? '[data-mobile2-conversation="conversation_kanban-1"]' : '[data-kanban-reader="conversation_kanban-1"]').filter({ has: page.locator('textarea') });
+        await reader.waitFor();
+        expect(await reader.isVisible()).toBe(true);
+        expect(await reader.evaluate((element) => element.closest('[data-stages-sheet]') === null)).toBe(true);
+        const composer = reader.locator('textarea').first();
+        expect(await composer.isEnabled()).toBe(true);
+        await composer.scrollIntoViewIfNeeded();
+        const visibleComposer = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const x = rect.x + rect.width / 2;
+          const y = rect.y + rect.height / 2;
+          return x > 0 && x < innerWidth && y > 0 && y < innerHeight
+            && element.contains(document.elementFromPoint(x, y));
+        });
+        expect(visibleComposer).toBe(true);
+        await composer.fill("Use the compact layout.");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${state}-reader.png`) });
+        await composer.press("Enter");
+        await page.waitForFunction(() => (window as unknown as { evidence: { sends: Array<{ text?: string; path?: string; conversationId?: string }> } }).evidence.sends.some((send) => send.text === "Use the compact layout." && (send.path === "/repo/kanban-1.jsonl" || send.conversationId === "conversation_kanban-1")));
+        readings.push({ width, lang, state, buttonHeight: box!.height, readerOutsideSheet: true, visibleComposer, composerEnabled: true, sends: await page.evaluate(() => (window as unknown as { evidence: { sends: unknown[] } }).evidence.sends.length) });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2));
+    fs.mkdirSync("evidence/stage-open-agent", { recursive: true });
+    fs.writeFileSync("evidence/stage-open-agent/geometry.json", JSON.stringify(readings, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 180_000);
 
 describe("seat hand-over with evidence answered last", () => {
   browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {

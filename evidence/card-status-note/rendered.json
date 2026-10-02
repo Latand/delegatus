@@ -1,0 +1,61 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1440,
+      "geometry": {
+        "height": 29,
+        "lineHeight": 14.5,
+        "clamp": "2",
+        "fullHeight": 87
+      },
+      "overflow": false,
+      "passive": true,
+      "fullText": true,
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "geometry": {
+        "height": 30,
+        "lineHeight": 15,
+        "clamp": "2",
+        "fullHeight": 60
+      },
+      "overflow": false,
+      "passive": true,
+      "fullText": true,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "geometry": {
+        "height": 29,
+        "lineHeight": 14.5,
+        "clamp": "2",
+        "fullHeight": 116
+      },
+      "overflow": false,
+      "passive": true,
+      "fullText": true,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "geometry": {
+        "height": 30,
+        "lineHeight": 15,
+        "clamp": "2",
+        "fullHeight": 75
+      },
+      "overflow": false,
+      "passive": true,
+      "fullText": true,
+      "pageErrors": []
+    }
+  ]
+}
