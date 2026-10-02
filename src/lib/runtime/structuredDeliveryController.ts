@@ -28,7 +28,6 @@ import {
   interruptionObligationStore,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
-import { reapSeveredStructuredHost } from "./registry";
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
@@ -825,26 +824,6 @@ export async function bindStructuredDeliveryQueue(
       if (retainedSurvivors.length === 0 && await state.terminateActiveHost?.(expectedKey)) {
         await settleKilledLaunches();
         return true;
-      }
-      /* No registration in this process owns the host, so nothing here can end
-         it through its own lifecycle. When the evidence also says the turn is
-         severed, the recorded process is reaped on its start identity so the
-         row below can retire — without that, a kill on an unclaimed host is
-         refused forever and blocks every message behind it (#1282). */
-      const reaped = retainedSurvivors.length === 0
-        ? await reapSeveredStructuredHost(
-            registry,
-            conversationId as `conversation_${string}`,
-            expectedKey,
-            dependencies.liveness ?? {},
-          )
-        : null;
-      if (reaped) {
-        console.error("[structured delivery] reaped a severed structured host nothing owned", {
-          key: sessionKeyId(expectedKey),
-          reaped: reaped.reaped,
-          reason: reaped.reason,
-        });
       }
       let terminated = retainedSurvivors.length === 0
         ? registry.terminateInactiveStructuredHost(conversationId as `conversation_${string}`, expectedKey)

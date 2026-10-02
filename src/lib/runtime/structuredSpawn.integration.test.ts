@@ -4884,8 +4884,19 @@ test("a partial structured kill retains child identity across a root-dead retry"
     }
     return originalKill(pid, signal as NodeJS.Signals);
   }) as typeof process.kill);
+  const severedNow = Date.now() + 91_000;
+  const severedLiveness = {
+    now: () => severedNow,
+    processCpuMs: () => 0,
+    readTranscript: async () => ({
+      lastEventAt: severedNow - 182_000,
+      kind: "tool-call" as const,
+      lastWriteAt: severedNow - 182_000,
+      turn: "busy" as const,
+    }),
+  };
   try {
-    await bindStructuredDeliveryQueue([], { registry, client }).catch(error => {
+    await bindStructuredDeliveryQueue([], { registry, client, liveness: severedLiveness }).catch(error => {
       expect(String(error)).toContain("the kill was refused");
     });
     for (let attempt = 0; attempt < 500; attempt += 1) {
@@ -4951,7 +4962,7 @@ test("a partial structured kill retains child identity across a root-dead retry"
 
     refuseChildSignals = false;
     await Bun.sleep(1_100);
-    await bindStructuredDeliveryQueue([], { registry: reopenedRegistry, client });
+    await bindStructuredDeliveryQueue([], { registry: reopenedRegistry, client, liveness: severedLiveness });
     await kickStructuredDeliveryQueue();
 
     expect(procBackend.pidAlive(childPid!)).toBeFalse();
