@@ -7,6 +7,8 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
+import { statePath } from "@/lib/configDir";
+import { activeDrain, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
 import { POST as seatRoute } from "@/app/api/orchestrator/seat/route";
@@ -329,6 +331,93 @@ test("REGRESSION (#1402): the designated seat rotates ITSELF through rotate_orch
   })]);
 });
 
+test.each(["route", "tool"] as const)("%s holds a new agent rotation during update draining and admits one successor after release", async (surface) => {
+  seatSeeded();
+  callerIs(SEAT_ID);
+  const { spawns } = dependencies();
+  const file = statePath("self-update", "auto-drain.json");
+  const id = "rotation-drain";
+  writeDrain(file, { id, target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  const args = { project: "proj-a", clientRequestId: "held-rotation-1" };
+  if (surface === "route") {
+    const answer = await routeRotation("seat", args);
+    expect(answer.status).toBe(409);
+    expect(answer.body.code).toBe("launch_held_for_update");
+  } else {
+    const answer = await toolRotation(args);
+    expect(answer.failed).toBe(true);
+    expect(answer.payload.error).toContain("new launches are held while the automatic update drains running work");
+  }
+  expect(spawns).toHaveLength(0);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(SEAT_ID);
+  expect(activeDrain(file)?.id).toBe(id);
+  releaseDrain(file, id);
+  if (surface === "route") expect((await routeRotation("seat", args)).status).toBe(200);
+  else expect((await toolRotation(args)).failed).toBe(false);
+  expect(spawns).toHaveLength(1);
+  if (surface === "route") expect((await routeRotation("seat", args)).status).toBe(200);
+  else expect((await toolRotation(args)).failed).toBe(false);
+  expect(spawns).toHaveLength(1);
+});
+
+test("the operator may manually rotate a seat while update draining holds agent launches", async () => {
+  seatSeeded();
+  callerIsOperator();
+  const { spawns } = dependencies();
+  const file = statePath("self-update", "auto-drain.json");
+  writeDrain(file, { id: "manual-rotation-drain", target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  const answer = await routeRotation("operator", { project: "proj-a", clientRequestId: "manual-rotation-1" });
+  expect(answer.status).toBe(200);
+  expect(spawns).toHaveLength(1);
+  expect(activeDrain(file)).not.toBeNull();
+});
+
+test.each([200, 202])("an agent rotation accepted with HTTP %s replays during update draining without a new launch", async (status) => {
+  seatSeeded();
+  callerIs(SEAT_ID);
+  const { deps, spawns } = dependencies();
+  if (status === 202) {
+    deps.spawn = async (body) => {
+      spawns.push(body);
+      return { status: 202, body: { ok: true, conversationId: SUCCESSOR_ID, path: null, launchId: "accepted-rotation-launch" } };
+    };
+    const resolved = deps.resolvedConversation;
+    deps.resolvedConversation = (conversationId) => conversationId === SUCCESSOR_ID ? null : resolved(conversationId);
+  }
+  const args = { project: "proj-a", clientRequestId: "accepted-rotation-1" };
+  expect((await routeRotation("seat", args)).status).toBe(status);
+  const file = statePath("self-update", "auto-drain.json");
+  writeDrain(file, { id: "replay-rotation-drain", target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  const replay = await routeRotation("seat", args);
+  expect(replay.status).toBe(200);
+  expect(replay.body.replayed).toBe(true);
+  expect(spawns).toHaveLength(1);
+  expect(activeDrain(file)).not.toBeNull();
+});
+
+test("an update hold begun while a rotation composes its handoff prevents its fresh spawn intent", async () => {
+  seatSeeded();
+  callerIsOperator();
+  const { deps, spawns } = dependencies();
+  expect((await routeRotation("operator", { project: "proj-a", clientRequestId: "first-rotation-1" })).status).toBe(200);
+  callerIs(SEAT_ID);
+  let entered!: () => void;
+  let finish!: () => void;
+  const composing = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  deps.summarizeHandoffs = async () => { entered(); await gate; return { kind: "fallback", reason: "unavailable" }; };
+  const rotation = routeRotation("seat", { project: "proj-a", clientRequestId: "delayed-rotation-1" });
+  await composing;
+  const file = statePath("self-update", "auto-drain.json");
+  writeDrain(file, { id: "delayed-rotation-drain", target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  finish();
+  const answer = await rotation;
+  expect(answer.status).toBe(409);
+  expect(answer.body.code).toBe("launch_held_for_update");
+  expect(spawns).toHaveLength(1);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(SUCCESSOR_ID);
+});
+
 test("REGRESSION (#1402): a conversation holding no seat rotates too — no role gate survives on this path", async () => {
   seatSeeded();
   callerIs(BYSTANDER_ID);
@@ -536,4 +625,27 @@ test("an agent's create_orchestrator is refused at the seat route, and a create 
   const byOperator = await executeOrchestratorSeatRequest(request, deps, { kind: "operator", conversationId: null, seatEpoch: null });
   expect(byOperator.status).toBe(200);
   expect(spawns).toEqual([expect.objectContaining({ engine: "claude", model: "sonnet" })]);
+});
+
+test("agent rotation retains its pending intent when downstream update admission closes", async () => {
+  seatSeeded(); callerIs(SEAT_ID);
+  const { deps, spawns } = dependencies();
+  const nativeSpawn = deps.spawn;
+  let autonomous: boolean | undefined;
+  deps.spawn = async (_body, restriction?: boolean) => {
+    autonomous = restriction;
+    writeDrain(statePath("self-update", "auto-drain.json"), { id: "downstream-seat-drain", target: "a".repeat(40), since: AT, until: 0, persistent: true });
+    return { status: 503, body: { code: "AUTO_UPDATE_DRAIN", error: "held for update" } };
+  };
+  const request = { project: "proj-a", clientRequestId: "downstream-rotation-1" };
+  const held = await routeRotation("seat", request);
+  expect(autonomous).toBe(true);
+  expect(held.body.code).toBe("launch_held_for_update");
+  expect(orchestratorSeatFor("proj-a").pending?.state).toBe("pending");
+  expect(spawns).toHaveLength(0);
+  releaseDrain(statePath("self-update", "auto-drain.json"), "downstream-seat-drain");
+  deps.spawn = nativeSpawn;
+  const resumed = await routeRotation("seat", request);
+  expect(resumed.status).toBe(200); expect(spawns).toHaveLength(1);
+  expect(spawns[0].clientAttemptId).toBe(request.clientRequestId);
 });

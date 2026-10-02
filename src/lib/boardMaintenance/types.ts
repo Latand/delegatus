@@ -56,6 +56,8 @@ export interface MaintenanceRun {
   conversationId: string | null;
   transcriptPath: string | null;
   launchBody?: Record<string, unknown>;
+  /** An undispatched claim keeps its identity across an update admission hold. */
+  admissionDeferred?: boolean;
   launchedAt: string | null;
   state: MaintenanceRunState;
   endedAt: string | null;

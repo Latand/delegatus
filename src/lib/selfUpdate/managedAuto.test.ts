@@ -1,14 +1,15 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
 import type { ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { initialAuto, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
-import { readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
+import { LOST_AFTER_MS, readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
+import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -23,7 +24,7 @@ function scenario(enabled = true) {
   let release: string | null = OLD;
   let turns = 0;
   let stages = 0;
-  let green: "green" | "red" = "green";
+  let green: "green" | "red" | "pending" | "unknown" = "green";
   let greenReads = 0;
   let modeReads = 0;
   let modeReadHook: ((read: number) => Promise<void>) | null = null;
@@ -73,7 +74,7 @@ function scenario(enabled = true) {
     receiptReads: () => receiptReads,
     advance: (ms: number) => { now += ms; }, setTurns: (value: number) => { turns = value; },
     setStages: (value: number) => { stages = value; },
-    setGreen: (value: "green" | "red") => { green = value; }, greenReads: () => greenReads,
+    setGreen: (value: typeof green) => { green = value; }, greenReads: () => greenReads,
     setRemote: (value: string) => { remote = value; }, setRelease: (value: string | null) => { release = value; },
     setModeReadHook: (hook: ((read: number) => Promise<void>) | null) => { modeReadHook = hook; },
     finish: (phase: "succeeded" | "rolled-back" | "failed", error: string | null = null) => {
@@ -83,6 +84,196 @@ function scenario(enabled = true) {
     },
   };
 }
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("accepted receipt persistence failure retains custody through reconstruction and healthy %s", async (phase) => {
+  const h = scenario();
+  let service = h.service();
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  let hostRevision = OLD;
+  let hostAnswers = true;
+  h.deps.hostHealth = async () => hostAnswers ? { pid: 102, startIdentity: "fixture", hostEpoch: 1, generation: { revision: hostRevision } } : null;
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const auto = () => readAuto(join(h.dir, "auto.json"));
+  const receiptFile = join(h.dir, "managed.json");
+  try {
+    await service.autoTick();
+    const holdId = held()!.id;
+    h.advance(60_000);
+    mkdirSync(receiptFile);
+    await service.autoTick(); // The host accepts; the real receipt rename fails with EISDIR.
+    expect(h.requests).toHaveLength(1);
+    expect(held()?.id).toBe(holdId);
+    const pending = auto().managedPending;
+    expect(pending).not.toBeNull();
+    expect(auto().enabled).toBe(true);
+    expect((await service.snapshot()).update).toMatchObject({ state: "running", deploymentId: "deployment-1" });
+    await service.setAuto(false);
+    service.stop();
+    h.advance(DRAIN_LEASE_MS + 1);
+    service = h.service();
+    await service.autoTick(); // Recover acceptance with lookup while persistence still fails.
+    expect(h.receiptReads()).toBe(1);
+    expect(auto().managedPending).toEqual(pending);
+    expect(held()?.id).toBe(holdId);
+    expect(h.requests).toHaveLength(1);
+    // Repair only this fixture's obstacle, then prove observation retries the receipt write.
+    rmSync(receiptFile, { recursive: true });
+    await service.snapshot();
+    expect(readManagedRecord(receiptFile)).toMatchObject({ deploymentId: "deployment-1", idempotencyKey: h.requests[0]!.idempotencyKey });
+    h.setRelease(TARGET); // Web has moved; the old host must still fence launches.
+    h.finish(phase);
+    await service.snapshot();
+    expect(held()?.id).toBe(holdId);
+    expect(ticks).toBe(0);
+    service.stop();
+    service = h.service();
+    await service.autoTick();
+    expect(held()?.id).toBe(holdId);
+    const settledRevision = phase === "succeeded" ? TARGET : OLD;
+    h.setRelease(settledRevision);
+    hostRevision = settledRevision;
+    hostAnswers = false;
+    await service.autoTick();
+    expect(held()?.id).toBe(holdId);
+    hostAnswers = true;
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(auto().managedPending).toBeNull();
+    await service.autoTick();
+    expect(ticks).toBe(1);
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
+});
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("early managed admission holds launches across reconstruction until %s", async (phase) => {
+  const h = scenario();
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  expect(lease()?.target).toBe(TARGET);
+  service.stop();
+  h.advance(DRAIN_LEASE_MS + 1);
+  service = h.service();
+  service.startAuto();
+  expect(lease()?.target).toBe(TARGET);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  h.finish(phase);
+  await service.snapshot();
+  expect(lease()).toBeNull();
+  service.stop();
+});
+
+test("a reconstructed accepted intent never resubmits when its receipt lookup is empty", async () => {
+  const h = scenario();
+  let service = h.service();
+  const receiptFile = join(h.dir, "managed.json");
+  try {
+    await service.autoTick();
+    h.advance(60_000);
+    mkdirSync(receiptFile);
+    await service.autoTick();
+    const holdId = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())!.id;
+    service.stop();
+    h.deps.findDeploymentByIdempotencyKey = async () => null;
+    service = h.service();
+    for (let i = 0; i < 3; i++) {
+      h.advance(60_000);
+      await service.autoTick();
+    }
+    expect(h.requests).toHaveLength(1);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(holdId);
+    expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+    // The host's direct read can recover an accepted deployment despite a missing index entry.
+    rmSync(receiptFile, { recursive: true });
+    h.finish("succeeded");
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
+});
+
+test.each(["failed", "rolled-back", "lost"] as const)("terminal managed %s retains custody until both processes are freshly healthy on one revision", async (phase) => {
+  const h = scenario();
+  let service = h.service();
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  let hostRevision = OLD;
+  let hostAnswers = true;
+  h.deps.hostHealth = async () => hostAnswers ? { pid: 102, startIdentity: "host", hostEpoch: 1, generation: { revision: hostRevision } } : null;
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  try {
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    const id = held()!.id;
+    h.setRelease(TARGET); // Web promoted while the host remains on the previous revision.
+    if (phase === "lost") {
+      h.deps.readDeployment = async () => null;
+      await service.snapshot();
+      h.advance(LOST_AFTER_MS + 1);
+    } else h.finish(phase, "runtime host handoff or rollback failed");
+    await service.snapshot();
+    expect(held()?.id).toBe(id);
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    expect(ticks).toBe(0);
+    service.stop();
+    h.advance(DRAIN_LEASE_MS + 1);
+    service = h.service();
+    await service.autoTick();
+    expect(held()?.id).toBe(id);
+    h.setRelease(OLD);
+    hostAnswers = false;
+    await service.autoTick();
+    expect(held()?.id).toBe(id);
+    hostAnswers = true;
+    hostRevision = "c".repeat(40);
+    await service.autoTick();
+    expect(held()?.id).toBe(id);
+    hostRevision = OLD;
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).managedPending).toBeNull();
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(ticks).toBe(1);
+  } finally { service.stop(); }
+});
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("switch-off retains managed custody and cold renewal until %s", async (phase) => {
+  const h = scenario();
+  h.setTurns(1);
+  let service = h.service();
+  await service.autoTick();
+    await service.autoTick();
+  h.setTurns(0);
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  await service.setAuto(false);
+  const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  expect(lease()).not.toBeNull();
+  service.stop();
+  h.advance(DRAIN_LEASE_MS + 1);
+  service = h.service();
+  service.startAuto();
+  expect(lease()).not.toBeNull();
+  h.advance(DRAIN_LEASE_MS + 1);
+  await service.autoTick();
+  expect(lease()).not.toBeNull();
+  expect(h.requests).toHaveLength(1);
+  h.finish(phase);
+  await service.snapshot();
+  expect(lease()).toBeNull();
+  expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+  service.stop();
+});
 
 test("managed availability permits deployment and explains missing prerequisites", async () => {
   const h = scenario(false);
@@ -101,6 +292,171 @@ test("managed availability permits deployment and explains missing prerequisites
   expect((await withoutGithub.snapshot()).auto?.availability).toBe("not-github");
   expect(await withoutGithub.setAuto(true)).toMatchObject({ ok: false, code: "auto-unavailable" });
   withoutGithub.stop();
+});
+
+test("a busy managed install holds immediately and retains its cohort through six hours", async () => {
+  const h = scenario();
+  h.setTurns(1);
+  let service = h.service();
+  try {
+    await service.autoTick();
+    const since = (await service.snapshot()).auto!.waitingSince;
+    expect((await service.snapshot()).auto).toMatchObject({ longWait: false, drain: { state: "draining" } });
+    const hold = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())!;
+    const next = "c".repeat(40);
+    h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(next), relation: "behind", ahead: 0, behind: 2, delta: null });
+    await service.check();
+    await Bun.sleep(0);
+    h.advance(3 * 60 * 60_000);
+    await service.autoTick();
+    expect((await service.snapshot()).auto).toMatchObject({ waitingSince: since, longWait: false, target: { sha: TARGET } });
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(hold.id);
+    service.stop();
+    service = h.service();
+    h.advance(3 * 60 * 60_000);
+    await service.autoTick();
+    expect((await service.snapshot()).auto).toMatchObject({ longWait: true, drain: { state: "overran" }, decision: { id: hold.id } });
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    h.setTurns(0);
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.revision).toBe(TARGET);
+  } finally { service.stop(); }
+});
+
+test.each(["red", "pending", "unknown"] as const)("a newly pending managed update holds admission before its first %s result", async state => {
+  const h = scenario(); h.setGreen(state);
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_original", sessionKey: { engine: "codex" }, host: "hosted", turn: "running" }] }) as never;
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const hold = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+    expect(hold).not.toBeNull();
+    h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    expect((await service.snapshot()).auto?.decision).toMatchObject({ id: hold!.id, blockers: { turnList: [{ conversationId: "conversation_original" }] } });
+    expect(h.requests).toHaveLength(0);
+  } finally { service.stop(); }
+});
+
+test("admission is already held while the first managed green lookup awaits", async () => {
+  const h = scenario();
+  let reading = false, release = () => {};
+  h.deps.green = { read: () => { reading = true; return new Promise(resolve => { release = () => resolve({ state: "pending" }); }); } } as unknown as ServiceDeps["green"];
+  const service = h.service(); const tick = service.autoTick();
+  try {
+    for (let i = 0; i < 100 && !reading; i++) await Bun.sleep(1);
+    expect(reading).toBe(true);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  } finally { release(); await tick; service.stop(); }
+});
+
+test.each(["enabled", "switch-off"] as const)("cold recovery reconciles a hold published before its owner checkpoint: %s", async mode => {
+  const h = scenario(); h.setTurns(1);
+  const since = new Date(h.deps.now()).toISOString();
+  const autoFile = join(h.dir, "auto.json"), holdFile = join(h.dir, "auto-drain.json");
+  writeAuto(autoFile, { ...readAuto(autoFile), waitingSince: since, waitingTarget: TARGET });
+  writeDrain(holdFile, { id: "orphan-first-hold", target: TARGET, since, until: h.deps.now() - 1, persistent: true });
+  let ticks = 0; h.deps.requestPipelineTick = () => { ticks++; };
+  let service = h.service();
+  try {
+    if (mode === "switch-off") {
+      expect(await service.setAuto(false)).toEqual({ ok: true });
+      await service.autoTick(); service.stop(); service = h.service(); await service.autoTick();
+      expect(activeDrain(holdFile, h.deps.now())).toBeNull();
+      expect(readAuto(autoFile)).toMatchObject({ enabled: false, drain: null });
+      expect(ticks).toBe(1);
+    } else {
+      await service.autoTick();
+      expect(readAuto(autoFile).drain).toMatchObject({ id: "orphan-first-hold", target: { sha: TARGET }, since });
+      service.stop(); service = h.service(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+      expect((await service.snapshot()).auto?.decision?.id).toBe("orphan-first-hold");
+      expect(activeDrain(holdFile, h.deps.now())?.id).toBe("orphan-first-hold");
+      expect(h.requests).toHaveLength(0); expect(ticks).toBe(0);
+    }
+  } finally { service.stop(); }
+});
+
+test.each(["red", "pending", "unknown"] as const)("six-hour named cohort decision stays visible under %s checks", async state => {
+  const h = scenario();
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_original", engine: "codex", host: "hosted", turn: "running" }] }) as never;
+  let service = h.service();
+  try {
+    await service.autoTick(); h.setGreen(state);
+    // Recover the authoritative non-green result saved by a prior refresh.
+    service.stop();
+    const file = join(h.dir, "auto.json");
+    const saved = readAuto(file);
+    writeAuto(file, { ...saved, green: { ...saved.green, [TARGET]: { ...saved.green[TARGET], state } } });
+    service = h.service(); h.advance(DRAIN_NOTICE_MS + 60_000);
+    await service.autoTick();
+    const auto = (await service.snapshot()).auto!;
+    expect(auto).toMatchObject({ phase: "not-green", longWait: true, decision: { blockers: { turnList: [{ conversationId: "conversation_original" }] } } });
+    expect(auto.decision?.id).toBe(readAuto(join(h.dir, "auto.json")).drain?.id);
+    service.stop(); service = h.service();
+    expect((await service.snapshot()).auto?.decision?.id).toBe(auto.decision!.id);
+    expect(await service.decideDrain(auto.decision!.id, "deploy-now")).toEqual({ ok: true });
+    expect(h.requests).toHaveLength(0);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  } finally { service.stop(); }
+});
+
+test("disabling during the green read cannot publish a new launch hold", async () => {
+  const h = scenario();
+  const file = join(h.dir, "auto.json");
+  writeAuto(file, { ...readAuto(file), waitingSince: new Date(h.deps.now()).toISOString(), waitingTarget: TARGET });
+  let release = () => {};
+  let reading = false;
+  h.deps.green = { read: () => { reading = true; return new Promise((resolve) => { release = () => resolve({ state: "green" }); }); } } as unknown as ServiceDeps["green"];
+  const service = h.service();
+  const tick = service.autoTick();
+  for (let i = 0; i < 100 && !reading; i++) await Bun.sleep(1);
+  expect(reading).toBe(true);
+  await service.setAuto(false);
+  release();
+  await tick;
+  expect(readAuto(file)).toMatchObject({ enabled: false, drain: null });
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  service.stop();
+});
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("the frozen drain target survives newer merges and releases after %s", async (phase) => {
+  const h = scenario();
+  h.setTurns(1);
+  const service = h.service();
+  await service.autoTick();
+    await service.autoTick();
+  const next = "c".repeat(40);
+  h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(next), relation: "behind", ahead: 0, behind: 2, delta: null });
+  await service.check();
+  await Bun.sleep(0);
+  expect((await service.snapshot()).auto?.target?.sha).toBe(TARGET);
+  h.setTurns(0);
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(h.requests[0]?.revision).toBe(TARGET);
+  h.advance(DRAIN_NOTICE_MS);
+  await service.autoTick();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  h.finish(phase, phase === "succeeded" ? null : "candidate failed");
+  await service.snapshot();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  service.stop();
+});
+
+test.each(["switch-off", "unavailable"])("a busy drain releases on %s", async (reason) => {
+  const h = scenario();
+  h.setTurns(1);
+  const service = h.service();
+  await service.autoTick();
+    await service.autoTick();
+  if (reason === "switch-off") await service.setAuto(false);
+  else { h.setRelease(null); await service.autoTick(); }
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  service.stop();
 });
 
 test("managed green merge waits for a quiet minute and requests the manual deployment path once", async () => {
@@ -253,6 +609,7 @@ test.each(["succeeded", "rolled-back"] as const)("an accepted request with a los
 
   h.finish(phase, phase === "succeeded" ? null : "candidate health failed");
   await service.refreshManaged();
+  await service.snapshot();
   if (phase === "succeeded") {
     expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, managedPending: null, off: null });
   } else {
@@ -412,6 +769,7 @@ test("a previous managed record does not hide recovery of a later accepted lost 
   expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
   h.finish("rolled-back", "candidate health failed");
   await service.refreshManaged();
+  await service.snapshot();
   expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
     off: { target: TARGET, reason: "candidate health failed" } });
   service.stop();
@@ -475,6 +833,7 @@ test("a rolled-back automatic deployment turns auto off with its target and reas
   await service.autoTick();
   h.finish("rolled-back", "candidate health failed");
   await service.refreshManaged();
+  await service.snapshot();
   expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
     off: { target: TARGET, stage: "deploy", reason: "candidate health failed" } });
   expect((await service.snapshot()).auto?.off?.target).toBe(TARGET);
@@ -510,13 +869,18 @@ test("a successful deployment settles after a web restart and keeps auto enabled
   h.finish("succeeded");
   h.setRelease(OLD); // The hot target may lag the host's terminal receipt.
   await service.refreshManaged();
+  await service.snapshot();
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  h.setRelease(TARGET);
+  await service.snapshot();
   expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, managedPending: null, off: null, waitingSince: null });
   await service.autoTick();
   expect(h.requests).toHaveLength(1);
   service.stop();
 });
 
-test("a saved failure settles after restart even while the host cannot answer", async () => {
+test("a saved failure disables updates while preserving custody until the host can answer", async () => {
   const h = scenario();
   let service = h.service();
   await service.autoTick();
@@ -529,8 +893,15 @@ test("a saved failure settles after restart even while the host cannot answer", 
   h.deps.mode = async () => ({ mode: "unsupported", reason: "no-runtime-host", record: null });
   service = h.service();
   await service.autoTick();
-  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false, managedPending: null,
+  expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: false,
     off: { target: TARGET, reason: "promotion failed" } });
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  h.deps.mode = async () => ({ mode: "managed", reason: null, record: null });
+  h.advance(5_000);
+  await service.autoTick();
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).toBeNull();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
   expect(h.requests).toHaveLength(1);
   service.stop();
 });

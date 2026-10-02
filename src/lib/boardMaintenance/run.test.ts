@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
@@ -14,7 +15,7 @@ import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMess
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
-function harness(archiveOverride = true, evidence: TaskWorkEvidence[] = []) {
+function harness(archiveOverride = true, evidence: TaskWorkEvidence[] = [], overrides: Partial<BoardMaintenancePorts> = {}) {
   held = sandbox(); let now = NOW;
   const registry = new AgentRegistry(statePath("fixture-registry.json"));
   const bodies: Record<string, unknown>[] = [], archived: string[] = [];
@@ -22,7 +23,7 @@ function harness(archiveOverride = true, evidence: TaskWorkEvidence[] = []) {
   let response = { status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), launchId: "fixture-launch", path: "/fixtures/worker.jsonl" } as Record<string, unknown> };
   const sources: SeatTickSources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => ({ state: "ok", value: null }) };
   const ports: BoardMaintenancePorts = { sources, evidence: async () => evidence, ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
-  return { controller: productionBoardMaintenanceController(sources, ports), sources, registry, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
+  return { controller: productionBoardMaintenanceController(sources, { ...ports, ...overrides }), sources, registry, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
 }
 test("off, no seat, live run and deploy defer without spending the slot", async () => {
   const h = harness(); await h.controller.launchIfDue(input(false)); expect(h.bodies).toHaveLength(0);
@@ -274,4 +275,79 @@ for (const state of ["terminal", "unreadable"] as const) test(`${state} deployme
     : { state: "unreadable", error: "fixture unreadable" };
   await h.controller.launchIfDue(input());
   expect(h.bodies).toHaveLength(1);
+});
+
+const holdUpdate = () => writeDrain(drainFile(), { id: "maintenance-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+test("update admission holds fresh maintenance claims and release admits one run", async () => {
+  const h = harness(); holdUpdate();
+  await h.controller.launchIfDue(input()); await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(0); expect(readMaintenanceProject(PROJECT)).toBeNull();
+  releaseDrain(drainFile(), "maintenance-drain");
+  await h.controller.launchIfDue(input()); await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(1);
+});
+test("update admission rechecks after evidence and retains an undispatched claim across cold recovery", async () => {
+  let entered!: () => void, resume!: () => void;
+  const collecting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  const h = harness(true, [], { evidence: async () => { entered(); await gate; return []; } });
+  const launch = h.controller.launchIfDue(input());
+  await collecting; holdUpdate(); resume(); await launch;
+  const run = h.run();
+  expect(h.bodies).toHaveLength(0); expect(run.launchId).toBeNull();
+  h.now(NOW + 7 * 3600000);
+  const recovered = productionBoardMaintenanceController(h.sources, { observe: async () => ({ state: "running" }), evidence: async () => [], launch: async body => {
+    h.bodies.push(body); return { status: 202, body: { state: "starting", conversationId: "conversation_fixture_held", launchId: "held-launch" } };
+  } });
+  await recovered.reconcile(PROJECT);
+  expect(h.run().state).not.toBe("failed"); expect(h.bodies).toHaveLength(0);
+  releaseDrain(drainFile(), "maintenance-drain");
+  await recovered.reconcile(PROJECT); await recovered.reconcile(PROJECT);
+  expect(h.bodies).toHaveLength(1); expect(h.bodies[0].clientAttemptId).toBe(run.runId);
+});
+test("submitted maintenance settles its receipt during update hold", async () => {
+  const h = harness(); await h.controller.launchIfDue(input()); holdUpdate();
+  h.observe({ state: "ended", finalText: "Verdict: pass" });
+  await h.controller.reconcile(PROJECT);
+  expect(maintenanceRuns(PROJECT)[0].state).toBe("succeeded"); expect(h.bodies).toHaveLength(1);
+});
+
+test("an undispatched launch payload retains its key and restarts its dispatch clock after update admission", async () => {
+  const h = harness(); const run = claim();
+  const { patchMaintenanceRun } = await import("./store");
+  const body = { clientAttemptId: run.runId, role: "maintainer", prompt: "fixture maintenance" };
+  patchMaintenanceRun(run.runId, { state: "launching", launchBody: body, launchedAt: new Date(NOW).toISOString() });
+  holdUpdate(); h.now(NOW + 7 * 3600000);
+  await h.controller.reconcile(PROJECT);
+  expect(h.bodies).toHaveLength(0); expect(h.run().launchBody).toEqual(body);
+  releaseDrain(drainFile(), "maintenance-drain");
+  await h.controller.reconcile(PROJECT); await h.controller.reconcile(PROJECT);
+  expect(h.bodies).toEqual([body]);
+  expect(h.run().launchedAt).toBe(new Date(NOW + 7 * 3600000).toISOString());
+  expect(readMaintenanceProject(PROJECT)!.lastLaunchAt).toBe(h.run().launchedAt);
+});
+test("admission deferred by the production spawn lane retries its payload after release", async () => {
+  let refuse = true;
+  const h = harness(true, [], { launch: async body => {
+    if (refuse) { holdUpdate(); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; }
+    h.bodies.push(body); return { status: 202, body: { state: "starting", conversationId: "conversation_fixture_resumed", launchId: "resumed-launch" } };
+  } });
+  await h.controller.launchIfDue(input()); const run = h.run();
+  expect(run.state).toBe("launching"); expect(run.admissionDeferred).toBe(true);
+  expect(h.bodies).toHaveLength(0);
+  await h.controller.reconcile(PROJECT); expect(h.bodies).toHaveLength(0);
+  h.now(NOW + 7 * 3600000); refuse = false; releaseDrain(drainFile(), "maintenance-drain");
+  await h.controller.reconcile(PROJECT);
+  expect(h.bodies).toEqual([run.launchBody!]); expect(h.run().admissionDeferred).toBe(false);
+});
+test("a maintenance receipt arriving before its binding checkpoint remains recoverable under hold", async () => {
+  const h = harness(); const run = claim();
+  const { patchMaintenanceRun } = await import("./store");
+  patchMaintenanceRun(run.runId, { state: "launching", launchedAt: new Date(NOW).toISOString() });
+  const receipt = { state: "completed", conversationId: "conversation_fixture_submitted", launchId: "submitted-launch" };
+  const original = h.registry.spawnReceiptForClientAttempt.bind(h.registry);
+  h.registry.spawnReceiptForClientAttempt = id => id === run.clientAttemptId ? receipt as never : original(id);
+  h.observe({ state: "ended", conversationId: receipt.conversationId, launchId: receipt.launchId, finalText: "Verdict: pass" });
+  holdUpdate(); await h.controller.reconcile(PROJECT);
+  expect(maintenanceRuns(PROJECT)[0].state).toBe("succeeded"); expect(h.bodies).toHaveLength(0);
 });

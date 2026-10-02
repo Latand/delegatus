@@ -1,4 +1,5 @@
 import { statePath } from "@/lib/configDir";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import type { NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -53,7 +54,12 @@ export async function launchMaintenanceConversation(body: Record<string, unknown
     import("@/lib/agent/spawnCommand"), import("@/lib/agent/operatorCapability"), import("@/lib/agent/spawnPolicy"),
   ]);
   const request = { headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER), json: async () => body } as unknown as NextRequest;
-  const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies, defer: startDeferredSpawnWork });
+  // Loading the spawn lane is asynchronous; existing receipts keep their custody.
+  if (activeDrain() && !productionSpawnCommandDependencies.registry().spawnReceiptForClientAttempt(String(body.clientAttemptId))) {
+    return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } };
+  }
+  const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
+    autonomousAdmissionHeld: () => !!activeDrain(), defer: startDeferredSpawnWork });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 export async function maintenanceWorkEvidence(project: string, now: number, sources: SeatTickSources, repoDir: string | null): Promise<TaskWorkEvidence[]> {
@@ -152,7 +158,14 @@ function maintainerEngine(): { engine?: "claude" | "codex" } {
     return engine === "claude" || engine === "codex" ? { engine } : {};
   } catch { return {}; }
 }
+function deferMaintenanceAdmission(run: MaintenanceRun, ports: BoardMaintenancePorts): boolean {
+  if (!activeDrain() || run.conversationId || run.launchId
+    || ports.sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId)) return false;
+  if (!run.admissionDeferred) patchMaintenanceRun(run.runId, { admissionDeferred: true });
+  return true;
+}
 async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Promise<string> {
+  if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
   // Recovered claims and launch replays obey the current switch too.
   const wakesEnabled = () => effectiveSeatTickSettings(ports.sources.settings(run.project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled;
   if (!wakesEnabled()) return "maintenance: paused while wakes are off";
@@ -164,6 +177,7 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     const tasks = ports.sources.tasks();
     const previous = previousMaintenanceRun(run.project, run.runId);
     const evidence = await (ports.evidence ?? ((project, now, cwd) => maintenanceWorkEvidence(project, now, ports.sources, cwd)))(run.project, ports.sources.now(), run.repoDir);
+    if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
     const holding = taskSeatHoldingSnapshot();
     let deployment: ReturnType<SeatTickSources["latestDeployment"]> = { state: "ok", value: null };
     try { deployment = ports.sources.latestDeployment(); } catch { /* installs without a deployment ledger */ }
@@ -171,16 +185,24 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now: ports.sources.now() });
     const body = { role: "maintainer", roleParams: {}, cwd: run.repoDir, project: run.project, "prompt": brief, title: tasks.find(t => t.id === run.taskId)?.text.split("\n")[0], taskId: run.taskId, clientAttemptId: run.runId, mcpServers: ["viewer"], notifyLauncher: false };
     // Persist the exact spawn payload before dispatch; restart replays the same digest.
-    run = patchMaintenanceRun(run.runId, { state: "launching", launchBody: body, launchedAt: new Date(ports.sources.now()).toISOString() })!;
+    run = patchMaintenanceRun(run.runId, { state: "launching", launchBody: body })!;
   }
   if (!maintenanceRunIsLive(run)) return "maintenance: already settled";
   if (!wakesEnabled()) return "maintenance: paused while wakes are off";
+  if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
+  if (!run.launchedAt || run.admissionDeferred) {
+    run = patchMaintenanceRun(run.runId, { launchedAt: new Date(ports.sources.now()).toISOString(), admissionDeferred: false })!;
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const response = await Promise.race([
     (ports.launch ?? launchMaintenanceConversation)(run.launchBody!),
     new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? MAINTENANCE_LAUNCH_TIMEOUT_MS); }),
   ]).finally(() => { if (timer) clearTimeout(timer); });
   if (!response) return "maintenance: launch pending";
+  if (response.body.code === "AUTO_UPDATE_DRAIN") {
+    patchMaintenanceRun(run.runId, { admissionDeferred: true });
+    return "maintenance: held for the automatic update";
+  }
   if (response.status < 200 || response.status >= 300) {
     const kind = ["project_account_refused", "ENGINE_NOT_CONNECTED", "service_tier_unavailable"].includes(String(response.body.code)) ? "no-account" : "launch-refused";
     settle(run, { state: "failed", failure: { kind, detail: String(response.body.error ?? "spawn refused"), ...(kind === "no-account" ? maintainerEngine() : {}) } }, ports);
@@ -193,11 +215,13 @@ export async function reconcileBoardMaintenance(project: string, ports: BoardMai
   const id = readMaintenanceProject(project)?.currentRunId;
   let run = id ? readMaintenanceRun(id) : null;
   if (!run || !maintenanceRunIsLive(run)) return null;
+  if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
   if (run.state === "claimed") {
-    if (ports.sources.now() - Date.parse(run.claimedAt) > MAINTENANCE_LAUNCH_GRACE_MS) { settle(run, { state: "failed", failure: { kind: "launch-failed", detail: "claimed launch expired before dispatch" } }, ports); return "maintenance: launch expired"; }
+    if (!run.admissionDeferred && ports.sources.now() - Date.parse(run.claimedAt) > MAINTENANCE_LAUNCH_GRACE_MS) { settle(run, { state: "failed", failure: { kind: "launch-failed", detail: "claimed launch expired before dispatch" } }, ports); return "maintenance: launch expired"; }
     // A restarted controller never spends the same slot twice.
     return launchRun(run, ports);
   }
+  if (run.state === "launching" && (!run.launchedAt || run.admissionDeferred)) return launchRun(run, ports);
   const observed = await (ports.observe ?? (r => observeMaintenanceRun(r, ports.sources)))(run);
   if (observed.conversationId) run = patchMaintenanceRun(run.runId, { conversationId: observed.conversationId, launchId: observed.launchId ?? run.launchId, transcriptPath: observed.path ?? run.transcriptPath })!;
   if (observed.state === "failed") settle(run, { state: "failed", failure: observed.failure ?? { kind: "launch-failed", detail: "launch failed" } }, ports);
@@ -218,6 +242,7 @@ export async function launchBoardMaintenanceIfDue(input: SeatTickCheckInput, por
   if (!setting.enabled) return null;
   if (!input.settings.enabled) return "maintenance: paused while wakes are off";
   if (!input.seat) return "maintenance: waits for a seat";
+  if (activeDrain()) return "maintenance: held for the automatic update";
   const held = readMaintenanceProject(input.project)?.currentRunId;
   if (held && maintenanceRunIsLive(readMaintenanceRun(held)!)) return null;
   try { const deploy = ports.sources.latestDeployment(); if (deploy.state === "ok" && deploy.value && !deploy.value.terminal) return "maintenance: waits, a deployment is running"; } catch { /* No ledger on standalone installs. */ }

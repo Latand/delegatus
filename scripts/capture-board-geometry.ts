@@ -5642,10 +5642,25 @@ async function selfUpdateAutoMain(): Promise<void> {
   const states: Record<string, Snapshot> = {
     off: { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
-    longWait: { ...base, auto: { ...auto, longWait: true } },
+    scheduled: { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+      busy: true, busyReason: "pipeline-controller", turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
+    draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
+    overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: "2026-01-02T06:00:00Z" }, blockers: { ...auto.blockers,
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }] } } },
+    "long-names": { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_seat", engine: "codex", project: "Project".repeat(11) + "Name", seat: true, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "T".repeat(80), cursor: "running", conversationId: "conversation_builder" }] } } },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
+  states.overran!.auto!.decision = { id: "drain-example", at: "2026-01-02T06:00:00Z", project: "Delegatus", blockers: {
+    ...auto.blockers,
+    stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }],
+    turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", seat: false, stage: null }],
+  } };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
@@ -5654,6 +5669,9 @@ async function selfUpdateAutoMain(): Promise<void> {
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, false);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    // The isolated install's first-run toast otherwise covers phone choices.
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
@@ -5662,7 +5680,8 @@ async function selfUpdateAutoMain(): Promise<void> {
       await context.addInitScript(seedInit);
       await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
       const page = await context.newPage();
-      await page.route("**/api/self-update", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }));
+      await page.route(/\/api\/self-update(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }));
+      await page.route("**/api/self-update/events*", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(snapshot)}\n\n` }));
       await page.goto(`${baseUrl}/`);
       await page.waitForFunction(() => {
         if (document.querySelector("[data-self-update-dialog]")) return true;
@@ -5677,19 +5696,57 @@ async function selfUpdateAutoMain(): Promise<void> {
         const outer = dialog.getBoundingClientRect();
         const rect = card.getBoundingClientRect();
         const control = button.getBoundingClientRect();
-        return { overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        const blockerRows = [...card.querySelectorAll<HTMLElement>("ul li")].map((row) => {
+          const range = document.createRange();
+          range.selectNodeContents(row);
+          const bounds = [...range.getClientRects()];
+          return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
+            left: Math.min(...bounds.map((bound) => bound.left)), right: Math.max(...bounds.map((bound) => bound.right)),
+            lines: bounds.length };
+        });
+        return { blockerRows, cardOverflow: card.scrollWidth - card.clientWidth, overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
           controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
           text: card.innerText.slice(0, 600) };
       });
       const tag = `${width}-${lang}-${name}`;
       report.frames[tag] = geometry;
-      if (geometry.overflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
+      if (geometry.overflow > 1 || geometry.cardOverflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
+      if (geometry.blockerRows.some((row) => row.overflow > 1 || row.left < geometry.card.x - 1 || row.right > geometry.card.x + geometry.card.width + 1)) {
+        report.failures.push(`${tag}: blocker text spills beyond card`);
+      }
+      if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some((row) => row.lines < 2))) {
+        report.failures.push(`${tag}: long blocker name did not wrap`);
+      }
       if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
       const frame = path.join(OUT_DIR, `${tag}.png`);
       await page.screenshot({ path: frame });
       if (evidenceDir) {
         fs.mkdirSync(evidenceDir, { recursive: true });
         fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+      }
+      if (name === "overran") {
+        await page.keyboard.press("Escape");
+        // This existing case also checks the standing Needs-you control; all
+        // update API answers are fixtures and neither choice is submitted.
+        if (width === 390) {
+          await page.goto(`${baseUrl}/#p=__overview__`);
+          await page.locator('[data-mobile2-open="attention"]').click();
+        } else {
+          await page.locator("[data-attention-island] > button").first().click();
+        }
+        const fold = page.locator('[data-needs-you-fold="Delegatus"]');
+        if (await fold.count() && await fold.getAttribute("aria-expanded") === "false") await fold.click();
+        const choice = page.locator('[data-auto-drain-decision="drain-example"]').first();
+        await choice.waitFor({ state: "visible", timeout: 30_000 });
+        const choices = await choice.evaluate((element) => ({
+          overflow: element.scrollWidth - element.clientWidth,
+          named: element.textContent?.includes("conversation_long_turn"),
+          choices: element.querySelectorAll("button").length,
+        }));
+        report.frames[`${tag}-needs-you`] = choices;
+        if (choices.overflow > 1 || !choices.named || choices.choices !== 2) report.failures.push(`${tag}: Needs-you decision is unreadable`);
+        await choice.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-needs-you.png`) });
       }
       await context.close();
     }

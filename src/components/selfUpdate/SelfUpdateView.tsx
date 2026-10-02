@@ -1,5 +1,6 @@
 "use client";
 
+import { AutoDrainDecision } from "./AutoDrainDecision";
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -396,16 +397,21 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
       </div>
       <p className="m-0 text-ui text-secondary">{available || auto.off || auto.phase === "deploying" ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
       {auto.enabled && blockers && auto.phase === "waiting" ? (
-        <ul className="m-0 list-disc pl-5 text-ui text-secondary">
+        <ul data-auto-blockers className="m-0 list-disc pl-5 text-ui text-secondary [overflow-wrap:anywhere]">
+          {(blockers.stageList ?? []).map((stage) => <li key={`${stage.pipelineId}:${stage.stageId}`}>{stage.stageId} · {stage.task}</li>)}
+          {(blockers.turnList ?? []).filter((turn) => !turn.stage).map((turn) => <li key={turn.conversationId}>{turn.seat && turn.project ? turn.project : `${turn.engine} · ${turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`}</li>)}
           {blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}
           {blockers.stages > 0 ? <li>{t("selfUpdate.auto.block.stages", { count: blockers.stages })}</li> : null}
           {blockers.operatorActiveAt ? <li>{t("selfUpdate.auto.block.operator")}</li> : null}
-          {blockers.busy ? <li>{t("selfUpdate.auto.block.busy")}</li> : null}
+          {blockers.busy ? <li>{t(blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` as MessageKey : "selfUpdate.auto.block.busy")}</li> : null}
           {blockers.memoryMb !== null ? <li>{t("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) })}</li> : null}
           {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
         </ul>
       ) : null}
-      {auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
+      {auto.decision ? <AutoDrainDecision decision={auto.decision} /> : null}
+      {auto.enabled && auto.drain && !auto.decision ? <p className="m-0 text-ui text-secondary" data-drain-state={auto.drain.state}>
+        {t(`selfUpdate.auto.drain.${auto.drain.state}` as MessageKey, { time: `${day(auto.drain.at, locale)} ${clock(auto.drain.at)}`, next: auto.drain.nextAt ? `${day(auto.drain.nextAt, locale)} ${clock(auto.drain.nextAt)}` : "" })}
+      </p> : !auto.decision && auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
       {s.mode === "checkout" && auto.target?.short && (s.serving.web?.short !== auto.target.short || s.serving.runtimeHost?.short !== auto.target.short) ? (
         <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.serving", { web: s.serving.web?.short ?? "—", host: s.serving.runtimeHost?.short ?? "—", built: auto.target.short })}</p>
       ) : null}

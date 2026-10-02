@@ -31,6 +31,7 @@ import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 function operatorTelegramConnected(): boolean {
   try {
@@ -115,7 +116,7 @@ import {
 
 export interface SeatCommandDependencies {
   /** POST /api/spawn in-process, on the operator's own authority. */
-  spawn(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
+  spawn(body: Record<string, unknown>, autonomous?: boolean): Promise<{ status: number; body: Record<string, unknown> }>;
   /** Deliver the mandate to an existing conversation, idempotent on
       `clientMessageId`. */
   deliver(input: { conversationId: string; path: string | null; clientMessageId: string; text: string }): Promise<{ ok: boolean; error?: string; outcome?: string }>;
@@ -250,15 +251,15 @@ function resolveOrchestratorCwd(project: string, requested: unknown, dependencie
   return dependencies.projectRoot?.(project) ?? null;
 }
 
-async function postSpawnInProcess(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
-  const { executeSpawnRequest } = await import("@/lib/agent/spawnCommand");
+async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { executeSpawnRequest, productionSpawnCommandDependencies } = await import("@/lib/agent/spawnCommand");
   /* An in-process call the VIEWER makes, on its own authority: the designation
      surfaces have already made their authority decision — the seat route by
      refusing an agent, the rotation route by naming one (#1402) — so this
      presents the operator spawn capability either way, the same lane the MCP
      server's spawn_agent uses. Who triggered the designation travels on the
-     seat record; this spawn carries none of it. Only `headers` and `json` are
-     read by the spawn command. */
+     seat record; its autonomous admission restriction is rechecked under the
+     spawn command's account lock. Only `headers` and `json` are read there. */
   const request = {
     headers: new Headers({
       host: "127.0.0.1",
@@ -267,7 +268,8 @@ async function postSpawnInProcess(body: Record<string, unknown>): Promise<{ stat
     }),
     json: async () => body,
   } as unknown as NextRequest;
-  const response = await executeSpawnRequest(request);
+  const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
+    autonomousAdmissionHeld: () => autonomous && !!activeDrain() });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -431,6 +433,14 @@ function incumbentChangedResult(
 export interface SeatCommandResult {
   status: number;
   body: Record<string, unknown>;
+}
+
+function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null): SeatCommandResult | null {
+  const hold = triggeredBy?.kind === "agent" ? activeDrain() : null;
+  return hold ? { status: 409, body: {
+    error: "new launches are held while the automatic update drains running work",
+    code: "launch_held_for_update", target: hold.target, since: hold.since,
+  } } : null;
 }
 
 function text(value: unknown): string {
@@ -1002,6 +1012,10 @@ async function runOrchestratorSeatRequest(
   }
   const spawnSizing = agentSeatSizingRefusal(triggeredBy, resolvedRuntime.value.config, incumbent);
   if (spawnSizing) return spawnSizing;
+  // Reconciliation and completed replay above can settle admitted work. A
+  // fresh agent spawn still needs admission after any awaited handoff work.
+  const hold = agentSeatLaunchHold(triggeredBy);
+  if (hold) return hold;
   const telegramGrant = operatorTelegramConnected();
   const begun = beginOrchestratorSeatIntent({
     project,
@@ -1095,7 +1109,11 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawned = await dependencies.spawn(spawnBody);
+  const spawned = await dependencies.spawn(spawnBody, begun.seat.triggeredBy?.kind === "agent");
+  if (spawned.body.code === "AUTO_UPDATE_DRAIN") {
+    // No receipt was admitted: keep the pending intent and its downstream key.
+    return { status: 409, body: { ...spawned.body, code: "launch_held_for_update", seat: begun.seat } };
+  }
   const spawnedConversationId = text(spawned.body.conversationId);
   const admitted = spawned.status >= 200 && spawned.status < 300 && spawned.body.ok !== false;
   const launchId = text(spawned.body.launchId);
@@ -1210,8 +1228,8 @@ const HANDOFF_NOTES_CAP = 2_000;
  * the route's answer by construction — for the actor it accepts and for every
  * refusal the rotation itself makes.
  *
- * Cross-origin rejection stays in the route, ahead of this: it is the perimeter,
- * and it is the only thing here that turns a caller away.
+ * Cross-origin rejection stays in the route, ahead of this: it is the perimeter.
+ * Automatic-update admission can also defer fresh agent launches.
  */
 export function handleOrchestratorRotationRequest(
   request: Pick<NextRequest, "headers">,
@@ -1330,6 +1348,10 @@ async function runOrchestratorRotation(
       },
     };
   }
+  // An accepted rotation can be replayed during a hold. Defer a fresh one
+  // before composition, which may itself launch a handoff summarizer.
+  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy);
+  if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
   const predecessor = predecessorTarget?.kind === "eligible" ? predecessorTarget : null;

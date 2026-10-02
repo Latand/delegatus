@@ -1,6 +1,7 @@
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { activeDrain, flowAwaitingAdmission } from "@/lib/selfUpdate/drain";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1176,6 +1177,7 @@ export async function tickFlow(
     if (round.reviewerPath) round.reviewerPath = currentConversationPath(round.reviewerConversationId, round.reviewerPath);
   }
   if (flow.state === "closed" || flow.state === "paused") return JSON.stringify(flow) !== before;
+  if (flowAwaitingAdmission(flow) && activeDrain()) return JSON.stringify(flow) !== before;
   const decision = flow.agentDecisions?.find((item) => item.disposition === "accepted");
   if (decision) {
     const evidence = await flowTurn(flow);
@@ -1330,13 +1332,20 @@ export async function tickFlow(
       return JSON.stringify(flow) !== before;
     }
     try {
-      const prepared = prepareReviewerLaunch(flow, round);
-      captureReviewHead(flow, round);
-      round.spawnStartedAt = isoNow();
-      const reservation = await withAccountMutationLockAsync(
-        () => reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId),
+      const admission = await withAccountMutationLockAsync(
+        () => {
+          // Account admission may have queued before the update drain began.
+          // Defer before consuming account attempts or interruption markers.
+          if (flowAwaitingAdmission(flow) && activeDrain()) return null;
+          const prepared = prepareReviewerLaunch(flow, round);
+          captureReviewHead(flow, round);
+          round.spawnStartedAt = isoNow();
+          return { prepared, reservation: reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId) };
+        },
         { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
       );
+      if (!admission) return JSON.stringify(flow) !== before;
+      const { prepared, reservation } = admission;
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
       persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan
