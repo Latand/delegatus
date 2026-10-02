@@ -9,6 +9,7 @@ import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
+import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
 import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -43,15 +44,16 @@ export class PipelineStoreError extends Error {
   }
 }
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
+  fs.writeFileSync(temp, stringifyRegistryDocument(value), "utf8");
   fs.renameSync(temp, filePath);
 }
-function readJson(filePath: string): unknown {
+function readJson(filePath: string): { raw: unknown; source: string } | undefined {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    const source = fs.readFileSync(filePath, "utf8");
+    return { raw: JSON.parse(source) as unknown, source };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new PipelineStoreError(`could not read pipeline registry: ${filePath}`, { cause: error });
@@ -728,7 +730,15 @@ function isTaskFinishWait(value: unknown): boolean {
   return typeof wait.taskId === "string" && wait.taskId.length > 0 && typeof wait.since === "string" && isStringList(wait.open);
 }
 
+/** Validation of a parsed record is total. A nested value of the wrong type
+    can throw inside a shape check (for example String({toString: null})); that
+    makes this record unreadable, while the JSON parser remains strict. */
 function isPipeline(value: unknown): value is Pipeline {
+  try { return isPipelineShape(value); }
+  catch { return false; }
+}
+
+function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
@@ -933,51 +943,48 @@ export function loadPipelinesForStartup(): Pipeline[] {
     throw new PipelineStoreError("pipeline startup collections are incomplete");
   }
   const records = active === null && archived === null
-    ? [...parsePipelinesFile(pipelinesFile(), false, true), ...parsePipelinesFile(pipelinesArchiveFile(), false, true)]
+    ? [...parsePipelinesFile(pipelinesFile(), true), ...parsePipelinesFile(pipelinesArchiveFile(), true)]
     : [...(active ?? []), ...(archived ?? [])];
-  if (!records.every(isPipeline)) throw new PipelineStoreError("pipeline registry contains malformed records");
-  if (new Set(records.map((record) => record.id)).size !== records.length) {
+  if (new Set(records.map(registryRecordKey)).size !== records.length) {
     throw new PipelineStoreError("pipeline startup records have contradictory identities");
   }
-  return records.map(reviveLoadedPipeline);
+  return records.flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
 }
 
-function parsePipelinesFile(filename: string, lenient: boolean, strictPresence = false): Pipeline[] {
-  const raw = readJson(filename);
+function parsePipelinesFile(filename: string, strictPresence = false): unknown[] {
+  const document = readJson(filename);
+  const raw = document?.raw;
   // Ordinary legacy readers historically accept null as empty. Startup must
   // distinguish that malformed content from positive missing-file evidence.
   if (raw === undefined || (raw === null && !strictPresence)) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    if (lenient) return [];
     throw new PipelineStoreError("pipeline registry must be an object");
   }
   const file = raw as Partial<PipelineFile>;
   if (typeof file.schemaVersion !== "number" || !MIGRATABLE_SCHEMA_VERSIONS.has(file.schemaVersion)) {
-    if (lenient) return [];
     throw new PipelineStoreError(`unsupported pipeline registry schema: ${String(file.schemaVersion)}`);
   }
   if (!Array.isArray(file.pipelines)) {
-    if (lenient) return [];
     throw new PipelineStoreError("pipeline registry contains malformed records");
   }
-  const records = file.pipelines.map((pipeline) => migratePipelineRecord(pipeline, file.schemaVersion!));
-  if (!lenient && !records.every(isPipeline)) throw new PipelineStoreError("pipeline registry contains malformed records");
-  const accepted = lenient ? records.filter(isPipeline) : records as Pipeline[];
-  if (lenient && accepted.length !== records.length) {
-    console.error(`[pipelines] skipped ${records.length - accepted.length} malformed archived pipeline record(s)`);
-  }
-  return accepted.map(reviveLoadedPipeline);
+  const records = file.pipelines.map((pipeline) => {
+    const migrated = migratePipelineRecord(pipeline, file.schemaVersion!);
+    // Never normalize a record this release cannot understand.
+    return isPipeline(migrated) ? reviveLoadedPipeline(migrated) : pipeline;
+  });
+  rememberRecordBytes(records, jsonArrayRecordBytes(document!.source, "pipelines"), isPipeline);
+  return records;
 }
 
 export function planPipelineStateMigration(): {
   pipelines: { records: number; keys: string[] };
   archive: { records: number; keys: string[] };
 } {
-  const pipelines = parsePipelinesFile(pipelinesFile(), false);
-  const archive = parsePipelinesFile(pipelinesArchiveFile(), true);
+  const pipelines = parsePipelinesFile(pipelinesFile());
+  const archive = parsePipelinesFile(pipelinesArchiveFile());
   return {
-    pipelines: { records: pipelines.length, keys: pipelines.map((pipeline) => pipeline.id) },
-    archive: { records: archive.length, keys: archive.map((pipeline) => pipeline.id) },
+    pipelines: { records: pipelines.length, keys: pipelines.map(registryRecordKey) },
+    archive: { records: archive.length, keys: archive.map(registryRecordKey) },
   };
 }
 
@@ -1067,9 +1074,58 @@ const pipelineStores = new Map<string, {
   archive: SqliteStateCollection<Pipeline>;
 }>();
 
-function decodePipeline(value: unknown): Pipeline | null {
-  if (!isPipeline(value)) throw new PipelineStoreError("pipeline registry contains malformed records");
+function decodePipeline(value: unknown, collection = "pipelines"): Pipeline | null {
+  if (!isPipeline(value)) {
+    pipelineRecordIssue(value, collection);
+    return null;
+  }
   return reviveLoadedPipeline(value);
+}
+
+/** Unknown vocabulary is diagnosed separately from a broken known shape. The
+    substituted copy is used only to validate structure, never for execution. */
+function pipelineRecordIssue(value: unknown, collection = "pipelines"): RegistryRecordIssue {
+  const unknown: string[] = [];
+  const copy = structuredClone(value);
+  const visit = (node: unknown, location: string) => {
+    if (!node || typeof node !== "object") return;
+    for (const [key, item] of Object.entries(node)) {
+      const row = node as Record<string, unknown>;
+      let known: readonly string[] | undefined;
+      let replacement = "pending";
+      if (key === "roleId") { known = PIPELINE_ROLE_IDS; replacement = "builder"; }
+      if (key === "kind" && /^stages\.\d+$/.test(location)) { known = ["run", "review-loop"]; replacement = "run"; }
+      if (key === "state" && location === "") { known = ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"]; replacement = "paused"; }
+      if (key === "pausedState" && location === "") { known = ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"]; replacement = "running"; }
+      if (key === "state" && location === "cursor") known = ["pending", "spawning", "running", "reviewing", "committing"];
+      if (key === "state" && /^runs\.\d+\.attempts\.\d+$/.test(location)) known = ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"];
+      if (known && typeof item === "string" && item.length > 0 && !known.includes(item)) {
+        unknown.push(`${location ? `${location}.` : ""}${key}=${item}`);
+        row[key] = replacement;
+      } else visit(item, location ? `${location}.${key}` : key);
+    }
+  };
+  visit(copy, "");
+  const unknownState = unknown.some((field) => field.startsWith("state="));
+  // Different states admit different shapes (an empty draft, a completed lane
+  // without a cursor). Try the known shapes instead of assigning one state's
+  // constraints to a future vocabulary value.
+  const forward = unknown.length > 0 && (unknownState && copy && typeof copy === "object"
+    ? ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"]
+      .some((state) => isPipeline({ ...copy, state }))
+    : isPipeline(copy));
+  return reportRegistryRecord(collection, value, forward ? "unknown-but-preserved" : "malformed",
+    forward ? `unsupported vocabulary (${unknown.join(", ")}); preserved without launch or settlement` : undefined);
+}
+
+/** Fresh diagnostic field for health and auto-update readers. Corrupt JSON
+    still throws through the authoritative SQLite snapshot reader. */
+export function pipelineRegistryHealth(): RegistryRecordIssue[] {
+  const collections = readStateCollectionsRows(stateDatabaseFile(), ["pipelines", "pipelines_archive"]);
+  return ["pipelines", "pipelines_archive"].flatMap((collection) => {
+    const records = collections.get(collection) ?? parsePipelinesFile(collection === "pipelines" ? pipelinesFile() : pipelinesArchiveFile(), true);
+    return records.filter((record) => !isPipeline(record)).map((record) => pipelineRecordIssue(record, collection));
+  });
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
@@ -1082,22 +1138,24 @@ function pipelineControllerActive(pipeline: Pipeline): boolean {
   return true;
 }
 
-export function pipelineStateCollectionSeeds(): [StateCollectionSeed<Pipeline>, StateCollectionSeed<Pipeline>] {
+export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, StateCollectionSeed<unknown>] {
   return [
     {
       collection: "pipelines",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
       migrationId: "pipelines-json-v1",
-      loadRecords: () => parsePipelinesFile(pipelinesFile(), false),
-      key: (pipeline: Pipeline) => pipeline.id,
-      controllerActive: pipelineControllerActive,
+      loadRecords: () => parsePipelinesFile(pipelinesFile()),
+      key: registryRecordKey,
+      recordJson: preservedRecordJson,
+      controllerActive: (pipeline) => !isPipeline(pipeline) || pipelineControllerActive(pipeline),
     },
     {
       collection: "pipelines_archive",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
       migrationId: "pipelines-archive-json-v1",
-      loadRecords: () => parsePipelinesFile(pipelinesArchiveFile(), true),
-      key: (pipeline: Pipeline) => pipeline.id,
+      loadRecords: () => parsePipelinesFile(pipelinesArchiveFile()),
+      key: registryRecordKey,
+      recordJson: preservedRecordJson,
       controllerActive: () => false,
     },
   ];
@@ -1113,6 +1171,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
     decode: decodePipeline,
+    preserveRejectedRecords: true,
     clone: reviveLoadedPipeline,
     decodeError: (error: unknown) => error instanceof PipelineStoreError
       ? error
@@ -1133,7 +1192,8 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   const archive = new SqliteStateCollection<Pipeline>(filename, {
     ...common,
     collection: "pipelines_archive",
-    onDecodeError: (error) => console.error("[pipelines] skipped malformed archived SQLite row", error),
+    decode: (value) => decodePipeline(value, "pipelines_archive"),
+    strictDecode: true,
   });
   const created = { active, archive };
   pipelineStores.set(filename, created);
@@ -1255,8 +1315,8 @@ export async function withPipelineStartupAdmission<T>(
 ): Promise<T> {
   let entered = false;
   try {
-    // Refuse malformed legacy archives before the ordinary store can migrate
-    // them leniently. Admission rereads under the lease before any effects.
+    // Verify file integrity before admission. Individual rejected records are
+    // preserved and unavailable to the callback; corrupt files refuse it.
     loadPipelinesForStartup();
     return await withPipelineMutation(() => {
       entered = true;
@@ -1387,8 +1447,8 @@ export function savePipelines(pipelines: Pipeline[]): void {
     the full record for the closed list and by-id reads. */
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
-/** Lenient read: the archive is cold storage, so a malformed or legacy record
-    is skipped with a log line instead of poisoning every closed-list read. */
+/** Cold records use the same per-record isolation and strict JSON parsing as
+    the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {
   return archiveStore().snapshot();
 }
