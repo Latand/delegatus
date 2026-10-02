@@ -191,6 +191,7 @@ import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
 import { resolveSiblings } from "@/lib/view/siblings";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { searchMemoryTool } from "@/lib/memory/mcp";
 import { validateSnapshotRequest } from "@/lib/view/validation";
 
 import {
@@ -2478,11 +2479,13 @@ async function searchTranscripts(
   if (!query) throw new Error("query is required");
   const project = text(args.project).trim();
   const cursor = text(args.cursor).trim();
-  const limit = Math.max(1, Math.min(100, integer(args.limit, 20)));
+  const order = args.order === "newest" ? "newest" : "relevance";
+  const limit = Math.max(1, Math.min(100, integer(args.limit, order === "relevance" ? 6 : 20)));
   const params = new URLSearchParams({ q: query });
   if (project) params.set("project", project);
   if (cursor) params.set("cursor", cursor);
   params.set("limit", String(limit));
+  params.set("order", order);
   const source = await readViewerControl(control, `/api/search/transcripts?${params}`);
   const stats = objectRecord(source.stats) ? source.stats : null;
   if (!Array.isArray(source.items)
@@ -6473,6 +6476,7 @@ export function viewerMcpBindings(
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+    search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: (args, context) => conversationMessages(args, domainDependencies, context),

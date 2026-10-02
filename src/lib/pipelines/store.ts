@@ -1166,8 +1166,9 @@ export function pipelineLockWaitMs(): number {
  * A refusal raised before `mutate` runs is a {@link StoreBusyBeforeAdmissionError}
  * (#1766): the lease was never taken, so nothing was read, written or reserved
  * and the same request may run again under the same idempotency key. A busy
- * error from anywhere after that keeps its ordinary ambiguous meaning — the
- * lease release raises the same message after the row is committed. */
+ * error from inside the callback keeps its ordinary ambiguous meaning: an
+ * earlier persist may have committed. Lease release never throws; failed
+ * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;

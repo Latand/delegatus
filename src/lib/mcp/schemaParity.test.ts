@@ -697,10 +697,12 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    /* #2425: terminal gates re-check the last fix; explicit stops remain. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("it re-checks the fix once more");
-    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review");
+    /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
+    /* Terminal stages re-check the last fix; other stages follow the pass edge. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
+    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge and relays the findings as unreviewed");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review if the head changed");
     expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
     expect(tool?.description).toContain("onExhausted");
     expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
@@ -1116,4 +1118,16 @@ test("MCP pipeline tools describe default 3 and accept an explicit higher budget
     }
   });
   expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
+});
+
+
+test("search order is optional and advertised with relevance and newest choices", async () => {
+  expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion" }).success).toBe(true);
+  expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion", order: "other" }).success).toBe(false);
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+    const schema = listed.tools.find((tool) => tool.name === "search_transcripts")!.inputSchema;
+    expect((schema.properties!.order as { enum: string[] }).enum).toEqual(["relevance", "newest"]);
+    expect(schema.required).not.toContain("order");
+  });
 });

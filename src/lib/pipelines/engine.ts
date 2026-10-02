@@ -67,7 +67,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -2844,7 +2844,7 @@ function commitPassedStage(
 ): void {
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
-  const result = commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
+  let result = commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
   if (!result.ok) {
     park(pipeline, result.error, attempt);
     return;
@@ -2859,9 +2859,16 @@ function commitPassedStage(
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir);
-    if (ancestor.code !== 0) {
-      park(pipeline, `stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; reconcile the commits in this worktree before continuing`, attempt);
+    if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
+      park(pipeline, `stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`, attempt);
       return;
+    }
+    if (ancestor.code === 1) {
+      result = reconcilePipelineStageHead(pipeline, result.sha, ports.exec);
+      if (!result.ok) {
+        park(pipeline, result.error, attempt);
+        return;
+      }
     }
   }
   /* #1938: a handoff recorded before reviewed heads were captured names none.
@@ -3124,13 +3131,13 @@ function fixerSelfFailCanGoToReview(
   // A base failure is historical only when its own paired statement says
   // that check passed on the head. Another check passing cannot clear it.
   const explicitlyBlocked = /\bblocked\s*:/i.test(completion);
-  const reason = (explicitlyBlocked ? completion : completion.replace(
-    /[^.\n]*\bfailed on (?:the )?base\b\s*(?:[,;]\s*)?(?:(?:and|but)\s+)?(?:(?:they|it|these tests|those tests)\s+)?passed on (?:the )?head\b[^.\n]*(?:\.|\n|$)/gi,
-    "",
-  ))
-    .replace(/\b(?:not blocked|no blockers?)\b/gi, "")
+  const reason = explicitlyBlocked ? completion : completion
+    // Remove only the correlated historical result. Keep any other clause in
+    // the sentence: it may describe a check that still blocks the fixer.
+    .replace(/\b[^.\n]*?\bfailed on (?:the )?base\b\s*(?:[,;]\s*)?(?:(?:and|but)\s+)?(?:(?:they|it|these tests|those tests)\s+)?passed on (?:the )?head\b/gi, "")
     // Red/green evidence describes a resolved failure, not a present stop.
-    .replace(/[^.\n]*\bfailed before (?:the )?fix\b[^.\n]*\bpassed\b[^.\n]*/gi, "");
+    .replace(/\b[^.\n]*?\bfailed before (?:the )?fix\b\s*(?:[,;]\s*)?(?:and\s+)?passed (?:on (?:the )?head|after (?:the )?fix)\b/gi, "")
+    .replace(/\b(?:not blocked|no blockers?)\b/gi, "");
   if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\s+(?:failed|failing|fail)\b/i.test(reason)) return false;
   const head = currentPipelineBranchHead(pipeline, ports.exec);
   return head.ok && head.sha !== pipeline.lastPassedCommit;
