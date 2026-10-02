@@ -100,8 +100,8 @@ probe("Claude reads lane artifacts in all access/sandbox profiles and restricted
   const cwd = path.join(root, "worktree");
   fs.mkdirSync(cwd, { recursive: true });
   const parts = [
-    { name: "previous-output", tail: "PREVIOUS_OUTPUT_TAIL_SENTINEL", text: `Design head\n${Array.from({ length: 500 }, (_, index) => `line ${index}: ${"d".repeat(80)}`).join("\n")}\nPREVIOUS_OUTPUT_TAIL_SENTINEL` },
-    { name: "specification", tail: "SPECIFICATION_TAIL_SENTINEL", text: `Specification head\n${Array.from({ length: 250 }, (_, index) => `criterion ${index}: ${"界".repeat(40)}`).join("\n")}\nSPECIFICATION_TAIL_SENTINEL` },
+    { name: "previous-output", checkpoints: ["Design head", "line 0:", "line 250:", "line 499:", "PREVIOUS_OUTPUT_TAIL_SENTINEL"], text: `Design head\n${Array.from({ length: 500 }, (_, index) => `line ${index}: ${"d".repeat(80)}`).join("\n")}\nPREVIOUS_OUTPUT_TAIL_SENTINEL` },
+    { name: "specification", checkpoints: ["Specification head", "criterion 0:", "criterion 125:", "criterion 249:", "SPECIFICATION_TAIL_SENTINEL"], text: `Specification head\n${Array.from({ length: 250 }, (_, index) => `criterion ${index}: ${"界".repeat(40)}`).join("\n")}\nSPECIFICATION_TAIL_SENTINEL` },
   ];
   const profiles = [
     { access: "read-write", sandbox: "full" },
@@ -120,12 +120,12 @@ probe("Claude reads lane artifacts in all access/sandbox profiles and restricted
     for (const profile of profiles.filter((item) => item.sandbox === "restricted")) {
       const denied = await agentRead(cwd, external, profile);
       expect(denied.denied).toBe(true);
-      expect(denied.result).not.toContain(part.tail);
+      expect(denied.result).not.toContain(part.checkpoints.at(-1)!);
     }
     for (const profile of profiles) {
       const allowed = await agentRead(cwd, lane, profile);
       expect(allowed.denied).toBe(false);
-      expect(allowed.result).toContain(part.tail);
+      for (const checkpoint of part.checkpoints) expect(allowed.result).toContain(checkpoint);
     }
   }
 }, 360_000);
