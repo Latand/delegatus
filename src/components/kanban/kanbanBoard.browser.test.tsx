@@ -15184,6 +15184,55 @@ describe("task chip: the card's Ask button puts a task in the orchestrator's com
   const EVIDENCE = path.resolve("evidence/task-chip-to-orchestrator");
   const FOLDED = JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null, topWidths: {}, sideWidths: {} });
 
+  browserTest("task chip: a mouse press keeps Ask in place on a note card and the card below it", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const focusTarget of ["card", "control"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, VIEWPORT, "light", locale, "reduce");
+        try {
+          const note = page.locator(card("t-note"));
+          await note.waitFor();
+          for (const [id, expectedChips] of [["t-note", 1], ["t-pending", 2]] as const) {
+            // Losing focus from the note must also leave its neighbour in place.
+            if (id === "t-pending") {
+              await note.focus();
+              await page.keyboard.press("Tab");
+              if (focusTarget === "card") await page.keyboard.press("Shift+Tab");
+              await note.locator('[data-task-note="full"]').waitFor();
+            }
+            const ask = page.locator(`[data-ask-orchestrator="task:${id}"]`);
+            await ask.scrollIntoViewIfNeeded();
+            const before = (await ask.boundingBox())!;
+            await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+            await page.mouse.down();
+            const during = (await ask.boundingBox())!;
+            await ask.evaluate(element => element.addEventListener("mouseup", () => {
+              element.setAttribute("data-test-release-top", String(element.getBoundingClientRect().top));
+            }, { once: true }));
+            // Release at the original pointer coordinates, as a physical mouse does.
+            await page.mouse.up();
+            const releaseTop = await ask.getAttribute("data-test-release-top");
+            const after = (await ask.boundingBox())!;
+            const pressed = await ask.getAttribute("aria-pressed");
+            const chips = await page.locator("[data-orchestrator-conversation] [data-task-chip]").count();
+            cases.push({ locale, focusTarget, id, before, during, releaseTop, after, pressed, chips });
+            if (releaseTop === null || Math.abs(Number(releaseTop) - before.y) > 0.5 || Math.abs(during.y - before.y) > 0.5) failures.push(`${locale} ${focusTarget} ${id}: Ask moved during the mouse press`);
+            if (pressed !== "true" || chips !== expectedChips) failures.push(`${locale} ${id}: pressed=${pressed}, chips=${chips}`);
+            await page.screenshot({ path: path.join(OUT, `note-ask-${locale}-${focusTarget}-${id}.png`) });
+          }
+          if (pageErrors.length) failures.push(`${locale}: ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(EVIDENCE, "note-press.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, cases }, null, 2)}\n`);
+  }, 120_000);
+
   browserTest("task chip: pressing Ask on a card adds a chip to the seat's composer, unfolds the seat and keeps the card in place", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });

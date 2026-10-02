@@ -1583,10 +1583,15 @@
 :is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
 .kb .remote-unbound { padding: 4px 10px; }
 
-/* A resting card keeps its note quiet; the existing task focus/reader shows
-   the full text below the description without repeating it under the title. */
+/* Keyboard focus and an open reader expose the full note. Pointer focus keeps
+   the compact note; a note already expanded by the keyboard holds its geometry
+   until the pointer click has landed, even on a neighbouring card. */
 .kb .card [data-task-note="full"] { display: none; }
-.kb .card:not(.folded):focus-within [data-task-note="full"],
+.kb .card:not(.folded):has(:focus-visible) [data-task-note="full"],
+.kb .card:not(.folded):focus-visible [data-task-note="full"],
+.kb .card:not(.folded)[data-note-pointer-full] [data-task-note="full"],
 .kb .card:not(.folded).has-reader [data-task-note="full"] { display: flex; }
-.kb .card:not(.folded):focus-within [data-task-note="compact"],
+.kb .card:not(.folded):has(:focus-visible) [data-task-note="compact"],
+.kb .card:not(.folded):focus-visible [data-task-note="compact"],
+.kb .card:not(.folded)[data-note-pointer-full] [data-task-note="compact"],
 .kb .card:not(.folded).has-reader [data-task-note="compact"] { display: none; }

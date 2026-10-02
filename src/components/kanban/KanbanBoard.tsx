@@ -291,6 +291,41 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const assignments = props.assignmentPorts ?? browserAssignmentPorts;
   const boardId = `kb-board-${useId().replace(/:/g, "")}`;
   const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let held: HTMLElement | null = null;
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    const clear = () => {
+      clearTimeout(releaseTimer);
+      held?.removeAttribute("data-note-pointer-full");
+      held = null;
+    };
+    const down = (event: PointerEvent) => {
+      if (event.button !== 0 || event.pointerType === "touch") return;
+      clear();
+      // A keyboard-expanded note must not shrink under a neighbouring press.
+      const focused = root.querySelector<HTMLElement>(".card:not(.folded):not(.has-reader):is(:focus-visible, :has(:focus-visible))");
+      const full = focused?.querySelector<HTMLElement>('[data-task-note="full"]');
+      if (full && getComputedStyle(full).display !== "none") {
+        held = focused!;
+        held.setAttribute("data-note-pointer-full", "");
+      }
+    };
+    // Keep the pointer target in place through mouseup and the ensuing click.
+    const up = () => { if (held) releaseTimer = setTimeout(clear, 0); };
+    root.addEventListener("pointerdown", down, true);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", clear);
+    window.addEventListener("blur", clear);
+    return () => {
+      clear();
+      root.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", clear);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
   const asideRef = useRef<HTMLDivElement>(null);
   const hasAside = Boolean(props.aside);
   const [mode, setMode] = useState<KanbanLayoutMode>("wide");
