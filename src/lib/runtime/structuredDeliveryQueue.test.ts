@@ -2784,3 +2784,28 @@ for (const policy of ["steer-or-queue", "steer-if-active"]) test(`${policy} unkn
   expect(dropped.states.get("m0")!.status).toBe(policy === "steer-or-queue" ? "queued" : "failed");
   expect((await dropped.target.health()).status).toBe("active");
 });
+
+test.each(["steer", "idle", "unsupported", "interrupt"] as const)("update drain permits original-turn steering and holds fresh %s turn actuation", async (seam) => {
+  const f = steerQueueFixture([seam === "interrupt" ? "interrupt-active" : "steer-or-queue"]);
+  Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  let held = true;
+  f.port.autonomousTurnHeld = () => held;
+  if (seam === "idle") f.setActive(null);
+  if (seam === "unsupported") Object.assign(f.target, { supportsSteer: false, steerFallback: "interrupt" });
+  await f.queue.drain();
+  expect(f.interrupts).toEqual([]);
+  if (seam === "steer") { expect(f.writes).toEqual(["steer:m0"]); return; }
+  expect(f.writes).toEqual([]); expect(f.states.get("m0")!.status).toBe("queued");
+  held = false; f.setActive(null);
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual(["start:m0"]);
+});
+test("a fresh autonomous message cannot recover a missing host during update drain", async () => {
+  const f = steerQueueFixture();
+  Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  f.port.autonomousTurnHeld = () => true;
+  let recoveries = 0;
+  const queue = new StructuredDeliveryQueue(f.port, () => null, undefined, undefined, async () => { recoveries++; return false; });
+  await queue.drain(); await queue.drain();
+  expect(recoveries).toBe(0); expect(f.transitions).toEqual([]);
+});
