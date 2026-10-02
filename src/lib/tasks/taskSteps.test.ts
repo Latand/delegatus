@@ -33,8 +33,22 @@ test("create, patch, store, and live derivation preserve the 5-of-8 checklist", 
     const stored = loadTasks(file)[0] as BoardTask;
     expect(stored.steps).toHaveLength(8);
     expect(deriveTaskSteps(stored.steps, [{ id: "lane", state: "running" }]).steps.filter(step => step.motion === "working")).toHaveLength(1);
-    expect(deriveTaskSteps(stored.steps, [{ id: "lane", state: "completed" }]).summary).toMatchObject({ done: 6, total: 8, open: 2, reasons: [{ kind: "queued", note: "When capacity is free", count: 2 }] });
+    expect(deriveTaskSteps(stored.steps, [{ id: "lane", state: "completed" }]).summary).toMatchObject({ done: 6, total: 8, open: 2, working: 0, needsYou: 0, reasons: [{ kind: "queued", note: "When capacity is free", count: 2 }] });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("running and operator-held checklist steps are summarized separately from waiting reasons", () => {
+  const steps = [
+    ...Array.from({ length: 5 }, (_, index) => ({ id: `done-${index}`, text: "Done", state: "done" as const })),
+    { id: "running", text: "In progress", state: "open" as const, ref: "lane", hold: { kind: "worker" as const, note: "Stale queue reason", since: now, by: "agent" as const } },
+    { id: "queued-a", text: "Queued A", state: "open" as const, hold: { kind: "worker" as const, note: "When capacity is free", since: now, by: "agent" as const } },
+    { id: "queued-b", text: "Queued B", state: "open" as const, hold: { kind: "worker" as const, note: "When capacity is free", since: now, by: "agent" as const } },
+  ];
+  const summary = deriveTaskSteps(steps, [{ id: "lane", state: "running" }]).summary;
+  expect(summary).toMatchObject({ done: 5, total: 8, open: 3, working: 1, needsYou: 0, reasons: [{ kind: "queued", note: "When capacity is free", count: 2 }] });
+
+  const asks = deriveTaskSteps([{ id: "ask", text: "Choose", state: "open", hold: { kind: "operator", note: "Choose a path", since: now, by: "agent" } }], []).summary;
+  expect(asks).toMatchObject({ open: 1, needsYou: 1, working: 0, reasons: [] });
 });

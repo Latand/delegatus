@@ -427,6 +427,18 @@ test("an operator hold is pinned and counted like the desktop needs-you motion",
   expect(phone.columns.blocked.pinned[0]?.edge).toBe("warning");
 });
 
+test("an operator-held open step uses shared needs-you motion in the phone queue", () => {
+  const heldStep = task("held-step", "assigned", [], { steps: [
+    { id: "choose", text: "Choose a release", state: "open", hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "agent" } },
+  ] });
+  const model = desktop([heldStep], []);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(model.columns.assigned.needsYou).toBe(1);
+  expect(phone.columns.assigned.needsYou).toBe(1);
+  expect(phone.columns.assigned.pinned.map((item) => item.card.task?.id)).toEqual(["held-step"]);
+  expect(phone.columns.assigned.pinned[0]?.card.motion.key).toBe("needs-you");
+});
+
 test("a pending move away from an operator hold uses the shared stopped motion", () => {
   const held = task("optimistic-hold", "blocked", [], { hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "operator" } });
   const model = desktop([held], [], { overrides: new Map([[held.id, "assigned"]]) });

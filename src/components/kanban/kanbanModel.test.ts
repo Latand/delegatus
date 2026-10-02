@@ -1132,7 +1132,19 @@ test("step pipeline references derive motion and group the remaining reasons", (
   const lane = buildingLane("step-lane", t.id, { startedAt: "2026-10-02T09:00:00.000Z" });
   const card = model([t], [], { pipelines: [lane] }).columns.assigned.cards[0]!;
   expect(card.motion.key).toBe("working");
-  expect(card.stepSummary).toMatchObject({ done: 1, total: 3, open: 2, reasons: [{ kind: "queued", note: "When capacity is free", count: 1 }, { kind: "stopped", count: 1 }] });
+  expect(card.stepSummary).toMatchObject({ done: 1, total: 3, open: 2, working: 1, needsYou: 0, reasons: [{ kind: "queued", note: "When capacity is free", count: 1 }] });
+  expect(taskReasonFiltersOfCard(card)).toContain("queued");
+  expect(taskReasonFiltersOfCard(card)).not.toContain("no-reason");
+
+  const allWorking = task("all-working", "assigned", [], { steps: [
+    { id: "one", text: "One", state: "open", ref: "all-working-lane", hold: held },
+    { id: "two", text: "Two", state: "open", ref: "all-working-lane", hold: held },
+  ] });
+  const workingLane = buildingLane("all-working-lane", allWorking.id, { startedAt: "2026-10-02T09:00:00.000Z" });
+  const workingCard = model([allWorking], [], { pipelines: [workingLane] }).columns.assigned.cards[0]!;
+  expect(workingCard.stepSummary).toMatchObject({ working: 2, reasons: [] });
+  expect(taskReasonFiltersOfCard(workingCard)).not.toContain("queued");
+  expect(taskReasonFiltersOfCard(workingCard)).not.toContain("no-reason");
   const pausedTask = task("paused-step-task", "assigned", [], { steps: [{ id: "pause", text: "Wait for review", state: "open", ref: "paused-step-lane" }] });
   const paused = buildingLane("paused-step-lane", pausedTask.id, { startedAt: "2026-10-02T09:00:00.000Z" });
   paused.state = "paused";

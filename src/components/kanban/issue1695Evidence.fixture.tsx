@@ -1503,7 +1503,7 @@ if (SCENARIO === "task-motion") {
     task("motion-taskref", "blocked", L("Wait for the linked task", "Дочекатися повʼязаної задачі"), "", 35 * MIN, [], { hold: { kind: "task", ref: "motion-bare", note: L("After the audit review", "Після перевірки аудиту"), since: iso(35 * MIN), by: "agent" } }),
     task("motion-checklist", "blocked", L("Complete the audit causes", "Усунути причини аудиту"), "", 70 * MIN, [], { steps: [
       ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: L(`Fixed cause ${index + 1}`, `Усунена причина ${index + 1}`), state: "done" as const })),
-      ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, ...(index === 0 ? { ref: "p-motion-checklist" } : {}), hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
     ] }),
     task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }),
     task("motion-bare", "blocked", L("Review older work", "Переглянути давнішу роботу"), "", 120 * MIN),
@@ -1511,6 +1511,10 @@ if (SCENARIO === "task-motion") {
     task("motion-done", "done", L("Completed review", "Завершене ревʼю"), "", 10 * MIN, [], { doneAt: iso(10 * MIN) }),
     task("motion-hidden", "blocked", L("Hidden older work", "Прихована давніша робота"), "", 120 * MIN, [], { groupHidden: { at: iso(60 * MIN), by: "operator", admitted: [] } }),
   );
+  pipelines.push(pipeline("p-motion-checklist", L("Run one checklist cause", "Виконати одну причину аудиту"), "motion-checklist", "running",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "running", null)] }],
+    { stageId: "implement", state: "running", input: null, activatedBy: null }));
 }
 
 /* `&empty=<status>` empties one column: its tasks move to Done, so the

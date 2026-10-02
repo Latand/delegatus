@@ -14434,7 +14434,7 @@ describe("task motion and waiting reasons", () => {
           await stepLine.scrollIntoViewIfNeeded();
           const stepText = (await stepLine.textContent()) ?? "";
           expect(stepText).toContain(locale === "en" ? "5 of 8 done" : "Виконано 5 з 8");
-          expect(stepText).toContain(locale === "en" ? "3 queued: After another task finishes" : "3 у черзі: Коли завершиться інша задача");
+          expect(stepText).toContain(locale === "en" ? "1 working · 2 queued: After another task finishes" : "1 у роботі · 2 у черзі: Коли завершиться інша задача");
           expect(await page.locator("[data-task-steps]").count()).toBe(1);
           const stepBounds = await stepLine.evaluate((el) => {
             const rect = el.getBoundingClientRect();
@@ -14481,8 +14481,11 @@ describe("task motion and waiting reasons", () => {
             expect(await page.locator('[data-reason-filter="no-reason"]').count()).toBe(1);
             const beforeCount = await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason');
             await queuedFilter.click();
-            expect(await page.locator('[data-id^="task:"]').count()).toBeGreaterThan(0);
-            expect(await page.locator('[data-id^="task:"]').evaluateAll(cards => cards.every(el => el.querySelector('[data-motion="waiting"]') !== null))).toBe(true);
+            const filteredCards = page.locator('[data-id^="task:"]');
+            expect(await filteredCards.count()).toBeGreaterThan(0);
+            const checklist = page.locator('[data-id="task:motion-checklist"]');
+            expect(await checklist.locator('[data-motion="working"]').count()).toBeGreaterThan(0);
+            expect(await checklist.locator('[data-task-steps]').textContent()).toContain(locale === "en" ? "1 working · 2 queued" : "1 у роботі · 2 у черзі");
             expect(await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason')).toBe(beforeCount);
             await queuedFilter.click();
             const stoppedSummary = page.locator('[data-status="assigned"] [data-column-stopped]');

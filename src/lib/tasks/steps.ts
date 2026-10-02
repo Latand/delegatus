@@ -17,6 +17,8 @@ export interface TaskStepsSummary {
   dropped: number;
   total: number;
   open: number;
+  needsYou: number;
+  working: number;
   reasons: Array<{ kind: "queued" | "waiting" | "postponed" | "stopped"; note: string; count: number }>;
 }
 
@@ -45,19 +47,22 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
   const done = derived.filter((step) => step.effectiveState === "done").length;
   const dropped = derived.filter((step) => step.effectiveState === "dropped").length;
   const open = derived.filter((step) => step.effectiveState === "open");
+  const needsYou = open.filter((step) => step.motion === "needs-you").length;
+  const working = open.filter((step) => step.motion === "working").length;
   const grouped = new Map<string, { kind: "queued" | "waiting" | "postponed" | "stopped"; note: string; count: number }>();
   for (const step of open) {
     const hold = step.hold;
-    const kind = !hold || hold.kind === "unstated" ? "stopped"
-      : ["worker", "resource", "limit"].includes(hold.kind) ? "queued"
-        : hold.kind === "postponed" ? "postponed" : "waiting";
+    if (step.motion === "working" || step.motion === "needs-you") continue;
+    const kind = step.motion === "stopped" ? "stopped"
+      : hold?.kind === "postponed" ? "postponed"
+        : hold && ["worker", "resource", "limit"].includes(hold.kind) ? "queued" : "waiting";
     const note = hold?.note?.trim() ?? "";
     const key = `${kind}\0${note}`;
     const prior = grouped.get(key);
     grouped.set(key, { kind, note, count: (prior?.count ?? 0) + 1 });
   }
   const reasons = [...grouped.values()].sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind) || a.note.localeCompare(b.note));
-  return { steps: derived, summary: { done, dropped, total: derived.length, open: open.length, reasons } };
+  return { steps: derived, summary: { done, dropped, total: derived.length, open: open.length, needsYou, working, reasons } };
 }
 
 /** Normalize a client checklist while preserving each step hold's original
