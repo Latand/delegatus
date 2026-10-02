@@ -5,7 +5,7 @@ import { applyLineEdits, type LineEdits, type LineTarget } from "@/lib/lineEdits
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
-import { redactBounded, redactMonitorText } from "./redact";
+import { redactMonitorText } from "./redact";
 
 /**
  * Per-project seat tick settings (issue #1275).
@@ -33,13 +33,10 @@ import { redactBounded, redactMonitorText } from "./redact";
  *   change to another project's tick is allowed and is not hidden: attribution
  *   is the answer here, not a prohibition.
  *
- * The row carries one thing that is not a schedule at all (#1280): the seat's
- * own additional prompt for its monitor. It rides every later scheduler-fired
- * wake beside the reasons and items the tick derives, and it is the only piece
- * of this record that says nothing about whether or when a wake is sent. That
- * separation is load-bearing — see {@link seatTickSettingsAreDefault} — so a
- * project that only ever writes a prompt stays, in every other respect, a
- * project nobody configured.
+ * The row also carries two standing instruction fields: the panel's text
+ * (reason), delivered in full on every wake and shown as the cadence-change
+ * explanation on the board, and the seat's own monitorPrompt (#1280).
+ * Both survive schedule reset and expiry until explicitly cleared.
  */
 
 export const SEAT_TICK_SETTINGS_SCHEMA_VERSION = 1;
@@ -99,7 +96,7 @@ export interface SeatTickSettings {
   enabled: boolean;
   /** Minutes between two wakes for this project; null keeps the default. */
   wakeIntervalMinutes: number | null;
-  /** Why, in the caller's own words. */
+  /** Panel instructions for every wake, also the board cadence explanation. */
   reason: string | null;
   /**
    * The seat's own additional prompt for its monitor (#1280): what it wants
@@ -127,7 +124,7 @@ export interface EffectiveSeatTickSettings {
   /**
    * The agent-authored prompt this project's wakes carry, or null (#1280).
    *
-   * Read off the row on both sides of the default, unlike the reason: it
+   * Read off the row on both sides of the default, alongside the instructions: it
    * changes what a wake SAYS and never whether or when one is sent, so it is
    * owed identically to a project on the default tick and to one that has
    * quieted itself.
@@ -174,11 +171,9 @@ export function defaultSeatTickSettings(project: string): SeatTickSettings {
 /**
  * Whether a record says anything about the SCHEDULE that the default does not.
  *
- * The prompt (#1280) is deliberately outside this. It changes what a wake says,
- * never whether or when one is sent, so a project carrying nothing but a prompt
- * is a project on the default tick: no board card stands over it, no reason is
- * owed for it, and restoring the default schedule leaves it exactly where it
- * was rather than treating it as part of the setting being ended.
+ * The instruction fields change what a wake says and stand independently of
+ * the schedule. A project carrying only instructions remains on the default
+ * cadence, with no cadence-change card; resetting the schedule preserves them.
  */
 export function seatTickSettingsAreDefault(settings: SeatTickSettings): boolean {
   return settings.enabled && settings.wakeIntervalMinutes === null;
@@ -358,7 +353,7 @@ export function effectiveSeatTickSettings(
       maintenance, maintenanceSetting: settings.maintenance,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
-      reason: null,
+      reason: settings.reason,
       /* The prompt survives the branch that discards the schedule setting,
          because it was never part of it. */
       monitorPrompt: settings.monitorPrompt,
@@ -396,16 +391,16 @@ export function effectiveSeatTickSettings(
  * something else — a seat that quieted itself until noon and separately left
  * words for its own wakes gets those words back at noon along with its tick.
  *
- * A row carrying no prompt reverts to the untouched default, byte for byte what
- * the lapse wrote before this field existed.
+ * The panel instructions (stored as reason) also survive: expiry ends the
+ * cadence setting, while both instruction fields stand until cleared.
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.monitorPrompt && !lapsed.maintenanceSetting) return restored;
-  return { ...restored, ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting) return restored;
+  return { ...restored, ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -462,11 +457,17 @@ export function applySeatTickSettingsChange(
     const raw = change.reason;
     if (raw === null) reason = null;
     else if (typeof raw !== "string") return { ok: false, error: "reason must be a string" };
-    else reason = redactBounded(raw, REASON_LIMIT) || null;
+    else {
+      const redacted = redactMonitorText(raw).trim();
+      if (raw.length > REASON_LIMIT || redacted.length > REASON_LIMIT) {
+        return { ok: false, error: `instructions (reason) are ${raw.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
+      }
+      reason = redacted || null;
+    }
   }
 
-  /* Set, replaced and cleared exactly the way the reason is, through this one
-     surface. Unlike the reason it is refused, not clamped, when it runs long
+  /* Set, replaced and cleared through this one surface. Like the panel
+     instructions it is refused, not clamped, when it runs long
      (#1450): a state note whose tail is dropped silently is a note the seat
      believes it still has. The error names the limit and the given length so
      the writer can shorten it; nothing is stored on a refusal. */
@@ -516,19 +517,13 @@ export function applySeatTickSettingsChange(
     setBy: context.actor,
   };
   if (!seatTickSettingsAreDefault(next) && !next.reason) {
-    return { ok: false, error: "a reason is required when the tick is disabled or its wake interval is changed; a quiet tick with no recorded reason is indistinguishable from a broken one" };
+    return { ok: false, error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" };
   }
-  /* Back at the defaults, the record keeps nothing of the setting it replaced:
-     an interval, an expiry and a reason that describe a state nobody holds any
-     more are the same disagreement between record and behaviour the lapsed
-     write exists to close. Who restored it, and when, is on the row either
-     way — `setBy` and `updatedAt` outlive the setting they ended.
-
-     The prompt is untouched here, because it was never part of what is being
-     ended: turning a tick back on says nothing about the words a seat left for
-     its own wakes, and `monitorPrompt: null` is how those words are withdrawn. */
+  /* Restoring a schedule clears its interval and expiry. The panel's
+     instructions and the seat's own note stand until explicitly cleared;
+     both are delivered independently of the cadence. */
   if (seatTickSettingsAreDefault(next)) {
-    return { ok: true, settings: { ...next, wakeIntervalMinutes: null, reason: null, until: null }, ...(notes.length ? { notes } : {}) };
+    return { ok: true, settings: { ...next, wakeIntervalMinutes: null, until: null }, ...(notes.length ? { notes } : {}) };
   }
   return { ok: true, settings: next, ...(notes.length ? { notes } : {}) };
 }

@@ -238,6 +238,15 @@ export interface KanbanModelInput {
       seat record names leaves the bands (#1841). */
   seat?: SeatRefs | null;
   query?: string;
+  /** The conversations with a reader open and unfolded in a card. A draft no
+      task holds stands in Assigned unless one of these is held by a card there:
+      a reader fills the column, so a draft above it would push the agent the
+      operator is reading out of the window. */
+  openReaders?: ReadonlySet<string>;
+  /** Whether this page launched the conversation from an agent draft. With a
+      reader open on another card in Assigned, the launched card stands under
+      that card, where the draft stood, and does not push it out of the window. */
+  launched?: (file: FileEntry) => boolean;
   /** Epoch seconds. */
   now: number;
 }
@@ -317,6 +326,33 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
  * the working cards keep their places while their agents stream. Then the
  * newest agent work, then the newest edit of the task, then the id.
  */
+/** A card no task owns that holds nothing but agent drafts. Its launch becomes
+    a task in Assigned, so the board draws it there from the first keystroke. */
+export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "members" | "mirrors">): boolean {
+  return !card.task && card.drafts.length > 0 && card.members.length === 0 && card.mirrors.length === 0;
+}
+
+/**
+ * A card launched from this page's draft, with its reader open, takes the
+ * place right under the last card the operator is reading in the column. The
+ * draft waited in Inbox beside that card; the launch writes a task that sorts
+ * above it, and the card being read would drop below the new card's reader and
+ * out of the window. Closing either reader lets the launched card sort as any
+ * other. Reorders `cards` in place.
+ */
+export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<string> | undefined, launched: ((file: FileEntry) => boolean) | undefined): void {
+  if (!reading?.size || !launched) return;
+  const held = (card: KanbanCard) => card.members.some((member) => reading.has(conversationIdentity(member.file)));
+  const landing = (card: KanbanCard) => held(card) && card.members.some((member) => launched(member.file));
+  let anchor = -1;
+  cards.forEach((card, index) => { if (held(card) && !landing(card)) anchor = index; });
+  if (anchor < 0) return;
+  const above = cards.slice(0, anchor + 1);
+  const moved = above.filter(landing);
+  if (!moved.length) return;
+  cards.splice(0, anchor + 1, ...above.filter((card) => !landing(card)), ...moved);
+}
+
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
   if ((a.workingSinceMs === null) !== (b.workingSinceMs === null)) return a.workingSinceMs === null ? 1 : -1;
   if (a.workingSinceMs !== null && b.workingSinceMs !== null) return b.workingSinceMs - a.workingSinceMs || a.id.localeCompare(b.id);
@@ -608,7 +644,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const needsYou = reasons.length > 0;
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
-    const status: TaskStatus = overridden ?? task?.status ?? "inbox";
+    /* A card holding only an agent draft is where its launch will land: the task
+       the launch writes is Assigned, so the draft stands there and the launched
+       card takes the place the draft held, in the column it was drawn in. */
+    const status: TaskStatus = overridden ?? task?.status ?? (!members.length && band.members.some((member) => member.kind === "draft") ? "assigned" : "inbox");
     const hide: GroupHideState = task
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };
@@ -694,6 +733,12 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     }];
   });
 
+  /* The draft's launch writes a task in Assigned and takes the draft's place there. Beside an agent being
+     read in Assigned the draft stays in Inbox instead, where it pushes nothing out of the window. */
+  const readInAssigned = cards.some((card) => card.task && !card.hide.hidden && card.status === "assigned"
+    && card.members.some((member) => input.openReaders?.has(conversationIdentity(member.file))));
+  if (readInAssigned) for (const card of cards) if (holdsOnlyDrafts(card)) card.status = "inbox";
+
   /* Search and the Overview's predicate narrow the same way and in the same
      place: what they reject leaves `shown`, and every count above is already
      taken over the whole inventory. */
@@ -706,6 +751,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const unlinked = cards.filter((card) => !card.task).sort(compareCards);
   const columns = Object.fromEntries(KANBAN_STATUSES.map((status) => {
     const inColumn = recorded.filter((card) => card.status === status).sort(status === "inbox" ? compareInboxCards : compareCards);
+    if (status === "assigned") landUnderReading(inColumn, input.openReaders, input.launched);
     return [status, {
       status,
       cards: inColumn,

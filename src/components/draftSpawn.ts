@@ -453,6 +453,12 @@ export function provisionalSpawnFile(
     proc: null,
     pid: null,
     model: attempt.request?.model || null,
+    /* The chosen runtime rides the first paint: without it the composer's
+       pill reads the scale's lowest tier until the server's projection of the
+       same launch brings the effort, and the label jumps (Light -> High). */
+    ...(attempt.request?.model ? { launchModel: attempt.request.model } : {}),
+    ...(attempt.request?.effort ? { effort: attempt.request.effort } : {}),
+    ...(typeof attempt.request?.fast === "boolean" ? { fast: attempt.request.fast } : {}),
     pendingQuestion: null,
     waitingInput: null,
     conversationId: outcome.conversationId,

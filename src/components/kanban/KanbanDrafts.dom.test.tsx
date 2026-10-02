@@ -5,7 +5,9 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { translate } from "@/lib/i18n";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { FileEntry } from "@/lib/types";
 
+import { setDraftCwd } from "../DraftAgentPane";
 import type { TaskMutationPorts } from "./useTaskMutations";
 
 /* + Task, + Agent and agent drafts on the kanban board (#1695 K9a), rendered by
@@ -240,12 +242,15 @@ test("a draft is drawn inside the card that holds it, is never sent to Conversat
   const onA = host.querySelector('.card[data-id="task:a"] [data-kanban-draft="draft-on-a"]');
   expect(onA?.querySelector('[aria-label="Draft of a new agent conversation"]')).not.toBeNull();
   expect(host.querySelector('.card[data-id="task:a"] .refs')).toBeNull();
-  /* A draft no task holds is a card of its own under Not on a task. */
+  /* A draft no task holds is a card of its own, drawn in Assigned: its launch
+     becomes a task there, and the launched card takes the place the draft held. */
   const alone = host.querySelector('[data-kanban-draft="draft-alone"]')?.closest(".card");
   expect(alone?.getAttribute("data-id")).toBe("draft:draft-alone");
-  expect(columnOf(alone)).toBe("inbox");
+  expect(columnOf(alone)).toBe("assigned");
   /* A shelf column holding a draft widens to reading width. */
   expect(host.querySelector(".column[data-status=inbox]")?.classList.contains("reading")).toBe(true);
+  /* The open-agents rail already stands beside the columns, with the draft in it, so the launch does not insert it. */
+  expect(host.querySelector('.open-rail [data-open-agent^="draft::"]')).not.toBeNull();
 
   click(onA!.querySelector(`button[aria-label="${translate("en", "draft.dismiss")}"]`));
   expect(closed).toEqual(["draft-on-a"]);
@@ -258,11 +263,53 @@ test("crossing a width breakpoint keeps a card's draft pane mounted", async () =
   expect(pane).not.toBeNull();
   expect(host.querySelector("[data-kanban-board]")?.getAttribute("data-mode")).toBe("wide");
 
-  for (const [width, mode] of [[1280, "narrow"], [900, "scroll"], [700, "tabs"], [1440, "wide"]] as const) {
+  /* The rail a draft opens takes its strip out of the width, so 1440 reads as narrow while it stands. */
+  for (const [width, mode] of [[1280, "narrow"], [900, "scroll"], [700, "tabs"], [1440, "narrow"]] as const) {
     boardWidth = width;
     flushSync(() => { for (const callback of resizeCallbacks) callback(); });
     expect(host.querySelector("[data-kanban-board]")?.getAttribute("data-mode")).toBe(mode);
     /* The same element: identity, compared as such (a matcher may compare DOM nodes by shape). */
     expect(host.querySelector('[data-kanban-draft="draft-on-a"] section') === pane).toBe(true);
   }
+});
+
+test("a sent draft stays drawn until the card its launch becomes is on the board, then the card takes its place", async () => {
+  const restored: string[] = [];
+  const closed: string[] = [];
+  const opened: string[] = [];
+  const spawned = {
+    ok: true, launched: true, transport: "structured", state: "path-pending", target: "",
+    launchId: "launch-1", conversationId: "conversation_launch-1", initialMessage: "queued",
+  };
+  const answer = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => (
+    String(input) === "/api/spawn" && init?.method === "POST"
+      ? new Response(JSON.stringify(spawned), { status: 200, headers: { "content-type": "application/json" } })
+      : answer(input, init)
+  )) as unknown as typeof fetch;
+  setDraftCwd("draft-alone", "/repo");
+  const { host, render } = mount([task("older", "assigned", "An older task")], {
+    drafts: ["draft-alone"],
+    onRestoreConversation: (file) => restored.push(file.conversationId ?? file.path),
+    onDraftClose: (id) => closed.push(id),
+    onConversationOpened: (path) => opened.push(path),
+  });
+  await settle();
+  const draft = () => host.querySelector('[data-kanban-draft="draft-alone"]');
+  type(draft()!.querySelector('textarea[aria-label="First prompt text"]'), "Read the README");
+  flushSync(() => draft()!.querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+  await settle(10);
+
+  /* The conversation joined the board, and the draft is still the card in Assigned. */
+  expect(restored).toEqual(["conversation_launch-1"]);
+  expect(closed).toEqual([]);
+  expect(columnOf(draft()?.closest(".card"))).toBe("assigned");
+
+  /* The task the launch wrote arrives with its conversation: one commit later the card stands where the draft stood. */
+  const launched = { path: "spawn:launch-1", root: "claude-projects", name: "spawn:launch-1", project: "fixture", title: "Claude", engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: 1_800_000_000, size: 0, activity: "live", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null, conversationId: "conversation_launch-1" } as unknown as FileEntry;
+  const placeholder = { ...task("launched", "assigned", "Read the README"), assignments: [{ launchId: "launch-1", conversationId: "conversation_launch-1", path: null, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" }] } as BoardTask;
+  render({ files: [launched], manual: [launched], allTasks: [task("older", "assigned", "An older task"), placeholder] });
+  await settle(10);
+  expect(closed).toEqual(["draft-alone"]);
+  expect(host.querySelector('.card[data-id="task:launched"]')).not.toBeNull();
 });

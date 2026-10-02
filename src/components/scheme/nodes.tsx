@@ -1585,7 +1585,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }
     const index = slot.index + 1;
     const stage = { id: `stage-${n}`, kind, prompt: index > 0 ? "{{prev.output}}" : "{{task}}", next: null };
     const optimistic = kind === "review-loop" ? optimisticAddReview(pipeline, stage, index) : optimisticAddStage(pipeline, stage, index);
-    void patchPipeline(pipeline.id, "add-stage", { index, stage }, optimistic).then((fail) => {
+    void patchPipeline(pipeline.id, "add-stage", { index, stage, after: pipeline.stages[slot.index]!.id }, optimistic).then((fail) => {
       if (fail) pushTaskToast("err", fail);
       setBusy(false);
     });

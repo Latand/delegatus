@@ -116,6 +116,336 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
   }
 });
 
+for (const advanceRemote of [false, true]) {
+  test(`a held PR branch provisions on the lane branch and publishes only to the delivery ref (stale local: ${advanceRemote})`, async () => {
+    const box = isolatedIdentityRepo();
+    const { root, repo } = box;
+    const origin = path.join(root, "origin.git");
+    const builder = path.join(root, "builder with spaces");
+    const deliveryBranch = "feature/held-pr";
+    try {
+      git(repo, "config", "user.name", "Fixture");
+      git(repo, "config", "user.email", "noreply");
+      git(repo, "config", "commit.gpgSign", "false");
+      git(root, "init", "--bare", "--initial-branch=main", origin);
+      git(repo, "remote", "add", "origin", origin);
+      git(repo, "push", "origin", "main");
+      git(repo, "worktree", "add", "-b", deliveryBranch, builder);
+      fs.writeFileSync(path.join(builder, "pr.txt"), "existing PR work\n");
+      git(builder, "add", "pr.txt");
+      git(builder, "commit", "-m", "existing PR work");
+      git(builder, "push", "origin", deliveryBranch);
+      const base = git(builder, "rev-parse", "HEAD");
+      const writer = path.join(root, "writer");
+      git(root, "clone", origin, writer);
+      git(writer, "config", "user.name", "Fixture");
+      git(writer, "config", "user.email", "noreply");
+      git(writer, "config", "commit.gpgSign", "false");
+      git(writer, "checkout", deliveryBranch);
+      if (advanceRemote) {
+        git(writer, "commit", "--allow-empty", "-m", "newer remote work");
+        git(writer, "push", "origin", deliveryBranch);
+      }
+      const current = git(writer, "rev-parse", "HEAD");
+      fs.writeFileSync(path.join(builder, "pr.txt"), "uncommitted builder work\n");
+      fs.writeFileSync(path.join(builder, "keep.txt"), "untracked builder work\n");
+      const status = git(builder, "status", "--porcelain");
+      const subject = { ...pipeline(), repoDir: repo, worktreeDir: path.join(root, "repo-pipeline-12345678"),
+        baseBranch: deliveryBranch, baseRef: base, lastPassedCommit: base };
+      subject.delivery!.target.branch = `refs/heads/${deliveryBranch}`;
+      savePipelines([subject]);
+
+      expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: current, baseBranch: deliveryBranch });
+      expect(git(subject.worktreeDir, "branch", "--show-current")).toBe(subject.branch);
+      expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true, sha: current });
+      fs.writeFileSync(path.join(subject.worktreeDir, "stage.txt"), "accepted work\n");
+      git(subject.worktreeDir, "add", "stage.txt");
+      git(subject.worktreeDir, "commit", "-m", "accepted stage");
+      const accepted = git(subject.worktreeDir, "rev-parse", "HEAD");
+      expect(await publishPipelineBranch(subject, realExec, { acceptedSha: accepted })).toEqual({ ok: true, sha: accepted, remote: "published" });
+      expect(git(repo, "ls-remote", "--heads", "origin", subject.delivery!.target.branch).split(/\s+/)[0]).toBe(accepted);
+      expect(git(repo, "ls-remote", "--heads", "origin", `refs/heads/${subject.branch}`)).toBe("");
+      // The remote can advance after publication's head probe and before push.
+      git(writer, "fetch", "origin", deliveryBranch);
+      git(writer, "merge", "--ff-only", "FETCH_HEAD");
+      git(writer, "commit", "--allow-empty", "-m", "concurrent remote work");
+      const remoteNext = git(writer, "rev-parse", "HEAD");
+      git(subject.worktreeDir, "commit", "--allow-empty", "-m", "next accepted stage");
+      const localNext = git(subject.worktreeDir, "rev-parse", "HEAD");
+      let raced = false;
+      const racing: ExecPort = (command, args, cwd) => {
+        if (command === "git" && args[0] === "push") {
+          raced = true;
+          git(writer, "push", "origin", deliveryBranch);
+        }
+        return realExec(command, args, cwd);
+      };
+      const refused = await publishPipelineBranch(subject, racing, { acceptedSha: localNext });
+      expect(raced).toBe(true);
+      expect(refused.ok).toBe(false);
+      expect(git(repo, "ls-remote", "--heads", "origin", subject.delivery!.target.branch).split(/\s+/)[0]).toBe(remoteNext);
+      expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(localNext);
+      expect(git(builder, "branch", "--show-current")).toBe(deliveryBranch);
+      expect(git(builder, "rev-parse", "HEAD")).toBe(base);
+      expect(git(builder, "status", "--porcelain")).toBe(status);
+      expect(fs.readFileSync(path.join(builder, "pr.txt"), "utf8")).toBe("uncommitted builder work\n");
+      expect(fs.readFileSync(path.join(builder, "keep.txt"), "utf8")).toBe("untracked builder work\n");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const held of [false, true]) {
+  test(`a successor preserves a closed lane's unpublished delivery tip and starts at the published head (held: ${held})`, async () => {
+    const { root, repo } = isolatedIdentityRepo();
+    try {
+      git(repo, "config", "user.name", "Fixture");
+      git(repo, "config", "user.email", "noreply");
+      git(repo, "config", "commit.gpgSign", "false");
+      const origin = path.join(root, "origin.git");
+      git(root, "init", "--bare", "--initial-branch=main", origin);
+      git(repo, "remote", "add", "origin", origin);
+      git(repo, "push", "origin", "main");
+      const published = git(repo, "rev-parse", "HEAD");
+      const deliveryBranch = "feature/successor";
+      const closedDir = path.join(root, "repo-pipeline-12345678");
+      git(repo, "worktree", "add", "-b", deliveryBranch, closedDir);
+      git(closedDir, "push", "origin", deliveryBranch);
+      fs.writeFileSync(path.join(closedDir, "unpublished.txt"), "closed lane work\n");
+      git(closedDir, "add", "unpublished.txt");
+      git(closedDir, "commit", "-m", "unpublished closed lane work");
+      const unpublished = git(closedDir, "rev-parse", "HEAD");
+      const predecessor = { ...pipeline(), state: "closed" as const, closedAt: "now",
+        repoDir: repo, worktreeDir: closedDir };
+      predecessor.delivery!.active = false;
+      predecessor.delivery!.publish = "disabled";
+      predecessor.delivery!.target.branch = `refs/heads/${deliveryBranch}`;
+      savePipelines([predecessor]);
+      if (!held) git(repo, "worktree", "remove", closedDir);
+      const successor = { ...pipeline(), id: "87654321", task: "successor", branch: "pipeline/successor-87654321",
+        repoDir: repo, worktreeDir: path.join(root, "repo-pipeline-87654321"), baseBranch: "main", baseRef: published };
+      await createPipelineWithDelivery(successor, predecessor.delivery!.target);
+
+      const result = await provisionPipelineWorktreeAsync(successor, realProvisionExec);
+      expect(result).toMatchObject({ ok: true, sha: published,
+        preservedLocalRef: { sha: unpublished, unpublishedCommits: 1 } });
+      if (!result.ok || !result.preservedLocalRef) throw new Error("expected preservation evidence");
+      expect(result.preservedLocalRef.ref).toStartWith("refs/backup/provision-unpublished/");
+      expect(git(repo, "rev-parse", result.preservedLocalRef.ref)).toBe(unpublished);
+      expect(git(repo, "rev-parse", deliveryBranch)).toBe(unpublished);
+      if (held) expect(git(closedDir, "rev-parse", "HEAD")).toBe(unpublished);
+      expect(git(successor.worktreeDir, "rev-parse", "HEAD")).toBe(published);
+      expect(fs.existsSync(path.join(successor.worktreeDir, "unpublished.txt"))).toBe(false);
+      git(successor.worktreeDir, "commit", "--allow-empty", "-m", "successor work");
+      const accepted = git(successor.worktreeDir, "rev-parse", "HEAD");
+      expect(await publishPipelineBranch(successor, realExec, { acceptedSha: accepted })).toMatchObject({ ok: true });
+      expect(realExec("git", ["merge-base", "--is-ancestor", unpublished, accepted], repo).code).toBe(1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+function deliveryProvisionFixture() {
+  const box = isolatedIdentityRepo();
+  git(box.repo, "config", "user.name", "Fixture");
+  git(box.repo, "config", "user.email", "noreply");
+  git(box.repo, "config", "commit.gpgSign", "false");
+  const origin = path.join(box.root, "origin.git");
+  git(box.root, "init", "--bare", "--initial-branch=main", origin);
+  git(box.repo, "remote", "add", "origin", origin);
+  git(box.repo, "push", "origin", "main");
+  const subject = { ...pipeline(), repoDir: box.repo, worktreeDir: path.join(box.root, "repo-pipeline-12345678"),
+    baseBranch: "main", baseRef: git(box.repo, "rev-parse", "HEAD") };
+  subject.delivery!.target.branch = "refs/heads/feature/resume";
+  git(box.repo, "worktree", "add", "-b", "feature/resume", subject.worktreeDir);
+  git(subject.worktreeDir, "push", "origin", "feature/resume");
+  git(subject.worktreeDir, "commit", "--allow-empty", "-m", "unpublished work");
+  const local = git(subject.worktreeDir, "rev-parse", "HEAD");
+  git(box.repo, "worktree", "remove", subject.worktreeDir);
+  return { ...box, subject, local };
+}
+
+test("the same owner and epoch resumes its in-flight local publication after losing the checkout", async () => {
+  const { root, repo, subject, local } = deliveryProvisionFixture();
+  try {
+    subject.delivery!.operation = { id: "own-publication", epoch: 1, sha: local, state: "pending" };
+    savePipelines([subject]);
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: local, baseBranch: "main" });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(local);
+    expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished")).toBe("");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an explicit baseRef pin wins over both the published delivery head and local leftovers", async () => {
+  const box = deliveryProvisionFixture();
+  try {
+    git(box.repo, "push", "origin", "feature/resume");
+    const leftover = git(box.repo, "commit-tree", `${box.local}^{tree}`, "-p", box.local, "-m", "later unpublished work");
+    git(box.repo, "update-ref", "refs/heads/feature/resume", leftover);
+    const subject = { ...box.subject, baseRefPinned: true };
+    savePipelines([subject]);
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true, sha: subject.baseRef,
+      preservedLocalRef: { sha: leftover, unpublishedCommits: 1 } });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(git(box.repo, "rev-parse", "feature/resume")).toBe(leftover);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("a superseded publication epoch cannot adopt the former owner's unpublished tip", async () => {
+  const { root, repo, subject, local } = deliveryProvisionFixture();
+  try {
+    subject.delivery!.operation = { id: "old-publication", epoch: 1, sha: local, state: "pending" };
+    savePipelines([subject]);
+    expect((await takeoverPipelineDelivery(subject.id, subject.id, 1, "new epoch", null)).pipeline?.delivery?.epoch).toBe(2);
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true, sha: subject.baseRef,
+      preservedLocalRef: { sha: local, unpublishedCommits: 1 } });
+    expect(git(repo, "rev-parse", "feature/resume")).toBe(local);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a pin equal to the local delivery tip stays pinned when the remote has advanced", async () => {
+  const { root, repo, subject, local } = deliveryProvisionFixture();
+  try {
+    git(repo, "push", "origin", "feature/resume");
+    git(repo, "update-ref", "refs/heads/feature/resume", subject.baseRef, local);
+    const pinned = { ...subject, baseRefPinned: true };
+    savePipelines([pinned]);
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(subject.baseRef);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the same owner's in-flight publication resumes on its lane ref after checkout loss", async () => {
+  const { root, repo, subject, local } = deliveryProvisionFixture();
+  try {
+    git(repo, "branch", subject.branch, local);
+    subject.delivery!.operation = { id: "own-lane-publication", epoch: 1, sha: local, state: "pending" };
+    savePipelines([subject]);
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toEqual({ ok: true, sha: local, baseBranch: "main" });
+    expect(git(subject.worktreeDir, "branch", "--show-current")).toBe(subject.branch);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an explicit pin from a separate history remains the provisioning base on retry", async () => {
+  const { root, repo, subject } = deliveryProvisionFixture();
+  try {
+    const baseRef = git(repo, "commit-tree", `${subject.baseRef}^{tree}`, "-m", "independent pinned base");
+    const pinned = { ...subject, baseRef, baseRefPinned: true };
+    savePipelines([pinned]);
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toMatchObject({ ok: true, sha: baseRef });
+    expect(await provisionPipelineWorktreeAsync(pinned, realProvisionExec)).toMatchObject({ ok: true, sha: baseRef });
+    expect(git(subject.worktreeDir, "rev-parse", "HEAD")).toBe(baseRef);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("backup creation is repeatable after checkout failure and never overwrites an existing backup", async () => {
+  const { root, repo, subject, local } = deliveryProvisionFixture();
+  try {
+    savePipelines([subject]);
+    const failed = await provisionPipelineWorktreeAsync(subject, async (command, args, cwd, signal) =>
+      args[0] === "worktree" && args[1] === "add"
+        ? { code: 1, stdout: "", stderr: "injected checkout failure" }
+        : realProvisionExec(command, args, cwd, signal));
+    expect(failed).toMatchObject({ ok: false, preservedLocalRef: { sha: local } });
+    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    expect(retry).toMatchObject({ ok: true, sha: subject.baseRef, preservedLocalRef: failed.preservedLocalRef });
+    expect(git(repo, "rev-parse", retry.preservedLocalRef!.ref)).toBe(local);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an unrelated existing lane ref refuses instead of becoming the PR base", async () => {
+  const box = isolatedIdentityRepo();
+  const { root, repo } = box;
+  const origin = path.join(root, "origin.git");
+  const builder = path.join(root, "builder");
+  const writer = path.join(root, "writer");
+  const deliveryBranch = "feature/held-pr";
+  try {
+    git(repo, "config", "user.name", "Fixture");
+    git(repo, "config", "user.email", "noreply");
+    git(repo, "config", "commit.gpgSign", "false");
+    git(root, "init", "--bare", "--initial-branch=main", origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "push", "origin", "main");
+    git(repo, "worktree", "add", "-b", deliveryBranch, builder);
+    fs.writeFileSync(path.join(builder, "pr.txt"), "existing PR work\n");
+    git(builder, "add", "pr.txt");
+    git(builder, "commit", "-m", "existing PR work");
+    git(builder, "push", "origin", deliveryBranch);
+    const base = git(builder, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(builder, "pr.txt"), "uncommitted builder work\n");
+    fs.writeFileSync(path.join(builder, "keep.txt"), "untracked builder work\n");
+    const builderStatus = git(builder, "status", "--porcelain");
+
+    git(root, "clone", origin, writer);
+    git(writer, "config", "user.name", "Fixture");
+    git(writer, "config", "user.email", "noreply");
+    git(writer, "config", "commit.gpgSign", "false");
+    git(writer, "checkout", deliveryBranch);
+    fs.writeFileSync(path.join(writer, "foreign.txt"), "unrelated lane history\n");
+    git(writer, "add", "foreign.txt");
+    git(writer, "commit", "-m", "unrelated lane history");
+    const dormantTip = git(writer, "rev-parse", "HEAD");
+
+    const subject = { ...pipeline(), repoDir: repo, worktreeDir: path.join(root, "lane"),
+      baseBranch: deliveryBranch, baseRef: base };
+    subject.delivery!.target.branch = `refs/heads/${deliveryBranch}`;
+    git(repo, "fetch", writer, `${dormantTip}:refs/heads/${subject.branch}`);
+    expect(git(repo, "show", `${subject.branch}:foreign.txt`)).toBe("unrelated lane history");
+
+    const result = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected the unowned lane ref to be refused");
+    expect(result.error).toContain(subject.branch);
+    expect(result.error).toContain("no registered lane worktree");
+    expect(git(repo, "rev-parse", subject.branch)).toBe(dormantTip);
+    expect(fs.existsSync(subject.worktreeDir)).toBe(false);
+    expect(git(builder, "branch", "--show-current")).toBe(deliveryBranch);
+    expect(git(builder, "rev-parse", "HEAD")).toBe(base);
+    expect(git(builder, "status", "--porcelain")).toBe(builderStatus);
+    expect(fs.readFileSync(path.join(builder, "pr.txt"), "utf8")).toBe("uncommitted builder work\n");
+    expect(fs.readFileSync(path.join(builder, "keep.txt"), "utf8")).toBe("untracked builder work\n");
+    expect(git(repo, "ls-remote", "--heads", "origin", `refs/heads/${deliveryBranch}`).split(/\s+/)[0]).toBe(base);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a pipeline branch held by another worktree refuses with the branch, holder and recovery action", async () => {
+  const { root, repo } = isolatedIdentityRepo();
+  try {
+    const subject = { ...pipeline(), repoDir: repo, worktreeDir: path.join(root, "repo-pipeline-12345678"),
+      baseBranch: "main", baseRef: git(repo, "rev-parse", "HEAD") };
+    const holder = path.join(root, "holding lane");
+    git(repo, "worktree", "add", "-b", subject.branch, holder);
+    fs.writeFileSync(path.join(holder, "keep.txt"), "preserve\n");
+    const result = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a held pipeline branch refusal");
+    expect(result.error).toContain(subject.branch);
+    expect(result.error).toContain(holder);
+    expect(result.error).toContain("resume its owning lane");
+    expect(git(holder, "branch", "--show-current")).toBe(subject.branch);
+    expect(git(holder, "rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(fs.readFileSync(path.join(holder, "keep.txt"), "utf8")).toBe("preserve\n");
+    expect(fs.existsSync(subject.worktreeDir)).toBe(false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("provisioning through a symlinked parent adopts its own checkout on retry", async () => {
+  const { root, repo } = isolatedIdentityRepo();
+  try {
+    const alias = path.join(root, "alias");
+    fs.symlinkSync(root, alias, "dir");
+    const subject = { ...pipeline(), repoDir: path.join(alias, "repo"),
+      worktreeDir: path.join(alias, "repo-pipeline-12345678"),
+      baseBranch: "main", baseRef: git(repo, "rev-parse", "HEAD") };
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true });
+    fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve\n");
+    expect(await provisionPipelineWorktreeAsync(subject, realProvisionExec)).toMatchObject({ ok: true, sha: subject.baseRef });
+    expect(git(subject.worktreeDir, "branch", "--show-current")).toBe(subject.branch);
+    expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("new owner checkout starts from an existing delivery head and keeps a divergent remote", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-checkout-"));
   const origin = path.join(root, "origin.git");

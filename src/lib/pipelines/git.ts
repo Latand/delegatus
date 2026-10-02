@@ -6,12 +6,15 @@ import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provis
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
-import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
+import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
 import type { Pipeline } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 
-export type PipelineGitResult = { ok: true; sha: string; baseBranch?: string } | { ok: false; error: string };
+export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
+export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
+  preservedLocalRef?: PreservedProvisionRef;
+};
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
@@ -109,6 +112,14 @@ export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
+/** Git canonicalizes a worktree's parent path in its registration. */
+function worktreePathMatches(registeredPath: string | undefined, lanePath: string): boolean {
+  if (!registeredPath) return false;
+  if (registeredPath === lanePath) return true;
+  try { return fs.realpathSync(registeredPath) === fs.realpathSync(lanePath); }
+  catch { return false; } // A missing path cannot prove this is the lane's checkout.
+}
+
 /** Provisioning alone uses this asynchronous port; stage Git keeps ExecPort. */
 export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
 
@@ -172,20 +183,66 @@ export async function resolvePipelineBaseAsync(
 }
 
 export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+  const preservation: { value?: PreservedProvisionRef } = {};
+  const result = await provisionPipelineCheckout(pipeline, exec, preservation, signal);
+  return preservation.value ? { ...result, preservedLocalRef: preservation.value } : result;
+}
+
+async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExecPort,
+  preservation: { value?: PreservedProvisionRef }, signal?: AbortSignal): Promise<PipelineGitResult> {
   if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const legacy = await exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${pipeline.branch}`], pipeline.repoDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : pipeline.branch;
-  // A pre-existing pipeline ref identifies an older checkout. New owners use
-  // the delivery ref directly, so no second branch can become a review fence.
-  const branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
+  // Preserve older lane refs. A delivery ref held by another worktree uses a
+  // lane ref too; publication still fences and writes the delivery target.
+  let branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
   if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
   const localRef = await exec("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], pipeline.repoDir, signal);
   const localSha = localRef.code === 0 ? localRef.stdout.trim() : null;
+  const owner = pipeline.delivery ? pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }) : null;
+  const sameOwner = owner?.id === pipeline.id && owner.createdAt === pipeline.createdAt
+    && owner.worktreeDir === pipeline.worktreeDir && owner.repoDir === pipeline.repoDir
+    && owner.delivery?.target.remote === pipeline.delivery?.target.remote
+    && deliveryOwnerError(pipeline, owner) === null;
+  const operation = sameOwner ? owner?.delivery?.operation : undefined;
+  const resumesPublication = !!operation && operation.epoch === pipeline.delivery?.epoch
+    && operation.sha === localSha && (operation.state === "pending" || operation.state === "running");
+  let ownsCheckout = false;
+  if (deliveryBranch !== pipeline.branch) {
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+    if (listing.code !== 0) return failure("checking ownership of the existing pipeline branch", listing);
+    const entries = listing.stdout.split("\0\0").map((record) => record.split("\0"));
+    ownsCheckout = entries.some((fields) => fields.includes(`branch refs/heads/${branch}`)
+      && worktreePathMatches(fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+    if (legacy.code === 0 && !ownsCheckout && !resumesPublication) {
+      const holder = entries.find((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`));
+      const holdingPath = holder?.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+      const location = holdingPath ? `; it is held by worktree ${holdingPath}` : " and has no registered lane worktree";
+      return { ok: false, error: `pipeline branch ${pipeline.branch} already exists${location}; preserve it and choose a new pipeline branch/worktree or resume its owning lane` };
+    }
+  }
+  const resumesLocal = (ownsCheckout && sameOwner) || resumesPublication;
+  const holdsInitialPin = pipeline.baseRefPinned && localSha === pipeline.baseRef;
+  const backupPrefix = `refs/backup/provision-unpublished/${pipeline.branch}/`;
+  if (legacy.code === 0 && resumesLocal) {
+    // A crash can leave a complete checkout before its outcome is persisted.
+    // The ref itself carries the lane and count needed to replay its evidence.
+    const backups = await exec("git", ["for-each-ref", "--format=%(refname) %(objectname)", backupPrefix], pipeline.repoDir, signal);
+    if (backups.code !== 0) return failure("recovering provisioning backup evidence", backups);
+    for (const record of backups.stdout.trim().split("\n")) {
+      const [ref, sha] = record.split(" ");
+      const match = ref?.startsWith(backupPrefix) ? ref.slice(backupPrefix.length).match(/^([1-9][0-9]*)-([0-9a-f]{40})$/) : null;
+      if (match && sha === match[2] && Number.isSafeInteger(Number(match[1]))) {
+        preservation.value = { ref, sha, unpublishedCommits: Number(match[1]) };
+        break;
+      }
+    }
+  }
   let remoteSha: string | null = null;
-  if (branch !== pipeline.branch && pipeline.delivery?.target.remote) {
+  if (deliveryBranch !== pipeline.branch && pipeline.delivery?.target.remote) {
     const remote = pipeline.delivery.target.remote;
     const ref = pipeline.delivery.target.branch;
     const probe = await exec("git", ["ls-remote", "--heads", remote, ref], pipeline.repoDir, signal);
@@ -200,19 +257,58 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
       if (localSha) {
         const localContainsRemote = await exec("git", ["merge-base", "--is-ancestor", remoteSha, localSha], pipeline.repoDir, signal);
         const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.repoDir, signal);
-        if (localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
+        if (resumesLocal && !holdsInitialPin && localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
           return { ok: false, error: `delivery branch ${branch} has divergent local and remote commits; merge or choose the preserved tip before starting the lane` };
         }
       }
     }
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  const start = localSha ?? remoteSha ?? pipeline.baseRef;
+  const start = resumesLocal ? localSha ?? remoteSha ?? pipeline.baseRef
+    : pipeline.baseRefPinned ? pipeline.baseRef : remoteSha ?? pipeline.baseRef;
+  if (!resumesLocal && localSha && localSha !== start && deliveryBranch !== pipeline.branch) {
+    const count = await exec("git", ["rev-list", "--count", `${remoteSha ?? pipeline.baseRef}..${localSha}`], pipeline.repoDir, signal);
+    if (count.code !== 0) return failure("counting unpublished delivery commits", count);
+    const unpublishedCommits = Number(count.stdout.trim());
+    if (!Number.isSafeInteger(unpublishedCommits) || unpublishedCommits < 0) return { ok: false, error: "invalid unpublished delivery commit count" };
+    if (unpublishedCommits > 0) {
+      // Content-addressed and create-only: retries retain the same backup,
+      // and no provisioning attempt can overwrite an earlier preserved tip.
+      const ref = `${backupPrefix}${unpublishedCommits}-${localSha}`;
+      const backup = await exec("git", ["update-ref", ref, localSha, "0".repeat(40)], pipeline.repoDir, signal);
+      if (backup.code !== 0) {
+        const existing = await exec("git", ["rev-parse", "--verify", ref], pipeline.repoDir, signal);
+        if (existing.code !== 0 || existing.stdout.trim() !== localSha) return failure("preserving unpublished delivery commits", backup);
+      }
+      preservation.value = { ref, sha: localSha, unpublishedCommits };
+    }
+    // Keep the delivery ref and any holder untouched, even when it is free.
+    branch = pipeline.branch;
+  }
+  const reuseLocal = localSha && (resumesLocal || localSha === start) && branch !== pipeline.branch;
   let expectedHead = start;
-  const addArgs = localSha
+  const addArgs = (deliveryBranch === pipeline.branch ? localSha : legacy.code === 0 || reuseLocal)
     ? ["worktree", "add", pipeline.worktreeDir, branch]
     : ["worktree", "add", "-b", branch, pipeline.worktreeDir, start];
-  const add = await exec("git", addArgs, pipeline.repoDir, signal);
+  let add = await exec("git", addArgs, pipeline.repoDir, signal);
+  if (!signal?.aborted && add.code !== 0 && !add.signal && add.code !== null && !killedAtBound(add)) {
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+    if (listing.code !== 0) return failure("checking which worktree holds the pipeline branch", listing);
+    const holder = listing.stdout.split("\0\0").map((record) => record.split("\0"))
+      .find((fields) => fields.includes(`branch refs/heads/${branch}`)
+        && !worktreePathMatches(fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+    if (holder) {
+      const holdingPath = holder.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+      if (branch === pipeline.branch) {
+        return { ok: false, error: `pipeline branch ${branch} is held by worktree ${holdingPath}; choose a new pipeline branch/worktree or resume its owning lane; the holding worktree was left untouched` };
+      }
+      branch = pipeline.branch;
+      if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
+      add = await exec("git", ["worktree", "add", "-b", branch, pipeline.worktreeDir, start], pipeline.repoDir, signal);
+      if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+      if (add.code !== 0) return { ok: false, error: `delivery branch ${deliveryBranch} is held by worktree ${holdingPath}; creating lane branch ${branch} failed; resolve the lane branch/path conflict and retry provisioning: ${(add.stderr || add.stdout).trim()}` };
+    }
+  }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
@@ -241,7 +337,8 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
     if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  if (localSha && remoteSha && localSha !== remoteSha) {
+  if (resumesLocal && localSha && remoteSha && localSha !== remoteSha
+    && !holdsInitialPin) {
     const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
     if (remoteContainsLocal.code === 0) {
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
@@ -252,7 +349,7 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
-  if (branch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
+  if (deliveryBranch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
     return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   }
   if (base.stdout.trim() !== expectedHead) {

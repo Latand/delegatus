@@ -15,7 +15,8 @@ import type { FileEntry } from "@/lib/types";
  * borrows its conversation's own title: the cleaned first line the
  * conversation list shows, never more of the prompt than that. With no
  * conversation to borrow from, the first line of the task's own admission
- * title is used, cleaned the same way.
+ * title is used, cleaned the same way. A launch's admission title is its first
+ * prompt, so a young launch shows it at once instead of waiting.
  */
 
 /** How long a placeholder waits for its agent's first action. */
@@ -59,8 +60,14 @@ export function placeholderTitle(input: PlaceholderTitleInput): PlaceholderTitle
      the window. */
   const failed = input.failedLaunches ?? [];
   const ended = (members.length > 0 || failed.length > 0) && !members.some(stillRunning);
-  if (young && !ended) return { pending: true, derived: null };
   const own = taskTitle(task.text);
+  /* A launch admitted with its first prompt already carries a title of its
+     own. The agent's refinement still replaces it (the task stays pending in
+     the store), but the card never sits at «Untitled task» meanwhile. */
+  if (young && !ended) {
+    const admitted = own === UNTITLED_TASK_TEXT ? null : firstPromptLine(own, TITLE_LIMIT);
+    return admitted ? { pending: false, derived: admitted } : { pending: true, derived: null };
+  }
   const candidates = [
     ...members.map((member) => member.file.title),
     ...(input.mirrors ?? []).map((mirror) => mirror.file.title),
