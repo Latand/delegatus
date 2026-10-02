@@ -104,6 +104,13 @@ const ask = conversation(D, "Чип Чекають: 2–3 варіанти", {
   pendingQuestion: { kind: "question", toolUseId: "toolu-ask-1", transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(4 * MIN),
     questions: [{ question: "Злити #2246 зараз чи після ревʼю?", header: "Злиття #2246", multiSelect: false, options: [] }] },
 });
+if (params.has("memory")) {
+  const subject = files.find((file) => file.path === ask)!;
+  subject.pendingQuestion = null;
+  subject.title = "Memory-limited build";
+  subject.memoryKill = { at: iso(60), limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true };
+  subject.durableLineage = { kind: "spawn", role: "builder", parentConversationId: null, reviewsConversationId: null, memberships: [{ kind: "pipeline", containerId: "lane-memory", stageId: "build", role: "builder", slot: "stage", stageOrder: 0, round: null, parentConversationId: null }] };
+}
 /* Row 2, `permission`: a structured host's tool request, answered inline. */
 const permission = conversation(D, "Аудит задач дошки", {
   ...role("reviewer"), ...working(900), mtime: now - 11 * MIN,

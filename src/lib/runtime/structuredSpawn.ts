@@ -1,3 +1,4 @@
+import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1687,7 +1688,12 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability);
+  const liveAgents = Object.values(input.registry.readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
+  const plan = planAgentMemory({ engine: input.engine, sessionKey: input.receipt.launchId, liveAgents });
+  const memoryCell = plan ? new AgentMemoryCell(plan) : null;
+  if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
+    ...(memoryCell ? { memoryCell } : {}),
+  });
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const validateTelegramGrant = profile.mcpServers.includes("telegram")
     ? () => { admittedStructuredLaunchInput(input); }
@@ -1722,6 +1728,7 @@ export async function defaultStartHost(
       initialEventCursor,
       env,
       ...engineProcess.codex,
+      ...(memoryCell ? { memoryCell } : {}),
     };
     return resumeSessionId
       ? await CodexAppServerHost.adopt(resumeSessionId, options)
@@ -1731,6 +1738,7 @@ export async function defaultStartHost(
   const options = {
     ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant),
     ...engineProcess.claude,
+    ...(memoryCell ? { memoryCell } : {}),
   };
   return form.kind === "resume"
     ? await ClaudeStreamBrokerHost.adopt(form.sessionId, options)
