@@ -697,10 +697,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    expect(onFail?.properties?.onExhausted?.description).toContain("re-checks the fix once more");
-    /* The terminal gate rechecks the last fix; stopping there is explicit. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review");
+    expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
+    /* Terminal stages re-check the last fix; other stages follow the pass edge. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
+    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge and relays the findings as unreviewed");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review if the head changed");
     expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
     expect(tool?.description).toContain("onExhausted");
     expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
