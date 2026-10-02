@@ -22,12 +22,6 @@
         "height": 28
       },
       "releaseTop": "460",
-      "after": {
-        "x": 463.8125,
-        "y": 460,
-        "width": 54.1875,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 1
     },
@@ -48,12 +42,6 @@
         "height": 28
       },
       "releaseTop": "691.4375",
-      "after": {
-        "x": 463.8125,
-        "y": 633.4375,
-        "width": 54.1875,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 2
     },
@@ -74,12 +62,6 @@
         "height": 28
       },
       "releaseTop": "460",
-      "after": {
-        "x": 463.8125,
-        "y": 460,
-        "width": 54.1875,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 1
     },
@@ -100,12 +82,6 @@
         "height": 28
       },
       "releaseTop": "691.4375",
-      "after": {
-        "x": 463.8125,
-        "y": 633.4375,
-        "width": 54.1875,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 2
     },
@@ -126,12 +102,6 @@
         "height": 28
       },
       "releaseTop": "459.9375",
-      "after": {
-        "x": 290,
-        "y": 459.9375,
-        "width": 79.015625,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 1
     },
@@ -152,12 +122,6 @@
         "height": 28
       },
       "releaseTop": "696.375",
-      "after": {
-        "x": 438.984375,
-        "y": 696.375,
-        "width": 79.015625,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 2
     },
@@ -178,12 +142,6 @@
         "height": 28
       },
       "releaseTop": "459.9375",
-      "after": {
-        "x": 290,
-        "y": 459.9375,
-        "width": 79.015625,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 1
     },
@@ -204,12 +162,6 @@
         "height": 28
       },
       "releaseTop": "696.375",
-      "after": {
-        "x": 438.984375,
-        "y": 609.375,
-        "width": 79.015625,
-        "height": 28
-      },
       "pressed": "true",
       "chips": 2
     }

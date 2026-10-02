@@ -15250,10 +15250,9 @@ describe("task chip: the card's Ask button puts a task in the orchestrator's com
             // Release at the original pointer coordinates, as a physical mouse does.
             await page.mouse.up();
             const releaseTop = await ask.getAttribute("data-test-release-top");
-            const after = (await ask.boundingBox())!;
             const pressed = await ask.getAttribute("aria-pressed");
             const chips = await page.locator("[data-orchestrator-conversation] [data-task-chip]").count();
-            cases.push({ locale, focusTarget, id, before, during, releaseTop, after, pressed, chips });
+            cases.push({ locale, focusTarget, id, before, during, releaseTop, pressed, chips });
             if (releaseTop === null || Math.abs(Number(releaseTop) - before.y) > 0.5 || Math.abs(during.y - before.y) > 0.5) failures.push(`${locale} ${focusTarget} ${id}: Ask moved during the mouse press`);
             if (pressed !== "true" || chips !== expectedChips) failures.push(`${locale} ${id}: pressed=${pressed}, chips=${chips}`);
             await page.screenshot({ path: path.join(OUT, `note-ask-${locale}-${focusTarget}-${id}.png`) });
