@@ -60,6 +60,29 @@ function useStateDirectory(name: string): string {
   return state;
 }
 
+test("symlinked and physical sibling worktrees keep one project after deletion", () => {
+  useStateDirectory("symlink-worktree-state");
+  const disk = path.join(SANDBOX, "grouping-disk");
+  const repo = path.join(disk, "repository");
+  const identity = createRepository(repo);
+  const real = path.join(disk, "repository-pipeline");
+  fs.mkdirSync(real);
+  fs.writeFileSync(path.join(real, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane")}\n`);
+  const link = path.join(SANDBOX, "Projects");
+  fs.symlinkSync(disk, link, "junction");
+  const given = path.join(link, "repository-pipeline");
+  for (const cwd of [given, real]) {
+    expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, worktree: "lane", repo });
+  }
+  persistWorktreeMap();
+  fs.rmSync(real, { recursive: true });
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  for (const cwd of [given, real]) {
+    expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, worktree: "lane", repo });
+  }
+});
+
 afterAll(() => {
   if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
   else delete process.env.LLV_STATE_DIR;
