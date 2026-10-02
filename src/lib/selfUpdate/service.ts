@@ -342,8 +342,8 @@ export class SelfUpdateService {
       : sha && !auto.green[sha] ? "checks" : "idle";
     return { availability: this.autoAvailability(decision), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
-      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
-      decision: auto.enabled && (phase === "waiting" || phase === "building") && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
+      waitingSince: auto.waitingSince, longWait: auto.enabled && !auto.drain?.admitted && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
+      decision: auto.enabled && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
       drain: auto.enabled && auto.waitingSince ? auto.drain
         ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt }
           : { state: "draining", at: auto.drain.since }
@@ -379,6 +379,13 @@ export class SelfUpdateService {
     const decision = await this.decide();
     if ((!this.auto.enabled || this.autoAvailability(decision) !== "available") && !this.hasAutoCustody()) this.endDrain();
     else if (this.auto.drain) this.refreshDrain();
+    const drain = this.auto.drain;
+    // Operator attention follows the original cohort's age even when checks
+    // stop a deployment. Observing it grants no release admission.
+    if (this.auto.enabled && drain && !drain.admitted
+      && this.deps.now() - Date.parse(drain.since) >= DRAIN_NOTICE_MS) {
+      await this.waitForAutoQuiet(await this.snapshot(), drain.target.sha, this.deps.now());
+    }
     if (decision.mode === "managed") { await this.runManagedAutoTick(decision); return; }
     if (decision.mode !== "checkout" || !decision.record) return;
     const record = decision.record;

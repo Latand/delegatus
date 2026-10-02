@@ -2785,13 +2785,14 @@ for (const policy of ["steer-or-queue", "steer-if-active"]) test(`${policy} unkn
   expect((await dropped.target.health()).status).toBe("active");
 });
 
-test.each(["steer", "idle", "unsupported", "interrupt"] as const)("update drain permits original-turn steering and holds fresh %s turn actuation", async (seam) => {
-  const f = steerQueueFixture([seam === "interrupt" ? "interrupt-active" : "steer-or-queue"]);
+test.each(["steer", "idle", "unsupported", "interrupt", "fallback-policy", "fallback-effect"] as const)("update drain permits original-turn steering and holds fresh %s turn actuation", async (seam) => {
+  const f = steerQueueFixture([seam === "interrupt" ? "interrupt-active" : seam === "fallback-policy" ? "steer-if-active" : seam === "fallback-effect" ? "queue" : "steer-or-queue"]);
   Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  if (seam === "fallback-effect") Object.assign(f.effects[0], { kind: "runtime.steer" });
   let held = true;
   f.port.autonomousTurnHeld = () => held;
   if (seam === "idle") f.setActive(null);
-  if (seam === "unsupported") Object.assign(f.target, { supportsSteer: false, steerFallback: "interrupt" });
+  if (seam === "unsupported" || seam.startsWith("fallback")) Object.assign(f.target, { supportsSteer: false, steerFallback: "interrupt" });
   await f.queue.drain();
   expect(f.interrupts).toEqual([]);
   if (seam === "steer") { expect(f.writes).toEqual(["steer:m0"]); return; }

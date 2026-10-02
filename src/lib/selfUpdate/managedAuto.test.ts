@@ -24,7 +24,7 @@ function scenario(enabled = true) {
   let release: string | null = OLD;
   let turns = 0;
   let stages = 0;
-  let green: "green" | "red" = "green";
+  let green: "green" | "red" | "pending" | "unknown" = "green";
   let greenReads = 0;
   let modeReads = 0;
   let modeReadHook: ((read: number) => Promise<void>) | null = null;
@@ -74,7 +74,7 @@ function scenario(enabled = true) {
     receiptReads: () => receiptReads,
     advance: (ms: number) => { now += ms; }, setTurns: (value: number) => { turns = value; },
     setStages: (value: number) => { stages = value; },
-    setGreen: (value: "green" | "red") => { green = value; }, greenReads: () => greenReads,
+    setGreen: (value: typeof green) => { green = value; }, greenReads: () => greenReads,
     setRemote: (value: string) => { remote = value; }, setRelease: (value: string | null) => { release = value; },
     setModeReadHook: (hook: ((read: number) => Promise<void>) | null) => { modeReadHook = hook; },
     finish: (phase: "succeeded" | "rolled-back" | "failed", error: string | null = null) => {
@@ -323,6 +323,30 @@ test("a busy managed install holds immediately and retains its cohort through si
     await service.autoTick();
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]?.revision).toBe(TARGET);
+  } finally { service.stop(); }
+});
+
+test.each(["red", "pending", "unknown"] as const)("six-hour named cohort decision stays visible under %s checks", async state => {
+  const h = scenario();
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_original", engine: "codex", host: "hosted", turn: "running" }] }) as never;
+  let service = h.service();
+  try {
+    await service.autoTick(); h.setGreen(state);
+    // Recover the authoritative non-green result saved by a prior refresh.
+    service.stop();
+    const file = join(h.dir, "auto.json");
+    const saved = readAuto(file);
+    writeAuto(file, { ...saved, green: { ...saved.green, [TARGET]: { ...saved.green[TARGET], state } } });
+    service = h.service(); h.advance(DRAIN_NOTICE_MS + 60_000);
+    await service.autoTick();
+    const auto = (await service.snapshot()).auto!;
+    expect(auto).toMatchObject({ phase: "not-green", longWait: true, decision: { blockers: { turnList: [{ conversationId: "conversation_original" }] } } });
+    expect(auto.decision?.id).toBe(readAuto(join(h.dir, "auto.json")).drain?.id);
+    service.stop(); service = h.service();
+    expect((await service.snapshot()).auto?.decision?.id).toBe(auto.decision!.id);
+    expect(await service.decideDrain(auto.decision!.id, "deploy-now")).toEqual({ ok: true });
+    expect(h.requests).toHaveLength(0);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
   } finally { service.stop(); }
 });
 

@@ -1044,6 +1044,13 @@ export class StructuredDeliveryQueue {
         continue;
       }
       if (effect.kind === "native-queue") {
+        const admission = durableStatuses.get(effect.operationId);
+        const startsWork = effect.action === "add" || effect.action === "start" || effect.action === "send-now";
+        if (startsWork && effect.origin?.kind === "agent" && admission?.status !== "delivering"
+          && this.port.autonomousTurnHeld?.(effect.operationId, admission?.admittedAt ?? admission?.at)) {
+          updateHeld = true;
+          continue;
+        }
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
         if (!await this.executeNative(effect, boundary && effect.eventSeq <= boundary.eventSeq
           ? "conversation was intentionally terminated" : undefined)) return true;
@@ -1138,14 +1145,15 @@ export class StructuredDeliveryQueue {
         || (steerOrQueue && host.supportsSteer === true
           && this.refusedSteerTurns.get(effect.operationId) !== health.activeTurnRef);
       const maySteer = health.status === "active" && steerRequested;
-      // Steering joins the original turn; starting or replacing a turn waits.
-      if (!maySteer && heldForUpdate()) { updateHeld = true; continue; }
       /* A host without steer that DECLARED an interrupt fallback (Copilot over
          ACP) takes a steer the way `interrupt-active` takes a send: the running
          turn is interrupted and the message starts the next one; a turn that
          already ended leaves nothing to interrupt and the message simply starts
          one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
       const steerByInterrupt = !steerOrQueue && steerRequested && host.steerFallback === "interrupt";
+      // Only in-turn steering joins the original cohort. Interrupt fallback
+      // replaces that turn and must wait along with other fresh turn starts.
+      if ((!maySteer || steerByInterrupt) && heldForUpdate()) { updateHeld = true; continue; }
       /* A host that DECLARED it cannot steer, which is the Claude broker: its
          write would land as an interrupt the operator never asked for, so the
          message is refused here rather than delivered as something else.

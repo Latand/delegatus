@@ -186,6 +186,27 @@ test("six hours names blockers for an operator decision while admission remains 
   } finally { service.stop(); }
 });
 
+test.each(["red", "pending", "unknown"] as const)("six-hour cohort notice survives %s checks in checkout mode", async state => {
+  const h = scenario();
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_original", engine: "codex", host: "hosted", turn: "running" }] }) as never;
+  let service = h.service();
+  try {
+    await service.autoTick(); h.setGreen(state);
+    service.stop();
+    const file = join(h.dir, "auto.json");
+    const saved = readAuto(file);
+    writeAuto(file, { ...saved, green: { ...saved.green, [TARGET]: { ...saved.green[TARGET], state } } });
+    service = h.service(); h.advance(DRAIN_NOTICE_MS + 60_000);
+    await service.autoTick();
+    const auto = readAuto(join(h.dir, "auto.json"));
+    expect(auto.green[TARGET]?.state).toBe(state);
+    expect(auto.drain?.overranAt).not.toBeNull();
+    expect(auto.drain?.blockers?.turnList?.[0]?.conversationId).toBe("conversation_original");
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(h.pending()).toBeNull();
+  } finally { service.stop(); }
+});
+
 test.each(["keep-waiting", "deploy-now"] as const)("the operator's %s decision preserves custody and fences stale replies", async (choice) => {
   const h = scenario();
   h.setTurn(true);
