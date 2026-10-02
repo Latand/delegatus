@@ -66,8 +66,8 @@
         "src/lib/workflows/types.ts"
       ],
       "build": true,
-      "imageInputCount": 53,
-      "sampleImageInput": "evidence/mcp-async-remote/before-after.json"
+      "imageInputCount": 52,
+      "sampleImageInput": "src/app/api/pipelines/preflight/route.ts"
     },
     {
       "runId": 37045141447,
@@ -103,8 +103,8 @@
         "src/lib/i18n/uk.ts"
       ],
       "build": true,
-      "imageInputCount": 22,
-      "sampleImageInput": "evidence/whole-card-drag/after-desktop-x4.json"
+      "imageInputCount": 15,
+      "sampleImageInput": "src/components/kanban/KanbanBoard.tsx"
     },
     {
       "runId": 37045121515,
@@ -126,8 +126,8 @@
         "src/lib/i18n/uk.ts"
       ],
       "build": true,
-      "imageInputCount": 11,
-      "sampleImageInput": "evidence/elsewhere-wall/readings.json"
+      "imageInputCount": 10,
+      "sampleImageInput": "src/components/kanban/KanbanCard.tsx"
     },
     {
       "runId": 37045123499,
@@ -156,8 +156,8 @@
         "src/lib/i18n/uk.ts"
       ],
       "build": true,
-      "imageInputCount": 18,
-      "sampleImageInput": "evidence/fast-tts/phone-renders.json"
+      "imageInputCount": 16,
+      "sampleImageInput": "src/components/BranchPane.tsx"
     },
     {
       "runId": 37045115468,
@@ -245,8 +245,8 @@
         "src/hooks/useFiles.ts"
       ],
       "build": true,
-      "imageInputCount": 16,
-      "sampleImageInput": "evidence/board-rebuild/results.json"
+      "imageInputCount": 15,
+      "sampleImageInput": "scripts/profile-kanban-board.ts"
     },
     {
       "runId": 37044988896,
@@ -309,8 +309,8 @@
         "scripts/memory-selection.ts"
       ],
       "build": true,
-      "imageInputCount": 8,
-      "sampleImageInput": "docs/research/memory-selection.all-turns.labels.json"
+      "imageInputCount": 2,
+      "sampleImageInput": "scripts/memory-selection.test.ts"
     },
     {
       "runId": 37044366628,
@@ -328,8 +328,8 @@
         "src/lib/search/unavailable.ts"
       ],
       "build": true,
-      "imageInputCount": 7,
-      "sampleImageInput": "evidence/mcp-call-cost/round2.json"
+      "imageInputCount": 6,
+      "sampleImageInput": "src/app/api/search/memory/route.test.ts"
     },
     {
       "runId": 37043454463,
@@ -543,8 +543,8 @@
         "src/lib/tasks/types.ts"
       ],
       "build": true,
-      "imageInputCount": 47,
-      "sampleImageInput": "evidence/task-states-and-reasons/renders.json"
+      "imageInputCount": 46,
+      "sampleImageInput": "src/app/api/tasks/[id]/route.ts"
     },
     {
       "runId": 37042152603,
@@ -622,8 +622,8 @@
         "src/lib/runtime/structuredHostRetirement.test.ts"
       ],
       "build": true,
-      "imageInputCount": 29,
-      "sampleImageInput": "evidence/delivery-outcome/receipts.json"
+      "imageInputCount": 28,
+      "sampleImageInput": "src/components/LogFeed.deliveryUncertainty.dom.test.tsx"
     },
     {
       "runId": 37041648671,
@@ -642,8 +642,8 @@
         "scripts/memory-selection.ts"
       ],
       "build": true,
-      "imageInputCount": 6,
-      "sampleImageInput": "docs/research/memory-selection.labels.json"
+      "imageInputCount": 2,
+      "sampleImageInput": "scripts/memory-selection.test.ts"
     },
     {
       "runId": 37041277170,
@@ -702,8 +702,8 @@
         "src/lib/tasks/types.ts"
       ],
       "build": true,
-      "imageInputCount": 47,
-      "sampleImageInput": "evidence/task-states-and-reasons/renders.json"
+      "imageInputCount": 46,
+      "sampleImageInput": "src/app/api/tasks/[id]/route.ts"
     },
     {
       "runId": 37041179225,
@@ -743,8 +743,8 @@
         "src/lib/i18n/uk.ts"
       ],
       "build": true,
-      "imageInputCount": 11,
-      "sampleImageInput": "evidence/elsewhere-wall/readings.json"
+      "imageInputCount": 10,
+      "sampleImageInput": "src/components/kanban/KanbanCard.tsx"
     },
     {
       "runId": 37040569952,
@@ -771,8 +771,8 @@
         "src/hooks/useFiles.ts"
       ],
       "build": true,
-      "imageInputCount": 16,
-      "sampleImageInput": "evidence/board-rebuild/results.json"
+      "imageInputCount": 15,
+      "sampleImageInput": "scripts/profile-kanban-board.ts"
     },
     {
       "runId": 37040452719,
@@ -808,8 +808,8 @@
         "src/lib/i18n/uk.ts"
       ],
       "build": true,
-      "imageInputCount": 22,
-      "sampleImageInput": "evidence/whole-card-drag/after-desktop-x4.json"
+      "imageInputCount": 15,
+      "sampleImageInput": "src/components/kanban/KanbanBoard.tsx"
     },
     {
       "runId": 37040439855,
@@ -838,8 +838,8 @@
         "src/lib/i18n/uk.ts"
       ],
       "build": true,
-      "imageInputCount": 18,
-      "sampleImageInput": "evidence/fast-tts/phone-renders.json"
+      "imageInputCount": 16,
+      "sampleImageInput": "src/components/BranchPane.tsx"
     },
     {
       "runId": 37040434999,
@@ -914,8 +914,8 @@
         "scripts/memory-selection.ts"
       ],
       "build": true,
-      "imageInputCount": 4,
-      "sampleImageInput": "docs/research/memory-selection.labels.json"
+      "imageInputCount": 2,
+      "sampleImageInput": "scripts/memory-selection.test.ts"
     },
     {
       "runId": 37039387851,

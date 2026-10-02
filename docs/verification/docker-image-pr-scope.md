@@ -42,6 +42,8 @@ compares admission with the installed TypeScript program's dependency graph.
 Unused evidence JSON and documentation JS/JSON skip the build. Root `.env`,
 `.env.local`, `.env.production` and `.env.production.local` are inputs because
 Next loads them during the production build.
+Root Babel and Browserslist configuration files are also admitted and exercised
+through the installed Next configuration loaders.
 
 The broad trigger is retained for compatibility with #2452 and to avoid GitHub's
 300-file trigger-filter limit. A three-minute, read-only `scope` job evaluates

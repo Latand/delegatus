@@ -13,6 +13,9 @@ const files = new Set([
   "scripts/fixtures/usage-metrics/recorded.json", "landing/site/demo/taskIcons.json",
   // Docker copies these root files; Next loads them with NODE_ENV=production.
   ".env", ".env.local", ".env.production", ".env.production.local",
+  ".babelrc", ".babelrc.json", ".babelrc.js", ".babelrc.mjs", ".babelrc.cjs",
+  "babel.config.js", "babel.config.json", "babel.config.mjs", "babel.config.cjs",
+  ".browserslistrc", "browserslist",
 ]);
 const directories = ["src/", "public/", "bin/", "patches/", "vendor/"];
 
