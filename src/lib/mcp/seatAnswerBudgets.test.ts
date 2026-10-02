@@ -198,7 +198,7 @@ test("pipeline_action close answers counts in 600 B with 8 pending hosts, and ge
     expect(answer.bytes).toBeLessThanOrEqual(600);
 
     /* The list is the record's, and the record is one read away. */
-    const read = await mcp.call("get_pipeline", { pipelineId: open.id });
+    const read = await mcp.call("get_pipeline", { pipelineId: open.id, full: true });
     expect((read.payload.pipeline as Pipeline).closeReport!.pending).toEqual(pending);
     console.log(`[#2030] pipeline_action close with 8 pending hosts: ${answer.bytes} B`);
   } finally {
