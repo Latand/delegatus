@@ -1,5 +1,6 @@
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
 
@@ -246,6 +247,11 @@ const BOARD_ORDER = SCENARIO === "board-order";
    one low task with a working agent, and an Assigned column whose priorities
    do not change its order. */
 const PRIORITY = SCENARIO === "task-priority";
+/** The seat tick's board cards: the standing tick notice and the maintenance
+    run cards. Their TEXT is built by the driver with the production builders
+    (`seatTickSettingsCardText`, `maintenanceCardText`) and handed over in the
+    query, so the board draws what the server would have written. */
+const TICK_CARDS = SCENARIO === "seat-tick-cards";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -1592,6 +1598,18 @@ if (BOARD_ORDER) {
     task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
   );
 }
+if (TICK_CARDS) {
+  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice: string; failed: string; live: string };
+  files.splice(0, files.length, orchestrator);
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" }),
+    task("t-tick-cleanup", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 3 * 60 * MIN, [], { color: "slate", icon: "wrench" }),
+    task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    task("t-tick-search", "assigned", L("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), "", 25 * MIN),
+    task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+  );
+}
 if (PRIORITY) {
   const helper = conversation("priority-helper", L("Implementer: remove the unused tmux helpers", "Імплементер: прибрати невживані помічники tmux"), working({ plan: { current: L("Deleting the pane scraper", "Видаляю зчитувач панелей") } }));
   const banner = conversation("priority-banner", L("Builder: the limit banner copy", "Білдер: текст банера про ліміт"), working({ plan: { current: L("Wording the reset time", "Формулюю час скидання") } }));
@@ -2081,8 +2099,14 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
+    const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
+    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+  }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
+  /* The tick panel the notice card opens reads these two; the driver answers them. */
+  if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (ALBUM && url.pathname === "/api/task-album") {
@@ -2573,7 +2597,7 @@ else localStorage.setItem("llvProject", PROJECT);
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
 if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
-createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

@@ -285,26 +285,89 @@ cookies) and counts clicks on its copy buttons." Cost: $0.
 | Cloudflare dashboard | Web Analytics has a UI | npm, GitHub and Analytics Engine live elsewhere; Analytics Engine has no UI |
 | A `/stats` page on the Worker | one link | needs Cloudflare Access (a Zero Trust setup) or public numbers, and more code |
 | A Delegatus view | inside the product | puts a panel only the maintainer needs, plus calls to npm, GitHub and Cloudflare with the maintainer's token, into every user's install; against the promise |
-| **Script plus a daily message** | one table from every source; no product change | there is no page to open: the operator reads the message or runs one command |
+| Script plus a daily message (superseded) | one table from every source; no product change | there is no page to open: the operator reads the message or runs one command |
 
-**Recommendation:** `bun scripts/usage-metrics.ts` prints one table from npm,
-GitHub, Web Analytics and, later, Analytics Engine. `--line` prints the same
-numbers as one message. The project's seat sends that line once a day to the
-operator's **private** chat with the Delegatus bot (already allowlisted; the
-bot can post there). The script also appends each day's totals to a history
-file outside the repository and outside the Viewer's state, so GitHub's
-14-day and Analytics Engine's 3-month windows lose nothing. For detail on
-visitors, the message links to the Web Analytics dashboard.
+### Private `/stats` page (implemented 2026-10-01)
 
-The project's orchestrator reports already go to a public community group.
-A metrics line there publishes the numbers, so it goes there only if the
-operator says so.
+The operator chose Cloudflare Access on 2026-09-30 and enabled Zero Trust on
+2026-10-01. Install and landing metrics are viewed at `https://delegatus.org/stats`
+(and the `www` domain). There is no daily Telegram metrics message.
+The maintainer script remains available for manual npm, GitHub and Web Analytics
+reports; its current implementation does not query Analytics Engine.
 
-Example line:
+`landing/worker.ts` serves `GET /stats` and `/stats/` before assets. Every
+response has `Cache-Control: private, no-store`. HTML uses system fonts and
+inline SVG with no scripts, trackers or external assets. The Worker verifies
+`Cf-Access-Jwt-Assertion` even when the edge Access application is absent:
+RS256 signature against the configured team's `/cdn-cgi/access/certs` JWKS,
+exact issuer, configured application audience (string or audience array),
+finite unexpired `exp`, and `nbf` when present. Public keys are cached per
+Worker isolate for five minutes; concurrent refreshes share a request. A
+missing/invalid assertion, config or key response returns 403 before any SQL.
+After key rotation a previously unseen key may be refused until that cache
+expires. Key fetches time out after five seconds.
 
+Ten SQL requests run server-side against the account Analytics Engine SQL API:
+
+| Query | Bound and meaning |
+| --- | --- |
+| Active installs, today / 7 / 30 days | Three `count(DISTINCT blob1)` queries, UTC midnight through page-generation time, `LIMIT 1` each. Seven and thirty days include today. |
+| Daily active installs | `formatDateTime(timestamp, '%Y-%m-%d')` and `count(DISTINCT blob1)`, last 30 UTC dates, `LIMIT 30`. Missing days show zero. |
+| New installs per day | Inner query groups IDs and takes `min(timestamp)` over retained three-month history; outer query groups first-seen dates in the last 30 days, `LIMIT 30`. IDs themselves never reach the HTML. |
+| Version / OS and architecture / install kind | Distinct IDs grouped by `blob2`, `blob3` and `blob4`, or `blob5`, last 30 days, top 100 rows each. Updates can put one ID in several rows. |
+| Landing actions per day | Date and `blob1` event, `sum(_sample_interval * double1)`, last 30 days, `LIMIT 120` for the four accepted event kinds. |
+| Newest install ping | `max(timestamp)` over retained three-month history, `LIMIT 1`. |
+
+All query windows have upper bounds at the same generation time. SQL requests
+time out after ten seconds. Failed HTTP responses, network errors and invalid
+JSON/data envelopes show an inline unavailable message for the affected section;
+the other sections remain visible. Upstream errors and credentials are never
+logged or printed in the page. Analytics Engine retains data for three months,
+so an ID returning after its earlier pings have expired may appear new. ID
+resets also appear new. Distinct-ID counts may undercount when data is sampled;
+landing action counts use the sample weight. Daily active totals count an ID
+again on each day it pings.
+
+References: [SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/),
+[SQL statements and subqueries](https://developers.cloudflare.com/analytics/analytics-engine/sql-reference/statements/),
+[aggregate functions](https://developers.cloudflare.com/analytics/analytics-engine/sql-reference/aggregate-functions/),
+[retention](https://developers.cloudflare.com/analytics/analytics-engine/limits/),
+and [Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
+
+### Publish configuration and token rotation
+
+The orchestrator publishes the Worker after merge. `landing/wrangler.jsonc`
+contains `STATS_ACCESS_TEAM_DOMAIN` (hostname without scheme) and
+`STATS_ACCESS_AUD` (the Access application's audience tag). Confirm those vars
+still match the Access application protecting `/stats` and `/stats/` on both
+domains. The edge policy allows only the operator's login; its email stays in
+Cloudflare configuration.
+
+At publish, set these protected values outside Git:
+
+- `STATS_AE_TOKEN`: Worker secret, an account-scoped API token with **Account /
+  Account Analytics / Read** permission for Analytics Engine SQL.
+- `STATS_ACCOUNT_ID`: Worker var or secret for that account. Prefer a secret so
+  it never enters the committed Wrangler config.
+- `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`: deployer's protected
+  environment for Wrangler, separate from the SQL reader token.
+
+The dataset bindings remain `INSTALLS` → `installs` and `SITE_EVENTS` →
+`site_events`. Build assets and deploy using the existing landing workflow.
+Upload secrets through Wrangler's interactive stdin prompts; never pass their
+values as command-line arguments or paste them into a PR:
+
+```sh
+bunx wrangler secret put STATS_AE_TOKEN --config landing/wrangler.jsonc
+bunx wrangler secret put STATS_ACCOUNT_ID --config landing/wrangler.jsonc
 ```
-📈 Delegatus 28.09 · npm 129, з них людей ≈0–9 (реліз 1.6.0) · встановлення: — · сайт: 30 візитів, копій промпту: — · GitHub: 19 відвідувачів
-```
+
+To rotate: create a replacement token with the same account-scoped read
+permission, overwrite `STATS_AE_TOKEN` with `wrangler secret put`, log into
+Access and confirm `/stats` loads all sections, then revoke the previous token.
+Keep the previous token valid until that authenticated check succeeds. A
+failed read leaves the page available with inline errors. Do not send metric
+values or credentials to public logs or review artifacts.
 
 ## 4. Build plan
 
@@ -332,7 +395,6 @@ decision 1.
 ## Deferred — not currently justified
 
 - Per-tab and per-step demo analytics, scroll depth, session replay.
-- A `/stats` page, public or behind Cloudflare Access.
 - A metrics view inside Delegatus.
 - Engines, models, agent counts or feature use in the ping.
 - An install script on delegatus.org (`curl | bash`) as a way to count

@@ -411,9 +411,10 @@ export function OrchestratorPanel({
   const seatEngine = file?.engine ?? status?.seat?.engine ?? null;
   const signalRef = useRef(onSeatSignal);
   signalRef.current = onSeatSignal;
+  const seatLive = state.kind === "live" && !rotating;
   useEffect(() => {
-    signalRef.current?.({ tone: signal.tone, label: signal.label, unread: unreadReply });
-  }, [signal.tone, signal.label, unreadReply]);
+    signalRef.current?.({ tone: signal.tone, label: signal.label, unread: unreadReply, live: seatLive });
+  }, [signal.tone, signal.label, unreadReply, seatLive]);
 
   /** `replayRequestId` re-posts an EXISTING durable intent by its own key — the
       seat command then completes that intent with ITS original mandate, so the
@@ -1242,6 +1243,8 @@ export interface SeatSignal {
   label: string;
   /** A reply landed while the seat was collapsed. */
   unread: boolean;
+  /** A live, settled seat: the incumbent's header, and its tick chip, exist. */
+  live: boolean;
 }
 
 export type SeatWordTone = "working" | "needs" | "failed" | "accent" | "quiet";

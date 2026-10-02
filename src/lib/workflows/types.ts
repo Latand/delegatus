@@ -15,7 +15,7 @@ export type ImplementStage = {
 export type ReviewStage = {
   kind: "review-loop";
   reviewer: RoleConfig;
-  fixer: RoleConfig; // default {engine:"codex", model:"gpt-5.6-terra", effort:"low"} (W5)
+  fixer: RoleConfig; // default {engine:"codex", model:"gpt-6-luna", effort:"low"} (W5)
   roundLimit: number; // default 3
   reviewerMode: "headless" | "pane"; // default "headless"
 };

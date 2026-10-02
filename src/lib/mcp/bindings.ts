@@ -1,5 +1,5 @@
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
-import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
+import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
@@ -89,6 +89,7 @@ import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
 import { projectDisplayName } from "@/lib/displayNames";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { orchestratorRelayPayload } from "@/lib/orchestrator/relay";
 import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -144,7 +145,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { changeRoleMapping, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, type RoleMappingChange } from "@/lib/roles/store";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
-import { readSpawnAdmissionFence, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
+import { readSpawnAdmissionFence, spawnTaskProjectError, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -1482,6 +1483,7 @@ async function sendMessage(
     Partial<Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">>,
   context?: McpToolCallContext,
   downstreamKey = sendDownstreamKey(requestId(args)),
+  orchestratorRelayProject?: string,
 ): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
@@ -1489,7 +1491,7 @@ async function sendMessage(
   const message = requiredMessageText(args);
   let outcome: Record<string, unknown>;
   try {
-    outcome = await dispatchControl(control)("/api/tmux", {
+    outcome = await dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", {
       pid: null,
       path: transcriptPath,
       ...(conversationId ? { conversationId } : {}),
@@ -1500,6 +1502,7 @@ async function sendMessage(
       /* #1117: an MCP send is inter-agent traffic by definition; the sender role
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
+      ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
     }, callerCapabilityHeaders());
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
@@ -1592,9 +1595,9 @@ function maintenanceCaller(dependencies: ViewerMcpDomainDependencies): Maintaine
   if (!conversationId || !dependencies.registrySnapshot) return null;
   return maintainerCallerOf(conversationId, dependencies.registrySnapshot());
 }
-function assertMaintenanceWrite(caller: MaintainerCaller | null, args: McpToolArgs, task?: BoardTask, create = false, openPipeline?: string, liveAgent?: string): void {
+function assertMaintenanceWrite(caller: MaintainerCaller | null, args: McpToolArgs, task?: BoardTask, create = false, openPipeline?: string, liveAgent?: string, retiredSeat = false): void {
   if (!caller) return;
-  const refusal = maintainerTaskWriteRefusal({ caller, args, task, create, openPipeline, liveAgent });
+  const refusal = maintainerTaskWriteRefusal({ caller, args, task, create, openPipeline, liveAgent, retiredSeat });
   if (refusal) throw new McpToolRefusal(refusal.error, { code: refusal.code, field: refusal.field, status: 403 });
 }
 function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task" | "update_task", before: BoardTask | undefined, after: BoardTask, fields: string[]): void {
@@ -1676,7 +1679,8 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   let liveAgent: string | undefined;
   const checkedAssignments = new Set<string>();
   const assignmentKey = (a: BoardTask["assignments"][number]) => JSON.stringify([a.conversationId, a.launchId, a.path, a.state]);
-  if (maintainer && args.status === "done") {
+  const closingOrHiding = args.status === "done" || args.hide === true || args.board === "hidden";
+  if (maintainer && closingOrHiding) {
     const task = loadTasks().find(t => t.id === taskId);
     for (const assignment of task?.assignments ?? []) {
       checkedAssignments.add(assignmentKey(assignment));
@@ -1688,15 +1692,20 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
       }
       const snapshot = await agentLivenessSnapshot({ ...(id ? { conversationId: id } : { transcriptPath: transcriptPath! }), limit: 1 }, dependencies.livenessSources());
       const record = snapshot.conversations[0];
-      if (!record || record.lifecycle === "starting" || record.host.state === "unknown" || record.turnState !== "idle") liveAgent = id ?? transcriptPath ?? "an unconfirmed assignment";
+      // Use agent_activity's lifecycle verdict. An expired unhosted transcript
+      // can be gone with an unknown host; a live idle host is still an agent.
+      // Only a freshly read settled transcript permits closure. Missing or
+      // budget-degraded evidence remains a refusal.
+      if (!record || record.lifecycle !== "gone" || record.turnState !== "idle" || record.evidenceSource !== "transcript") liveAgent = id ?? transcriptPath ?? "an unconfirmed assignment";
     }
   }
   const result = mutateTasks((tasks) => {
     prior = tasks.find(task => task.id === taskId);
     const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
-    if (maintainer && args.status === "done" && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
-    assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent);
+    if (maintainer && closingOrHiding && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
+    const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
+    assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent, retiredSeat);
     const before = fieldValues(prior);
     const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
@@ -4270,6 +4279,7 @@ async function sendMessageToOrchestrator(
   dependencies: ViewerMcpDomainDependencies,
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
   requiredMessageText(args);
   const key = requestId(args);
@@ -4306,7 +4316,7 @@ async function sendMessageToOrchestrator(
       conversationId: recipient,
       transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
       path: undefined,
-    }, control, dependencies, context, orchestratorSendDownstreamKey(key));
+    }, control, dependencies, context, orchestratorSendDownstreamKey(key), project);
     return redactPayload({
       ...outcome, project, created,
       // Seat metadata describes only the recipient this dispatch actually used.
@@ -6051,15 +6061,45 @@ function orchestratorSendDownstreamKey(key: string): string {
 }
 
 function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+  requireOrchestratorRelayCaller(dependencies);
   const project = canonicalOrchestratorProject(required(args, "project"));
-  requiredMessageText(args);
+  const message = requiredMessageText(args);
+  const caller = recoveryCaller(dependencies);
+  const attribution = attributionOf(dependencies);
+  // Match HTTP admission: a designated seat takes precedence even when the
+  // root caller's general attribution also identifies it as the voice gateway.
+  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find((candidate) => candidate.conversationId === attribution.conversationId);
+  if (!seat && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+    throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
+      code: "orchestrator_relay_refused", retryable: false,
+    });
+  }
   return {
-    caller: recoveryCaller(dependencies),
+    // Relay receipts belong to the exact sender, never its successor seat.
+    caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
+      text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
+    },
     // Separate from direct send: equal client keys on different tools are
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
   };
+}
+
+/** The gateway keeps its existing relay path. A seat gets messaging only:
+    auto-creation still goes through the unchanged operator-only seat route. */
+function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
+  const caller = attributionOf(dependencies);
+  if (caller.kind === "gateway") return;
+  if (caller.conversationId && !caller.via) {
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;
+  }
+  throw new McpToolRefusal("only a designated orchestrator seat or the voice gateway may relay to an orchestrator", {
+    code: "orchestrator_relay_refused", retryable: false,
+  });
 }
 
 function bindSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
@@ -6104,9 +6144,13 @@ function spawnTargetProject(args: McpToolArgs, cwd: string): string | null {
 
 function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
   const cwd = spawnCwd(args);
+  const caller = recoveryCaller(dependencies);
+  const project = spawnTargetProject(args, cwd);
+  const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
+  if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
   return {
-    caller: recoveryCaller(dependencies),
-    target: { project: spawnTargetProject(args, cwd), identity: cwd },
+    caller,
+    target: { project, identity: cwd },
     downstreamKey: `mcp_spawn_${crypto.createHash("sha256").update(requestId(args)).digest("hex")}`,
   };
 }
@@ -6124,11 +6168,15 @@ async function recoverSend(
   if (legacy) {
     return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "no durable evidence establishes the owner of this send", ids: {}, ownership: "unknown" };
   }
+  if (binding.toolName === "send_message_to_orchestrator" && !binding.sendPayload) {
+    return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
+  }
   if (!binding.target.identity) {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };
   }
   const ports: SendSettlementPorts = dependencies.sendSettlementPorts?.() ?? {};
-  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey, ...(typeof args?.text === "string" ? { text: args.text } : {}) }, ports);
+  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey,
+    ...(binding.sendPayload ?? (typeof args?.text === "string" ? { text: args.text } : {})) }, ports);
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };
   }

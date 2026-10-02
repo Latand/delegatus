@@ -1328,7 +1328,7 @@ export interface SeatTickCard {
       `tick-settings`, and stamped with when the SETTING was recorded rather
       than when the check ran, so a card that has not changed is not rewritten
       on every check. */
-  settings?: Pick<EffectiveSeatTickSettings, "reason" | "until" | "setBy" | "updatedAt">;
+  settings?: Pick<EffectiveSeatTickSettings, "enabled" | "wakeIntervalMs" | "reason" | "until" | "setBy" | "updatedAt">;
   /**
    * What distinguishes this OCCURRENCE of the condition from the last one, for
    * the create receipt (#1298).

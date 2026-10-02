@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 32;
+export const ORCHESTRATOR_PROMPT_VERSION = 34;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -291,15 +291,11 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   that names no parent is a duplicate card, and a reviewer that names one
  *   joins the caller's card beside the reviewed work's
  *   (`membership.test.ts`, `spawnRecovery.integration.test.ts`);
- * - the CROSS-PROJECT refusal belongs to `create_pipeline` and
- *   `pipeline_action: "link-task"`, which validate against the pipeline's own
- *   project at the store seam (`pipelineTaskLinkError` in `store.ts`, called
- *   from `engine.ts`). A spawn's explicit target carries its own project —
- *   `launchMembership.ts` commits it with an EMPTY project — so the guard in
- *   `membership.ts` compares against nothing and a SINGLE foreign id is
- *   admitted. The directive and the `spawn_agent` schema say this per tool;
- *   do not restate it as one rule for both (`membership.test.ts` pins the
- *   admission, `launchMembership.test.ts` pins the empty project);
+ * - the CROSS-PROJECT refusal belongs to both launch tools and
+ *   `pipeline_action: "link-task"`. Pipelines validate at the store seam
+ *   (`pipelineTaskLinkError`); spawns share that predicate through
+ *   `spawnTaskProjectError`, resolving aliases and comparing against cwd before
+ *   the MCP claim and HTTP launch reservation (spawnRecovery.integration.test.ts);
  * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
  *   `link_task_to_pipeline` writes one assignment row and leaves that list
  *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
@@ -333,7 +329,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every launch of that pipeline — each stage, retry and fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
 - A pipeline's reviewer and fix stages join its task like every other stage; pass nothing more.
-- Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card.
+- Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline and spawn_agent both refuse a task belonging to another project after project aliases are resolved.
 
 EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
 
@@ -432,8 +428,8 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - Keep the outcome's one task card current with update_task.
 
 ## Pipeline stage contract
-A pipeline is a graph of stages, and array order means nothing: each stage names its successors. Each stage is {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: a stage you never wire reaches nothing.
-Review pairs a read-only reviewer, onFail: {to: "<fix stage id>", maxRounds}, and a fix stage whose next returns to it. maxRounds counts failing reviews. onExhausted governs exhaustion: advance (default) runs the last fix, follows the reviewer's pass edge or completes, and keeps findings marked "budget spent". stop-after-fix waits in needs_review after the fix. park stops before it. Use stop-after-fix only when the operator asked to look before merge. The handoff happens once per stage; a later failure parks.
+Stages are a graph; array order controls presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
+Review pairs a read-only reviewer with onFail:{to:"<fix stage id>",maxRounds} and a fix whose next returns to it. maxRounds counts failing reviews. advance (default) runs the last fix: a terminal gate (next:null) re-checks once, pass completes, fail parks with "budget spent: N findings left". A nonterminal gate follows its pass edge with unreviewed findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.
 Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.
 The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.
 src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.

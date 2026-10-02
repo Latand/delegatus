@@ -11,7 +11,7 @@ process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
-const { ORCHESTRATOR_ALERT_REF, monitorCardText, monitorClientRequestId, monitorRefIn, orchestratorAlertCardText } = await import("./cards");
+const { ORCHESTRATOR_ALERT_REF, monitorCardText, monitorClientRequestId, monitorRefIn, orchestratorAlertCardText, seatTickSettingsCardText } = await import("./cards");
 import type { ClassifiedRequest } from "./types";
 
 afterAll(() => {
@@ -99,5 +99,54 @@ describe("monitor board cards", () => {
     expect(monitorRefIn(text)).toBe(ORCHESTRATOR_ALERT_REF);
     expect(monitorClientRequestId(ORCHESTRATOR_ALERT_REF)).toBe("monitor-741:orchestrator-unresolved");
     expect(text).toContain("durable record");
+  });
+});
+
+describe("the standing tick notice card", () => {
+  const input = {
+    project: "atlas",
+    detail: "wakes for this project are set to one every 30 minute(s)",
+    reason: "a release afternoon",
+    until: "2026-10-01T09:24:00.000Z",
+    setBy: { kind: "manager", conversationId: "seat-1", project: "atlas" },
+    updatedAt: "2026-10-01T07:00:00.000Z",
+    schedule: { enabled: true, wakeIntervalMinutes: 30 },
+    timeZone: "UTC",
+  };
+  const titleOf = (text: string) => text.split("\n")[0];
+
+  test("its first line is the setting itself, in the operator's language, with the time it lapses", () => {
+    expect(titleOf(seatTickSettingsCardText({ ...input, locale: "en" }))).toBe("Tick: every 30 min until 09:24");
+    expect(titleOf(seatTickSettingsCardText({ ...input, locale: "uk" }))).toBe("Тікер: кожні 30 хв до 09:24");
+  });
+
+  test("a setting that lapses on another day names the date, and exact hours collapse", () => {
+    const later = { ...input, until: "2026-10-03T09:24:00.000Z", schedule: { enabled: true, wakeIntervalMinutes: 120 } };
+    expect(titleOf(seatTickSettingsCardText({ ...later, locale: "en" }))).toBe("Tick: every 2 h until 03.10 09:24");
+    expect(titleOf(seatTickSettingsCardText({ ...later, locale: "uk" }))).toBe("Тікер: кожні 2 год до 03.10 09:24");
+  });
+
+  test("an off tick says off, and a setting with no expiry has no 'until'", () => {
+    const off = { ...input, until: null, schedule: { enabled: false, wakeIntervalMinutes: 60 } };
+    expect(titleOf(seatTickSettingsCardText({ ...off, locale: "en" }))).toBe("Tick: off");
+    expect(titleOf(seatTickSettingsCardText({ ...off, locale: "uk" }))).toBe("Тікер: вимкнено");
+  });
+
+  test("the body is written in one language and keeps the ref line that makes it a notice", () => {
+    const uk = seatTickSettingsCardText({ ...input, locale: "uk" });
+    expect(uk).toContain("Вказівки на кожне пробудження: a release afternoon.");
+    expect(uk.indexOf("Пробудження цього проєкту")).toBeLessThan(uk.indexOf("Вказівки на кожне пробудження:"));
+    expect(uk).toContain("Змінив(ла): призначений оркестратор (seat-1).");
+    expect(uk).not.toContain("Reason given");
+    const en = seatTickSettingsCardText({ ...input, locale: "en" });
+    expect(en).toContain("Instructions for every wake: a release afternoon.");
+    expect(en.indexOf("Wakes for this project")).toBeLessThan(en.indexOf("Instructions for every wake:"));
+    expect(en).toContain("Set by the designated seat (seat-1).");
+    expect(en).not.toContain("Причина");
+    for (const text of [uk, en]) expect(monitorRefIn(text)).toBe("seat-tick-settings");
+  });
+
+  test("the same inputs write the same card, so a settled setting rewrites nothing", () => {
+    expect(seatTickSettingsCardText({ ...input, locale: "uk" })).toBe(seatTickSettingsCardText({ ...input, locale: "uk" }));
   });
 });

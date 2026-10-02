@@ -1,7 +1,7 @@
 "use client";
 
 import { Timer } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useAnchoredBox } from "@/components/feed/SpeakMenu";
@@ -9,6 +9,7 @@ import { useModalLayer } from "@/components/modalLayer";
 import { useLocale } from "@/lib/i18n";
 
 import { SeatTickActions, SeatTickBody, SeatTickDot, useSeatTickDraft } from "./SeatTickBody";
+import { onSeatTickPanelRequest, takePendingSeatTickPanel } from "./openSeatTick";
 import { seatTickReading } from "./seatTickView";
 import { useSeatTickSettings, type SeatTickSettingsRead } from "./useSeatTickSettings";
 import { Z } from "@/components/layers";
@@ -42,6 +43,22 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
   const anchorRef = useRef<HTMLButtonElement>(null);
   const read = useSeatTickSettings(project, true);
   const reading = seatTickReading(read, Date.now(), t);
+
+  /* The board's tick notice card asks for this project's panel. A seat that was
+     folded unfolds first, and this chip mounts with it: the request is claimed
+     on mount as well as on arrival. */
+  const answer = useCallback(() => {
+    /* The popover leaves with its chip, so a chip scrolled out of view under
+       the card that asked would close it again at once. */
+    anchorRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    setOpenFor(project);
+  }, [project]);
+  useEffect(() => {
+    if (takePendingSeatTickPanel(project)) answer();
+    return onSeatTickPanelRequest((target) => {
+      if (target === project && takePendingSeatTickPanel(project)) answer();
+    });
+  }, [project, answer]);
 
   return (
     <>
@@ -82,7 +99,7 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
 }) {
   const { t } = useLocale();
   const rootRef = useRef<HTMLDivElement>(null);
-  const state = useSeatTickDraft(read.record);
+  const state = useSeatTickDraft(read);
   /* `onScreen` is consumed, not dropped (`SpeakAlert`'s reason, #1030): this
      popover deliberately does not lock body scroll, so the surface underneath
      it scrolls while it is open, and the placement math CLAMPS a scrolled-away
@@ -139,7 +156,7 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
         read={read}
         state={state}
         surface="desktop"
-        actions={<SeatTickActions read={read} state={state} offDefault={read.record?.effective.isDefault === false} surface="desktop" />}
+        actions={state.dirty || read.error ? <SeatTickActions read={read} state={state} surface="desktop" /> : null}
         onOpenedCard={onClose}
       />
     </div>,

@@ -14,6 +14,9 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
+import { maintenanceCardText } from "@/lib/boardMaintenance/text";
+import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
+import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
 
 /*
@@ -39,6 +42,46 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+describe("shipped role defaults rendered evidence", () => {
+  browserTest("default xhigh rows keep their chosen effort without a downgrade nudge in every locale and layout", async () => {
+    const out = path.resolve(".artifacts/role-defaults");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator('[data-mapping-row="reviewer"]').waitFor();
+          await page.locator('[data-mapping-group="rare"] > button').click();
+          const rows: Record<string, unknown>[] = [];
+          expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
+          expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
+          expect(await page.locator("[data-mapping-row]").count()).toBe(16);
+          for (const id of ["reviewer", "architect", "prod-auditor"]) {
+            const row = page.locator(`[data-mapping-row="${id}"]`);
+            await row.scrollIntoViewIfNeeded();
+            const effort = await row.locator("select").nth(1).inputValue();
+            const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
+            expect(effort).toBe("xhigh");
+            expect(cost).toBe("very-heavy");
+            expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
+            rows.push({ id, effort, cost, nudge: false });
+          }
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          cases.push({ locale, width, rows, overflow, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/role-defaults", { recursive: true });
+      fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
 
 describe("linked boards M3 remote agents", () => {
   browserTest("an unbound remote agent remains visible in an empty phone Inbox", async () => {
@@ -13976,4 +14019,381 @@ describe("synced task card", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+describe("#2396 the seat tick's board cards: the notice names the setting and opens the panel, the run cards keep their time", () => {
+  /* The `seat-tick-cards` scenario: the standing tick notice in the Inbox, a
+     live maintenance run in Assigned and a failed one in Blocked, each written
+     by the production card builders (`seatTickSettingsCardText`,
+     `maintenanceCardText`) in en and uk. On the desktop at 1440×900 the three
+     cards and the panel the notice's button opens; on the phone at 390×844 the
+     board. Frames go to LLV_SEAT_TICK_SHOTS_DIR (default
+     `.artifacts/seat-tick-shots`), never committed.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 LLV_SEAT_TICK_SHOTS_DIR=… \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "seat tick's board cards" */
+  const SHOTS = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots");
+  const stamp = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+
+  /** The cards' text, written in `locale` by the same functions the server uses. */
+  function cardTexts(locale: "en" | "uk") {
+    const base = {
+      kind: "run", runId: "run-evidence", project: "atlas", slot: 1, intervalHours: 3, claimedAt: stamp(95), seat: { seatEpoch: 1, conversationId: "seat" },
+      repoDir: null, taskId: "t-tick-failed", clientAttemptId: "attempt", launchId: null, conversationId: null, transcriptPath: null,
+      launchedAt: stamp(94), endedAt: null, failure: null, log: { changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], verdict: null },
+      counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, changedTaskIds: [], supersededTaskIds: [],
+    } as unknown as MaintenanceRun;
+    /* The maintainer runs on Claude here, so the failure and its remedy name Claude. */
+    const failed = { ...base, state: "failed" as const, endedAt: stamp(60), failure: { kind: "no-account" as const, detail: "no account", engine: "claude" as const } } as MaintenanceRun;
+    const live = { ...base, state: "running" as const, claimedAt: stamp(6), launchedAt: stamp(5) } as MaintenanceRun;
+    const until = new Date(Date.now() + 2 * 3_600_000).toISOString();
+    const notice = seatTickSettingsCardText({
+      project: "atlas", detail: "wakes for this project are set to one every 30 minute(s)", reason: "a release afternoon, so the seat is woken on a schedule of its own", until,
+      setBy: { kind: "gateway", conversationId: null, project: null }, updatedAt: stamp(45), schedule: { enabled: true, wakeIntervalMinutes: 30 }, locale, timeZone: "UTC",
+    });
+    return { notice, failed: maintenanceCardText(locale, failed, "UTC"), live: maintenanceCardText(locale, live, "UTC") };
+  }
+
+  const tickAnswer = (reason = "a release afternoon") => ({
+    project: "atlas", changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
+    effective: { enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
+    defaults: {}, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
+    policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+    state: { lastCheckAt: stamp(2), lastWakeAt: stamp(20), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
+    stateError: null, lastRun: null, lastDelivery: null, journalError: null,
+    maintenance: {
+      enabled: true, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null, setBy: null, live: null,
+      lastRun: { runId: "run-evidence", taskId: "t-tick-failed", conversationId: null, state: "failed", claimedAt: stamp(95), launchedAt: stamp(94), endedAt: stamp(60),
+        failure: { kind: "no-account", detail: "", engine: "claude" }, counts: { writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 }, attentionCount: 0 },
+      nextEligibleAt: null, nextRunAt: stamp(-120), waitingOn: "interval", pauseReason: null, runsError: null,
+    },
+  });
+  const rolesAnswer = {
+    revision: "fixture", health: "ok",
+    launchChoices: [
+      { engine: "codex", models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }] },
+      { engine: "claude", models: [{ id: "opus", label: "Opus", shortLabel: "Opus", use: "build", efforts: ["low", "medium", "high", "xhigh", "max"] }] },
+    ],
+    roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
+  };
+
+  browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/seat-tick-instructions");
+    fs.mkdirSync(out, { recursive: true });
+    let storedReason = "a release afternoon";
+    /* Read once per case. The board stamps `until` and `updatedAt` from the clock, and a record whose stamps move
+       between two reads looks changed to the panel, which then discards the draft a refusal is meant to keep. */
+    let frozenAnswer = tickAnswer(storedReason);
+    const answerWith = (reason: string) => ({
+      ...frozenAnswer,
+      settings: { ...frozenAnswer.settings, reason },
+      effective: { ...frozenAnswer.effective, reason },
+    });
+    let putRequests = 0;
+    let releaseSettingsRead = () => {};
+    let markSettingsReadStarted = () => {};
+    let settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+    let settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          putRequests += 1;
+          const body = await request.json() as { reason?: string; enabled?: boolean };
+          if ((body.reason?.length ?? 0) > 500) {
+            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+          }
+          if (body.enabled === false && !body.reason?.trim()) {
+            return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
+          }
+          if (typeof body.reason === "string") storedReason = body.reason;
+        } else {
+          markSettingsReadStarted();
+          await settingsReadGate;
+        }
+        return Response.json(answerWith(storedReason));
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const english = "Read the incoming chat and answer questions, correcting anything inaccurate. Sort incoming tasks by priority and start them properly.";
+    const ukrainian = "Дивись що пишуть в чат і відповідай на питання, поправляй якщо щось неправильно. Розбирай задачі з вхідних по пріорітетам і правильно запускай.";
+
+    async function openPanel(page: Page, phone: boolean) {
+      if (phone) {
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+        const control = page.locator("[data-phone-task-tick-open]");
+        await control.waitFor();
+        await control.click();
+        await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+      } else {
+        const fold = page.locator("[data-seat-collapse]");
+        if (await fold.count()) await fold.first().click();
+        await page.locator("[data-open-seat-tick]").click();
+        await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+      }
+    }
+
+    async function assertVisible(page: Page, expected: string, label: string, state: string) {
+      const field = page.locator("[data-seat-tick-reason]");
+      expect(await field.inputValue(), `${label} ${state} keeps the complete instruction`).toBe(expected);
+      const geometry = await field.evaluate((node) => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+      expect(geometry.scrollHeight, `${label} ${state} text is fully visible`).toBeLessThanOrEqual(geometry.clientHeight + 1);
+      await field.screenshot({ path: path.join(SHOTS, `${label}-${state}.png`) });
+      return geometry;
+    }
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const phone of [false, true]) {
+        const width = phone ? 390 : 1440;
+        const label = `${phone ? "phone-390" : "desktop-1440"}-${lang}`;
+        const shortText = lang === "en" ? english : ukrainian;
+        const repeatedText = Array.from({ length: 4 }, () => shortText).join("\n");
+        const prefix = repeatedText.slice(0, 499).trimEnd();
+        const text = `${prefix}${"x".repeat(500 - prefix.length)}`;
+        storedReason = "a release afternoon";
+        frozenAnswer = tickAnswer(storedReason);
+        settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+        settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+          try {
+            if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
+            else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+            await openPanel(page, phone);
+            const field = page.locator("[data-seat-tick-reason]");
+            await settingsReadStarted;
+            expect(await field.isDisabled(), `${label} instructions stay disabled during the initial settings read`).toBe(true);
+            releaseSettingsRead();
+            await page.waitForFunction(() => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]");
+              return field !== null && !field.disabled;
+            });
+            await field.fill(text);
+            const edited = await assertVisible(page, text, label, "edited");
+            expect(text.length, `${label} boundary instruction length`).toBe(500);
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(storedReason.length, `${label} server fixture stores the full instruction`).toBe(500);
+            const saved = await assertVisible(page, text, label, "saved");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-saved-panel.png`) });
+            const requestsBeforeOverage = putRequests;
+            await field.fill(`${text}x`);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe("501");
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toContain(lang === "en" ? "501 / 500 characters" : "501 / 500 символів");
+            expect(await page.locator("[data-seat-tick-over-limit]").textContent()).toContain(lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1");
+            const viewportWidth = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth }));
+            expect(viewportWidth.page, `${label} over-limit page has no horizontal overflow`).toBeLessThanOrEqual(viewportWidth.viewport);
+            expect(putRequests, `${label} counter appears before a request`).toBe(requestsBeforeOverage);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit.png`) });
+            await page.locator("[data-seat-tick-save]").click();
+            const overLimitMessage = page.locator("[data-seat-tick-error]");
+            await overLimitMessage.waitFor();
+            const overLimitError = await overLimitMessage.textContent();
+            expect(overLimitError).toContain(lang === "en" ? "«Instructions for every wake» is 501 characters" : "«Вказівки на кожне пробудження» перевищують ліміт 500 символів: 501");
+            expect(overLimitError, `${label} refusal names the field the panel shows`).not.toContain("(reason)");
+            expect(await field.inputValue(), `${label} the refused draft stays in the field`).toBe(`${text}x`);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent(), `${label} the counter survives the refusal`).toContain(lang === "en" ? "501 / 500 characters" : "501 / 500 символів");
+            const overLimitReading = await page.locator("[data-seat-tick-character-count]").textContent();
+            await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit-refusal.png`) });
+            await field.fill("");
+            await page.locator("[data-seat-tick-enabled]").click();
+            await page.locator("[data-seat-tick-save]").click();
+            const requiredMessage = page.locator("[data-seat-tick-error]");
+            await requiredMessage.waitFor();
+            const requiredError = await requiredMessage.textContent();
+            expect(requiredError).toContain(lang === "en" ? "«Instructions for every wake» is required" : "«Вказівки на кожне пробудження» потрібні");
+            expect(requiredError, `${label} refusal names the field the panel shows`).not.toContain("(reason)");
+            if (lang === "en") expect(requiredError).not.toContain("the seat");
+            expect(await field.inputValue(), `${label} the emptied field stays empty after the refusal`).toBe("");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-missing-instructions-refusal.png`) });
+            expect(pageErrors, `${label} errors while saving`).toEqual([]);
+            cases.push({ label, edited, saved, overLimit: overLimitReading, putRequests });
+          } finally { await context.close(); }
+        }
+        {
+          settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+          settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
+          const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+          try {
+            if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
+            else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+            await openPanel(page, phone);
+            await settingsReadStarted;
+            expect(await page.locator("[data-seat-tick-reason]").isDisabled(), `${label} reopened instructions wait for the settings read`).toBe(true);
+            releaseSettingsRead();
+            await page.waitForFunction((expected) => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]");
+              return field !== null && field.value === expected;
+            }, text);
+            const reopened = await assertVisible(page, text, label, "reopened");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-reopened-panel.png`) });
+            expect(pageErrors, `${label} errors after reopening`).toEqual([]);
+            cases.push({ label, reopened });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(SHOTS, "instructions-readings.json"), `${JSON.stringify(cases, null, 2)}\n`);
+  }, 180_000);
+
+  async function instructionReading(page: Page, lang: "en" | "uk") {
+    const field = page.locator("[data-seat-tick-reason]");
+    await field.scrollIntoViewIfNeeded();
+    const label = lang === "en" ? "Instructions for every wake" : "Вказівки на кожне пробудження";
+    const helper = lang === "en"
+      ? "The agent receives these instructions on every wake: what to do next and when to stop."
+      : "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися.";
+    expect(await field.getAttribute("aria-describedby")).toBeTruthy();
+    expect(await field.locator("..").textContent()).toContain(label);
+    const hint = page.locator("[data-seat-tick-instructions-hint]");
+    expect(await hint.textContent()).toContain(helper);
+    expect(await field.inputValue()).toBe("a release afternoon");
+    const geometry = await hint.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const text = range.getBoundingClientRect();
+      return { left: box.left, right: box.right, textLeft: text.left, textRight: text.right, textHeight: text.height, height: box.height, viewport: innerWidth };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.left - 1);
+    expect(geometry.textRight).toBeLessThanOrEqual(geometry.right + 1);
+    expect(geometry.textHeight).toBeLessThanOrEqual(geometry.height + 1);
+    return { label, helper: await hint.textContent(), geometry };
+  }
+
+  browserTest("the notice card is titled after the setting and opens the panel; the run cards keep their time visible; en and uk, light and dark, 1440 and 390", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/seat-tick-cards-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": () => Response.json(tickAnswer()),
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        for (const scheme of ["light", "dark"] as const) {
+          {
+            const label = `board-desktop-1440-${scheme}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, scheme, lang);
+            try {
+              await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+              const fold = page.locator("[data-seat-collapse]");
+              if (await fold.count()) await fold.first().click();
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-board.png`) });
+              for (const [name, id] of [["tick-notice", "t-tick-notice"], ["maintenance-failed", "t-tick-failed"], ["maintenance-live", "t-tick-live"]] as const) {
+                await page.locator(card(id)).screenshot({ path: path.join(SHOTS, `${label}-card-${name}.png`) });
+              }
+              const read = await page.evaluate(() => {
+                const text = (selector: string) => document.querySelector(selector)?.textContent?.trim() ?? "";
+                const clamp = (id: string) => {
+                  const title = document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] h3.title .clamp`) as HTMLElement | null;
+                  /* Whether the leading «DD.MM HH:mm» is drawn inside the title's
+                     own box: the part of a run's title that tells runs apart. */
+                  let timeShown: boolean | null = null;
+                  if (title?.firstChild) {
+                    const range = document.createRange();
+                    range.setStart(title.firstChild, 0);
+                    range.setEnd(title.firstChild, Math.min(11, title.firstChild.textContent?.length ?? 0));
+                    const box = title.getBoundingClientRect();
+                    const at = range.getBoundingClientRect();
+                    timeShown = at.width > 0 && at.right <= box.right + 1 && at.bottom <= box.bottom + 1;
+                  }
+                  return { text: title?.textContent ?? "", timeShown, width: Math.round(title?.getBoundingClientRect().width ?? 0) };
+                };
+                return {
+                  notice: clamp("t-tick-notice"), failed: clamp("t-tick-failed"), live: clamp("t-tick-live"),
+                  noticeBody: text('[data-kanban-board] .card[data-id="task:t-tick-notice"] .desc'),
+                  failedBody: text('[data-kanban-board] .card[data-id="task:t-tick-failed"] .desc'),
+                  noticeButton: text('[data-open-seat-tick]'),
+                };
+              });
+              /* The seat is folded, so its header and the chip in it are not
+                 drawn. The notice's button still asks for the panel: the seat
+                 unfolds and the chip opens it. */
+              const seat = page.locator("[data-kanban-seat]").first();
+              const foldedBefore = (await seat.getAttribute("data-collapsed")) === "1" && (await page.locator("[data-seat-tick-chip]").count()) === 0;
+              await page.locator("[data-open-seat-tick]").scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-seat-folded.png`) });
+              await page.locator("[data-open-seat-tick]").click();
+              await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+              await page.waitForTimeout(500);
+              const unfoldedAfter = (await seat.getAttribute("data-collapsed")) === "0";
+              const instructions = await instructionReading(page, lang);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-panel.png`) });
+              readings.push({ label, ...read, instructions, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
+              expect(pageErrors, `${label} page errors`).toEqual([]);
+            } finally { await context.close(); }
+          }
+          {
+            const label = `board-phone-390-${scheme}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+            try {
+              await page.waitForTimeout(2500);
+              /* The three tabs that hold the cards: the notice in Inbox, the
+                 live run in Assigned, the failed run in Blocked. */
+              for (const tab of ["inbox", "assigned", "blocked"] as const) {
+                await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+                await page.waitForTimeout(500);
+                await page.screenshot({ path: path.join(SHOTS, `${label}-${tab}.png`) });
+              }
+              /* The notice opens the task screen; its 44 px control opens the
+                 tick sheet over it, through the nav the seat sheet's row uses. */
+              await page.locator('[data-phone-kanban-tab="inbox"]').click();
+              await page.waitForTimeout(400);
+              await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+              const control = page.locator("[data-phone-task-tick-open]");
+              await control.waitFor({ timeout: 10_000 });
+              await page.waitForTimeout(500);
+              const controlHeight = Math.round((await control.boundingBox())?.height ?? 0);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-task-screen.png`) });
+              await control.click();
+              await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+              await page.waitForTimeout(700);
+              const instructions = await instructionReading(page, lang);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-tick-sheet.png`) });
+              readings.push({ label, phone: true, instructions, controlHeight, tickSheetOpened: true, pageErrors });
+              expect(pageErrors, `${label} page errors`).toEqual([]);
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(SHOTS, "board-cards-readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    for (const entry of readings.filter((reading) => reading.phone) as Array<{ label: string; controlHeight: number; tickSheetOpened: boolean }>) {
+      expect(entry.controlHeight, `${entry.label} the tick control is a 44 px target`).toBeGreaterThanOrEqual(44);
+      expect(entry.tickSheetOpened, `${entry.label} the tick sheet opened`).toBe(true);
+    }
+    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; noticeBody: string; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
+    for (const entry of desk) {
+      const en = entry.label.endsWith("-en");
+      /* The notice is titled after the setting, in the card's own language. */
+      expect(entry.notice.text, `${entry.label} notice title`).toMatch(en ? /^Tick: every 30 min until \d{2}:\d{2}$/ : /^Тікер: кожні 30 хв до \d{2}:\d{2}$/);
+      expect(entry.noticeBody, `${entry.label} instructions card label`).toContain(en ? "Instructions for every wake:" : "Вказівки на кожне пробудження:");
+      expect(entry.noticeButton, `${entry.label} notice button`).toBe(translate(en ? "en" : "uk", "kanban.tickNotice.open"));
+      /* The run cards lead with their time, and the time is on screen even where
+         the column is too narrow for the whole title. */
+      for (const run of [entry.failed, entry.live]) {
+        expect(run.text, `${entry.label} run title`).toMatch(en ? /^\d{2}\.\d{2} \d{2}:\d{2} · Board maintenance$/ : /^\d{2}\.\d{2} \d{2}:\d{2} · Обслуговування дошки$/);
+        expect(run.timeShown, `${entry.label} the run's time is drawn inside its title`).toBe(true);
+      }
+      expect(entry.failedBody, `${entry.label} failed card text`).toContain(en ? "Failed: no Claude account is available for this project." : "Не вдалося: немає доступного акаунта Claude");
+      /* The button answers on a folded seat: it unfolds and the panel opens. */
+      expect(entry.foldedBefore, `${entry.label} the seat was folded and drew no chip`).toBe(true);
+      expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
+    }
+  }, 600_000);
 });

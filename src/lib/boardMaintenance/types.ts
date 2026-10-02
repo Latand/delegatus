@@ -59,7 +59,9 @@ export interface MaintenanceRun {
   launchedAt: string | null;
   state: MaintenanceRunState;
   endedAt: string | null;
-  failure: { kind: MaintenanceFailureKind; detail: string } | null;
+  /** `engine` names the runtime a `no-account` launch was refused on, so the
+      text and the Accounts link name the engine the run actually used. */
+  failure: { kind: MaintenanceFailureKind; detail: string; engine?: "claude" | "codex" } | null;
   log: MaintenanceRunLog;
   counts: MaintenanceCounts;
   /** Distinct ids remain exact even after the stored change preview fills. */

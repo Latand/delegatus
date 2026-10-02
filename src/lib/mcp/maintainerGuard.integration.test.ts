@@ -97,8 +97,102 @@ test("done checks delivered path-only assignments and permits only a confirmed s
     expect(spy).toHaveBeenCalledWith({ transcriptPath, limit: 1 }, {});
     spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "gone", host: { state: "gone" }, turnState: "unknown" }] } as never);
     expect(await tools.callTool("update_task", { clientRequestId: "path-only-unknown-done", taskId: task.id, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
-    spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "completed", host: { state: "dead" }, turnState: "idle" }] } as never);
+    spy.mockResolvedValueOnce({ conversations: [{ conversationId: "path-only-worker", transcriptPath, lifecycle: "gone", host: { state: "unknown" }, turnState: "idle", reason: "launch_unproven_expired", evidenceSource: "transcript" }] } as never);
     expect(await tools.callTool("update_task", { clientRequestId: "path-only-settled-done", taskId: task.id, status: "done" })).toMatchObject({ ok: true });
     expect(spy).toHaveBeenCalledTimes(3);
   } finally { spy.mockRestore(); }
+});
+
+test("activity and closure agree for historical, live idle and unknown assignments", async () => {
+  const id = ["conversation", "fixture-liveness-maintainer"].join("_");
+  snapshot.conversations[id as `conversation_${string}`] = { id, agentRole: "maintainer", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  const task = loadTasks()[0];
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const workerId = "conversation_fixture-history";
+  const liveness = await import("@/lib/lifecycle/liveness");
+  const { evaluateLiveness } = liveness;
+  const spy = spyOn(liveness, "agentLivenessSnapshot");
+  const manual = { ...domain, registrySnapshot: () => snapshot, callerAttribution: () => ({ kind: "agent", conversationId: id }), livenessSources: () => ({}), refreshLifecycleJournal: () => ({ appended: 0 }) };
+  const tools = createMcpToolService(viewerMcpBindings(undefined, undefined, manual as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(manual as never));
+  try {
+    for (const [name, host, turn, source, permitted] of [
+      ["historical", "unknown", "idle", "transcript", true],
+      ["dead", "gone", "idle", "transcript", true],
+      ["live-idle", "alive", "idle", "transcript", false],
+      ["live-busy", "alive", "busy", "transcript", false],
+      ["unreadable", "unknown", "unknown", "unreadable", false],
+      ["projected", "unknown", "idle", "projection", false],
+      ["severed", "gone", "busy", "transcript", false],
+    ] as const) {
+      mutateTasks(tasks => ({ tasks: tasks.map(t => t.id === task.id ? { ...t, status: "assigned", assignments: [{ conversationId: workerId, path: null, panePid: null, state: "linked", at: new Date().toISOString(), error: null }] } : t), result: undefined }));
+      const decision = evaluateLiveness({ host: { state: host }, turnState: turn, silentForMs: 3600000, stallAfterMs: 600000 });
+      const row = { conversationId: workerId, host: { state: host }, turnState: turn, evidenceSource: source, ...decision };
+      spy.mockResolvedValue({ conversations: [row], count: 1, selection: { matched: 1, selected: 1 } } as never);
+      const activity = await tools.callTool("agent_activity", { clientRequestId: `activity-${name}`, conversationId: workerId, full: true });
+      expect((activity as unknown as { conversations: unknown[] }).conversations[0]).toMatchObject(row);
+      const result = await tools.callTool("update_task", { clientRequestId: `closure-${name}`, taskId: task.id, status: "done" });
+      expect(result.ok).toBe(permitted);
+      if (!permitted) expect(result.code).toBe("maintainer_done_refused");
+    }
+  } finally { spy.mockRestore(); }
+});
+
+test("retired seat history hides on the service wire, preserving details and current seats", async () => {
+  const maintainerId = "conversation_fixture-history-maintainer";
+  const oldId = "conversation_fixture-retired-seat";
+  const currentId = "conversation_fixture-current-seat";
+  for (const [id, agentRole] of [[maintainerId, "maintainer"], [oldId, "orchestrator"], [currentId, "orchestrator"]] as const) {
+    snapshot.conversations[id] = { id, agentRole, projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  }
+  const at = new Date().toISOString();
+  fs.writeFileSync(path.join(root, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 3, seats: { [project]: { project, seatEpoch: 2, conversationId: currentId, path: null, mandate: "fixture", state: "active", intent: { clientRequestId: "fixture-seat", mode: "spawn", launchId: null, error: null }, designatedAt: at, activatedAt: at } }, pending: {}, revocations: [{ project, conversationId: oldId, seatEpoch: 1, revokedAt: at, successorConversationId: currentId }], history: [] }));
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const taskId = "fixture-retired-seat-card";
+  mutateTasks(tasks => ({ tasks: [...tasks, { id: taskId, project, text: "Previous orchestrator", details: "Keep this history", status: "assigned", placement: "unplaced", origin: { kind: "launch", key: "fixture-seat-attempt", refinement: "titled" }, assignments: [{ conversationId: oldId, launchId: "fixture-seat-launch", clientAttemptId: "fixture-seat-attempt", path: null, panePid: null, state: "linked", error: null, at }], createdAt: at, updatedAt: at }], result: undefined }));
+  const liveness = await import("@/lib/lifecycle/liveness");
+  const spy = spyOn(liveness, "agentLivenessSnapshot").mockResolvedValue({ conversations: [{ conversationId: oldId, lifecycle: "gone", host: { state: "gone" }, turnState: "idle", evidenceSource: "transcript" }] } as never);
+  const manual = { ...domain, registrySnapshot: () => snapshot, callerAttribution: () => ({ kind: "agent", conversationId: maintainerId }), livenessSources: () => ({}) };
+  const tools = createMcpToolService(viewerMcpBindings(undefined, undefined, manual as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(manual as never));
+  try {
+    const fresh = loadTasks().find(t => t.id === taskId)!;
+    const { taskRevision } = await import("@/lib/tasks/revision");
+    expect(await tools.callTool("update_task", { clientRequestId: "retired-seat-history", taskId, expectedProject: fresh.project, expectedRevision: taskRevision(fresh), status: "done", hide: true, board: "hidden", appendLine: "Maintenance: retired seat verified" })).toMatchObject({ ok: true });
+    const retired = loadTasks().find(t => t.id === taskId)!;
+    expect(retired).toMatchObject({ status: "done", board: "hidden", groupHidden: { by: "agent" }, details: "Keep this history\nMaintenance: retired seat verified" });
+    expect(retired.assignments[0].conversationId).toBe(oldId);
+    const { groupHideState } = await import("@/lib/tasks/groupHide");
+    expect(groupHideState(retired, { members: [], pipelines: [], seat: { conversationIds: [currentId], paths: [] } }).hidden).toBe(true);
+    mutateTasks(tasks => ({ tasks: tasks.map(t => t.id === taskId ? { ...t, status: "assigned", assignments: [{ ...t.assignments[0], conversationId: currentId }] } : t), result: undefined }));
+    expect(await tools.callTool("update_task", { clientRequestId: "current-seat-protected", taskId, status: "done", hide: true })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
+  } finally { spy.mockRestore(); }
+});
+
+test("the real transcript projection permits gone history and refuses a verified live idle owner", async () => {
+  const maintainerId = "conversation_fixture-real-maintainer";
+  const historyId = "conversation_fixture-real-history";
+  const transcriptPath = path.join(root, "real-history.jsonl");
+  const now = Date.parse("2026-10-01T12:00:00Z"), ended = now - 3600000;
+  fs.writeFileSync(transcriptPath, JSON.stringify({ timestamp: new Date(ended).toISOString(), type: "event_msg", payload: { type: "task_complete", last_agent_message: "Done" } }) + "\n");
+  snapshot.conversations[maintainerId] = { id: maintainerId, agentRole: "maintainer", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [] } as never;
+  snapshot.conversations[historyId] = { id: historyId, generations: [{ path: transcriptPath }], continuityPaths: [], abandonedContinuityPaths: [] } as never;
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const taskId = "fixture-real-history-card";
+  mutateTasks(tasks => ({ tasks: [...tasks, { id: taskId, project, text: "Finished work", status: "assigned", placement: "unplaced", assignments: [{ conversationId: historyId, path: transcriptPath, panePid: null, state: "linked", at: new Date(ended).toISOString(), error: null }], createdAt: new Date(ended).toISOString(), updatedAt: new Date(ended).toISOString() }], result: undefined }));
+  const { readLivenessTranscriptEvidence } = await import("@/lib/lifecycle/transcript");
+  const sources = {
+    now: () => now, registrySnapshot: () => snapshot, pipelines: () => [], flows: () => [],
+    describeTranscript: async () => ({ path: transcriptPath, project, title: "Finished work", engine: "codex" as const, mtimeMs: ended, conversationId: historyId, activity: null, activityReason: null }),
+    transcriptEvidence: readLivenessTranscriptEvidence,
+    probe: { now: () => now, pidAlive: (pid: number) => pid === 424242, processIdentity: () => "fixture-process-start" },
+  };
+  const manual = { ...domain, registrySnapshot: () => snapshot, callerAttribution: () => ({ kind: "agent", conversationId: maintainerId }), livenessSources: () => sources, refreshLifecycleJournal: () => ({ appended: 0 }) };
+  const tools = createMcpToolService(viewerMcpBindings(undefined, undefined, manual as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(manual as never));
+  const activity = await tools.callTool("agent_activity", { clientRequestId: "real-gone-activity", conversationId: historyId, full: true });
+  expect((activity as unknown as { conversations: unknown[] }).conversations[0]).toMatchObject({ lifecycle: "gone", reason: "launch_unproven_expired", turnState: "idle", host: { state: "unknown" }, evidenceSource: "transcript" });
+  expect(await tools.callTool("update_task", { clientRequestId: "real-gone-closure", taskId, status: "done" })).toMatchObject({ ok: true });
+  snapshot.entries["codex:fixture-real-history"] = { key: { engine: "codex", accountId: null, sessionId: "fixture-real-history" }, status: "live", artifactPath: transcriptPath, host: null, updatedAt: new Date(now).toISOString(), structuredHost: { process: { pid: 424242, startIdentity: "fixture-process-start" } } } as never;
+  mutateTasks(tasks => ({ tasks: tasks.map(t => t.id === taskId ? { ...t, status: "assigned" } : t), result: undefined }));
+  const live = await tools.callTool("agent_activity", { clientRequestId: "real-live-idle-activity", conversationId: historyId, full: true });
+  expect((live as unknown as { conversations: unknown[] }).conversations[0]).toMatchObject({ lifecycle: "stalled", turnState: "idle", host: { state: "alive" }, evidenceSource: "transcript" });
+  expect(await tools.callTool("update_task", { clientRequestId: "real-live-idle-closure", taskId, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
 });

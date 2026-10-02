@@ -925,7 +925,7 @@ function guardCount(state: SeatTickProjectState, kind: SeatTickWakeReasonKind, f
 function settingsCards(input: SeatTickCheckInput): SeatTickCard[] {
   const settings = input.settings;
   if (!settings.configured) return [];
-  const context = { reason: settings.reason, until: settings.until, setBy: settings.setBy, updatedAt: settings.updatedAt };
+  const context = { enabled: settings.enabled, wakeIntervalMs: settings.wakeIntervalMs, reason: settings.reason, until: settings.until, setBy: settings.setBy, updatedAt: settings.updatedAt };
   return [{
     ref: SEAT_TICK_SETTINGS_REF,
     kind: "tick-settings",

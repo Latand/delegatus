@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { maintainerTaskWriteRefusal } from "./guard";
+import { maintainerTaskWriteRefusal, retiredSeatTask } from "./guard";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { statePath } from "@/lib/configDir";
 import { permitMaintainerTool } from "@/lib/mcp/toolAllowlist";
 import { MUTATING_MCP_TOOL_NAMES } from "@/lib/mcp/server";
 import { claim, sandbox, PROJECT } from "./testFixture";
@@ -25,4 +27,38 @@ test("mutating tool classification is fail closed; config reads remain available
   for (const tool of MUTATING_MCP_TOOL_NAMES) expect(permitMaintainerTool(tool, {}).allowed).toBe(allowed.includes(tool));
   for (const [tool, args] of [["seat_tick_settings", { maintenance: { enabled: true } }], ["role_presets", { overrides: {} }], ["auto_updates", { enabled: true }], ["account_project_binding", { action: "add" }]] as const) expect(permitMaintainerTool(tool, args)).toMatchObject({ allowed: false, code: "maintainer_tool_refused" });
   expect(permitMaintainerTool("account_project_binding", { action: "list", project: PROJECT }).allowed).toBe(true);
+});
+
+test("only a confirmed retired seat card can be hidden as done history", () => {
+  held = sandbox(); const run = claim();
+  const snapshot = new AgentRegistry(statePath("fixture-registry.json")).readOnlySnapshot();
+  const id = "conversation_old-seat";
+  snapshot.conversations[id] = { id, agentRole: "orchestrator", generations: [], continuityPaths: [], abandonedContinuityPaths: [] } as never;
+  const task: BoardTask = { id: "retired-card", placement: "unplaced", project: PROJECT, text: "orchestrator · You are this project's orchestrator…", status: "assigned", assignments: [{ conversationId: id, launchId: "old-launch", path: null, panePid: null, state: "linked", error: null, at: run.claimedAt }], createdAt: run.claimedAt, updatedAt: run.claimedAt };
+  const free = () => ({ active: { conversationId: "conversation_current-seat", path: null } as never, pending: null });
+  const revoked = () => new Set([id]);
+  const retired = retiredSeatTask(task, snapshot, free, revoked);
+  expect(retired).toBe(true);
+  const caller = { conversationId: "fixture-maintainer", project: PROJECT, run };
+  const refusal = (args: Record<string, unknown>, extra = {}) => maintainerTaskWriteRefusal({ caller, task, args, retiredSeat: retired, ...extra });
+  expect(refusal({ status: "done", hide: true, board: "hidden", appendLine: "Maintenance: retired seat verified" })).toBeNull();
+  expect(refusal({ status: "inbox", hide: true })?.code).toBe("maintainer_delete_refused");
+  expect(refusal({ status: "done", hide: true }, { liveAgent: id })?.code).toBe("maintainer_delete_refused");
+  expect(refusal({ status: "done", hide: true }, { openPipeline: "open-lane" })?.code).toBe("maintainer_delete_refused");
+  expect(refusal({ status: "done", hide: true, assignments: [] })?.code).toBe("maintainer_delete_refused");
+  expect(retiredSeatTask(task, snapshot, () => null, revoked)).toBe(false);
+  expect(retiredSeatTask(task, snapshot, free, () => null)).toBe(false);
+  expect(retiredSeatTask(task, snapshot, () => ({ active: { conversationId: id } as never, pending: null }), revoked)).toBe(false);
+  expect(retiredSeatTask(task, snapshot, () => ({ active: null, pending: { conversationId: id } as never }), revoked)).toBe(false);
+  const named = { ...task, text: "Previous orchestrator", origin: { kind: "launch" as const, key: "old-launch", refinement: "titled" as const } };
+  expect(retiredSeatTask(named, snapshot, free, revoked)).toBe(true);
+  expect(retiredSeatTask({ ...named, origin: { ...named.origin, key: "old-attempt" }, assignments: [{ ...task.assignments[0], clientAttemptId: "old-attempt" }] }, snapshot, free, revoked)).toBe(true);
+  snapshot.conversations.conversation_old_worker = { id: "conversation_old_worker", agentRole: "builder", generations: [], continuityPaths: [], abandonedContinuityPaths: [] } as never;
+  const withWorker = { ...named, assignments: [...named.assignments, { ...named.assignments[0], conversationId: "conversation_old_worker", launchId: "worker-launch" }] };
+  expect(retiredSeatTask(withWorker, snapshot, free, revoked)).toBe(true);
+  expect(retiredSeatTask({ ...withWorker, assignments: [...withWorker.assignments, { ...named.assignments[0], conversationId: "conversation_current-seat" }] }, snapshot, free, revoked)).toBe(false);
+  expect(retiredSeatTask({ ...task, text: "Release the application" }, snapshot, free, revoked)).toBe(false);
+  snapshot.conversations.conversation_legacy = { ...snapshot.conversations[id], id: "conversation_legacy", supersededBy: id } as never;
+  snapshot.conversationAliases.conversation_legacy = id;
+  expect(retiredSeatTask(task, snapshot, () => ({ active: { conversationId: "conversation_legacy" } as never, pending: null }), revoked)).toBe(false);
 });

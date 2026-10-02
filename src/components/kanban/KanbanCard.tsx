@@ -24,6 +24,8 @@ import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 
+import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
+import { useSeatSignal } from "./kanbanSeatStore";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -360,6 +362,26 @@ function UnstartedLaunches({ card, title, nowMs, onOpen, onDismiss }: {
   );
 }
 
+/** The tick notice's «Tick settings» button. It is offered while a live seat
+    holds the project, because that seat's chip is what answers; a folded seat
+    unfolds to show it, and a project with no live seat has no chip to open. */
+function SeatTickNoticeButton({ project }: { project: string }) {
+  const { t } = useLocale();
+  const live = useSeatSignal(project)?.live ?? false;
+  if (!live) return null;
+  return (
+    <button
+      type="button"
+      className="btn quiet"
+      data-open-seat-tick={project}
+      onClick={() => requestSeatTickPanel(project)}
+    >
+      <span>{t("kanban.tickNotice.open")}</span>
+      <ChevronRight />
+    </button>
+  );
+}
+
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
   /* The card holding the orchestrator's conversation stays on the board. */
@@ -636,6 +658,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
+      {/* The standing tick notice opens the panel that holds the setting it
+          describes. */}
+      {!collapsed && card.task && isSeatTickNotice(card.task.text) ? <SeatTickNoticeButton project={card.project} /> : null}
       {collapsed ? null : <FinishWaitLine taskId={card.task?.id ?? null} pipelines={card.pipelines} />}
 
       {/* The agent's context, folded away: one row while closed, the whole text

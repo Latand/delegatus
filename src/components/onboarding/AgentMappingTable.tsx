@@ -253,7 +253,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
   const changed = shipped !== null && !same(config, shipped);
   const status = statuses[config.engine];
   const scale = effortScale(config.engine, config.model) ?? [];
-  const nudge = costClass(config) === "very-heavy" && effortRank(config.effort) > effortRank("high") && scale.includes("high");
+  const nudge = !same(config, shipped) && costClass(config) === "very-heavy" && effortRank(config.effort) > effortRank("high") && scale.includes("high");
   const models = modelOptions(row, config.engine);
   const modelSelect = (
     <select

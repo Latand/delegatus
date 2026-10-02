@@ -494,7 +494,7 @@ test("a project whose tick is off is checked, journaled and never woken (#1275)"
     ref: "seat-tick-settings",
     kind: "tick-settings",
     state: "open",
-    settings: { reason: offSettings().reason, until: null, setBy: offSettings().setBy, updatedAt: "2026-08-28T11:00:00.000Z" },
+    settings: { enabled: false, wakeIntervalMs: 60 * 60_000, reason: offSettings().reason, until: null, setBy: offSettings().setBy, updatedAt: "2026-08-28T11:00:00.000Z" },
     detail: "ticking is off for this project: no wake will be sent until it is turned back on",
   }]);
 });
@@ -507,7 +507,7 @@ test("a tick setting that reached its expiry is written back to the default by t
   /* The wake goes out — the setting lapsed — and the record on disk stops
      saying "off" beside a tick that is ticking. */
   expect(record).toMatchObject({ verdict: "wake" });
-  expect(persisted).toEqual([defaultSeatTickSettings(PROJECT)]);
+  expect(persisted).toEqual([{ ...defaultSeatTickSettings(PROJECT), reason: settings.reason, updatedAt: settings.updatedAt, setBy: settings.setBy }]);
   expect(rig.cards[0]!.card).toMatchObject({ state: "resolved" });
 });
 
@@ -522,6 +522,7 @@ test("the lapse ends the setting that expired and keeps the monitor prompt it ne
   expect(persisted).toEqual([{
     ...defaultSeatTickSettings(PROJECT),
     monitorPrompt: MONITOR_PROMPT,
+    reason: settings.reason,
     updatedAt: settings.updatedAt,
     setBy: settings.setBy,
   }]);
@@ -541,7 +542,9 @@ test("the board card for a quiet tick is written, kept in step, and closed when 
   await runSeatTickCheck(project, { ...off.deps, ensureCard: undefined });
   const raised = readCards();
   expect(raised).toHaveLength(1);
-  expect(raised[0]!.text).toContain("This project's seat tick is not on its default settings");
+  /* The card's first line is the setting; this sandbox records no operator
+     language, so it is the default Ukrainian. */
+  expect(raised[0]!.text.split("\n")[0]).toBe("Тікер: вимкнено");
   expect(raised[0]!.text).toContain("the only open lane is a draft nothing can discharge");
   expect(raised[0]!.status).not.toBe("done");
 
@@ -623,7 +626,7 @@ test("a card is written to the state dir the tick is pointed at now, not the one
   const { loadTasks } = await import("@/lib/tasks/store");
   const cards = loadTasks(path.join(moved, "tasks.json")).filter((task) => task.project === project);
   expect(cards).toHaveLength(1);
-  expect(cards[0]!.text).toContain("This project's seat tick is not on its default settings");
+  expect(cards[0]!.text.split("\n")[0]).toBe("Тікер: вимкнено");
 });
 
 test("a wake is delivered by durable conversation id, with an idempotent client message id", async () => {
@@ -2106,6 +2109,39 @@ test("a check that outran its interval drops the next tick rather than queueing 
 
 const MONITOR_PROMPT = "before the items, check whether last night's digest actually sent";
 const PROMPT_HEADING = "Standing monitor note for this project";
+
+test("every scheduler wake carries the operator instructions alongside the seat note", async () => {
+  const instruction = "Handle incoming tasks by priority; stop when the inbox is empty.";
+  const settings = { ...promptSettings(), wakeIntervalMinutes: 30, reason: instruction };
+  const first = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent[0]!.text).toContain(`Operator instructions for every wake:\n${instruction}`);
+  expect(first.sent[0]!.text).toContain(MONITOR_PROMPT);
+  expect(first.sent[0]!.text).toContain("Items:");
+
+  const next = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, noteShown: seatTickNoteRevisionForTest(MONITOR_PROMPT) }, settings });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent[0]!.text).toContain(instruction);
+  expect(next.sent[0]!.text).toContain("Standing monitor note unchanged");
+
+  const proposal = harness({ settings });
+  await runSeatTickCheck(PROJECT, proposal.deps);
+  expect(proposal.journal[0]!.verdict).toBe("proactive");
+  expect(proposal.sent[0]!.text).toContain(instruction);
+  expect(proposal.sent[0]!.text).toContain(MONITOR_PROMPT);
+
+  const edited = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings: { ...settings, reason: "Stop launching tasks until the release settles." } });
+  await runSeatTickCheck(PROJECT, edited.deps);
+  expect(edited.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
+  const cleared = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings: { ...settings, reason: null } });
+  await runSeatTickCheck(PROJECT, cleared.deps);
+  expect(cleared.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
+  expect(cleared.sent[0]!.text).not.toContain("Operator instructions for every wake:");
+});
+
+function seatTickNoteRevisionForTest(note: string): string {
+  return createHash("sha256").update(note).digest("hex").slice(0, 32);
+}
 
 function promptSettings(): SeatTickSettings {
   return {

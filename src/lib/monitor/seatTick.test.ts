@@ -1148,7 +1148,7 @@ test("a disabled tick sends no wake, and says on the record why it is quiet (#12
     ref: "seat-tick-settings",
     kind: "tick-settings",
     state: "open",
-    settings: { reason: "the only open lane is a draft nothing can discharge", until: null, setBy: null, updatedAt: "2026-08-28T11:00:00.000Z" },
+    settings: { enabled: false, wakeIntervalMs: 60 * MINUTE, reason: "the only open lane is a draft nothing can discharge", until: null, setBy: null, updatedAt: "2026-08-28T11:00:00.000Z" },
     detail: "ticking is off for this project: no wake will be sent until it is turned back on",
   }]);
 });
@@ -1193,6 +1193,8 @@ test("a slowed but enabled tick still carries its card, saying what it is set to
     ref: "seat-tick-settings",
     state: "open",
     detail: "wakes for this project are set to one every 180 minute(s)",
+    /* The structured schedule the card composes its localized title from. */
+    settings: { enabled: true, wakeIntervalMs: 180 * MINUTE },
   });
 });
 
@@ -1205,7 +1207,7 @@ test("settings back at their default resolve the card instead of leaving it stan
     ref: "seat-tick-settings",
     kind: "tick-settings",
     state: "resolved",
-    settings: { reason: null, until: null, setBy: null, updatedAt: "2026-08-28T11:30:00.000Z" },
+    settings: { enabled: true, wakeIntervalMs: 60 * MINUTE, reason: "the draft is gone, ticking as normal again", until: null, setBy: null, updatedAt: "2026-08-28T11:30:00.000Z" },
     detail: "this project is on the default tick settings",
   }]);
 });

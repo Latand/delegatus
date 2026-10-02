@@ -31,3 +31,34 @@ test("desktop-specific advice names only the verified Codex bundle and Claude se
   expect(installPrompt("codex")).toContain("curl -fsSL https://chatgpt.com/codex/install.sh | sh");
   expect(installPrompt("codex")).not.toContain("bun add -g @openai/codex");
 });
+
+function strings(): Record<string, Record<string, string>> {
+  const context = { window: { DLG: {} as { copy?: { strings: Record<string, Record<string, string>> } } } };
+  vm.runInNewContext(fs.readFileSync(new URL("./copy.js", import.meta.url), "utf8"), context);
+  return context.window.DLG.copy!.strings;
+}
+
+test("footer offers either CLI and narrates the install in the prompt's order", () => {
+  const { en, uk } = strings();
+  expect(en["foot.line"]).toContain("Claude Code or Codex");
+  expect(uk["foot.line"]).toContain("Claude Code або Codex");
+  expect(en["foot.does"]).toContain("installs and starts Delegatus on this machine, connects itself to it");
+  expect(uk["foot.does"]).toContain("встановить і запустить Delegatus на цій машині, підключиться до нього");
+  const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  for (const key of ["foot.line", "foot.does"]) expect(html).toContain(`data-i18n="${key}">${en[key]}</p>`);
+});
+
+test("hero runs the official CLIs, the description fits a search snippet, and the page's fallbacks match", () => {
+  const { en, uk } = strings();
+  expect(en["hero.promise"]).toContain("Runs the official CLIs");
+  expect(uk["hero.promise"]).toContain("Запускає офіційні CLI");
+  expect(en["hero.sub"]).toContain("You see every agent and can step in.");
+  expect(uk["hero.sub"]).toContain("Ти бачиш усіх агентів і можеш втрутитися.");
+  for (const lang of [en, uk]) {
+    expect(lang["meta.description"].length).toBeLessThanOrEqual(155);
+    expect(lang["meta.description"]).toMatch(/Free and open source|Безкоштовно, з відкритим кодом/);
+  }
+  const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  for (const key of ["hero.sub", "hero.promise"]) expect(html).toContain(`data-i18n="${key}">${en[key]}</p>`);
+  expect(html).toContain(`<meta name="description" content="${en["meta.description"]}">`);
+});
