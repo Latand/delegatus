@@ -392,8 +392,12 @@ function maskApprovedPublicValues(text: string): string {
       && (tokenHierarchicalUri
         || (!typedAssignment && !sourceColonValue && tokenOpaqueUri)
         || tokenEmail || text[offset - 1] === ".");
-    const continued = /^[;,"'`\]}>)]$/.test(text[end] ?? "")
-      && end + 1 < text.length && !approvedPublicRightBoundary.test(text[end + 1]);
+    const matchingClose = (delimiter === "(" && text[end] === ")")
+      || (delimiter === "[" && text[end] === "]");
+    const wrapperTail = matchingClose && !(delimiter === "[" && text[end + 1] === "(")
+      && !/^(?:[)\]}>;,]*(?:$|\s))/.test(text.slice(end + 1));
+    const continued = wrapperTail || (/^[;,"'`\]}>)]$/.test(text[end] ?? "") && !matchingClose
+      && end + 1 < text.length && !approvedPublicRightBoundary.test(text[end + 1]));
     // Bare operands (for example here-doc bodies) also inherit their enclosing
     // attachment; source quotes are not required to retain that ownership.
     candidates.push({ start, end, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, sourceOptionalCall, sourceOptionalIndex, group: operandGroups.at(-1),
@@ -428,7 +432,9 @@ function maskApprovedPublicValues(text: string): string {
       const character = text[rawCursor++];
       if (/[([{]/.test(character)) {
         const start = rawCursor - 1;
-        const callee = completedRawGroups.get(start - 1);
+        let before = start - 1;
+        while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
+        const callee = completedRawGroups.get(before);
         rawGroups.push({ start, envelopeStart: callee?.envelopeStart ?? start, attached: false, parent: rawGroups.at(-1) });
       } else if (/[)\]}]/.test(character)) {
         const group = rawGroups.pop();
