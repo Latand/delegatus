@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { QUIET_DIAGNOSTICS_ENV } from "@/lib/startupDiagnostics";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
@@ -83,6 +84,7 @@ export function withAgentConfigSandbox(
   source: NodeJS.ProcessEnv,
   home?: string,
 ): NodeJS.ProcessEnv {
+  Object.assign(env, agentPublicationIdentityEnv(source));
   discardUnsupportedApiCredentials(env);
   const realConfigRoot = configRootFor(source);
   const root = agentConfigSandboxRoot(source, home);
