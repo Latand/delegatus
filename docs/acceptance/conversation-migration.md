@@ -1,5 +1,35 @@
 # Conversation migration through Viewer
 
+## Claude MCP regression verification
+
+Issue #1423's missing MCP runtime socket failure no longer reproduces on main
+`22534207a805770880cd8020e51ca106155ccf95`. Commit
+`09c7c2d0b589a41f8399130aaa918f646da157c5` already moved account migrations
+to the Viewer control API. The historical cause was migration dispatch inside
+the MCP process, which had no runtime-host connection.
+
+`src/lib/mcp/conversationMigration.integration.test.ts` now also starts the real
+MCP stdio entry point in a separate process with an isolated home, registry,
+provider roots and fake account choices. Its environment carries no runtime
+socket. Both Claude `reseat` and `select-account` cross bearer-authenticated
+HTTP into the production migration handler, structured controls and runtime
+journal. The tests assert the capability-derived actor, selected account,
+preserved profile and receipt identity, selection before the next send, and
+one dispatch and one send despite replay. A separate Claude regression requires
+`runtime-host-unavailable` when the Viewer itself has no runtime client.
+
+A temporary mutation restoring direct in-process migration dispatch made both
+Claude stdio cases fail with HTTP-equivalent status 503 and
+`runtime-host-unavailable`. Restoring the binding byte-for-byte restores the
+green path. The focused integration file passes all 15 tests; an independent
+read-only review repeated that run without findings. TypeScript and changed-file
+ESLint also pass.
+
+The runtime transport and account existence lookup are fixtures. The queue's
+rebind and provider send are simulated; these checks establish the MCP control
+path and ordering. Live provider authentication, successor creation and
+production deployment are outside this isolated verification.
+
 ## Confirmed defect
 
 Issue #1911 concerns the process that owns migration dispatch. At base
