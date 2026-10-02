@@ -4,6 +4,13 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
+import { Sparkle } from "@/components/icons";
+import { TurnStatusBar } from "@/components/TurnStatusBar";
+import { chatState } from "@/components/mobile/mobileChatState";
+import type { FileEntry } from "@/lib/types";
+import { turnStateFromRecords } from "@/lib/scanner/activity";
+import recordedTurnEnd from "@/lib/runtime/fixtures/recorded-turn-end.json";
+import { useSwitchboardData } from "./useSwitchboardData";
 import type { EventSourceLike, RuntimeBus } from "./runtimeBus";
 
 const createTestRuntimeBus = (await import("./runtimeBus")).createRuntimeBus;
@@ -57,6 +64,110 @@ afterEach(() => {
 function Probe() {
   const data = useFiles();
   return <div data-loaded={String(data.loaded)}>{data.files[0]?.path ?? "empty"}</div>;
+}
+
+function TurnStatusProbe({ now }: { now: number }) {
+  const data = useFiles();
+  const board = useSwitchboardData(data.files, [], "", now);
+  return <>
+    <span data-working-count>{board.working.length}</span>
+    {data.files.map((file) => <section key={file.path} data-card-state={file.activity}>
+      <span data-phone-state>{chatState(file)}</span>
+      <span data-card-status>{[...board.working, ...board.waiting, ...board.recent, ...board.older]
+        .find((item) => item.file.path === file.path)?.statusLine}</span>
+      <TurnStatusBar file={file} workingLabel="working…" workingIcon={Sparkle} />
+    </section>)}
+  </>;
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine}: recorded turn end settles every status surface while the scan remains live`, async () => {
+    // Recorded QA transcript boundaries with identities and prose removed.
+    // Replay their canonical lifecycle into the bus; the catalog stays
+    // at the preceding open turn, as it did during the five-minute scan window.
+    const conversationId = "conversation_turn-end";
+    const artifactPath = `/sessions/${engine}-turn-end.jsonl`;
+    let source: EventSourceLike | null = null;
+    testRuntimeBus = createTestRuntimeBus({
+      fetch: async () => new Response(JSON.stringify({
+        schemaVersion: 1, snapshotSeq: 100, retentionFloorSeq: 0,
+        runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+        sessions: [{ conversationId, sessionKey: { engine, sessionId: "session-turn-end" },
+          artifactPath, hostKind: engine === "claude" ? "claude-broker" : "codex-app-server",
+          host: "hosted", turn: "running", provenance: "structured", revision: 1,
+          attentionIds: [], recentReceipts: [], activeTurnId: "turn-end", capabilities: {} }],
+        attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [],
+      })),
+      createEventSource: () => source = {
+        onopen: null, onmessage: null, onerror: null,
+        close: () => {}, addEventListener: () => {},
+      },
+      now: Date.now, setTimeout, clearTimeout, setInterval, clearInterval,
+    });
+    testRuntimeBus.start();
+    await Bun.sleep(20);
+    source!.onopen?.(null);
+    const scanned: FileEntry = {
+      path: artifactPath, conversationId, root: engine === "claude" ? "claude-projects" : "codex-sessions",
+      engine, fmt: engine, kind: "session", name: "turn-end", title: "Replay", project: "demo",
+      parent: null, mtime: Date.now() / 1000, size: 1, activity: "live", proc: "running", pid: null,
+      model: null, pendingQuestion: null, waitingInput: null, rateLimit: null,
+      lastTurn: { startedAt: Date.now() - 8000, endedAt: null },
+    };
+    let fileReads = 0;
+    globalThis.fetch = mock(async () => {
+      fileReads += 1;
+      return new Response(JSON.stringify({ files: [scanned] }));
+    }) as unknown as typeof fetch;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      flushSync(() => root.render(<TurnStatusProbe now={scanned.mtime} />));
+      await Bun.sleep(40);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("1");
+      expect(host.querySelector('[data-turn-status="running"]')).not.toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).toBe("working");
+      const ended = recordedTurnEnd[engine];
+      const turn = turnStateFromRecords([ended], engine);
+      expect(turn).toBe("done");
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 101, eventId: `${engine}-end`,
+        scope: { type: "session", id: conversationId }, revision: 2, kind: turn === "done" ? "turn-ended" : "item",
+        occurredAt: ended.timestamp,
+        payload: { conversationId, turnId: "turn-end", outcome: "completed" },
+      }) });
+      await Bun.sleep(60);
+      expect(testRuntimeBus.getState().store.sessions[conversationId]?.turn).toBe("idle");
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+      expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 102, eventId: "host-after-end",
+        scope: { type: "session", id: conversationId }, revision: 3, kind: "session-status",
+        payload: { conversationId, host: "dead", turn: "idle" },
+      }) });
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+      expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+      expect(host.querySelector("[data-card-status]")?.textContent).toBe("finished the turn — waiting for a reply");
+      expect(fileReads).toBe(1);
+      // A late catalog answer still containing the pre-terminal row cannot
+      // bring working back after the runtime end has already reached the DOM.
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 103, eventId: "files-after-end",
+        scope: { type: "system", id: "files" }, kind: "files.revision", payload: { filesRevision: 2 },
+      }) });
+      await Bun.sleep(500);
+      expect(fileReads).toBe(2);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+      expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
 }
 
 test("an already open live board renders a new agent after SSE snapshot recovery", async () => {
