@@ -5,12 +5,15 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import type { NativeQueueDependencies } from "@/hooks/useNativeQueue";
 import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
+
+import { addTaskChip, readTaskChips, resetTaskChipsForTests } from "./orchestrator/taskChips";
+import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 
 import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
 import { writeProfile } from "./runtimeProfile";
@@ -20,6 +23,7 @@ import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
 import { accessoryReserve, mobileComposerCeiling, mobileComposerUnitMax } from "@/lib/composerScroll";
 import { composerSubmissionPayloads, composerSubmissionSaving } from "@/lib/composerSubmissionPayloads";
+import { ComposerPayloadStore } from "@/lib/composerPayloadStore";
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 
 /**
@@ -192,6 +196,7 @@ afterEach(() => {
   sessionStorage.clear();
   resetRetainedQueueAdmissionsForTests();
   resetOutboxForTests();
+  resetTaskChipsForTests();
 });
 
 /** Per-test fields of the conversation the board actually observed. */
@@ -217,7 +222,7 @@ const file = {
   waitingInput: null,
 } as FileEntry;
 
-async function mount(): Promise<{ host: HTMLElement; root: Root }> {
+async function mount(taskChipsFor?: string): Promise<{ host: HTMLElement; root: Root }> {
   globalThis.fetch = (async (input: string) => {
     if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
     return new Promise(() => {}) as unknown as Response;
@@ -226,7 +231,7 @@ async function mount(): Promise<{ host: HTMLElement; root: Root }> {
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(<TmuxComposer file={{ ...file, ...observed }} />);
+    root.render(<TmuxComposer file={{ ...file, ...observed }} taskChipsFor={taskChipsFor} />);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return { host, root };
@@ -885,7 +890,7 @@ async function withHeldLargeHandOff(
     host: HTMLElement;
     answer: (reply: () => Promise<{ status: number; body: Record<string, unknown> }>) => Promise<void>;
   }) => Promise<void>,
-  options: { document?: boolean } = {},
+  options: { document?: boolean; task?: boolean } = {},
 ): Promise<void> {
   const storage = installComposerStorageForTests();
   const previous = queueTransport.write;
@@ -896,8 +901,9 @@ async function withHeldLargeHandOff(
       held.push((reply) => { reply().then(resolve, reject); });
     });
   };
-  const { host, root } = await mount();
+  const { host, root } = await mount(options.task ? "viewer" : undefined);
   try {
+    if (options.task) await settle(() => { addTaskChip("viewer", CHIP); });
     await stage(host, { name: "large.png", type: "image/png", size: 300_000 }, LARGE_IMAGE);
     if (options.document) await stage(host, { name: "fixture.bin", type: "application/octet-stream", size: 8 }, DOCUMENT);
     await settle(() => appendComposerDraft(CARD, "large hand-off"));
@@ -1222,4 +1228,99 @@ test("a large hand-off keeps its document in the durable envelope, and a lost an
     await answer(async () => journalReceipt(queueWrites[1]!));
     expect(readRetainedQueueAdmissions(CARD)).toEqual([]);
   }, { document: true });
+});
+
+
+const CHIP = { id: "task_queue", title: "Fix __init__.py (#42)" };
+const LATER_CHIP = { id: "task_later", title: "Next task" };
+for (const action of ["Alt+Enter", "Queue message"] as const) {
+  test(`${action} carries task references into the native queue envelope`, async () => {
+    const { host, root } = await mount("viewer");
+    try {
+      await settle(() => { addTaskChip("viewer", CHIP); });
+      await settle(() => appendComposerDraft(CARD, "start this one"));
+      if (action === "Alt+Enter") await settle(() => press(host.querySelector("textarea")!, "Enter", { altKey: true }));
+      else {
+        await openSendMenu(host);
+        await settle(() => menuAction(host, translate("en", "queue.queueMessage"))!.click());
+      }
+      expect(queueWrites[0]).toMatchObject({ text: taskReferencePrelude([CHIP]) + "\nstart this one", selectedContext: { tasks: [CHIP] } });
+      expect(readTaskChips("viewer")).toEqual([]);
+    } finally { await act(async () => root.unmount()); }
+  });
+}
+
+for (const fate of ["refused", "unknown"] as const) {
+  test(`a ${fate} task queue hand-off retains references through recovery`, async () => {
+    const previous = queueTransport.write;
+    let release!: () => void;
+    queueTransport.write = async (body) => {
+      queueWrites.push(body);
+      await new Promise<void>((resolve) => { release = resolve; });
+      if (fate === "unknown") throw new Error("network lost");
+      return { status: 409, body: { error: "native queue host or account ownership changed" } };
+    };
+    const { host, root } = await mount("viewer");
+    try {
+      await settle(() => { addTaskChip("viewer", CHIP); });
+      await settle(() => appendComposerDraft(CARD, "start this one"));
+      await settle(() => press(host.querySelector("textarea")!, "Enter", { altKey: true }));
+      expect(readTaskChips("viewer")).toEqual([]);
+      await settle(() => { addTaskChip("viewer", LATER_CHIP); });
+      await settle(() => release());
+      expect(readRetainedQueueAdmissions(CARD)[0]?.mutation).toMatchObject({ text: taskReferencePrelude([CHIP]) + "\nstart this one", selectedContext: { tasks: [CHIP] } });
+      expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+      expect(readTaskChips("viewer")).toEqual([LATER_CHIP]);
+      if (fate === "unknown") {
+        queueTransport.write = previous;
+        await settle(() => host.querySelector<HTMLButtonElement>('[data-testid="native-queue-unresolved-retry"]')!.click());
+        expect(queueWrites[1]).toEqual(queueWrites[0]);
+        expect(readTaskChips("viewer")).toEqual([LATER_CHIP]);
+      } else {
+        await settle(() => { readTaskChips("viewer"); resetTaskChipsForTests(); });
+        await settle(() => host.querySelector<HTMLButtonElement>('[data-testid="native-queue-refused-restore"]')!.click());
+        expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("start this one");
+        expect(readTaskChips("viewer")).toEqual([CHIP]);
+      }
+    } finally { queueTransport.write = previous; await act(async () => root.unmount()); }
+  });
+}
+
+test("a refused task queue hand-off restores its chips with the empty draft", async () => {
+  const previous = queueTransport.write;
+  queueTransport.write = async (body) => { queueWrites.push(body); return { status: 409, body: { error: "native queue host or account ownership changed" } }; };
+  const { host, root } = await mount("viewer");
+  try {
+    await settle(() => { addTaskChip("viewer", CHIP); });
+    await settle(() => appendComposerDraft(CARD, "start this one"));
+    await settle(() => press(host.querySelector("textarea")!, "Enter", { altKey: true }));
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("start this one");
+    expect(readTaskChips("viewer")).toEqual([CHIP]);
+  } finally { queueTransport.write = previous; await act(async () => root.unmount()); }
+});
+
+
+test("durable task queue retention preserves chips added while its bytes save and replays the snapshot", async () => {
+  const storage = installComposerStorageForTests();
+  const originalRetain = ComposerPayloadStore.prototype.retain;
+  let added = false;
+  const put = spyOn(ComposerPayloadStore.prototype, "retain").mockImplementation(async function(this: ComposerPayloadStore, identity, payload) {
+    if (payload.mutation && !added) {
+      added = true;
+      addTaskChip("viewer", LATER_CHIP); addTaskChip("viewer", { ...CHIP, title: "Updated task" });
+    }
+    return originalRetain.call(this, identity, payload);
+  });
+  try {
+    await withHeldLargeHandOff(async ({ host, answer }) => {
+      expect(queueWrites[0]).toMatchObject({ text: taskReferencePrelude([CHIP]) + "\nlarge hand-off", selectedContext: { tasks: [CHIP] } });
+      expect(readTaskChips("viewer")).toEqual([{ ...CHIP, title: "Updated task" }, LATER_CHIP]);
+      await answer(async () => { throw new Error("network lost"); });
+      await settle(() => host.querySelector<HTMLButtonElement>('[data-testid="native-queue-unresolved-retry"]')!.click());
+      await until(() => queueWrites.length === 2, "task replay");
+      expect(queueWrites[1]).toEqual(queueWrites[0]);
+      await answer(async () => journalReceipt(queueWrites[1]!));
+      expect(readTaskChips("viewer")).toEqual([{ ...CHIP, title: "Updated task" }, LATER_CHIP]);
+    }, { task: true });
+  } finally { put.mockRestore(); storage.uninstall(); }
 });

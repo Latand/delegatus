@@ -18,6 +18,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
+import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -643,7 +644,14 @@ function harness() {
 /** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
 const REMOTE_BRANCH = { publication: "remote-branch" } as const;
 
-async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch", legacyReview = false, defaultOwner = false) {
+/** A reported completion settles after the canonical turn has finished. */
+function finishReported(h: ReturnType<typeof harness>, pathname: string, verdict: "pass" | "fail", text: string) {
+  const finished = h.finish(pathname, verdict, text);
+  h.durableTurns.set(pathname, { turn: "terminal", message: h.messages.get(pathname)! });
+  return finished;
+}
+
+async function realWorktreeLane(name: string, stages: unknown[], publication?: "remote-branch", legacyReview = false, defaultOwner = false, brief: { task?: string; spec?: string } = {}) {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
   const origin = path.join(root, "origin.git");
@@ -670,7 +678,7 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const h = harness();
   h.ports.exec = realExec;
   h.ports.provisionExec = realProvisionExec;
-  const created = await createPipelineFromRequest({ task: name, repoDir: repo, baseRef: base, stages: stages as never,
+  const created = await createPipelineFromRequest({ task: name, ...brief, repoDir: repo, baseRef: base, stages: stages as never,
     ...(publication ? { publication } : defaultOwner ? {} : { publication: "internal" as const }) }, h.ports);
   if (!created.pipeline) throw new Error(created.error);
   if (legacyReview) savePipelines([asStoredLegacyReviewLane(created.pipeline, created.convertedStages)]);
@@ -678,6 +686,46 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   await tickPipelines([], h.ports);
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
+
+test("a read-only successor settles and advances when its handoff is in a clean Git worktree", async () => {
+  const fixture = await realWorktreeLane("readonly-stage-input-handoff", [
+    { id: "design", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Design", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review {{prev.output}}", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
+  ]);
+  try {
+    const { git, h, id, worktree } = fixture;
+    const design = "Design head\n" + "d".repeat(45_000);
+    const sourceIgnore = fs.readFileSync(path.join(fixture.repo, ".gitignore"), "utf8");
+    h.setConversationActive(false);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports))
+      .toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", design)], h.ports);
+    await tickPipelines([], h.ports);
+
+    expect(h.spawnInputs).toHaveLength(2);
+    const handoff = h.spawnInputs[1]!.prompt.match(/Full previous output file: (.+)\n/)?.[1];
+    expect(handoff).toBeDefined();
+    expect(path.isAbsolute(handoff!)).toBe(true);
+    expect(fs.readFileSync(handoff!, "utf8")).toBe(design);
+    expect(sourceIgnore).not.toContain(".artifacts/pipeline-stage-inputs");
+    expect((await git(worktree, "status", "--porcelain"))).toBe("");
+
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, h.ports))
+      .toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(h, "/codex/stage-2.jsonl", "pass", "Reviewed")], h.ports);
+    await tickPipelines([], h.ports);
+
+    expect(loadPipelines().find((pipeline) => pipeline.id === id)?.state).toBe("running");
+    expect(h.spawnInputs).toHaveLength(3);
+    expect(h.spawnInputs[2]!.prompt).toContain("Build");
+    expect((await git(worktree, "status", "--porcelain"))).toBe("");
+  } finally {
+    if (fs.existsSync(fixture.root)) fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test("a rebased builder reconciles accepted content and continues with fast-forward delivery", async () => {
   const fixture = await realWorktreeLane("rebase-reconcile", [
@@ -1368,15 +1416,154 @@ test("a fail-park keeps delivery through retry and publishes the next pass witho
     #2187 converted new ones at creation: that lane still reviews through its
     embedded flow, which is what those tests exercise, so it is stored as the
     older engine stored it. */
-async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
+async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch"; repoDir?: string } = {}) {
   savePipelines([]);
-  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
+  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: request.repoDir ?? "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
   if (!result.convertedStages?.length) return result.pipeline;
   const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);
   savePipelines([lane]);
   return lane;
 }
+
+test.each([
+  { prompt: "Build from {{prev.output}}", access: "read-write", sandbox: "full" },
+  { prompt: "Build from {{prev.output}}", access: "read-write", sandbox: "restricted" },
+  { prompt: "Build from {{prev.output}}", access: "read-only", sandbox: "full" },
+  { prompt: "Build from {{prev.output}}", access: "read-only", sandbox: "restricted" },
+  { prompt: "Build the approved design", access: "read-write", sandbox: "full" },
+  { prompt: "Build the approved design", access: "read-write", sandbox: "restricted" },
+  { prompt: "Build the approved design", access: "read-only", sandbox: "full" },
+  { prompt: "Build the approved design", access: "read-only", sandbox: "restricted" },
+] as const)("a 45 KB output launches with an in-lane file for $access/$sandbox (%s)", async ({ prompt, access, sandbox }) => {
+  const h = harness();
+  const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved) => {
+    assertStructuredTextEnvelope(input.prompt);
+    return spawnAgent(input, reserved);
+  };
+  const pipeline = await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1], prompt, access, sandbox }] as never,
+    { repoDir: path.join(process.env.LLV_STATE_DIR!, "repo") });
+  fs.mkdirSync(pipeline.worktreeDir, { recursive: true });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const design = "Design head\n" + "d".repeat(45_000);
+  expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+    { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", design)], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(loadPipelines()[0]!.state, loadPipelines()[0]!.stateDetail ?? "no pipeline state detail").toBe("running");
+  expect(loadPipelines()[0]!.cursor?.state).toBe("running");
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.runtimeProfile).toMatchObject({ access, sandbox });
+  const delivered = h.spawnInputs[1]!.prompt;
+  expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
+  expect(delivered).toContain("Design head");
+  const artifact = delivered.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(artifact).toBeDefined();
+  expect(path.isAbsolute(artifact!)).toBe(true);
+  expect(fs.readFileSync(artifact!, "utf8")).toBe(design);
+  expect(artifact!.startsWith(path.join(h.spawnInputs[1]!.cwd, ".artifacts", "pipeline-stage-inputs") + path.sep)).toBe(true);
+  expect(artifact!.startsWith(path.join(process.env.LLV_STATE_DIR!, "pipeline-stage-inputs") + path.sep)).toBe(false);
+});
+
+test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launches and settles with a byte-complete private prompt in real Git", async (overflow) => {
+  const fixture = await realWorktreeLane(`full-stage-${overflow.replaceAll(" ", "-")}`, [
+    { id: "design", kind: "run", role: { roleId: "architect" }, prompt: "Design", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" },
+      "prompt": overflow === "expanded prompt" ? "{{task}}".repeat(100) : "Build {{task}}", next: null },
+  ], undefined, false, false, { task: "t".repeat(500), spec: "AC: preserve every instruction" });
+  try {
+    const { h, git, worktree, id } = fixture;
+    h.setConversationActive(false);
+    h.setPaneAlive(false);
+    const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
+    const { renderStagePrompt } = await import("./prompts");
+    const spawnAgent = h.ports.spawnAgent;
+    h.ports.spawnAgent = (input, reserved) => {
+      assertStructuredTextEnvelope(input.prompt);
+      return spawnAgent(input, reserved);
+    };
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const build = lane.stages.find((stage) => stage.id === "build")!;
+    if (overflow === "role scaffold") {
+      build.effectiveRole.promptScaffold = "Scaffold head\n" + "界".repeat(11_000) + "\n{{prev.output}}\nScaffold tail";
+    }
+    savePipelines([lane]);
+    const previous = "Design head\n" + "🙂".repeat(12_000) + "\nDesign tail";
+    const expected = renderStagePrompt(lane, build, build.effectiveRole, previous);
+    expect(Buffer.byteLength(expected)).toBeGreaterThan(32_000);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports))
+      .toMatchObject({ report: { verdict: { status: "pass" } } });
+    const finished = finishReported(h, "/codex/stage-1.jsonl", "pass", previous);
+    await tickPipelines([finished], h.ports);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) {
+      await tickPipelines([], h.ports);
+      await engineModule.drainStageActivations(h.ports);
+    }
+    const running = loadPipelines().find((item) => item.id === id)!;
+    expect(running.state, running.stateDetail ?? "no detail").toBe("running");
+    expect(h.spawnInputs).toHaveLength(2);
+    const delivered = h.spawnInputs[1]!.prompt;
+    expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
+    const file = delivered.match(/Full stage prompt file: (.+)\n/)?.[1];
+    expect(file).toBeDefined();
+    expect(file!.startsWith(path.join(worktree, ".artifacts", "pipeline-stage-inputs") + path.sep)).toBe(true);
+    expect(fs.readFileSync(file!, "utf8")).toBe(expected);
+    expect(fs.statSync(file!).mode & 0o777).toBe(0o600);
+    expect(expected).toContain("Role prompt scaffold:");
+    expect(expected).toContain("Report this stage's completion with the Delegatus MCP tool stage_report");
+    expect(expected).toContain(previous);
+    expect((await git(worktree, "status", "--porcelain"))).toBe("");
+    fs.writeFileSync(path.join(worktree, "result.txt"), "worker result\n");
+    (await git(worktree, "add", "-A"));
+    expect((await git(worktree, "diff", "--cached", "--name-only"))).toBe("result.txt");
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_2" }, h.ports))
+      .toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(h, "/codex/stage-2.jsonl", "pass", "Built")], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)?.state).toBe("completed");
+    expect((await git(worktree, "ls-files", "--", ".artifacts/pipeline-stage-inputs"))).toBe("");
+    expect((await git(worktree, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))).toBe("result.txt");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["reviewer", "builder"])("large fail-edge findings launch the %s stage through the same file handoff", async (roleId) => {
+  const h = harness();
+  const repoDir = path.join(process.env.LLV_STATE_DIR!, "large-fail-edge-repo");
+  const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved) => {
+    assertStructuredTextEnvelope(input.prompt);
+    return spawnAgent(input, reserved);
+  };
+  const pipeline = await create(h.ports, [
+    { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null, onFail: { to: "fix", maxRounds: 1 } },
+    { id: "fix", kind: "run", role: { roleId }, prompt: "Resolve {{prev.output}}", next: null },
+  ] as never, { repoDir });
+  fs.mkdirSync(pipeline.worktreeDir, { recursive: true });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const findings = Array.from({ length: 25 }, (_, n) => ({ severity: "P1" as const, text: `src/module.ts:${n + 1} ` + "f".repeat(1_800) }));
+  expect(await engineModule.reportStageCompletion({ verdict: "fail", findings, summary: "Resolve every finding" },
+    { kind: "agent", role: "reviewer", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "fail" } } });
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "fail", "Review result")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.spawnInputs).toHaveLength(2);
+  const prompt = h.spawnInputs[1]!.prompt;
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
+  const file = prompt.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  const full = fs.readFileSync(file!, "utf8");
+  expect(full).toContain("Resolve every finding");
+  for (const finding of findings) expect(full).toContain(`P1 — ${finding.text}`);
+});
 
 test.each([
   { access: "read-write", sandbox: "full" },
@@ -9192,12 +9379,12 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(roundCount).toBe(1);
 
     fs.mkdirSync(repo);
-    git("init", "-q");
+    (await git("init", "-q"));
     fs.writeFileSync(path.join(repo, "work.txt"), "before\n");
-    git("add", "work.txt");
-    git("-c", "user.name=Test", "-c", "user.email=fixture", "commit", "-qm", "baseline");
+    (await git("add", "work.txt"));
+    (await git("-c", "user.name=Test", "-c", "user.email=fixture", "commit", "-qm", "baseline"));
     fs.writeFileSync(path.join(repo, "work.txt"), "unfinished Claude edit\n");
-    const dirtyDiff = git("diff", "--", "work.txt");
+    const dirtyDiff = (await git("diff", "--", "work.txt"));
     expect(dirtyDiff).toContain("unfinished Claude edit");
     const successorPath = "/codex/stage-3-successor.jsonl";
     const sourceId = "019f423a-d6e9-\x34903-b597-3e676b6ff3d4";
@@ -9206,6 +9393,10 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const targetRoot = path.join(root, "claude-target");
     fs.mkdirSync(sourceRoot, { mode: 0o700 });
     fs.mkdirSync(targetRoot, { mode: 0o700 });
+    /* safeHistoryCopy intentionally rejects peer-writable roots; keep this
+       fixture stable when the invoking shell has a permissive umask. */
+    fs.chmodSync(sourceRoot, 0o700);
+    fs.chmodSync(targetRoot, 0o700);
     const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
     const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
     fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
@@ -9251,7 +9442,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(continuations).toHaveLength(1);
     expect(switching.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(1);
     expect(edgeRoundsUsed(switching, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
-    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+    expect((await git("diff", "--", "work.txt"))).toBe(dirtyDiff);
 
     h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
     await tickPipelines([], h.ports);
@@ -9277,8 +9468,11 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(continuations.every((item) => item.conversationId === limited.conversationId
       && item.clientMessageId === continuations[0]!.clientMessageId)).toBe(true);
     expect(edgeRoundsUsed(resumed, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
-    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
-    expect(h.calls.some((call) => /\b(?:reset|clean)\b/.test(call))).toBe(false);
+    expect((await git("diff", "--", "work.txt"))).toBe(dirtyDiff);
+    // Settlement may unstage only the private artifact path; recovery must
+    // never reset or clean the worker's dirty files (also checked in real Git).
+    expect(h.calls.filter((call) => /\b(?:reset|clean)\b/.test(call))
+      .every((call) => call === `git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`)).toBe(true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -12116,8 +12310,13 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
       order.push(`push:${localHead}`);
       return { code: 0, stdout: "", stderr: "" };
     }
-    if (args[0] === "reset" || args[0] === "clean") {
+    if ((args[0] === "reset" && args.includes("--hard")) || args[0] === "clean") {
       dirty = false;
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "reset" && args.includes("--quiet") && args.includes("--")) {
+      /* A path-scoped reset of controller artifacts must not erase the mock's
+         unrelated source edit from `status`. */
       return { code: 0, stdout: "", stderr: "" };
     }
     if (args[0] === "cat-file") return { code: history.includes(String(args[2]).replace("^{commit}", "")) ? 0 : 1, stdout: "", stderr: "" };
@@ -16376,15 +16575,15 @@ test.each(["session", "weekly"] as const)("native Claude %s reset waits without 
     expect(result.status).toBe(0);
     return result.stdout;
   };
-  git("init", "-b", "main");
+  (await git("init", "-b", "main"));
   fs.writeFileSync(path.join(root, "tracked.txt"), "base\n");
-  git("add", "tracked.txt");
-  git("-c", "user.name=Recovery Fixture", "-c", "user.email=noreply", "commit", "-m", "fixture");
+  (await git("add", "tracked.txt"));
+  (await git("-c", "user.name=Recovery Fixture", "-c", "user.email=noreply", "commit", "-m", "fixture"));
   fs.writeFileSync(path.join(root, "tracked.txt"), "staged work\n");
-  git("add", "tracked.txt");
+  (await git("add", "tracked.txt"));
   fs.writeFileSync(path.join(root, "tracked.txt"), "unstaged work\n");
   fs.writeFileSync(path.join(root, "untracked.txt"), "untracked work\n");
-  const head = git("rev-parse", "HEAD");
+  const head = (await git("rev-parse", "HEAD"));
   const index = fs.readFileSync(path.join(root, ".git", "index"));
   savePipelines([lane]);
   const baseExec = f.h.ports.exec;
@@ -16409,7 +16608,7 @@ test.each(["session", "weekly"] as const)("native Claude %s reset waits without 
     expect(fs.readFileSync(path.join(root, "tracked.txt"), "utf8")).toBe("unstaged work\n");
     expect(fs.readFileSync(path.join(root, "untracked.txt"), "utf8")).toBe("untracked work\n");
     expect(fs.readFileSync(path.join(root, ".git", "index"))).toEqual(index);
-    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect((await git("rev-parse", "HEAD"))).toBe(head);
   } finally { fs.rmSync(container, { recursive: true, force: true }); }
 });
 

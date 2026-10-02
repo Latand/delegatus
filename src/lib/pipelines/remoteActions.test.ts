@@ -68,10 +68,15 @@ test.each(["pause", "lost-reply"] as const)("a controller output commit survives
       expect(findPipelineRecord(lane.id)!.state).toBe("paused");
       expect((await patchPipeline(lane.id, { action: "resume" }, basePorts)).error).toBeUndefined();
     }
+    const handoff = path.join(lane.worktreeDir, ".artifacts", "pipeline-stage-inputs", "pending.md");
+    fs.mkdirSync(path.dirname(handoff), { recursive: true }); fs.writeFileSync(handoff, "private handoff\n");
+    expect((await realExec("git", ["add", "-f", "--", ".artifacts/pipeline-stage-inputs/pending.md"], lane.worktreeDir)).code).toBe(0);
     await settlePendingStageGit(basePorts);
     expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(head);
     expect(findPipelineRecord(lane.id)!.stateDetail ?? "").not.toContain("created a commit");
     expect(fs.readFileSync(path.join(lane.worktreeDir, "report.md"), "utf8")).toBe("owned output\n");
+    expect(fs.readFileSync(handoff, "utf8")).toBe("private handoff\n");
+    expect((await realExec("git", ["diff", "--cached", "--name-only"], lane.worktreeDir)).stdout.trim()).toBe("");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

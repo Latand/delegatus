@@ -6023,6 +6023,78 @@ describe("tool call context tokens", () => {
   }, 120_000);
 });
 
+browserTest("task chip: the phone task screen's Ask button attaches the task and opens the orchestrator's conversation", async () => {
+  /* The phone's card is one button (#699), so the task chip's button sits where the phone keeps the card's
+     actions: the opened task's bottom bar, beside «+ Agent». Pressing it attaches the task as a chip and opens
+     the seat's conversation over the task screen, with the chip above the composer and the input empty. */
+  const OUT_CHIP = path.resolve(".artifacts/task-chip-phone");
+  const EVIDENCE_CHIP = path.resolve("evidence/task-chip-to-orchestrator");
+  fs.mkdirSync(OUT_CHIP, { recursive: true });
+  fs.mkdirSync(EVIDENCE_CHIP, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const readings: Record<string, unknown>[] = [];
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      const key = `390-${lang}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "light" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 600);
+        const cardSelector = '[data-phone-card-kind="task"]';
+        await page.locator(cardSelector).first().click();
+        await page.waitForSelector("[data-phone-task-ask-orchestrator]", { timeout: 10_000 });
+        await pause(page, 400);
+        const bar = await page.evaluate(() => {
+          const ask = document.querySelector<HTMLElement>("[data-phone-task-ask-orchestrator]")!;
+          const bar = ask.closest<HTMLElement>("[data-phone-task-bar]")!;
+          const box = ask.getBoundingClientRect();
+          const barBox = bar.getBoundingClientRect();
+          const text = (node: Element) => node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+          return {
+            label: ask.getAttribute("aria-label"), text: text(ask), height: Math.round(box.height), width: Math.round(box.width),
+            inside: box.left >= barBox.left - 1 && box.right <= barBox.right + 1,
+            overflow: bar.scrollWidth - bar.clientWidth,
+            siblings: [...bar.querySelectorAll("button")].map((button) => ({ text: text(button), right: Math.round(button.getBoundingClientRect().right) })),
+          };
+        });
+        await page.screenshot({ path: path.join(OUT_CHIP, `task-bar-${lang}.png`) });
+        await page.click("[data-phone-task-ask-orchestrator]");
+        const opened = await page.waitForSelector("[data-task-chip]", { timeout: 10_000 }).then(() => true, () => false);
+        await pause(page, 500);
+        const chip = opened ? await page.evaluate(() => {
+          const node = document.querySelector<HTMLElement>("[data-task-chip]")!;
+          const box = node.getBoundingClientRect();
+          const textarea = [...document.querySelectorAll<HTMLTextAreaElement>("textarea")].find((area) => area.getBoundingClientRect().height > 0);
+          return { text: node.textContent?.replace(/\s+/g, " ").trim() ?? "", inView: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth, removeHeight: Math.round(node.querySelector<HTMLElement>("[data-task-chip-remove]")!.getBoundingClientRect().height), draft: textarea?.value ?? null };
+        }) : null;
+        await page.screenshot({ path: path.join(OUT_CHIP, `chip-composer-${lang}.png`) });
+        readings.push({ key, bar, opened, chip });
+        if (bar.text !== translate(lang, "taskChip.ask")) fail(`the button says ${JSON.stringify(bar.text)}`);
+        if (bar.height < 44) fail(`the button is ${bar.height} px tall, under the 44 px target`);
+        if (!bar.inside || bar.overflow > 0) fail(`the bar's row overflows ${JSON.stringify(bar)}`);
+        if (!opened) fail("no chip reached a composer after the press");
+        else if (!chip!.inView || chip!.draft !== "") fail(`the chip ${JSON.stringify(chip)}`);
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(EVIDENCE_CHIP, "phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 180_000);
+
 describe("agent memory isolation", () => {
   browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
     const out = path.resolve(".artifacts/agent-memory-phone");
