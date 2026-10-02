@@ -45,10 +45,19 @@ const packageVersionSamples = [
   ["pkg", "1.2.3-beta.rc"].join("@"),
   ["pkg", "1.2.3-beta.com"].join("@"),
   `Inspect \`${["pkg", "1.2.3"].join("@")}\`.`,
+  `Inspect [${["pkg", "1.2.3+sha.abc"].join("@")}](https://fixture.invalid).`,
+  `Encoded preface %41: \`${["pkg", "1.2.3"].join("@")}\`.`,
   ...[" ", "\t", "\r", "\n", "\v", "\f", '"', "'", "`", ")", "]", ",", ";", ":"]
     .map((boundary) => ["pkg", "1.2.3+sha.abc"].join("@") + boundary),
 ];
 const versionLookingRealAddresses = [
+  ...[".com", ".\u{1F130}.com", ".%F0%9F%84%B0.com", ".&#x1F130;.com"]
+    .flatMap((suffix) => [
+      `\`${["probe", "1.2.3"].join("@")}\`${suffix}`,
+      `[${["probe", "1.2.3"].join("@")}](https://fixture.invalid)${suffix}`,
+    ]),
+  `\`${["pkg", "1.2.3"].join("@")}\` and ${["pkg", "1.2.3"].join("@")} . ${["probe", "1.2.3"].join("@")}\`.com`,
+  `\`${["probe", "1.2.3+sha.abc"].join("@")}\`.com`,
   ...[".", "/", "!", "?", ">tail", "}", "=", "\\tail", "%20", "&#32;", "\u00A0", "\u200B", "💡"]
     .map((suffix) => ["probe", "1.2.3"].join("@") + suffix),
   ...["1.2.3.4.5", "1.2.3-beta.", "1.2.3+sha.", "1.2.3-beta%2E1", "1.2.3+sha&#46;abc", "1.2.3-beta.1+sha", "1.2.3-beta.rc.1+sha.2"]
@@ -1444,7 +1453,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           });
           expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
           expect(result.stdout.toString()).toBe(!exactOnly || contiguous
-            ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+            ? `PRIVACY GATE: FAIL\nknown_value: 1\n${fileNotice("docs/acceptance/issue-290/readiness-kanban.png", "known_value")}\n`
+            : "PRIVACY GATE: PASS\n");
           expect(result.stderr.toString()).toBe("");
         });
       }
