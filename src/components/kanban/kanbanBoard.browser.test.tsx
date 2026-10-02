@@ -14962,3 +14962,43 @@ describe("task chip: the card's Ask button puts a task in the orchestrator's com
     fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
   }, 300_000);
 });
+
+
+describe("task chip native queue presentation", () => {
+  browserTest("task chip queue badges and clean editor fit desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/task-chip-native-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-queue-preview`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          const panel = page.locator('[data-testid="native-queue-panel"]');
+          await panel.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          await page.waitForTimeout(300);
+          for (const selector of ['[data-testid="native-queue-row"]', '[data-testid="native-queue-unresolved-row"]', '[data-testid="native-queue-refused-row"]']) {
+            const row = panel.locator(selector);
+            expect(await row.textContent()).not.toContain("task reference");
+            expect(await row.textContent()).toContain("start this one");
+            expect(await row.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          }
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          await panel.locator('[data-testid="native-queue-edit"]').click();
+          const field = panel.locator('[data-testid="native-queue-edit-field"]');
+          expect(await field.inputValue()).toBe("start this one");
+          await page.waitForTimeout(300);
+          expect(await panel.locator('[data-testid="native-queue-row"] [data-task-badge]').count()).toBe(1);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-edit.png`) });
+          cases.push({ locale, width, cleanPreview: true, cleanEdit: true, badge: "Fix __init__.py (#42)", overflow: false });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/task-chip-to-orchestrator", { recursive: true });
+    fs.writeFileSync("evidence/task-chip-to-orchestrator/native-queue.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 120_000);
+});
