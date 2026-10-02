@@ -796,7 +796,7 @@ function isPipeline(value: unknown): value is Pipeline {
       && /^[0-9a-f]{64}$/.test(pipeline.publicationAdmission.fence) && ["pending", "settled"].includes(pipeline.publicationAdmission.state)
       && (pipeline.publicationAdmission.error === undefined || typeof pipeline.publicationAdmission.error === "string"))) &&
     (pipeline.remoteAction === undefined || (Boolean(pipeline.remoteAction && typeof pipeline.remoteAction === "object")
-      && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover"].includes(pipeline.remoteAction.action)
+      && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover", "skip-stage"].includes(pipeline.remoteAction.action)
       && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
       && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
       && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))

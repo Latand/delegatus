@@ -24,6 +24,106 @@ afterAll(() => {
 });
 const HEAD = "a".repeat(40);
 
+test.each(["success", "failure", "pause", "owner"] as const)("skip-stage durably acknowledges before its fenced Git check (%s)", async (outcome) => {
+  const h = setupRetry(); let commands = 0;
+  h.lane.delivery = { target: { repository: "skip-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
+    commands++;
+    return h.ports.exec(args[0], args[1]);
+  } };
+  const admitted = await patchPipeline(h.lane.id, { action: "skip-stage" }, ports);
+  expect(admitted.error).toBeUndefined(); expect(commands).toBe(0);
+  expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "needs_decision", remoteAction: { action: "skip-stage", state: "pending" } });
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let signal: AbortSignal | undefined;
+  let intercepted = false;
+  const work = settlePendingRemoteActions({ ...ports, exec: async (...args: Parameters<typeof realExec>) => {
+    if (!intercepted) { intercepted = true; signal = args[4]?.signal; entered(); await held; }
+    if (outcome === "failure") return { code: 128, stdout: "", stderr: "checkout unavailable" };
+    return ports.exec(...args);
+  } });
+  try {
+    await checking;
+    if (outcome === "pause") {
+      const pause = patchPipeline(h.lane.id, { action: "pause" }, h.ports);
+      expect(await Promise.race([pause, Bun.sleep(150).then(() => null)])).not.toBeNull();
+    }
+    if (outcome === "owner") await withPipelineMutation((pipelines, persist) => {
+      pipelines[0]!.delivery!.epoch++; persist();
+    });
+    if (outcome === "pause" || outcome === "owner") { await Bun.sleep(75); expect(signal?.aborted).toBe(true); }
+    release(); await work;
+    const current = findPipelineRecord(h.lane.id)!;
+    expect(current.remoteAction?.state).toBe("settled");
+    if (outcome === "success") expect(current.runs[1]!.attempts[0]!.state).toBe("skipped");
+    else {
+      expect(current.runs[1]!.attempts[0]!.state).toBe("needs_decision");
+      expect(current.remoteAction?.error).toBeString();
+    }
+    if (outcome === "pause") expect(current.state).toBe("paused");
+  } finally { release(); await work; }
+});
+
+test.each(["before-write", "after-write"] as const)("a deferred skip preserves output ownership when paused %s", async (boundary) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-skip-owned-"));
+  const repo = path.join(root, "source"); fs.mkdirSync(repo);
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr); return result.stdout.trim();
+  };
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const base = git("rev-parse", "HEAD"), lane = pipelineCorpus(2, 1)[1]!;
+  const ignore = path.join(root, "ignore"); fs.writeFileSync(ignore, "unowned.txt\n");
+  git("config", "core.excludesfile", ignore);
+  lane.repoDir = repo; lane.worktreeDir = `${repo}-pipeline-${lane.id}`;
+  git("worktree", "add", "-q", "-b", lane.branch, lane.worktreeDir, base);
+  lane.state = "needs_decision"; lane.closedAt = null; lane.publication = "internal";
+  lane.lastPassedCommit = base; lane.baseRef = base;
+  lane.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+  lane.stages[0]!.effectiveRole.access = "read-only"; lane.stages[0]!.outputs = ["report.md"];
+  const attempt = lane.runs[0]!.attempts[0]!; attempt.state = "needs_decision";
+  attempt.effectiveRole.access = "read-only"; attempt.launchId = null;
+  savePipelines([lane]); fs.writeFileSync(path.join(lane.worktreeDir, "report.md"), "owned output\n");
+  fs.writeFileSync(path.join(lane.worktreeDir, "unowned.txt"), "preserved\n");
+  const ports = { ...defaultPipelinePorts(), exec: realExec, getFlow: () => null,
+    stageHostResident: async () => false, stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    conversationAgentActive: async () => false, paneAgentAlive: async () => false };
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const heldPorts = { ...ports, exec: async (...args: Parameters<typeof realExec>) => {
+    if (args[1][0] === "commit" && boundary === "before-write") { entered(); await held; }
+    const result = await realExec(...args);
+    if (args[1][0] === "commit" && boundary === "after-write") { entered(); await held; }
+    return result;
+  } };
+  const admission = patchPipeline(lane.id, { action: "skip-stage" }, heldPorts);
+  let work: Promise<void> | undefined;
+  try {
+    const admitted = await Promise.race([admission, Bun.sleep(150).then(() => null)]);
+    expect(admitted?.pipeline?.remoteAction?.state).toBe("pending");
+    work = settlePendingRemoteActions(heldPorts);
+    expect(await Promise.race([checking.then(() => true), work.then(() => false), Bun.sleep(1000).then(() => false)])).toBe(true);
+    const pause = patchPipeline(lane.id, { action: "pause" }, ports);
+    expect(await Promise.race([pause, Bun.sleep(150).then(() => null)])).not.toBeNull();
+    release(); await work;
+    expect(findPipelineRecord(lane.id)).toMatchObject({ state: "paused", lastPassedCommit: base });
+    await patchPipeline(lane.id, { action: "resume" }, ports);
+    await patchPipeline(lane.id, { action: "skip-stage" }, ports);
+    await settlePendingRemoteActions({ ...ports });
+    const current = findPipelineRecord(lane.id)!;
+    expect(current.remoteAction?.error).toBeUndefined(); expect(current.runs[0]!.attempts[0]!.state).toBe("skipped");
+    expect(current.lastPassedCommit).not.toBe(base);
+    expect(fs.readFileSync(path.join(lane.worktreeDir, "unowned.txt"), "utf8")).toBe("preserved\n");
+    expect((await realExec("git", ["show", "--pretty=", "--name-only", "HEAD"], lane.worktreeDir)).stdout.trim()).toBe("report.md");
+  } finally { release(); await admission; await work; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("compact MCP polling exposes a deferred publication failure while preserving operator detail", async () => {
   const h = setupRetry(); h.lane.state = "paused"; h.lane.stateDetail = "paused by operator";
   h.lane.worktreeDir = h.lane.worktreeDir.replace(h.lane.id, "publication-poll");

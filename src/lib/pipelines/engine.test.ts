@@ -58,7 +58,7 @@ const patchPipeline: typeof rawPatchPipeline = async (id, request, ports = defau
   if (accepted.pipeline.remoteAction?.state === "pending") await engineModule.settlePendingRemoteActions(ports);
   let current = loadPipelines().find((pipeline) => pipeline.id === id) ?? accepted.pipeline;
   if (current.remoteAction?.state === "settled" && current.remoteAction.error
-    && (request.action === "retry-stage" || request.action === "takeover")) return { error: current.remoteAction.error, status: 409 };
+    && (request.action === "retry-stage" || request.action === "takeover" || request.action === "skip-stage")) return { error: current.remoteAction.error, status: 409 };
   if ((request.action === "publish" || request.action === "retry-stage") && current.delivery?.operation?.state === "pending") {
     const { publishPipelineBranch } = await import("./git");
     const result = await publishPipelineBranch(current, ports.exec, { acceptedSha: current.delivery.operation.sha });

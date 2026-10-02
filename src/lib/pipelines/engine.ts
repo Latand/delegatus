@@ -6089,6 +6089,37 @@ function remoteActionFence(pipeline: Pipeline): string {
   })).digest("hex");
 }
 
+/** Adopt a verified skip under its durable lane fence, then reserve publication. */
+function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts): void {
+  const previousHead = pipeline.lastPassedCommit;
+  pipeline.lastPassedCommit = sha;
+  attempt.state = "skipped";
+  attempt.completedAt = ports.now();
+  attempt.output = sha !== previousHead
+    ? `Skipped by operator; current head ${sha} was accepted as its result.`
+    : "Skipped by operator.";
+  if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== sha) {
+    pipeline.state = "running";
+    pipeline.pausedState = null;
+    setCursorState(pipeline, stage.id, "committing");
+    const published = queuePipelinePublication(pipeline, ports.exec, {
+      acceptedSha: sha, publishedSha: pipeline.publishedCommit ?? null,
+    });
+    if (!published.ok) {
+      park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
+    } else if (published.remote !== "published") {
+      setCursorState(pipeline, stage.id, "committing");
+      keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
+        ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
+    } else {
+      pipeline.publishedCommit = published.sha;
+      advancePipeline(pipeline, stage, ports, attempt);
+    }
+  } else {
+    advancePipeline(pipeline, stage, ports, attempt);
+  }
+}
+
 /** Remote repair runs outside the registry lease, under an inherited kernel
     lock. A restart rechecks pending intent only after its old children stop. */
 export async function settlePendingRemoteActions(ports: PipelinePorts = defaultPipelinePorts()): Promise<void> {
@@ -6127,12 +6158,12 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "remote action superseded" };
-      return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: args.includes("fetch") ? 60_000 : 5_000 });
+      return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: args.includes("fetch") || args[0] === "commit" ? 60_000 : 5_000 });
     };
     let result: import("./git").PipelineGitResult = { ok: false, error: "remote action superseded" };
     try {
       revalidate();
-      if (!abort.signal.aborted && action.action === "retry-stage") {
+      if (!abort.signal.aborted && (action.action === "retry-stage" || action.action === "skip-stage")) {
         const stage = currentStage(preview);
         const attempt = stage ? currentAttempt(preview, stage.id) : null;
         let cleanupError = (await orphanAgentPane(attempt, ports))?.error;
@@ -6142,11 +6173,33 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
         revalidate();
         if (!abort.signal.aborted && action.retryReceipt?.claimId && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed") abort.abort();
         if (cleanupError) result = { ok: false, error: cleanupError };
-        else if (!abort.signal.aborted) result = publishesRemoteBranch(preview) ? await synchronizePipelineRetryHead(preview, exec) : await currentPipelineBranchHead(preview, exec);
+        else if (!abort.signal.aborted && action.action === "skip-stage" && stage && attempt) {
+          const outputs = attemptStage(stage, attempt).outputs ?? [];
+          const receiptKey = crypto.createHash("sha256").update(JSON.stringify({ stage: stage.id, attempt: attempt.n,
+            launchId: attempt.launchId, conversationId: attempt.conversationId, worktree: preview.worktreeDir,
+            branch: preview.branch, parent: preview.lastPassedCommit, outputs })).digest("hex");
+          result = stage.kind === "run" && attempt.effectiveRole.access === "read-only" && outputs.length > 0
+            ? await commitPipelineStage(preview, stage.id, false, exec, outputs, preview.lastPassedCommit,
+              path.join(pipelineArtifactsDir(preview.id), `skip-commit-${receiptKey}.json`))
+            : await currentPipelineBranchHead(preview, exec);
+          if (!result.ok) result = { ok: false, error: `${result.error}; commit the stage's work or retry it before skipping` };
+          if (result.ok && result.sha !== preview.lastPassedCommit) {
+            const ancestor = await exec("git", ["merge-base", "--is-ancestor", preview.lastPassedCommit, result.sha], preview.worktreeDir);
+            if (ancestor.code !== 0) result = { ok: false, error: "the current head does not descend from the last accepted head; reconcile the commits in this worktree before skipping" };
+          }
+        } else if (!abort.signal.aborted) result = publishesRemoteBranch(preview) ? await synchronizePipelineRetryHead(preview, exec) : await currentPipelineBranchHead(preview, exec);
         // Re-read local work after the remote probe, before committing a cursor.
-        if (result.ok) {
+        if (result.ok && action.action === "retry-stage") {
           const local = await currentPipelineBranchHead(preview, exec);
           if (!local.ok || local.sha !== result.sha) result = { ok: false, error: "the retry checkout moved during remote verification" };
+        } else if (result.ok) {
+          const head = await exec("git", ["rev-parse", "HEAD"], preview.worktreeDir);
+          const branch = await exec("git", ["branch", "--show-current"], preview.worktreeDir);
+          const deliveryBranch = preview.delivery?.disposition === "owner" ? preview.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
+          if (head.code !== 0 || head.stdout.trim() !== result.sha || branch.code !== 0
+            || (branch.stdout.trim() !== preview.branch && branch.stdout.trim() !== deliveryBranch)) {
+            result = { ok: false, error: "the skip checkout moved during verification" };
+          }
         }
       } else if (!abort.signal.aborted && action.takeover) {
         const request = action.takeover;
@@ -6187,6 +6240,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
           if (!reserved.ok) { pipeline.stateDetail = reserved.error; persist(); return; }
           pipeline.publishedCommit = reserved.remote === "published" ? reserved.sha : null;
         }
+      }
+      if (action.action === "skip-stage") {
+        pipeline.stateDetail = null;
+        applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports);
       }
       if (action.action === "retry-stage" || pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
       persist();
@@ -8987,56 +9044,19 @@ export async function patchPipeline(
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision" || !stage || !attempt) return { error: "pipeline does not have a stage attempt awaiting a decision", status: 409 };
-      const orphan = await orphanAgentPane(attempt, ports);
-      if (orphan) return orphan;
-      if (flow && flow.state !== "closed") {
-        const closed = await ports.closeFlow(flow.id);
-        if (closed?.error) {
-          pipeline.stateDetail = closed.error;
-          persist();
-          return { error: closed.error, status: closed.status ?? 409 };
-        }
-      }
       if (!pipeline.lastPassedCommit) return { error: "pipeline worktree has not been provisioned", status: 409 };
-      const outputs = attemptStage(stage, attempt).outputs ?? [];
-      const carried = stage.kind === "run" && attempt?.effectiveRole.access === "read-only"
-        && outputs.length > 0
-        ? (await commitPipelineStage(pipeline, stage.id, false, ports.exec, outputs, pipeline.lastPassedCommit))
-        : (await currentPipelineBranchHead(pipeline, ports.exec));
-      if (!carried.ok) return { error: `${carried.error}; commit the stage's work or retry it before skipping`, status: 409 };
-      if (carried.sha !== pipeline.lastPassedCommit) {
-        const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, carried.sha], pipeline.worktreeDir));
-        if (ancestor.code !== 0) return { error: "the current head does not descend from the last accepted head; reconcile the commits in this worktree before skipping", status: 409 };
-      }
-      const previousHead = pipeline.lastPassedCommit;
-      pipeline.lastPassedCommit = carried.sha;
-      if (attempt) {
-        attempt.state = "skipped";
-        attempt.completedAt = ports.now();
-        attempt.output = carried.sha !== previousHead
-          ? `Skipped by operator; current head ${carried.sha} was accepted as its result.`
-          : "Skipped by operator.";
-      }
-      if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== carried.sha) {
-        pipeline.state = "running";
-        pipeline.pausedState = null;
-        setCursorState(pipeline, stage.id, "committing");
-        const published = queuePipelinePublication(pipeline, ports.exec, {
-          acceptedSha: carried.sha, publishedSha: pipeline.publishedCommit ?? null,
-        });
-        if (!published.ok) {
-          park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
-        } else if (published.remote !== "published") {
-          setCursorState(pipeline, stage.id, "committing");
-          keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
-            ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
-        } else {
-          pipeline.publishedCommit = published.sha;
-          advancePipeline(pipeline, stage, ports, attempt);
+      if (pipeline.remoteAction?.state === "pending") {
+        if (pipeline.remoteAction.action !== "skip-stage" || JSON.stringify(pipeline.remoteAction.actor) !== JSON.stringify(actor)) {
+          return { error: "another remote action is already pending", status: 409 };
         }
-      } else {
-        advancePipeline(pipeline, stage, ports, attempt);
+        return { pipeline };
       }
+      pipeline.remoteAction = { id: crypto.randomUUID(), action: "skip-stage", state: "pending",
+        fence: remoteActionFence(pipeline), at: ports.now(), actor };
+      pipeline.stateDetail = "stage skip accepted; cleanup and checkout verification pending";
+      if (pipeline.delivery) deliveryJournal(pipeline, "recovery", pipeline.stateDetail, actor?.kind === "agent" ? actor.conversationId : null);
+      persist(); requestPipelineTick();
+      return { pipeline };
     } else if (req.action === "override-stage") {
       const closed = closedGraphRefusal(pipeline);
       if (closed) return closed;

@@ -794,7 +794,7 @@ export function pipelineActivitySettled(
 
 export type PipelineRemoteAction = {
   id: string;
-  action: "retry-stage" | "takeover";
+  action: "retry-stage" | "takeover" | "skip-stage";
   state: "pending" | "settled";
   fence: string;
   at: string;
