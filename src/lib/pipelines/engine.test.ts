@@ -754,6 +754,8 @@ test.each([
 test.each([
   { label: "correlated historical red/green evidence", summary: "Regression tests failed on base and passed on head. No blockers.", finding: "another in-scope issue", expected: "review" },
   { label: "test coverage finding", summary: "Handed findings fixed; checks passed.", finding: "Tests fail to cover cancellation in fix.txt:1", expected: "review" },
+  { label: "required tests still fail on head", summary: "Required integration tests still fail on head. I committed the partial fix.", finding: "unresolved integration failure", expected: "park" },
+  { label: "required tests are failing on head", summary: "Required integration tests are failing on head. TypeScript passed.", finding: "unresolved integration failure", expected: "park" },
   { label: "explicit current failure after the fix", summary: "Blocked: integration tests failed before fix and still fail on head; TypeScript passed.", finding: "unresolved integration failure", expected: "park" },
   { label: "current failure beside historical base evidence", summary: "Regression tests failed on base and passed on head, but cannot run required integration checks.", finding: "unresolved integration failure", expected: "park" },
   { label: "current failure before historical base evidence", summary: "Cannot run required integration checks; regression tests failed on base and passed on head.", finding: "unresolved integration failure", expected: "park" },
@@ -902,6 +904,35 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
     expect(current.cursor?.stageId).toBe("fix");
     expect(current.lastPassedCommit).toBe(base);
     expect(current.runs[0]!.attempts[0]!.output).toContain("Blocked: required integration tests");
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a fenced fixer verdict keeps a blocker after the bounded relay output", async () => {
+  const fixture = await realWorktreeLane("fixer-blocker-after-relay-limit", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ]);
+  try {
+    const { h, git, worktree, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "committed partial fix");
+    const summary = `${"Verification details recorded. ".repeat(1200)}Blocked: cannot run required integration checks.`;
+    h.setConversationActive(false);
+    h.messages.set("/codex/stage-1.jsonl", {
+      text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``,
+      ts: Date.now() + 100_000_000,
+    });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.cursor?.stageId).toBe("fix");
+    expect(current.lastPassedCommit).toBe(base);
+    expect(current.cursor?.stageId).not.toBe("review");
     expect(h.spawnInputs).toHaveLength(1);
   } finally {
     savePipelines([]);

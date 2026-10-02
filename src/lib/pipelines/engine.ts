@@ -3185,7 +3185,7 @@ function fixerSelfFailCanGoToReview(
     // Red/green evidence describes a resolved failure, not a present stop.
     .replace(/\bfailed before (?:the )?fix\b\s*(?:[,;]\s*)?(?:and\s+)?passed (?:on (?:the )?head|after (?:the )?fix)\b/gi, "")
     .replace(/\b(?:not blocked|no blockers?)\b/gi, "");
-  if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\s+(?:failed|failing|fail)\b/i.test(reason)) return false;
+  if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\b[^\n.]{0,100}\b(?:failed|failing|fail)\b/i.test(reason)) return false;
   const head = currentPipelineBranchHead(pipeline, ports.exec);
   return head.ok && head.sha !== pipeline.lastPassedCommit;
 }
@@ -4266,7 +4266,8 @@ async function tickRunStage(
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
-    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse) ?? fenced;
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse)
+      ?? (fenced ? { ...fenced, completionText: stageVerdictProse(durable.message!.text) } : null);
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -4378,7 +4379,8 @@ async function tickRunStage(
     return;
   }
   const fenced = parsePipelineStageVerdict(message.text);
-  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse) ?? fenced;
+  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse)
+    ?? (fenced ? { ...fenced, completionText: stageVerdictProse(message.text) } : null);
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(
