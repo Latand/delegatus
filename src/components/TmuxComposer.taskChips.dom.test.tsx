@@ -75,6 +75,8 @@ function structuredView(conversationId: string): RuntimeSessionView {
 }
 
 import { appendComposerDraft, TmuxComposer } from "./TmuxComposer";
+import { VoiceComposerHost } from "./voice/VoiceComposerHost";
+import { resetVoiceSlotsForTest } from "./voice/voiceSlots";
 const { resetOutboxForTests, readOutbox } = await import("./conversation/outbox");
 const { resetManagerIdentityForTest } = await import("./voice/managerIdentity");
 const { viewBus } = await import("@/hooks/viewPresenceBus");
@@ -118,6 +120,7 @@ function stubFetch(): void {
 }
 
 beforeEach(() => {
+  resetVoiceSlotsForTest();
   installTmuxComposerRuntimeForTests({
     useRuntimeView: (file) => file.conversationId === COMPOSING || file.conversationId === WORKER ? structuredView(file.conversationId) : null,
   });
@@ -138,6 +141,7 @@ afterEach(async () => {
   resetTmuxComposerRuntimeForTests();
   for (const root of roots) await act(async () => root.unmount());
   roots = [];
+  resetVoiceSlotsForTest();
   globalThis.fetch = realFetch;
   document.body.replaceChildren();
   localStorage.clear();
@@ -149,13 +153,13 @@ afterEach(async () => {
   viewBus.reportCards([]);
 });
 
-async function mountComposer(conversationId = COMPOSING, taskChipsFor: string | null | undefined = "atlas"): Promise<HTMLElement> {
+async function mountComposer(conversationId = COMPOSING, taskChipsFor: string | null | undefined = "atlas", hoisted = false): Promise<HTMLElement> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   roots.push(root);
   await act(async () => {
-    root.render(<TmuxComposer file={fileFor(conversationId, "composing_chips")} {...(taskChipsFor ? { taskChipsFor } : {})} />);
+    root.render(<>{hoisted ? <VoiceComposerHost /> : null}<TmuxComposer file={fileFor(conversationId, "composing_chips")} {...(taskChipsFor ? { taskChipsFor } : {})} /></>);
     await new Promise((r) => setTimeout(r, 0));
   });
   return host as unknown as HTMLElement;
@@ -178,6 +182,21 @@ async function sendThrough(host: HTMLElement, conversationId: string, text: stri
 }
 
 const chips = (host: HTMLElement) => [...host.querySelectorAll("[data-task-chip]")];
+
+test("a hoisted seat composer renders and sends its explicit task chips when seat discovery is unavailable", async () => {
+  // The normal fetch stub reports no discoverable seat. The dock already knows
+  // this composer's seat identity and must carry it through the real host.
+  const host = await mountComposer(COMPOSING, "atlas", true);
+  await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Fix the mobile board" }); });
+  await settle();
+  const visibleChips = chips(host).length;
+  await sendThrough(host, COMPOSING, "start this one");
+  expect(visibleChips).toBe(1);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.selectedContext?.tasks).toEqual([{ id: TASK_A, title: "Fix the mobile board" }]);
+  expect(sent[0]!.text).toContain(TASK_A);
+  expect(readTaskChips("atlas")).toEqual([]);
+});
 
 test("a chip the card added shows above the input with its title and a remove control; the input stays empty", async () => {
   const host = await mountComposer();

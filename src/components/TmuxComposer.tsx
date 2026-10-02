@@ -1580,8 +1580,9 @@ function VoiceComposerCardSlot({ cardId, composerProps, primary }: { cardId: str
       deadHost: composerProps.deadHost ?? false,
       sendBlockedReason: composerProps.sendBlockedReason ?? null,
       placeholder: composerProps.placeholder,
+      taskChipsFor: composerProps.taskChipsFor,
     });
-  }, [cardId, composerProps.deadHost, composerProps.file, composerProps.placeholder, composerProps.pollPaused, composerProps.sendBlockedReason, composerProps.viewActive, placeId]);
+  }, [cardId, composerProps.deadHost, composerProps.file, composerProps.placeholder, composerProps.pollPaused, composerProps.sendBlockedReason, composerProps.taskChipsFor, composerProps.viewActive, placeId]);
   return <div ref={publishNode} data-testid="voice-composer-card-slot" className="contents" />;
 }
 
