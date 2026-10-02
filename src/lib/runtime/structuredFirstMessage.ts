@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { MAX_STRUCTURED_TEXT_BYTES } from "./structuredContent";
-import { prepareControllerArtifactDirectory } from "@/lib/pipelines/controllerArtifacts";
+import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "@/lib/pipelines/controllerArtifacts";
 
 const EXCERPT_BYTES = 512;
 
@@ -11,7 +11,10 @@ const EXCERPT_BYTES = 512;
  * structured envelope. Call after every scaffold and caller brief are composed,
  * and before spawn admission or durable payload identity is calculated. */
 export function composeStructuredFirstMessage(text: string, worktreeDir: string): string {
-  if (Buffer.byteLength(text, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) return text;
+  if (Buffer.byteLength(text, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
+    protectExistingControllerArtifacts(worktreeDir);
+    return text;
+  }
 
   const digest = crypto.createHash("sha256").update(text).digest("hex");
   const directory = prepareControllerArtifactDirectory(worktreeDir);

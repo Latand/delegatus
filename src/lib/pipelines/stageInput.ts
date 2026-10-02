@@ -1,16 +1,16 @@
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
-import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
 import { renderStagePrompt } from "./prompts";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 
 /** Compose the launch message before spawn admission. The shared UI renderer
-    remains pure; only this server path materializes oversized input parts. */
+    remains pure; this server path materializes oversized parts, falling back
+    to the complete rendered prompt when substitutions or framing do not fit. */
 export function composeStageInput(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -19,11 +19,13 @@ export function composeStageInput(
   worktreeDir: string = pipeline.worktreeDir,
 ): string {
   const inline = renderStagePrompt(pipeline, stage, role, previousOutput);
-  if (Buffer.byteLength(inline, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) return inline;
+  if (Buffer.byteLength(inline, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
+    protectExistingControllerArtifacts(worktreeDir);
+    return inline;
+  }
 
-  excludeControllerArtifacts(worktreeDir);
+  prepareControllerArtifactDirectory(worktreeDir);
 
-  const specification = pipeline.spec?.trim() || "No separate pinned specification was supplied.";
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
   const artifact = (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
@@ -52,12 +54,12 @@ export function composeStageInput(
     ? artifact("specification", pipeline.spec) : null;
   if (specFile) prompt = fit(specFile);
   if (Buffer.byteLength(prompt, "utf8") > MAX_STRUCTURED_TEXT_BYTES) {
-    const withoutRelay = (text: string) => text.split("{{task}}").join(pipeline.task).split("{{prev.output}}").join("").trim();
-    const promptBytes = Buffer.byteLength(withoutRelay(stage.prompt));
-    const scaffoldBytes = role.roleId && role.promptScaffold ? Buffer.byteLength(withoutRelay(role.promptScaffold)) : 0;
-    const specBytes = Buffer.byteLength(specification);
-    const framingBytes = Buffer.byteLength(renderStagePrompt(pipeline, stage, role, "")) - promptBytes - scaffoldBytes - specBytes;
-    throw new Error(`stage ${stage.id} input cannot fit the ${MAX_STRUCTURED_TEXT_BYTES}-byte bound: prompt=${promptBytes} bytes; role scaffold=${scaffoldBytes} bytes; previous output=${Buffer.byteLength(previousOutput)} bytes; specification=${specBytes} bytes; framing=${framingBytes} bytes. Shorten the stage prompt or role scaffold.`);
+    // Preserve the original renderer's bytes, including every substitution,
+    // role instruction, access fence and completion contract. The reference
+    // replaces the whole message; unused part references need no files.
+    artifacts.length = 0;
+    const fullPrompt = artifact("stage prompt", inline);
+    prompt = `Read the complete stage prompt below and carry out all of its instructions.\n${artifactReference(fullPrompt, 512)}`;
   }
   for (const { file, text } of artifacts) {
     const directory = path.dirname(file);
@@ -71,32 +73,6 @@ export function composeStageInput(
     }
   }
   return prompt;
-}
-
-/** Keep private controller handoffs readable in the worktree while ensuring
-    Git status and ordinary `git add -A` never treat them as stage changes. */
-function excludeControllerArtifacts(worktreeDir: string): void {
-  let excludeFile: string;
-  try {
-    excludeFile = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], {
-      cwd: worktreeDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    // Unit fixtures can compose input against a directory that is not a Git
-    // worktree. Real pipeline worktrees always are, and take the guarded path.
-    if (fs.existsSync(path.join(worktreeDir, ".git"))) {
-      throw new Error(`cannot protect pipeline stage input artifacts in ${worktreeDir}`);
-    }
-    return;
-  }
-  const rule = "/.artifacts/pipeline-stage-inputs/";
-  const existing = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, "utf8") : "";
-  prepareControllerArtifactDirectory(worktreeDir);
-  if (existing.split(/\r?\n/).includes(rule)) return;
-  fs.mkdirSync(path.dirname(excludeFile), { recursive: true, mode: 0o700 });
-  fs.appendFileSync(excludeFile, `${existing && !existing.endsWith("\n") ? "\n" : ""}${rule}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 function artifactReference(part: { label: string; file: string; text: string }, headBytes: number): string {

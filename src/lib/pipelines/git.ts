@@ -11,7 +11,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 
 import type { Pipeline } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
-import { CONTROLLER_ARTIFACT_DIRECTORY, CONTROLLER_ARTIFACT_PATHSPEC } from "./controllerArtifacts";
+import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -531,15 +531,15 @@ function changedWorktreePaths(
   cwd: string,
   declaredOutputs: readonly string[] = [],
 ): { ok: true; paths: string[] } | { ok: false; error: string } {
-  const tracked = exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--", ".", CONTROLLER_ARTIFACT_PATHSPEC], cwd);
+  const tracked = exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
   if (tracked.code !== 0) return failure("checking tracked stage output paths", tracked);
-  const untracked = exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", CONTROLLER_ARTIFACT_PATHSPEC], cwd);
+  const untracked = exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
   if (untracked.code !== 0) return failure("checking untracked stage output paths", untracked);
   let ignoredOutputs = "";
   if (declaredOutputs.length > 0) {
     const ignored = exec(
       "git",
-      ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...declaredOutputs, CONTROLLER_ARTIFACT_PATHSPEC],
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...declaredOutputs, ...CONTROLLER_ARTIFACT_PATHSPECS],
       cwd,
     );
     if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
@@ -561,7 +561,7 @@ export function commitPipelineStage(
   declaredOutputs: readonly string[] = [],
   protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
 ): PipelineGitResult {
-  const status = exec("git", ["status", "--porcelain", "--", ".", CONTROLLER_ARTIFACT_PATHSPEC], pipeline.worktreeDir);
+  const status = exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   if (initialHead.code !== 0 || !initialHead.stdout.trim()) return failure("recording the passed stage commit", initialHead);
@@ -592,7 +592,7 @@ export function commitPipelineStage(
   }
   const add = exec(
     "git",
-    ["add", ...(allowCommit ? ["-A", "--", ".", CONTROLLER_ARTIFACT_PATHSPEC] : ["-f", "-A", "--", ...changedOutputPaths])],
+    ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
     pipeline.worktreeDir,
   );
   if (add.code !== 0) return failure("staging the passed stage", add);
@@ -628,9 +628,14 @@ export function commitPipelineStage(
 }
 
 function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): PipelineGitResult | null {
+  try {
+    protectExistingControllerArtifacts(worktreeDir);
+  } catch (error) {
+    return { ok: false, error: `protecting controller pipeline artifacts: ${error instanceof Error ? error.message : "unknown error"}` };
+  }
   const result = exec(
     "git",
-    ["reset", "--quiet", "HEAD", "--", `:(top)${CONTROLLER_ARTIFACT_DIRECTORY}`],
+    ["reset", "--quiet", "HEAD", "--", ...CONTROLLER_ARTIFACT_GIT_PATHS],
     worktreeDir,
   );
   return result.code === 0 ? null : failure("unstaging controller pipeline artifacts", result);
@@ -648,7 +653,7 @@ export function pipelineWorktreeChanges(
   exec: ExecPort,
   limit = 20,
 ): PipelineWorktreeChanges {
-  const status = exec("git", ["status", "--porcelain", "--", ".", CONTROLLER_ARTIFACT_PATHSPEC], pipeline.worktreeDir);
+  const status = exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const paths = status.stdout
     .split("\n")

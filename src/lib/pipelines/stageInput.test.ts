@@ -163,15 +163,11 @@ test.each(["artifact root", "handoff directory"] as const)("large stage inputs r
   fs.mkdirSync(path.join(repo, "reports"));
   fs.writeFileSync(path.join(repo, "reports", "result.md"), "declared stage result\n");
   const settled = commitPipelineStage(pipeline, stage.id, linkAt === "artifact root", realExec, ["reports/result.md"], head);
-  if (linkAt === "artifact root") {
-    /* Git cannot safely apply the nested exclusion through a top-level
-       symlink. Refusal is safe: no alias contents are published or removed. */
-    expect(settled.ok).toBe(false);
-    expect(runGit("rev-parse", "HEAD")).toBe(head);
-  } else {
-    expect(settled).toMatchObject({ ok: true });
-    expect(runGit("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n")).toEqual(["reports/result.md"]);
-  }
+  // Both aliases are refused before settlement can write through or publish
+  // them. The declared report and existing alias contents remain on disk.
+  expect(settled.ok).toBe(false);
+  expect(runGit("rev-parse", "HEAD")).toBe(head);
+  expect(fs.readFileSync(path.join(repo, "reports/result.md"), "utf8")).toBe("declared stage result\n");
   expect(fs.readFileSync(path.join(publish, "preserve.txt"), "utf8")).toBe("content that must survive\n");
 });
 
@@ -203,6 +199,48 @@ test("large stage inputs reject a hardlinked ignore file without changing its ex
     .toThrow(/pipeline controller artifact ignore file must be a regular file with one link/);
   expect(fs.readFileSync(external, "utf8")).toBe(original);
   expect(() => JSON.parse(fs.readFileSync(external, "utf8"))).not.toThrow();
+});
+
+test.each(["symlink", "hardlink"] as const)("stage composition leaves a %s in Git info/exclude and its external JSON byte-identical", (linkKind) => {
+  const repo = path.join(artifactState, `linked-exclude-${linkKind}`);
+  fs.mkdirSync(repo);
+  const runGit = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  runGit("init", "--initial-branch=main");
+  runGit("config", "user.email", "noreply@example.invalid");
+  runGit("config", "user.name", "Fixture");
+  runGit("config", "commit.gpgSign", "false");
+  fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+  runGit("add", "tracked.txt");
+  runGit("commit", "-m", "base");
+  const exclude = runGit("rev-parse", "--path-format=absolute", "--git-path", "info/exclude");
+  const external = path.join(artifactState, `external-${linkKind}.json`);
+  const original = '{"enabled":true}\n';
+  fs.writeFileSync(external, original);
+  fs.unlinkSync(exclude);
+  if (linkKind === "symlink") fs.symlinkSync(external, exclude);
+  else fs.linkSync(external, exclude);
+
+  const { pipeline, stage } = handoffFixture();
+  pipeline.worktreeDir = repo;
+  const previous = "Previous head\n" + "p".repeat(57_500);
+  const delivered = composeStageInput(pipeline, stage, stage.effectiveRole, previous);
+  const file = delivered.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(fs.readFileSync(file!, "utf8")).toBe(previous);
+  expect(fs.readFileSync(external, "utf8")).toBe(original);
+  expect(JSON.parse(fs.readFileSync(external, "utf8"))).toEqual({ enabled: true });
+  expect(runGit("status", "--porcelain")).toBe("");
+  expect(runGit("add", "--dry-run", "-A")).toBe("");
+  const head = runGit("rev-parse", "HEAD");
+  expect(commitPipelineStage(pipeline, stage.id, false, realExec, [], head)).toEqual({ ok: true, sha: head });
+  fs.writeFileSync(path.join(repo, "tracked.txt"), "worker edit\n");
+  runGit("add", "-A");
+  expect(commitPipelineStage(pipeline, stage.id, true, realExec)).toMatchObject({ ok: true });
+  expect(runGit("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("tracked.txt");
+  expect(fs.readFileSync(external, "utf8")).toBe(original);
 });
 
 test("read-write settlement never stages or commits controller artifacts", () => {

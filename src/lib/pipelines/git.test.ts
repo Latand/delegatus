@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -939,8 +940,8 @@ test("pass commits a dirty stage and retry resets plus cleans", () => {
   };
   expect(commitPipelineStage(pipeline(), "build", true, exec)).toEqual({ ok: true, sha: "stage-sha" });
   expect(resetPipelineStage(pipeline(), exec)).toEqual({ ok: true, sha: "base" });
-  expect(calls).toContain("git reset --quiet HEAD -- :(top).artifacts/pipeline-stage-inputs");
-  expect(calls).toContain("git add -A -- . :(exclude,top).artifacts/pipeline-stage-inputs");
+  expect(calls).toContain(`git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`);
+  expect(calls).toContain(`git add -A -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
   expect(calls).toContain("git reset --hard base");
   expect(calls).toContain("git clean -fd");
 });
@@ -980,6 +981,53 @@ test("read-write settlement removes pre-staged controller artifacts from the com
     expect(box.run("diff", "--cached", "--name-only")).toBe("");
     expect(fs.readFileSync(handoffs.output, "utf8")).toBe("previous stage output\n".repeat(2000));
     expect(fs.readFileSync(handoffs.specification, "utf8")).toBe("private stage specification\n".repeat(2000));
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { label: "read-write changes", allowCommit: true, output: false, changed: true },
+  { label: "read-write no change", allowCommit: true, output: false, changed: false },
+  { label: "read-only no outputs", allowCommit: false, output: false, changed: false },
+  { label: "read-only unchanged output", allowCommit: false, output: true, changed: false },
+  { label: "read-only changed output", allowCommit: false, output: true, changed: true },
+].flatMap((mode) => [true, false].map((staged) => ({ ...mode, staged }))))("$label settlement protects nested structured handoffs (staged=$staged) before stage and ordinary worker commits", async ({ allowCommit, output, changed, staged }) => {
+  const box = isolatedIdentityRepo();
+  try {
+    box.run("config", "user.name", "Fixture");
+    box.run("config", "user.email", "noreply@example.invalid");
+    if (output) {
+      fs.mkdirSync(path.join(box.repo, "reports"));
+      fs.writeFileSync(path.join(box.repo, "reports/audit.md"), "baseline audit\n");
+      box.run("add", "reports/audit.md");
+      box.run("commit", "-m", "baseline audit");
+    }
+    const cwd = path.join(box.repo, "package");
+    fs.mkdirSync(cwd);
+    const { composeStructuredFirstMessage } = await import("@/lib/runtime/structuredFirstMessage");
+    const input = "PRIVATE_NESTED_SETTLEMENT_SENTINEL\n" + "Full context\n".repeat(3_000);
+    const delivered = composeStructuredFirstMessage(input, cwd);
+    const file = delivered.match(/Full structured first message file: (.+)\n/)?.[1];
+    if (staged) box.run("add", "-f", path.relative(box.repo, file!));
+    else fs.unlinkSync(path.join(path.dirname(file!), ".gitignore"));
+    const head = box.run("rev-parse", "HEAD");
+    const work = output ? "reports/audit.md" : "source.ts";
+    if (changed) fs.writeFileSync(path.join(box.repo, work), "worker result\n");
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    const result = commitPipelineStage(subject, "build", allowCommit, box.exec, output ? [work] : [], head);
+    expect(result).toMatchObject({ ok: true });
+    expect(box.run("diff", "--cached", "--name-only")).toBe("");
+    expect(box.run("ls-files", "--", "package/.artifacts/pipeline-stage-inputs")).toBe("");
+    expect(fs.readFileSync(file!, "utf8")).toBe(input);
+    if (changed) expect(box.run("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe(work);
+    else expect(box.run("rev-parse", "HEAD")).toBe(head);
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "ordinary worker result\n");
+    box.run("add", "-A");
+    box.run("commit", "-m", "ordinary worker change");
+    expect(box.run("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("source.ts");
+    expect(box.run("show", "--format=", "HEAD")).not.toContain("PRIVATE_NESTED_SETTLEMENT_SENTINEL");
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
   }
