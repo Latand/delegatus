@@ -476,7 +476,7 @@ export class MergeBatch {
     // immediately before any push or PR edit.
     const candidatePrivacy = await this.trustedPrivacy(state, ["--check-commits", "--require-known-values"]);
     if (candidatePrivacy.code) throw new Error("Batch failed the trusted publication gate");
-    const bodyPrivacy = await this.trustedPrivacy(state, ["--paths", bodyFile, "--require-known-values"]);
+    const bodyPrivacy = await this.trustedPrivacy(state, ["--require-known-values", "--paths", bodyFile]);
     if (bodyPrivacy.code) throw new Error("Batch PR body failed the publication gate");
     const push = ["push", ...(state.published ? [`--force-with-lease=refs/heads/${state.branch}:${state.published}`] : []),
       "origin", `${state.tip}:refs/heads/${state.branch}`];

@@ -1,5 +1,5 @@
 import { expect, test, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync, copyFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -207,6 +207,17 @@ function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   }));
 }
 
+function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
+  mkdirSync(join(f.repo, "scripts"));
+  mkdirSync(join(f.repo, "src", "lib"), { recursive: true });
+  copyFileSync(join(import.meta.dir, "privacy-publication-gate.ts"), join(f.repo, "scripts/privacy-publication-gate.ts"));
+  copyFileSync(join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), join(f.repo, "scripts/generate-privacy-known-value-fingerprints.ts"));
+  copyFileSync(join(import.meta.dir, "privacy-known-value-fingerprints.json"), join(f.repo, "scripts/privacy-known-value-fingerprints.json"));
+  copyFileSync(join(import.meta.dir, "../src/lib/environmentIsolation.ts"), join(f.repo, "src/lib/environmentIsolation.ts"));
+  f.seed("scripts/privacy-publication-gate.ts", readFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "utf8"));
+  symlinkSync(join(import.meta.dir, "../node_modules"), join(f.repo, "node_modules"), "dir");
+}
+
 function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: string, observed: string[] = [], candidates: string[] = []): CommandRunner {
   return async (cwd, args, env) => {
     if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts") {
@@ -223,6 +234,22 @@ function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: 
         && readFileSync(candidateIdentity, "utf8").includes(rejectedIdentity) ? 1 : 0, output: "" };
     }
     if (args[0] === "git" && args[1] === "bisect") return commandRunner(cwd, args, env);
+    return { code: 0, output: "" };
+  };
+}
+
+function realBodyPrivacyRunner(): CommandRunner {
+  return async (cwd, args, env) => {
+    if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts" && args.includes("--paths")) {
+      const result = Bun.spawnSync({
+        cmd: [process.execPath, join(cwd, args[2]!), ...args.slice(3)],
+        cwd,
+        env: { ...process.env, ...env },
+        stderr: "pipe",
+        stdout: "pipe",
+      });
+      return { code: result.exitCode ?? 1, output: result.stdout.toString() + result.stderr.toString() };
+    }
     return { code: 0, output: "" };
   };
 }
@@ -282,6 +309,53 @@ test("a stale branch privacy scanner cannot block publication after pinned main 
   expect(trustedDirs.length).toBe(3);
   expect(trustedDirs.every((directory) => directory !== landed.work)).toBe(true);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+});
+
+test("the real main scanner publishes a healthy remainder with a stale branch hook", async () => {
+  const f = landingFixture("attributed", undefined, (fixture) => {
+    seedRealTrustedPrivacyFiles(fixture);
+    return realBodyPrivacyRunner();
+  });
+  f.addPr(12, "healthy.txt", "healthy remainder\n");
+  git(f.repo, ["checkout", "topic-12"]);
+  mkdirSync(join(f.repo, "scripts"), { recursive: true });
+  writeFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "export const stale = true;\n");
+  git(f.repo, ["add", "scripts/privacy-publication-gate.ts"]);
+  git(f.repo, ["commit", "--amend", "--no-edit"]);
+  const movedHead = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "--force", "origin", `${movedHead}:refs/pull/12/head`, `${movedHead}:refs/heads/topic-12`]);
+  f.views.get(12)!.headRefOid = movedHead;
+  const rejected = f.addPr(13, "rejected.txt", "rejected change\n");
+  mkdirSync(join(f.repo, ".githooks"));
+  const hook = join(f.repo, ".githooks/pre-push");
+  writeFileSync(hook, "#!/bin/sh\nwhile read local_ref local_sha remote_ref remote_sha; do\n  [ \"$remote_ref\" = refs/heads/main ] && exit 0\ndone\n[ \"${LLV_SKIP_HOOKS:-0}\" = 1 ]\n");
+  chmodSync(hook, 0o755);
+  git(f.repo, ["config", "core.hooksPath", ".githooks"]);
+  git(f.repo, ["checkout", "main"]);
+
+  await f.batch.build(`12@${movedHead},13@${rejected}`);
+  await f.batch.gate();
+  const landed = await f.batch.land();
+
+  expect(landed.rows.map((row) => row.status)).toEqual(["merged", "culprit"]);
+  expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).toContain("scripts");
+});
+
+test("the real main scanner blocks a sensitive generated PR body before push", async () => {
+  const f = landingFixture("green", undefined, (fixture) => {
+    seedRealTrustedPrivacyFiles(fixture);
+    return realBodyPrivacyRunner();
+  });
+  const head = f.addPr(12, "healthy.txt", "healthy change\n");
+  const sensitiveBody = ["synthetic-person", "invalid.example"].join("@");
+  f.views.get(12)!.closingIssuesReferences = [{ number: sensitiveBody as unknown as number }];
+  const built = await f.batch.build(`12@${head}`);
+  await f.batch.gate();
+
+  await expect(f.batch.land()).rejects.toThrow("Batch PR body failed the publication gate");
+  expect(git(f.repo, ["ls-remote", "origin", `refs/heads/${built.branch}`])).toBe("");
+  expect(f.calls.some((args) => args[1] === "create")).toBe(false);
 });
 
 test("one gated batch rebase-merges with exact head, closes originals with landed SHAs and keeps branches", async () => {
