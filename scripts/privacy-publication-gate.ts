@@ -324,7 +324,8 @@ function maskApprovedPublicValues(text: string): string {
   function completeLiteral(): void {
     if (!literal) return;
     if ((literal[0].startsWith("/*") && literal[0].endsWith("*/"))
-      || (literal[0].startsWith("//") && text[literal.index - 1] !== ":")) {
+      || (literal[0].startsWith("//") && text[literal.index - 1] !== ":")
+      || /^(?:#|--)/.test(literal[0])) {
       rawTriviaEnds.set(literal.index + literal[0].length - 1, literal.index);
     }
     advanceSyntax(literal.index);
@@ -442,7 +443,23 @@ function maskApprovedPublicValues(text: string): string {
   // syntax. In particular, the // in a bare HTTPS origin must never hide a
   // closing delimiter or the character outside it. Quoted contents are
   // opaque; enclosing groups still belong to every value inside the quote.
-  const rawQuotes = text.matchAll(/"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/gu);
+  const rawComments = [...rawTriviaEnds].map(([last, start]) => ({ start, end: last + 1 }));
+  const rawQuotePattern = /"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/gu;
+  function* rawQuoteMatches(): Generator<RegExpMatchArray> {
+    let start = 0;
+    // A comment's unmatched quote ends at that comment, so it cannot swallow
+    // the next real call. Keep quotes within comments for their own raw spans.
+    for (const comment of [...rawComments, { start: text.length, end: text.length }]) {
+      for (const end of [comment.start, comment.end]) {
+        for (const quote of text.slice(start, end).matchAll(rawQuotePattern)) {
+          quote.index += start;
+          yield quote;
+        }
+        start = end;
+      }
+    }
+  }
+  const rawQuotes = rawQuoteMatches();
   let rawQuote = rawQuotes.next().value;
   let containingRawQuote: { start: number; end: number; quote: string } | undefined;
   let rawCursor = 0;
@@ -450,6 +467,8 @@ function maskApprovedPublicValues(text: string): string {
   const rawGroups: RawGroup[] = [];
   const completedRawGroups = new Map<number, RawGroup>();
   const candidateRawGroups = new Map<(typeof candidates)[number], RawGroup>();
+  let rawCommentCursor = 0;
+  let rawCommentFrame: { end: number; depth: number; completed: Map<number, RawGroup> } | undefined;
   function skipRawTrivia(before: number): number {
     for (;;) {
       while (before >= 0 && /[\t\n\v\f\r ]/.test(text[before])) before -= 1;
@@ -474,6 +493,15 @@ function maskApprovedPublicValues(text: string): string {
   }
   function advanceRawGroups(end: number): void {
     while (rawCursor < end) {
+      if (rawCommentFrame && rawCursor >= rawCommentFrame.end) {
+        rawGroups.length = rawCommentFrame.depth;
+        rawCommentFrame = undefined;
+      }
+      const comment = rawComments[rawCommentCursor];
+      if (comment && rawCursor === comment.start) {
+        rawCommentFrame = { end: comment.end, depth: rawGroups.length, completed: new Map() };
+        rawCommentCursor += 1;
+      }
       if (rawQuote && rawCursor === rawQuote.index) {
         containingRawQuote = { start: rawQuote.index, end: rawQuote.index + rawQuote[0].length, quote: rawQuote[0][0] };
         rawCursor += rawQuote[0].length;
@@ -484,18 +512,23 @@ function maskApprovedPublicValues(text: string): string {
       if (/[([{]/.test(character)) {
         const start = rawCursor - 1;
         const before = /[([]/.test(character) ? rawCalleeBefore(start) : start - 1;
-        const callee = completedRawGroups.get(before);
+        const completed = rawCommentFrame?.completed ?? completedRawGroups;
+        const callee = completed.get(before);
         const namedCallee = before < skipRawTrivia(start - 1);
-        const unicodeCallee = before >= 0 && text.charCodeAt(before) > 0x7f;
+        const unicodeCallee = before >= 0 && text.charCodeAt(before) > 0x7f && /[\p{L}\p{N}]/u.test(text[before]);
         // A standalone group keeps its own opening edge (for example an arrow
         // callback body). Calls/indexes retain their named or returned callee.
         const envelopeStart = callee?.envelopeStart ?? (namedCallee || unicodeCallee ? before + 1 : start);
         rawGroups.push({ start, envelopeStart, attached: false, parent: rawGroups.at(-1) });
       } else if (/[)\]}]/.test(character)) {
+        // Source-comment delimiters cannot close a surrounding code group or
+        // become a returned callee after the comment. Their own groups still
+        // fence public occurrences inside the comment.
+        if (rawCommentFrame && rawGroups.length <= rawCommentFrame.depth) continue;
         const group = rawGroups.pop();
         if (group) {
           group.end = rawCursor;
-          completedRawGroups.set(rawCursor - 1, group);
+          (rawCommentFrame?.completed ?? completedRawGroups).set(rawCursor - 1, group);
           group.attached = "([{".indexOf(text[group.start]) !== ")]}".indexOf(character);
         }
       }
