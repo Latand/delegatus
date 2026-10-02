@@ -11870,6 +11870,35 @@ test("a same-owner publication waits through another tick, then advances once se
   expect(box.order.some((item) => item.startsWith("push:"))).toBe(false);
 });
 
+test("a legacy HEAD-verification park waits for its in-flight publisher to settle", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operation = pipeline.delivery!.operation!;
+  const detail = "the accepted head cannot be verified before completion: HEAD temporarily unavailable";
+  pipeline.state = "needs_decision";
+  pipeline.stateDetail = detail;
+  pipeline.runs[0]!.attempts[0]!.state = "needs_decision";
+  pipeline.runs[0]!.attempts[0]!.error = detail;
+  savePipelines([pipeline]);
+  box.setRemote(box.passedSha);
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: detail,
+      cursor: { stageId: "build", state: "committing" }, delivery: { operation: { id: operation.id, state: "running" } } });
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(box.order).toEqual(["commit"]);
+  } finally { fs.closeSync(descriptor); }
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(recovered.runs[0]!.attempts).toHaveLength(1);
+  expect(recovered.runs[0]!.attempts[0]!.state).toBe("passed");
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit"]);
+});
+
 test("a restarted engine reconciles an interrupted reservation from the remote without repeating stage work (#1939)", async () => {
   const { h, box, pipeline } = await interruptedPublication();
   pipeline.delivery!.operation!.state = "pending";
@@ -12176,6 +12205,49 @@ test("a successful publish resumes a pass parked on a rejected publication", asy
   expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
 });
 
+test.each([
+  ["retry-stage", "moved"],
+  ["publish", "moved"],
+  ["retry-stage", "unverifiable"],
+  ["publish", "unverifiable"],
+] as const)("legacy HEAD-verification parks resume the accepted attempt (%s, %s)", async (action, cause) => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+
+  const exec = h.ports.exec;
+  if (cause === "moved") box.setLocalHead("8".repeat(40));
+  else h.ports.exec = (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
+    ? { code: 128, stdout: "", stderr: "HEAD temporarily unavailable" }
+    : exec(command, args, cwd);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  const legacy = loadPipelines()[0]!;
+  expect(legacy.stateDetail).toStartWith(cause === "moved"
+    ? "the worktree moved to " : "the accepted head cannot be verified before completion:");
+  // The pinned base passed the accepted attempt to park(), overwriting its state.
+  legacy.runs[0]!.attempts[0]!.state = "needs_decision";
+  savePipelines([legacy]);
+  const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+
+  h.ports.exec = exec;
+  box.setLocalHead(box.passedSha);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action, expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed).toMatchObject({ state: "running", lastPassedCommit: box.passedSha,
+    publishedCommit: box.passedSha, cursor: { stageId: "review", state: "pending" } });
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toEqual({ ...before, state: "passed", error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.killedPanes).toHaveLength(0);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
 test("a pass whose commit failed still retries stage work before publishing", async () => {
   const h = harness();
   const box = publishHarness(h);
@@ -12202,8 +12274,15 @@ test("a pass whose commit failed still retries stage work before publishing", as
   expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
 });
 
-test("another lane's takeover keeps the old publication-refusal park fenced", async () => {
+test.each([false, true])("another lane's takeover keeps the old publication park fenced (legacy HEAD park: %s)", async (legacyHeadPark) => {
   const { h, box, id } = await deliveryRefusalPark();
+  if (legacyHeadPark) {
+    const parked = loadPipelines()[0]!;
+    parked.stateDetail = `the worktree moved to ${"8".repeat(40)} after accepting ${box.passedSha}; commit and publish the current head before completing this stage`;
+    parked.runs[0]!.attempts[0]!.state = "needs_decision";
+    parked.runs[0]!.attempts[0]!.error = parked.stateDetail;
+    savePipelines([parked]);
+  }
   expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
     reason: "recover the owner" }, h.ports)).error).toBeUndefined();
   const target = loadPipelines()[0]!.delivery!.target;
@@ -12221,10 +12300,16 @@ test("another lane's takeover keeps the old publication-refusal park fenced", as
   expect(h.spawnInputs).toHaveLength(1);
 });
 
-test.each(["budget spent: 2 findings left", "the worktree needs a decision"])("takeover and publish preserve an unrelated park: %s", async (detail) => {
+test.each([
+  ["budget spent: 2 findings left", "passed"],
+  ["the worktree needs a decision", "passed"],
+  ["budget spent: 2 findings left", "needs_decision"],
+  ["the worktree needs a decision", "needs_decision"],
+] as const)("takeover and publish preserve an unrelated park: %s (%s)", async (detail, attemptState) => {
   const { h, id } = await deliveryRefusalPark();
   const parked = loadPipelines()[0]!;
   parked.stateDetail = detail;
+  parked.runs[0]!.attempts[0]!.state = attemptState;
   parked.runs[0]!.attempts[0]!.error = detail;
   savePipelines([parked]);
   expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,

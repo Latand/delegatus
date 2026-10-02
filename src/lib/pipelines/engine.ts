@@ -2696,9 +2696,11 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
 
 function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
   const detail = pipeline.stateDetail;
+  // Older engines passed the accepted attempt to park() on HEAD verification
+  // failure, so its pass verdict survived with a needs_decision state.
   return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
     && (detail?.startsWith("publishing the passed stage:") === true
-      || (attempt.state === "passed" && (detail?.startsWith("the worktree moved to ") === true
+      || ((attempt.state === "passed" || attempt.state === "needs_decision") && (detail?.startsWith("the worktree moved to ") === true
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
 }
 
