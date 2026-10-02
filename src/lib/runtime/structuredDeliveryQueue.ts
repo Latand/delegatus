@@ -61,6 +61,8 @@ export interface StructuredDeliveryQueuePort {
     status: StructuredDeliveryTransition,
     details?: RuntimeTransitionDetails,
   ): Promise<void>;
+  /** Persist the concrete generation a fresh retry is about to reach. */
+  bindDeliveryGeneration?(operationId: string, generationId: string): boolean | Promise<boolean>;
   /** The durable receipt state, when the port can read it. The compact control
       needs it to tell a control it must issue from one an earlier executor
       already issued and never settled (#862), and the message path reads the
@@ -1199,6 +1201,17 @@ export class StructuredDeliveryQueue {
         : undefined;
       if (!firstDispatch) this.firstDispatches.delete(effect.operationId);
       const routedTurnId = recordsRoute && shouldInterrupt ? health.activeTurnRef! : null;
+      if (this.port.bindDeliveryGeneration) {
+        try {
+          if (!await this.port.bindDeliveryGeneration(effect.operationId, health.sessionKey)) {
+            this.retrySoon();
+            return true;
+          }
+        } catch {
+          this.retrySoon();
+          return true;
+        }
+      }
       if (!await this.transitionUnlessSettled(
         effect.operationId,
         "delivering",

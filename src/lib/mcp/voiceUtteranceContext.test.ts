@@ -506,6 +506,7 @@ test("naming a target explicitly is never overridden by the call", async () => {
 
   const byPath = await bindings(lookupThroughTheControlEndpoint()).conversation_messages({
     clientRequestId: "spoken-read-11",
+    full: true,
     transcriptPath: otherTranscript,
   }) as { transcriptPath: string };
   expect(byPath.transcriptPath).toBe(otherTranscript);

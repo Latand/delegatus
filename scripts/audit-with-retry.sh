@@ -46,8 +46,8 @@ for attempt in 1 2 3; do
   # format cannot turn an advisory or unknown failure into a retry.
   # Format: oven-sh/bun, bun-v1.3.3, src/cli/audit_command.zig sendAuditRequest.
   diagnostic="$(sed -E -e $'s/\033\\[[0-9;]*m//g' -e '/^bun audit v[^[:space:]]+.*$/d; /^[[:space:]]*$/d' "$output")"
-  # Bun 1.4 reports an HTTP status after the advisory endpoint URL. Normalize
-  # only a single complete POST diagnostic for this endpoint and retry statuses.
+  # Bun 1.4 reports HTTP failures with the advisory endpoint's URL. Normalize
+  # only its complete, single-line diagnostic for the same transient statuses.
   if [[ "$diagnostic" =~ ^error:\ POST\ https?://[^[:space:]]+/-/npm/v1/security/advisories/bulk\ -\ (408|429|500|502|503|504)$ ]]; then
     diagnostic="error: audit request failed (status ${BASH_REMATCH[1]})"
   fi
