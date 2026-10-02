@@ -1448,7 +1448,7 @@ Initial and remaining failures:
 
 ### src/lib/mcp/stdio.integration.test.ts
 
-**fixed** — 31 pass, 0 fail. Test drift fixed: the all-optional deployment_status schema omits required; normalize to [] before asserting callerLaunchId is optional. Packaged transport rerun passes all 31 tests after build:mcp.
+**fixed** — 31 pass, 0 fail. Test drift fixed: the all-optional deployment_status schema omits required; normalize to [] before asserting callerLaunchId is optional. The same-key race now checks exactly one `/api/tmux` dispatch and one recipient effect while exercising original-first and peer-first terminal settlement; `replayed` records receipt reuse. Packaged transport rerun passes all 31 tests after build:mcp.
 
 Initial failures:
 
@@ -2286,7 +2286,7 @@ Initial failures:
 - All changed test files rerun individually: all behavioral fixes pass; extraction keeps its existing pure-dependency guard red (3 pass / 1 fail).
 - Audit retry wrapper: 37 pass, including real ephemeral advisory endpoint and fail-closed diagnostics.
 - SpeakButton DOM/SSR: 21 pass; unchanged pane render suites pass.
-- Resources: 69 pass; recovery contention: 9 pass; packaged MCP stdio: 31 pass.
+- Resources: 69 pass; recovery contention: 9 pass; packaged MCP stdio: 31 pass, including both deterministic terminal-settlement orders with one downstream request and one recipient effect.
 - State ownership: 14 pass; project resolution: 11 pass.
 - Neutral revisit: all 150 files completed. This includes initial nonzero files plus relay and speech regression files. The old privacy matrix hit its 1200-second bound; current rebased default privacy suite completes and records its prerequisite failures above.
 - TypeScript, changed-file ESLint, shell syntax, diff whitespace and merge-base publication gate are run at the final candidate. The PR records their final results.
