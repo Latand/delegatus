@@ -5,8 +5,8 @@ import path from "node:path";
 
 /* This suite exercises the terminal-settlement host reap (#574), which
    terminates agent processes. Every pipeline is constructed directly inside
-   this sandboxed state directory and every port is stubbed — it never reads
-   the shared runtime state directory and can never dispatch a real kill. */
+   this sandboxed state directory. The integration cases use a private runtime
+   socket and processes started here; no case reads or signals operator state. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminal-reap-"));
 process.env.LLV_STRUCTURED_HOSTS = "0";
 
@@ -83,7 +83,7 @@ function harness() {
   const stops: string[] = [];
   const resident = new Map<string, boolean>();
   const stopResults = new Map<string, PipelineStageStopResult>();
-  const active = new Map<string, boolean>();
+  const active = new Map<string, boolean | null>();
   let clock = 1_000_000;
   let monotonic = 0;
   let stopCostMs = 0;
@@ -95,7 +95,9 @@ function harness() {
     spawnReceipt: () => null,
     claimSpawnRetry: () => "claimed",
     paneAgentAlive: async () => false,
-    stopStageAgent: async (target) => {
+    stopStageAgent: async (target, options) => {
+      if (options?.onlyIfIdle && active.has(target.conversationId ?? "")
+        && active.get(target.conversationId ?? "") !== false) return { outcome: "deferred" };
       stops.push(`${target.stageId}:${target.attempt}:${target.conversationId ?? "none"}`);
       monotonic += stopCostMs;
       const result = stopResults.get(target.conversationId ?? "") ?? { outcome: "stopped" as const };
@@ -391,3 +393,222 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
   expect(settled.terminalReap).toMatchObject({ rounds: 2, stopped: 2 });
   expect(settled.terminalReap!.settledAt).not.toBeNull();
 });
+
+
+test.each(["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle"])("automatic retirement over the production socket: %s", async (scenario) => {
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { procBackend } = await import("@/lib/proc");
+  const { systemBootEpoch } = await import("@/lib/processIdentity");
+  const { defaultPipelinePorts } = await import("./engine");
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const { runtimeHostClient } = await import("@/lib/runtime/client");
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const { RuntimeHost } = await import("../../runtime-host/host");
+  const { serveRuntimeHost } = await import("../../runtime-host/socket");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "review-live-host-"));
+  const helperFile = path.join(root, "helper.pid");
+  const helperCode = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(helperFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  const rootCode = scenario === "root-exits-before-helper"
+    ? `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(helperCode)}], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);`
+    : "setInterval(() => {}, 1000)";
+  const child = Bun.spawn([process.execPath, "-e", rootCode], {
+    env: { NODE_ENV: "test", LLV_STATE_DIR: root }, stdout: "ignore", stderr: "ignore",
+  });
+  const recordedPid = child.pid;
+  let helperPid: number | null = null;
+  if (scenario === "root-exits-before-helper") {
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(helperFile) && Date.now() < deadline) await Bun.sleep(10);
+    helperPid = Number(fs.readFileSync(helperFile, "utf8"));
+  }
+  const originalKill = process.kill;
+  const signals: number[] = [];
+  process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+    signals.push(pid);
+    if (pid !== recordedPid && pid !== helperPid) throw new Error("fixture refused a signal to an unrecorded process");
+    return originalKill.call(process, pid, signal);
+  }) as typeof process.kill;
+  const key = { engine: "codex" as const, sessionId: (await import("node:crypto")).randomUUID() };
+  const transcript = path.join(root, `${key.sessionId}.jsonl`);
+  fs.writeFileSync(transcript, "");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd: root, transport: "structured", accountId: "account-a",
+  });
+  if (begun.kind !== "created") throw new Error("fixture launch refused");
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key, artifactPath: transcript, cwd: root, accountId: "account-a", status: "live", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio", process: {
+      pid: recordedPid, startIdentity: procBackend.processIdentity(recordedPid), bootEpoch: systemBootEpoch(),
+    }, eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1,
+      activeTurnRef: "new-live-turn", pendingAttention: [], activeFlags: ["native-inject", "native-queue", "structured-image-v1"] },
+    claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+  });
+  if (settled.kind !== "settled") throw new Error("fixture settlement refused");
+  setAgentRegistryForTests(registry);
+  const conversationId = begun.receipt.conversationId;
+  const journal = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "running",
+    activeTurnId: "new-live-turn", attentionIds: [], provenance: "structured", artifactPath: transcript,
+    writerClaim: "structured-host:fixture:1", capabilities: { steer: true, structuredAttention: true },
+  } });
+  if (scenario === "retry-after-actuation-read") {
+    journal.executeOperation({ kind: "send", operationId: "failed-racing-turn", idempotencyKey: "failed-racing-turn",
+      conversationId, policy: "queue", text: "work awaiting retry" });
+    journal.transitionOperation("failed-racing-turn", "failed", { reason: "fixture-failure" });
+  }
+  const host = new RuntimeHost(journal, undefined, undefined, true);
+  let unavailable = false;
+  const commands: unknown[] = [];
+  const payload = { conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted",
+    attentionIds: [], provenance: "structured", artifactPath: transcript,
+    writerClaim: "structured-host:fixture:1", capabilities: { steer: true, structuredAttention: true } };
+  const publish = (running: boolean) => journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status",
+    payload: { ...payload, turn: running ? "running" : "idle", activeTurnId: running ? "resumed-live-turn" : null } });
+  const setRegistryBusy = (busy: boolean) => {
+    const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+    registry.upsert({ ...entry, status: busy ? "live" : "idle",
+      structuredHost: { ...entry.structuredHost!, activeTurnRef: busy ? "resumed-live-turn" : null } });
+  };
+  let observedIdle = false;
+  let actuationChecked = false;
+  let recovered = false;
+  const socket = path.join(root, "runtime.sock");
+  const server = serveRuntimeHost(socket, { handle: async (request, options) => {
+    if (unavailable && !recovered && request.method === "snapshot") {
+      if (scenario === "unavailable") return { id: request.id, ok: false, error: "snapshot temporarily unavailable" };
+      if (!observedIdle) {
+        observedIdle = true;
+        publish(false);
+        setRegistryBusy(false);
+      }
+      const response = await host.handle(request, options);
+      if (scenario === "resumed-after-snapshot") publish(true);
+      return response;
+    }
+    if (request.method === "session-read" && unavailable && !recovered) {
+      actuationChecked = true;
+      if (scenario === "resumed-before-actuation") publish(true);
+      const retirementClaimed = journal.effectBatch(100, ["runtime.kill"]).some(effect =>
+        journal.operationResult(effect.payload.operationId as string)?.receipt.status === "delivering");
+      if (scenario === "queued-before-actuation") journal.executeOperation({ kind: "send", operationId: "new-queued-turn",
+        idempotencyKey: "new-queued-turn", conversationId, policy: "queue", text: "new live work" });
+      if (scenario === "generation-before-actuation") journal.append({ scope: { type: "session", id: conversationId },
+        kind: "session-status", payload: { ...payload, sessionKey: { ...key, sessionId: "replacement-generation" }, turn: "idle", activeTurnId: null } });
+      const response = await host.handle(request, options);
+      if (scenario === "queued-after-actuation-read" && retirementClaimed) {
+        const newWork = journal.executeOperation({ kind: "send", operationId: "new-racing-turn", idempotencyKey: "new-racing-turn",
+          conversationId, policy: "queue", text: "work after the idle response" });
+        expect(newWork.receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-in-progress" });
+      }
+      if (scenario === "retry-after-actuation-read" && retirementClaimed) {
+        const retry = await host.handle({ id: "racing-retry", method: "operation-retry", params: { operationId: "failed-racing-turn" } });
+        expect(retry).toMatchObject({ ok: false, error: "idle-retirement-in-progress" });
+        expect(journal.operationResult("failed-racing-turn")?.receipt.status).toBe("failed");
+      }
+      if (scenario === "registry-busy-before-signal") setRegistryBusy(true);
+      if (scenario === "legacy-session-read" && response.ok && response.result && typeof response.result === "object") {
+        delete (response.result as { retirementBlocked?: boolean }).retirementBlocked;
+      }
+      return response;
+    }
+    if (request.method === "command") commands.push(request.params?.command);
+    return host.handle(request, options);
+  } });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const oldSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const oldStructured = process.env.LLV_STRUCTURED_HOSTS;
+  process.env.LLV_RUNTIME_HOST_SOCKET = socket;
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  const finished = attempt(1, conversationId, true);
+  finished.agentPath = transcript;
+  finished.launchId = begun.receipt.launchId;
+  savePipelines([pipelineRecord({ id: "review-live-busy", state: "completed", attempts: [finished] })]);
+  let unbindPersistence: (() => void) | null = null;
+  try {
+    const tick = async () => {
+      const h = harness();
+      const production = defaultPipelinePorts();
+      h.ports.stageHostResident = production.stageHostResident;
+      h.ports.conversationAgentActive = production.conversationAgentActive;
+      h.ports.stopStageAgent = production.stopStageAgent;
+      await tickPipelines([], h.ports);
+    };
+    await tick();
+    expect(commands).toEqual([]);
+    await bindStructuredDeliveryQueue([], { registry, client: runtimeHostClient(), recover: async () => null });
+    if (helperPid !== null) {
+      const { bindCodexHostPersistence } = await import("@/lib/runtime/registry");
+      type HostState = import("@/lib/runtime/engineHost").HostState;
+      const state: HostState = { sessionKey: key.sessionId, status: "idle", endpoint: "stdio", pid: recordedPid,
+        processStartIdentity: procBackend.processIdentity(recordedPid), protocolVersion: "v2", eventCursor: 1,
+        activeTurnRef: null, pendingAttention: [], activeFlags: ["native-inject", "native-queue", "structured-image-v1"], account: null };
+      const listeners = new Set<(state: HostState) => void>();
+      const observableHost = { health: async () => state, setWriterFence: () => {}, release: async () => {},
+        onStateChange: (listener: (state: HostState) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+      unbindPersistence = await bindCodexHostPersistence(registry, key,
+        observableHost as unknown as Parameters<typeof bindCodexHostPersistence>[2], "structured-host:fixture", 1);
+      void child.exited.then(() => { for (const listener of [...listeners]) listener({ ...state, status: "dead", pid: null }); });
+    }
+    unavailable = true;
+    const started = Date.now();
+    await tick();
+    if (helperPid !== null) {
+      // The root can exit before the executor escalates its captured helper.
+      while (journal.effectBatch(100, ["runtime.kill"]).length > 0 && Date.now() - started < 5_000) await Bun.sleep(10);
+    }
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
+    expect(commands.every(command => !!(command as { onlyIfIdle?: unknown }).onlyIfIdle)).toBe(true);
+    if (["idle", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper"].includes(scenario)) {
+      await child.exited;
+      expect(procBackend.pidAlive(recordedPid)).toBe(false);
+      expect(signals.length).toBeGreaterThan(0);
+      if (helperPid !== null) {
+        expect(procBackend.pidAlive(helperPid)).toBe(false);
+        expect(signals).toContain(helperPid);
+      }
+      if (scenario === "queued-after-actuation-read") expect(journal.operationResult("new-racing-turn")?.receipt.status).toBe("rejected");
+      expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 1, stopped: 1 });
+    } else {
+      expect(procBackend.pidAlive(recordedPid)).toBe(true);
+      expect(signals).toEqual([]);
+      expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null });
+      if (scenario === "unavailable" || scenario === "resumed-after-snapshot" || scenario === "resumed-before-actuation") {
+        expect(journal.snapshot().sessions[0]?.turn).toBe("running");
+      }
+      if (["resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation"].includes(scenario)) expect(actuationChecked).toBe(true);
+      // Deferred attempts remain eligible once the same recorded host is idle.
+      recovered = true;
+      if (scenario === "queued-before-actuation") {
+        const pending = journal.operationResult("new-queued-turn")!;
+        expect(pending.receipt.status).toBe("queued");
+        journal.transitionOperation("new-queued-turn", "failed", { reason: "delivery-discarded" });
+      }
+      publish(false);
+      setRegistryBusy(false);
+      const cleanupStarted = Date.now();
+      await tick();
+      await child.exited;
+      expect(Date.now() - cleanupStarted).toBeLessThan(5_000);
+      expect(signals.length).toBeGreaterThan(0);
+      expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 1, stopped: 1 });
+    }
+  } finally {
+    process.kill = originalKill;
+    unbindPersistence?.();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    if (oldSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = oldSocket;
+    process.env.LLV_STRUCTURED_HOSTS = oldStructured;
+    setAgentRegistryForTests(null);
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+    if (helperPid !== null && procBackend.pidAlive(helperPid)) originalKill.call(process, helperPid, "SIGKILL");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);

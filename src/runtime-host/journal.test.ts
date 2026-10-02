@@ -3822,3 +3822,131 @@ test("a settled turn reaches the completion-notice port once, and a failed consu
     reopened.close();
   }
 });
+
+
+test.each(["queued", "delivering", "uncertain", "native-queue"])("automatic retirement reads durable %s work beyond displayed receipts", (work) => {
+  const dir = sandbox("idle-work");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_idle_work";
+  const key = { engine: "codex" as const, sessionId: "idle-generation" };
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+    activeTurnId: null, writerClaim: "fixture:1", attentionIds: [],
+    capabilities: { steer: true, structuredAttention: true, nativeQueue: work === "native-queue" },
+  } });
+  const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+  if (work === "native-queue") {
+    journal.executeOperation({ kind: "native-queue", conversationId, operationId: "pending-native", idempotencyKey: "pending-native",
+      action: "add", binding: { threadId: key.sessionId, accountId: null }, text: "accepted native work" });
+    journal.nativeQueueTransition("pending-native", { phase: "prepared", input: [{ type: "text", text: "accepted native work" }] });
+    journal.nativeQueueTransition("pending-native", { phase: "observed-queued", submission: {
+      id: "native-one", clientUserMessageId: "pending-native", input: [{ type: "text", text: "accepted native work" }],
+    } });
+  } else {
+    journal.executeOperation({ kind: "send", conversationId, operationId: "pending-send", idempotencyKey: "pending-send", policy: "queue", text: "accepted work" });
+    if (work !== "queued") journal.transitionOperation("pending-send", work as "delivering" | "uncertain");
+  }
+  // Display retention is bounded; the work obligation is not.
+  for (let i = 0; i < 9; i++) journal.executeOperation({ kind: "kill", conversationId, sessionKey: key, operationId: `operator-${i}`, idempotencyKey: `operator-${i}` });
+  expect(journal.readSession({ conversationId })!.recentReceipts.some(receipt => receipt.operationId.startsWith("pending-"))).toBe(false);
+  expect(journal.readSession({ conversationId })!.retirementBlocked).toBe(true);
+  const retired = journal.executeOperation({ kind: "kill", conversationId, sessionKey: key, operationId: "automatic-retire", idempotencyKey: "automatic-retire", onlyIfIdle });
+  expect(retired.receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-deferred" });
+  expect(journal.effectBatch(100, ["runtime.kill"]).some(effect => effect.payload.operationId === "automatic-retire")).toBe(false);
+  journal.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+test.each(["work-first", "retirement-first"])("automatic retirement claim serializes new work: %s", (ordering) => {
+  const dir = sandbox("retirement-claim");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_retirement_claim";
+  const key = { engine: "codex" as const, sessionId: "claimed-generation" };
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+  journal.executeOperation({ kind: "kill", operationId: "retire-claim", idempotencyKey: "retire-claim", conversationId, sessionKey: key, onlyIfIdle });
+  const send = (id: string) => journal.executeOperation({ kind: "send", operationId: id, idempotencyKey: id, conversationId, text: "new work", policy: "queue" });
+  if (ordering === "work-first") {
+    expect(send("work-first").receipt.status).toBe("queued");
+    const claimed = journal.transitionOperation("retire-claim", "delivering");
+    expect(claimed.receipt).toMatchObject({ status: "failed", reason: "idle-retirement-deferred" });
+    expect(journal.operationResult("work-first")!.receipt.status).toBe("queued");
+  } else {
+    expect(journal.transitionOperation("retire-claim", "delivering").receipt.status).toBe("delivering");
+    expect(send("racing-send").receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-in-progress" });
+    const native = journal.executeOperation({ kind: "native-queue", operationId: "racing-native", idempotencyKey: "racing-native",
+      conversationId, action: "add", binding: { threadId: key.sessionId, accountId: null }, text: "new native work" });
+    expect(native.receipt.status).toBe("rejected");
+    expect(journal.nativeQueueRead(conversationId)).toEqual([]);
+    expect(journal.effectBatch(100).every(effect => effect.payload.operationId === "retire-claim")).toBe(true);
+    // A refused teardown releases its admission barrier, allowing a retry.
+    journal.transitionOperation("retire-claim", "failed", { reason: "idle-retirement-deferred" });
+    expect(send("work-after-release").receipt.status).toBe("queued");
+  }
+  journal.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("automatic retirement claim blocks in-place retry without consuming its action", () => {
+  const dir = sandbox("retirement-retry");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_retirement_retry";
+  const key = { engine: "codex" as const, sessionId: "retry-generation" };
+  try {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      activeTurnId: null, writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true },
+    } });
+    journal.executeOperation({ kind: "send", operationId: "retry-send", idempotencyKey: "retry-send",
+      conversationId, text: "retry work", policy: "queue" });
+    journal.transitionOperation("retry-send", "failed", { reason: "fixture-failure" });
+    const session = journal.readSession({ conversationId })!;
+    journal.executeOperation({ kind: "kill", operationId: "retry-retire", idempotencyKey: "retry-retire", conversationId,
+      sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: "fixture:1" } });
+    expect(journal.transitionOperation("retry-retire", "delivering").receipt.status).toBe("delivering");
+    expect(() => journal.retryOperation("retry-send")).toThrow("idle-retirement-in-progress");
+    expect(journal.operationResult("retry-send")!.receipt.status).toBe("failed");
+    expect(journal.effectBatch(100).every(effect => effect.payload.operationId === "retry-retire")).toBe(true);
+    journal.transitionOperation("retry-retire", "failed", { reason: "idle-retirement-deferred" });
+    expect(journal.retryOperation("retry-send").receipt.status).toBe("queued");
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test.each(["before-admission", "before-claim"])("automatic retirement protects a rearmed retry parent %s", (timing) => {
+  const dir = sandbox("retirement-retry-parent");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_retry_parent";
+  const key = { engine: "codex" as const, sessionId: "retry-parent-generation" };
+  try {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      activeTurnId: null, writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true },
+    } });
+    journal.executeOperation({ kind: "send", operationId: "retry-parent", idempotencyKey: "retry-parent",
+      conversationId, text: "accepted parent work", policy: "queue" });
+    journal.transitionOperation("retry-parent", "failed", { reason: "fixture-failure" });
+    const successor = journal.retryOperation("retry-parent", "successor-key");
+    journal.transitionOperation(successor.operationId, "failed", { reason: "fixture-failure" });
+    const session = journal.readSession({ conversationId })!;
+    const kill = { kind: "kill" as const, operationId: "parent-retire", idempotencyKey: "parent-retire", conversationId,
+      sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: "fixture:1" } };
+    if (timing === "before-claim") expect(journal.executeOperation(kill).receipt.status).toBe("queued");
+    expect(journal.retryOperation("retry-parent").receipt.status).toBe("queued");
+    expect(journal.readSession({ conversationId })!.retirementBlocked).toBe(true);
+    const retire = timing === "before-claim"
+      ? journal.transitionOperation("parent-retire", "delivering") : journal.executeOperation(kill);
+    expect(retire.receipt).toMatchObject({ status: timing === "before-claim" ? "failed" : "rejected", reason: "idle-retirement-deferred" });
+    expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
+    expect(journal.operationResult("retry-parent")!.receipt.status).toBe("queued");
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

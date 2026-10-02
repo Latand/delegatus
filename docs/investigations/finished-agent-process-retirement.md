@@ -28,7 +28,20 @@ used as authority for a signal.
    reported it active. A later idle observation could never revisit that
    attempt. Active work now defers settlement without consuming teardown
    rounds. Subsequent ticks retry it; failed siblings retain their own bounded
-   retry and unconfirmed-host reporting.
+   retry and unconfirmed-host reporting. Automatic stops require fresh positive
+   idle evidence and carry the observed generation, session revision and writer
+   claim through journal admission and executor actuation. Unreadable evidence
+   or new work remains deferred. Durable pending operations, native queue rows,
+   held deliveries and unreplayed handoff messages protect accepted work.
+   Capability advertisements use the existing activity-flag classifier.
+   The journal atomically acquires the retirement claim before teardown. Work
+   admitted first defers retirement; new admissions while teardown owns the
+   claim receive a retryable rejection. In-place retries check the same barrier
+   before claiming their action or rearming a failed operation. Captured-tree
+   cleanup survives the root releasing its writer claim, fenced by the same
+   generation, claim epoch and process identities. Finishing or refusing
+   teardown releases the barrier. Older runtime generations without this
+   protocol are deferred.
 2. MCP launcher EOF only ended child stdin. A child retaining handles or
    ignoring TERM could stay resident indefinitely. Launcher-owned children
    now receive one second for EOF, then TERM, then KILL after another second.
@@ -56,7 +69,16 @@ failed before the EOF fix and passed afterward.
 The terminal-reap regression failed before the fix: seven active observations
 followed by idle produced no stop. It now preserves all seven active ticks,
 reaps on the first idle tick, and does not repeat the stop. A second case
-checks that an unconfirmed sibling cannot hide pending live work.
+checks that an unconfirmed sibling cannot hide pending live work. Production
+socket/journal regressions cover snapshot loss, a resumed turn after snapshot,
+a turn or generation changed before actuation, queued work and in-place retry
+after the actuation read, and registry busy
+state before signals. Each deferred host is subsequently cleaned up within
+five seconds once its work settles; capability-bearing idle hosts also exit.
+An idle root with real registry persistence exits on TERM; its detached helper
+ignores TERM and is still killed within the deadline after the root releases
+its writer claim.
+The two original busy-turn regressions failed before the safety correction.
 
 The existing retirement suite checks real tree termination, including a child
 in its own process group, retained resume data, identity changes, unreadable

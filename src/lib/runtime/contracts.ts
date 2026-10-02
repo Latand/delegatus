@@ -381,8 +381,27 @@ export interface RuntimeInterruptCommand extends RuntimeCommandBase {
   turnId?: string | null;
 }
 
+/** Automatic retirement is bound to one observed idle session revision and writer. */
+export interface RuntimeIdleKillFence {
+  revision: number;
+  writerClaim: string;
+}
+
+export function runtimeIdleKillMatches(
+  session: RuntimeSession | null | undefined,
+  key: RuntimeKillCommand["sessionKey"],
+  fence: RuntimeIdleKillFence,
+): boolean {
+  return !!session && session.host === "hosted" && session.turn === "idle"
+    && session.activeTurnId === null && session.attentionIds.length === 0
+    && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
+    && session.revision === fence.revision && session.writerClaim === fence.writerClaim
+    && session.retirementBlocked !== true;
+}
+
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  onlyIfIdle?: RuntimeIdleKillFence;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
 }
 
@@ -534,6 +553,9 @@ export interface RuntimeInjectionBinding {
 }
 
 export interface RuntimeSession {
+  /** Fresh keyed session reads derive this from all open operations and native
+      queue entries. Absence is insufficient evidence for automatic retirement. */
+  retirementBlocked?: boolean;
   /** Structured writer identity published with this session generation. */
   writerClaim?: string | null;
   diagnostics?: RuntimeHostDiagnostics;

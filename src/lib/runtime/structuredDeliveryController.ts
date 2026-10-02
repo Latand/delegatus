@@ -1,3 +1,6 @@
+import { handoffQueue } from "./handoffQueueStore";
+import { blockingHostActivityFlags } from "./hostActivityFlags";
+import { runtimeIdleKillMatches } from "./contracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
@@ -819,7 +822,42 @@ export async function bindStructuredDeliveryQueue(
       },
     },
     hostResolver(registry, hosts),
-    async (conversationId, expectedKey) => {
+    async (conversationId, expectedKey, onlyIfIdle) => {
+      if (onlyIfIdle) {
+        // Re-read the journal after admission and immediately before actuation.
+        // Missing evidence leaves retirement deferred, with no process effects.
+        const session = await client.readSession?.({ conversationId }).catch(() => null);
+        if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
+      }
+      let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
+      const idleAuthority = (): boolean => {
+        if (!onlyIfIdle) return true;
+        const snapshot = registry.readOnlySnapshot();
+        if (Object.values(snapshot.heldDeliveries).some(delivery => delivery.conversationId === conversationId
+          && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))) return false;
+        try {
+          if (handoffQueue().rows().some(row => (row.conversationId === conversationId
+            || (row.engine === expectedKey.engine && row.engineSessionId === expectedKey.sessionId))
+            && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)))) return false;
+        } catch { return false; }
+        const entry = snapshot.entries[sessionKeyId(expectedKey)];
+        const conversation = registry.conversation(conversationId as ViewerConversationId);
+        const generation = conversation?.generations.at(-1);
+        // A host's terminal persistence callback releases its writer when the
+        // captured tree prevents it clearing the row. The same captured tree
+        // still belongs to this teardown; a replacement writer never does.
+        const captured = capturedRetirement;
+        const releasedCapturedWriter = captured !== null && entry?.claimOwner === null
+          && entry.claimEpoch === captured.claimEpoch
+          && entry.structuredHost?.writerClaimEpoch === captured.claimEpoch
+          && (entry.structuredTerminationSurvivors ?? []).some(identity => identity.pid === captured.root.pid
+            && identity.startIdentity === captured.root.startIdentity && identity.bootEpoch === captured.root.bootEpoch);
+        return !!entry?.structuredHost && generation?.id === expectedKey.sessionId
+          && !entry.host && entry.status === "idle" && entry.structuredHost.activeTurnRef === null
+          && entry.structuredHost.pendingAttention.length === 0 && blockingHostActivityFlags(entry.structuredHost.activeFlags).length === 0
+          && (`${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` === onlyIfIdle.writerClaim || releasedCapturedWriter);
+      };
+      if (!idleAuthority()) return false;
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
         for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
@@ -863,6 +901,7 @@ export async function bindStructuredDeliveryQueue(
           if (branchSharesRootHost(registry, registry.conversation(conversationId as ViewerConversationId))) {
             return { status: 409, error: BRANCH_SHARED_HOST_ERROR };
           }
+          if (!idleAuthority()) return { status: 409, error: "idle-retirement-deferred" };
           return null;
         };
         const refusal = authorize();
@@ -870,7 +909,17 @@ export async function bindStructuredDeliveryQueue(
         const outcome = await terminateStructuredHostTree(ref, {
           retainedSurvivors,
           authorize,
-          persistCapturedTree: identities => registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities),
+          // The automatic path uses the signal ladder's synchronous authority
+          // recheck rather than the operator's unconditional release method.
+          ...(onlyIfIdle ? { terminateOwnedHost: async () => false } : {}),
+          persistCapturedTree: identities => {
+            const persisted = registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities);
+            if (persisted && onlyIfIdle) {
+              const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]!;
+              capturedRetirement = { root: ref, claimEpoch: entry.claimEpoch };
+            }
+            return persisted;
+          },
           retireRegistryEntry: (key, expected, confirmed) => registry.terminateStructuredHost(key, expected, confirmed),
         });
         if (!outcome.ok) {

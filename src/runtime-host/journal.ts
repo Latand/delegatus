@@ -1,3 +1,4 @@
+import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
@@ -783,6 +784,16 @@ export class RuntimeJournal {
           return { operationId, receipt: previous, replayed: true };
         }
       }
+      // Acquire automatic retirement inside the same transaction as admission.
+      // A queued kill carries no reservation; delivering excludes new work.
+      if (status === "delivering" && command.kind === "kill" && command.onlyIfIdle) {
+        const session = this.entity<RuntimeSession>("session", command.conversationId);
+        if (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
+          || this.retirementBlocked(command.conversationId)) {
+          status = "failed";
+          details = { ...details, reason: "idle-retirement-deferred" };
+        }
+      }
       const queueing = status === "queued"
         && (previous.status === "delivering" || previous.status === "applying"
           || (this.structuredHosts && previous.status === "pending"));
@@ -983,6 +994,12 @@ export class RuntimeJournal {
         && previous.status !== "uncertain") {
         throw new Error("only failed or uncertain runtime operations can retry in place");
       }
+      // Re-arming an existing row admits work just like a fresh send. Hold the
+      // same transaction as the retirement claim and leave retry ownership
+      // untouched when teardown has already acquired it.
+      if (this.retirementInProgress(command.conversationId)) {
+        throw new Error("idle-retirement-in-progress");
+      }
       const claimed = recorded ?? this.acquireDeliveryActionInTransaction(operationId, "retry", previous);
       if (claimed.winner !== "retry") throw this.deliveryActionConflict(claimed.winner, "retry");
       if (previous.status === "pending" || previous.status === "queued") {
@@ -1052,12 +1069,14 @@ export class RuntimeJournal {
       throw new Error("runtime session identity is invalid");
     }
     const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
-    if (session) return presentSession(session);
+    if (session) return { ...presentSession(session), retirementBlocked: this.retirementBlocked(session.conversationId) };
     if (!artifactPath) return null;
     const row = this.db.query<{ state_json: string }, [string]>(
       "SELECT state_json FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.artifactPath') = ? ORDER BY id LIMIT 1",
     ).get(artifactPath);
-    return row ? presentSession(JSON.parse(row.state_json) as RuntimeSession) : null;
+    if (!row) return null;
+    const matched = JSON.parse(row.state_json) as RuntimeSession;
+    return { ...presentSession(matched), retirementBlocked: this.retirementBlocked(matched.conversationId) };
   }
 
   snapshot(): RuntimeSnapshot {
@@ -1877,6 +1896,7 @@ export class RuntimeJournal {
 
   private normalizeOperation(command: RuntimeOperationCommand): RuntimeOperationCommand {
     if (command.kind === "native-queue") return parseRuntimeCommand("native-queue", command);
+    if (command.kind === "kill") return parseRuntimeCommand("kill", command);
     if (command.kind === "inject") {
       const normalized = parseRuntimeCommand("inject", command);
       /* The parser recomputes the digest from the text it accepted. Comparing
@@ -1941,7 +1961,10 @@ export class RuntimeJournal {
     let reason: string | null = null;
     let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : session?.activeTurnId ?? null;
     let queuePosition: number | null = null;
-    if (command.kind === "native-queue") {
+    if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
+      status = "rejected";
+      reason = "idle-retirement-in-progress";
+    } else if (command.kind === "native-queue") {
       turnId = command.turnId ?? null;
       if (!this.structuredHosts || !session || session.host !== "hosted") {
         status = "rejected"; reason = "no-claim";
@@ -2093,7 +2116,9 @@ export class RuntimeJournal {
         turnId = attention.turnId ?? turnId;
       }
     } else if (command.kind === "kill") {
-      status = "queued";
+      status = command.onlyIfIdle && (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
+        || this.retirementBlocked(command.conversationId)) ? "rejected" : "queued";
+      if (status === "rejected") reason = "idle-retirement-deferred";
       turnId = null;
     } else {
       status = "queued";
@@ -2138,6 +2163,31 @@ export class RuntimeJournal {
     const session = this.entity<RuntimeSession>("session", conversationId);
     if (!session?.writerClaim) return null;
     return { threadId: session.sessionKey.sessionId, accountId: session.accountId, writerClaim: session.writerClaim };
+  }
+
+  private retirementInProgress(conversationId: string): boolean {
+    return !!this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND json_extract(request_json, '$.kind') = 'kill'
+        AND json_type(request_json, '$.onlyIfIdle') = 'object'
+        AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
+    `).get(conversationId);
+  }
+
+  /** Keyed, durable work evidence; the eight displayed receipts cannot prove
+      an empty queue. Unknown outcomes also retain their work obligation. */
+  private retirementBlocked(conversationId: string): boolean {
+    const operation = this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND json_extract(request_json, '$.kind') <> 'kill'
+        AND json_extract(receipt_json, '$.status') IN ('pending', 'queued', 'delivering', 'applying', 'uncertain')
+      LIMIT 1
+    `).get(conversationId);
+    if (operation) return true;
+    return !!this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM native_queue_entries WHERE conversation_id = ?
+        AND json_extract(state_json, '$.state') NOT IN ('delivered', 'removed', 'refused') LIMIT 1
+    `).get(conversationId);
   }
 
   private queuedSendCount(conversationId: string): number {

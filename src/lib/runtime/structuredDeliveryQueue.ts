@@ -1,7 +1,8 @@
+import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
-import { parseRuntimeCommand, parseRuntimeSendSettings } from "./commands";
+import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeSendSettings } from "./commands";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
@@ -186,6 +187,7 @@ interface ControlEffect {
   operationId: string;
   conversationId: string;
   kind: "answer" | "interrupt" | "kill";
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
@@ -401,6 +403,8 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
       conversationId,
       kind: "kill",
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
+      ...(effect.payload.onlyIfIdle !== undefined
+        ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
       eventSeq: effect.eventSeq,
     };
   }
@@ -682,6 +686,7 @@ export class StructuredDeliveryQueue {
     private readonly terminateHost: (
       conversationId: string,
       sessionKey: { engine: "codex" | "claude"; sessionId: string },
+      onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
     ) => Promise<boolean> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
@@ -2040,13 +2045,31 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       const host = this.resolveHost(effect.conversationId);
+      if (effect.onlyIfIdle && host) {
+        const state = await this.readHealth(host);
+        if (!state.readable || state.value.status !== "idle" || state.value.activeTurnRef !== null
+          || state.value.pendingAttention.length > 0 || blockingHostActivityFlags(state.value.activeFlags).length > 0) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-retirement-deferred" });
+          return { blocked: false, terminated: false };
+        }
+      }
       if (!effect.sessionKey) {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "structured host termination target is unavailable" });
         return { blocked: false, terminated: false };
       }
+      if (effect.onlyIfIdle) {
+        if (!await this.transitionUnlessSettled(effect.operationId, "delivering")) return { blocked: false, terminated: false };
+        const claimed = await this.readStatus(effect.operationId);
+        if (!claimed.readable) return { blocked: true, terminated: false };
+        if (claimed.value?.status !== "delivering") return { blocked: false, terminated: false };
+      }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey)) {
+          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle)) {
+            if (effect.onlyIfIdle) {
+              await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-retirement-deferred" });
+              return { blocked: false, terminated: false };
+            }
             return { blocked: true, terminated: false };
           }
           if (!await this.transitionUnlessSettled(effect.operationId, "delivering")) {
@@ -2063,7 +2086,7 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey)) {
+        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle)) {
           await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }

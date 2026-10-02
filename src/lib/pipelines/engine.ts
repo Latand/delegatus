@@ -161,6 +161,7 @@ export type PipelineStageStopResult =
       `detail` names the evidence when the stop went around the runtime. */
   | { outcome: "stopped"; detail?: string }
   | { outcome: "not-running" }
+  | { outcome: "deferred" }
   /** Termination was attempted and the authorized tree is unresolved (#1501):
       a survivor, refused signal, or lost authority. Typed apart from `failed` because
       no evidence about the registry row or the transcript may terminalize
@@ -239,7 +240,7 @@ export interface PipelinePorts {
   paneAgentAlive(paneId: string): Promise<boolean>;
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
-  stopStageAgent(target: PipelineStageHostRef): Promise<PipelineStageStopResult>;
+  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle: true }): Promise<PipelineStageStopResult>;
   /** Identity-verified teardown of a stage attempt's tmux pane, for a
       pane-hosted agent the registry can no longer address. `unknown` means the
       pane could not be proven to be this stage's, so nothing was signalled. */
@@ -718,6 +719,7 @@ const KILL_DELIVERED_STATES = new Set(["delivered"]);
 const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
 
 export type StageStopProbes = {
+  onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   client?: RuntimeHostClient | null;
   /** Injected into the identity-bound termination a socketless caller falls
       back to (#1501); production uses the real kernel probes and signals. */
@@ -726,6 +728,7 @@ export type StageStopProbes = {
     conversationId: string;
     transcriptPath: string;
     action: "kill";
+    onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   }) => Promise<{ status: number; body: unknown }>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -861,17 +864,22 @@ export async function stopPipelineStageAgent(
       const { applyConversationAction } = await import("@/lib/conversation/actions");
       return applyConversationAction(request);
     });
-    const result = await applyAction({ conversationId, transcriptPath, action: "kill" });
+    const result = await applyAction({ conversationId, transcriptPath, action: "kill",
+      ...(probes.onlyIfIdle ? { onlyIfIdle: probes.onlyIfIdle } : {}),
+    });
     const body = result.body as { ok?: boolean; error?: string; code?: string; operationId?: string; receipt?: { status?: string } };
     if (result.status === 503 && body.code === RUNTIME_HOST_UNAVAILABLE_CODE) {
+      if (probes.onlyIfIdle) return { outcome: "deferred" };
       return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
     }
     if (result.status >= 400 || body.ok !== true) {
+      if (probes.onlyIfIdle) return { outcome: "deferred" };
       return { outcome: "failed", error: body.error ?? `stage host kill was refused with status ${result.status}` };
     }
     /* No receipt means the control settled synchronously — the legacy pane
        ladder, or a replayed terminal kill on an already-dead host. */
     const receiptStatus = body.receipt?.status ?? null;
+    if (probes.onlyIfIdle && receiptStatus && KILL_REFUSED_STATES.has(receiptStatus)) return { outcome: "deferred" };
     if (!receiptStatus || KILL_DELIVERED_STATES.has(receiptStatus)) return { outcome: "stopped" };
 
     const operationId = body.operationId ?? null;
@@ -887,6 +895,7 @@ export async function stopPipelineStageAgent(
         const status = durable?.receipt.status ?? null;
         if (status && KILL_DELIVERED_STATES.has(status)) return { outcome: "stopped" };
         if (status && KILL_REFUSED_STATES.has(status)) {
+          if (probes.onlyIfIdle) return { outcome: "deferred" };
           return {
             outcome: "failed",
             error: durable?.receipt.reason ?? `stage host kill ${status} (operation ${operationId})`,
@@ -903,7 +912,32 @@ export async function stopPipelineStageAgent(
       detail: `kill accepted as ${receiptStatus} but termination was not confirmed`,
     };
   } catch (error) {
+    if (probes.onlyIfIdle) return { outcome: "deferred" };
     return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Observe positive idle evidence afresh. Unknown state never authorizes an
+    automatic stop, and the durable command rechecks this revision at admission. */
+export async function retirePipelineStageAgent(
+  target: PipelineStageHostRef,
+  probes: StageStopProbes = {},
+): Promise<PipelineStageStopResult> {
+  try {
+    const probe = await stageHostProbe(target);
+    if (!probe || !probe.resident()) return { outcome: "not-running" };
+    const client = probes.client === undefined ? runtimeHostClient() : probes.client;
+    if (!client) return { outcome: "deferred" };
+    const session = await client.readSession?.({ conversationId: probe.conversationId });
+    // Older runtime generations cannot prove the conditional-kill protocol.
+    if (!session || session.retirementBlocked !== false || session.host !== "hosted" || session.turn !== "idle"
+      || session.activeTurnId !== null || session.attentionIds.length > 0 || !session.writerClaim
+      || session.artifactPath !== probe.transcriptPath) return { outcome: "deferred" };
+    return await stopPipelineStageAgent(target, { ...probes, client,
+      onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim },
+    });
+  } catch {
+    return { outcome: "deferred" };
   }
 }
 
@@ -1240,7 +1274,8 @@ export function defaultPipelinePorts(
       const info = await paneInfo(paneId);
       return info !== null && !isShellCommand(info.command);
     },
-    stopStageAgent: (target) => stopPipelineStageAgent(target),
+    stopStageAgent: (target, options) => options?.onlyIfIdle
+      ? retirePipelineStageAgent(target) : stopPipelineStageAgent(target),
     stopStagePane: (target) => stopPipelineStagePane(target),
     stageHostResident: async (target) => {
       try {
@@ -5939,8 +5974,12 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       liveWork = true;
       continue;
     }
+    const result = await ports.stopStageAgent(target, { onlyIfIdle: true });
+    if (result.outcome === "deferred") {
+      liveWork = true;
+      continue;
+    }
     attempted = true;
-    const result = await ports.stopStageAgent(target);
     if (result.outcome === "unresolved") rememberUnresolvedTermination(attempt, result, ports.now());
     if (result.outcome === "stopped") {
       reap.stopped += 1;
