@@ -583,6 +583,8 @@ test("a hold of 0.35 s lifts the card and shows the four columns; nothing opens 
   expect(q(dock()!, '[data-phone-dock-tile="assigned"]')!.hasAttribute("data-here")).toBe(true);
   expect(q(dock()!, '[data-phone-dock-tile="assigned"]')!.textContent).toContain(en("mobile2.kanban.dockHere"));
   expect(ghostOf()).not.toBeNull();
+  /* An opaque ghost: a see-through one lets the card under it write across its rows. */
+  expect(ghostOf()!.style.opacity).toBe("");
   expect(nav.getState().sheet).toBeNull();
   expect(opened.tasks).toEqual([]);
   fireOn(card, finger("pointerup", 40, 40));

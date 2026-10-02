@@ -284,7 +284,7 @@
 .kb .card:hover { border-color: var(--border-strong); }
 .kb .card:focus-visible { outline: 2px solid var(--color-accent); }
 .kb .card.dragging { opacity: 0.35; }
-.kb .card.ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); opacity: 0.95; content-visibility: visible; will-change: transform; }
+.kb .card.ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); content-visibility: visible; will-change: transform; }
 /* The whole card is the drag handle (cardDrag.ts). The pointer is captured on
    the held card, so nothing under the ghost takes hover, and a text selection is
    refused by `selectstart` there. No inherited property (`user-select`,

@@ -90,7 +90,7 @@ export function beginCardLift(options: CardLiftOptions): void {
   ghost.removeAttribute("data-phone-card-frame");
   Object.assign(ghost.style, {
     position: "fixed", left: "0", top: "0", margin: "0", width: `${rect.width}px`, zIndex: "80", pointerEvents: "none",
-    boxShadow: "var(--shadow-2)", opacity: "0.96", borderRadius: "12px", willChange: "transform",
+    boxShadow: "var(--shadow-2)", borderRadius: "12px", willChange: "transform",
     transform: `translate3d(${rect.left}px, ${rect.top}px, 0) scale(${LIFT_SCALE})`,
   });
   const dimmed = element.style.opacity;
