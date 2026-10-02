@@ -141,6 +141,25 @@ test("host shutdown and unknown recovery cannot reopen an idle turn for the same
   } finally { cache.dispose(); }
 });
 
+test("a late running status for the settled turn stays idle, while a different turn wakes subscribers", async () => {
+  const cache = await catalog();
+  try {
+    const project = createRuntimeFilesStatusProjection();
+    const raw = cache.read();
+    project(raw, runtime({ turn: "running", activeTurnId: "turn-one" }));
+    const settled = project(raw, runtime({ turn: "idle", activeTurnId: "turn-one" }));
+    project(raw, runtime({ host: "dead", turn: "unknown", activeTurnId: null }));
+
+    expect(project.updateRuntime(runtime({ turn: "running", activeTurnId: "turn-one" }))).toBe(true);
+    expect(project(raw, runtime({ turn: "running", activeTurnId: "turn-one" })).files[0]).toBe(settled.files[0]);
+
+    project(raw, runtime({ host: "dead", turn: "unknown", activeTurnId: null }));
+    expect(project.updateRuntime(runtime({ turn: "running", activeTurnId: "turn-two" }))).toBe(true);
+    expect(project(raw, runtime({ turn: "running", activeTurnId: "turn-two" }))).toBe(raw);
+    expect(raw.files[0]?.activity).toBe("live");
+  } finally { cache.dispose(); }
+});
+
 test("a late metadata-only replacement keeps its matching turn settlement while offline", async () => {
   let releaseLate!: (response: Response) => void;
   let requests = 0;

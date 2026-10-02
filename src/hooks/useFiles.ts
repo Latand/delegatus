@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
@@ -1211,11 +1211,13 @@ export function filesPollCadence(connection: "live" | "reconnecting" | "degraded
 export function useFiles(_project?: string | null, pinnedPath?: string | null): FilesData {
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
+  // A pin changes the subscription scope, while runtime turn settlements
+  // remain valid across that change for the same transcript generation.
+  const projectStatus = useMemo(() => createRuntimeFilesStatusProjection(), []);
   useEffect(() => {
     let alive = true;
     const cache = filesClientCache;
     const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
-    const projectStatus = createRuntimeFilesStatusProjection();
     const currentStatus = (next: FilesData) => bus ? projectStatus(next, bus.getState()) : next;
     const publishBackgroundData = (next: FilesData) => {
       if (!alive) return;
@@ -1434,6 +1436,9 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       window.removeEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
       window.removeEventListener(FILES_CHANGED_EVENT, onChanged);
     };
-  }, [pinnedPath]);
-  return data.requestScope === requestScope ? data : filesClientCache.readScope(pinnedPath);
+  }, [pinnedPath, projectStatus]);
+  if (data.requestScope === requestScope) return data;
+  const scopedFallback = filesClientCache.readScope(pinnedPath);
+  const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
+  return bus ? projectStatus(scopedFallback, bus.getState()) : scopedFallback;
 }

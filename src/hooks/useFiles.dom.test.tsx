@@ -66,8 +66,8 @@ function Probe() {
   return <div data-loaded={String(data.loaded)}>{data.files[0]?.path ?? "empty"}</div>;
 }
 
-function TurnStatusProbe({ now }: { now: number }) {
-  const data = useFiles();
+function TurnStatusProbe({ now, pinnedPath }: { now: number; pinnedPath?: string }) {
+  const data = useFiles(undefined, pinnedPath);
   const board = useSwitchboardData(data.files, [], "", now);
   return <>
     <span data-working-count>{board.working.length}</span>
@@ -153,17 +153,53 @@ for (const engine of ["claude", "codex"] as const) {
       expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
       expect(host.querySelector("[data-card-status]")?.textContent).toBe("finished the turn — waiting for a reply");
       expect(fileReads).toBe(1);
-      // A late catalog answer still containing the pre-terminal row cannot
-      // bring working back after the runtime end has already reached the DOM.
+      // A same-turn status snapshot can arrive after the terminal event while
+      // the host still reports the last activeTurnId. It must preserve idle.
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 103, eventId: "files-after-end",
-        scope: { type: "system", id: "files" }, kind: "files.revision", payload: { filesRevision: 2 },
+        schemaVersion: 1, seq: 104, eventId: "late-same-turn-status",
+        scope: { type: "session", id: conversationId }, revision: 4, kind: "session-status",
+        payload: { conversationId, host: "hosted", turn: "running", activeTurnId: "turn-end" },
       }) });
-      await Bun.sleep(500);
-      expect(fileReads).toBe(2);
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+
+      // Opening the transcript changes the files scope and restarts its
+      // subscription effect. The settlement must remain visible during that
+      // render and on every status surface.
+      flushSync(() => root.render(<TurnStatusProbe now={scanned.mtime} pinnedPath={artifactPath} />));
+      await Bun.sleep(60);
       expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
       expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
       expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+      expect(host.querySelector("[data-card-status]")?.textContent).toBe("finished the turn — waiting for a reply");
+
+      // Recovery first reports unknown, then proves that a different turn
+      // started. This transition must invalidate the retained idle overlay.
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 105, eventId: "unknown-after-end",
+        scope: { type: "session", id: conversationId }, revision: 5, kind: "session-status",
+        payload: { conversationId, host: "dead", turn: "unknown", activeTurnId: null },
+      }) });
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 106, eventId: "next-turn-started",
+        scope: { type: "session", id: conversationId }, revision: 6, kind: "session-status",
+        payload: { conversationId, host: "hosted", turn: "running", activeTurnId: "turn-next" },
+      }) });
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("1");
+      expect(host.querySelector('[data-turn-status="running"]')).not.toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).toBe("working");
+      // A late catalog answer still containing the pre-terminal row cannot
+      // bring working back after the runtime end has already reached the DOM.
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 107, eventId: "files-after-end",
+        scope: { type: "system", id: "files" }, kind: "files.revision", payload: { filesRevision: 2 },
+      }) });
+      await Bun.sleep(500);
+      expect(fileReads).toBeGreaterThanOrEqual(2);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("1");
+      expect(host.querySelector('[data-turn-status="running"]')).not.toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).toBe("working");
     } finally {
       flushSync(() => root.unmount());
     }

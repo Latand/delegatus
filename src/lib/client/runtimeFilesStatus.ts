@@ -9,6 +9,7 @@ type Settlement = {
   conversationId: string;
   path: string;
   engine: FileEntry["engine"];
+  settledTurnId: string | null;
   authoritativeTurn: NonNullable<FileEntry["authoritativeTurn"]>;
   clearAttention: boolean;
   sourceRow?: FileEntry;
@@ -30,7 +31,10 @@ export function createRuntimeFilesStatusProjection() {
   let arrays = new WeakMap<FileEntry[], FileEntry[]>();
   const settlements = new Map<string, Settlement>();
   const observedTurns = new Set<string>();
+  const activeTurnIds = new Map<string, string>();
   let live = false;
+  const identity = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">) =>
+    JSON.stringify([session.conversationId, session.artifactPath]);
 
   const updateRuntime = (runtime: RuntimeBusState): boolean => {
     // During fallback polling the retained bus store can precede the newly
@@ -49,18 +53,23 @@ export function createRuntimeFilesStatusProjection() {
         session.provenance === "structured"
         && session.hostKind !== "tmux-legacy" && session.hostKind !== "unhosted")
       : [];
-    const identity = (session: RuntimeSession) => JSON.stringify([session.conversationId, session.artifactPath]);
     const currentIdentities = new Set(sessions.map(identity));
     for (const key of observedTurns) if (!currentIdentities.has(key)) observedTurns.delete(key);
+    for (const key of activeTurnIds.keys()) if (!currentIdentities.has(key)) activeTurnIds.delete(key);
+    let settlementChanged = false;
     for (const session of sessions) {
       if (session.turn === "running" || session.turn === "interrupt_requested") {
         observedTurns.add(identity(session));
-        // A positive running snapshot starts a new generation. Drop the prior
-        // generation's overlay for this artifact before projecting its rows.
+        if (session.activeTurnId) activeTurnIds.set(identity(session), session.activeTurnId);
+        // A same-turn status can arrive after the terminal event but before
+        // the broker clears activeTurnId. Retire the overlay only when runtime
+        // identifies a different active turn.
         for (const [key, settlement] of settlements) {
           if (settlement.path === session.artifactPath && settlement.engine === session.sessionKey.engine
-            && settlement.conversationId === session.conversationId) {
+            && settlement.conversationId === session.conversationId
+            && session.activeTurnId !== null && session.activeTurnId !== settlement.settledTurnId) {
             settlements.delete(key);
+            settlementChanged = true;
           }
         }
       }
@@ -70,8 +79,12 @@ export function createRuntimeFilesStatusProjection() {
       turn: session.turn, activeTurnId: session.activeTurnId, hasAttention: session.attentionIds.length > 0,
       observedTurn: observedTurns.has(identity(session)) || Boolean(session.liveTurn?.text || session.liveTurn?.items?.length),
     }));
-    const nextSignature = JSON.stringify(statuses);
-    if (nextSignature !== signature || !live) {
+    // Keep running and unknown transitions in the signature too. In
+    // particular, unknown -> running can retire a settlement without ever
+    // changing the idle-only status list.
+    const lifecycle = sessions.map((session) => [identity(session), session.turn, session.activeTurnId]);
+    const nextSignature = JSON.stringify([statuses, lifecycle]);
+    if (nextSignature !== signature || settlementChanged || !live) {
       live = true;
       signature = nextSignature;
       byConversation = new Map(statuses.map((status) => [status.conversationId, status]));
@@ -149,6 +162,7 @@ export function createRuntimeFilesStatusProjection() {
         conversationId: status.conversationId,
         path: file.path,
         engine: file.engine,
+        settledTurnId: status.activeTurnId ?? activeTurnIds.get(identity(status)) ?? null,
         authoritativeTurn: file.authoritativeTurn?.state === "terminal" ? file.authoritativeTurn
           : { state: "idle", source: "lifecycle", terminalAt: null },
         clearAttention: !status.hasAttention,
