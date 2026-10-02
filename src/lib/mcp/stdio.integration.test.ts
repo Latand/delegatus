@@ -940,6 +940,29 @@ test("spoofing and concurrency: another caller, a changed payload, and two proce
       expect(fixture.effects().filter((effect) => effect.kind === "recipient" && effect.clientMessageId === downstream("send_message", requestId))).toHaveLength(1);
       expect(fixture.responses().filter((response) => response.pathname === "/api/tmux" && response.body.includes(String(race[0]?.operationId)))).toHaveLength(1);
     }
+
+    /* Keep the original same-key race: two MCP processes begin a fresh key
+       together while the first downstream effect is still in flight. */
+    fixture.resetMarkers();
+    const concurrentKey = "send-race-simultaneous";
+    fixture.control({ mode: "respond", sendEffect: "deliver", sendSettlementDelayMs: 500 });
+    const concurrent = await Promise.all([
+      call(owner, "send_message", sendArguments(fixture, concurrentKey)),
+      call(peer, "send_message", sendArguments(fixture, concurrentKey)),
+    ]);
+    const ownerAnswer = concurrent.find((answer) => answer.replayed === false);
+    const replayAnswer = concurrent.find((answer) => answer.replayed === true);
+    expect(ownerAnswer).toMatchObject({ ok: true, outcome: "delivered", settled: true, operationId: expect.any(String) });
+    expect(replayAnswer).toBeDefined();
+    if (replayAnswer?.ok === false) {
+      expect(replayAnswer).toMatchObject({ code: "outcome_unknown", retryable: false, details: { outcome: "unknown", nextAction: "original-key-lookup" } });
+      expect(replayAnswer.operationId).toBeUndefined();
+    } else {
+      expect(replayAnswer).toMatchObject({ ok: true, operationId: ownerAnswer?.operationId });
+    }
+    expect(fixture.effects().filter((effect) => effect.kind === "recipient" && effect.clientMessageId === downstream("send_message", concurrentKey))).toHaveLength(1);
+    expect(await call(peer, "send_message", sendArguments(fixture, concurrentKey)))
+      .toMatchObject({ ok: true, operationId: ownerAnswer?.operationId, replayed: true });
   } finally {
     await owner.close();
     await stranger.close();
