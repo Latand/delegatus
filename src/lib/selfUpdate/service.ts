@@ -14,7 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
-import { DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
+import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
@@ -556,10 +556,11 @@ export class SelfUpdateService {
       const revision = snapshot.mode === "checkout" && snapshot.installed.sha === target ? snapshot.installed : snapshot.available;
       if (revision?.sha === target) {
         const drain = { id: randomUUID(), target: revision, since: at, overranAt: null, blockers: null };
-        // Publish the hold before the next asynchronous observation can launch work.
-        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS, persistent: true });
+        // Checkpoint ownership before publishing persistent admission. Both
+        // writes finish before the next asynchronous observation can launch work.
         this.auto = { ...this.auto, drain, quietSince: null };
         this.saveAuto();
+        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS, persistent: true });
       }
     }
     if (!this.deps.quiet) return false;
@@ -791,17 +792,34 @@ export class SelfUpdateService {
     };
     // The short gate fences this write. Persist renewable custody before the
     // request can be accepted and outlive that gate or this service instance.
-    writeDrain(this.drainFile, { id: drain.id, target: target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
     this.auto = { ...this.auto, drain: { ...drain, admitted: true } };
+    this.saveAuto();
+    writeDrain(this.drainFile, { id: drain.id, target: target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+  }
+
+  private recoverDrainOwner(): void {
+    if (this.auto.drain) return;
+    const lease = activeDrain(this.drainFile, this.deps.now());
+    // A valid older first-publication checkpoint can lack its owner. An
+    // unreadable hold stays fenced for repair instead of being reassigned.
+    if (!lease?.persistent || lease.id === "unreadable" || !/^[a-f0-9]{40}$/i.test(lease.target)) return;
+    const target = [this.auto.managedPending?.target, this.slice.available, this.slice.installed]
+      .find(revision => revision?.sha === lease.target)
+      ?? { ...UNKNOWN_REVISION, sha: lease.target, short: shortSha(lease.target) };
+    const admitted = this.hasAutoCustody();
+    this.auto = { ...this.auto, waitingSince: this.auto.waitingSince ?? lease.since, waitingTarget: lease.target,
+      drain: { id: lease.id, target, since: lease.since, overranAt: null, blockers: this.auto.lastBlockers, admitted } };
     this.saveAuto();
   }
 
   private refreshDrain(): void {
+    this.recoverDrainOwner();
     const drain = this.auto.drain;
     if ((this.auto.enabled || this.hasAutoCustody()) && drain) writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
   }
 
   private endDrain(): void {
+    this.recoverDrainOwner();
     const drain = this.auto.drain;
     if (!drain) return;
     releaseDrain(this.drainFile, drain.id);

@@ -9,7 +9,7 @@ import { initialCheck } from "./checkState";
 import { LOST_AFTER_MS, readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
-import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
+import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -323,6 +323,32 @@ test("a busy managed install holds immediately and retains its cohort through si
     await service.autoTick();
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]?.revision).toBe(TARGET);
+  } finally { service.stop(); }
+});
+
+test.each(["enabled", "switch-off"] as const)("cold recovery reconciles a hold published before its owner checkpoint: %s", async mode => {
+  const h = scenario(); h.setTurns(1);
+  const since = new Date(h.deps.now()).toISOString();
+  const autoFile = join(h.dir, "auto.json"), holdFile = join(h.dir, "auto-drain.json");
+  writeAuto(autoFile, { ...readAuto(autoFile), waitingSince: since, waitingTarget: TARGET });
+  writeDrain(holdFile, { id: "orphan-first-hold", target: TARGET, since, until: h.deps.now() - 1, persistent: true });
+  let ticks = 0; h.deps.requestPipelineTick = () => { ticks++; };
+  let service = h.service();
+  try {
+    if (mode === "switch-off") {
+      expect(await service.setAuto(false)).toEqual({ ok: true });
+      await service.autoTick(); service.stop(); service = h.service(); await service.autoTick();
+      expect(activeDrain(holdFile, h.deps.now())).toBeNull();
+      expect(readAuto(autoFile)).toMatchObject({ enabled: false, drain: null });
+      expect(ticks).toBe(1);
+    } else {
+      await service.autoTick();
+      expect(readAuto(autoFile).drain).toMatchObject({ id: "orphan-first-hold", target: { sha: TARGET }, since });
+      service.stop(); service = h.service(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+      expect((await service.snapshot()).auto?.decision?.id).toBe("orphan-first-hold");
+      expect(activeDrain(holdFile, h.deps.now())?.id).toBe("orphan-first-hold");
+      expect(h.requests).toHaveLength(0); expect(ticks).toBe(0);
+    }
   } finally { service.stop(); }
 });
 
