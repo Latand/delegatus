@@ -734,6 +734,10 @@ test.each([
       savePipelines([lane]);
     }
     fixture.h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: verdict, findings: [`P1 — ${label}`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    if (label === "report prose blocked") {
+      const message = fixture.h.messages.get("/codex/stage-1.jsonl")!;
+      fixture.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
     await tickPipelines([entry("/codex/stage-1.jsonl")], fixture.h.ports);
     const current = loadPipelines()[0]!;
     expect(current.state).toBe("needs_decision");
@@ -782,6 +786,10 @@ test.each([
       ? `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings })}\n\`\`\``
       : "";
     h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${transcriptVerdict}`, ts: Date.now() + 100_000_000 });
+    if (settlement !== "fenced verdict") {
+      const message = h.messages.get("/codex/stage-1.jsonl")!;
+      h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
     await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
     await tickPipelines([], h.ports);
     const current = loadPipelines()[0]!;
@@ -882,6 +890,10 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
     const summary = "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.";
     const verdict = `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``;
     h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${verdict}`, ts: Date.now() + 100_000_000 });
+    if (settlement === "reported plus fenced completion") {
+      const message = h.messages.get("/codex/stage-1.jsonl")!;
+      h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
     await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
     const current = loadPipelines()[0]!;
     expect(current.state).toBe("needs_decision");
