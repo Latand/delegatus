@@ -821,7 +821,8 @@ export async function bindStructuredDeliveryQueue(
           }
         }
       };
-      if (await state.terminateActiveHost?.(expectedKey)) {
+      const retainedSurvivors = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredTerminationSurvivors ?? [];
+      if (retainedSurvivors.length === 0 && await state.terminateActiveHost?.(expectedKey)) {
         await settleKilledLaunches();
         return true;
       }
@@ -830,12 +831,14 @@ export async function bindStructuredDeliveryQueue(
          severed, the recorded process is reaped on its start identity so the
          row below can retire — without that, a kill on an unclaimed host is
          refused forever and blocks every message behind it (#1282). */
-      const reaped = await reapSeveredStructuredHost(
-        registry,
-        conversationId as `conversation_${string}`,
-        expectedKey,
-        dependencies.liveness ?? {},
-      );
+      const reaped = retainedSurvivors.length === 0
+        ? await reapSeveredStructuredHost(
+            registry,
+            conversationId as `conversation_${string}`,
+            expectedKey,
+            dependencies.liveness ?? {},
+          )
+        : null;
       if (reaped) {
         console.error("[structured delivery] reaped a severed structured host nothing owned", {
           key: sessionKeyId(expectedKey),
@@ -843,10 +846,9 @@ export async function bindStructuredDeliveryQueue(
           reason: reaped.reason,
         });
       }
-      let terminated = registry.terminateInactiveStructuredHost(
-        conversationId as `conversation_${string}`,
-        expectedKey,
-      );
+      let terminated = retainedSurvivors.length === 0
+        ? registry.terminateInactiveStructuredHost(conversationId as `conversation_${string}`, expectedKey)
+        : false;
       if (!terminated) {
         // An explicit kill does not depend on idle/severed-turn evidence. A
         // launch host can be alive without a transport owned by this process.
@@ -874,10 +876,16 @@ export async function bindStructuredDeliveryQueue(
         const refusal = authorize();
         if (refusal) throw new Error(refusal.error);
         const outcome = await terminateStructuredHostTree(ref, {
+          retainedSurvivors,
           authorize,
-          retireRegistryEntry: (key, expected) => { registry.terminateStructuredHost(key, expected); },
+          retireRegistryEntry: (key, expected, confirmed) => { registry.terminateStructuredHost(key, expected, confirmed); },
         });
-        if (!outcome.ok) throw new Error(outcome.error);
+        if (!outcome.ok) {
+          if (outcome.terminationStarted && outcome.survivors.length > 0) {
+            registry.recordStructuredTerminationSurvivors(expectedKey, ref, outcome.survivors);
+          }
+          throw new Error(outcome.error);
+        }
         terminated = registry.terminateInactiveStructuredHost(conversationId as ViewerConversationId, expectedKey);
       }
       if (!terminated) return false;

@@ -454,6 +454,28 @@ test("a host that already exited retires its row without signalling anything", a
   expect(retired).toEqual([{ engine: "claude", sessionId: CLAUDE_SESSION }]);
 });
 
+test("a root-dead retry refuses a replacement at a retained survivor pid", async () => {
+  const replacementPid = 5_501;
+  const signals: number[] = [];
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 5_500, startIdentity: "5500:old", sessionId: CLAUDE_SESSION, owned: false }),
+    {
+      processIdentity: pid => pid === replacementPid ? "5501:replacement" : null,
+      pidAlive: pid => pid === replacementPid,
+      ppidMap: () => new Map(),
+      processGroupId: () => null,
+      protectedPids: () => new Set(),
+      retainedSurvivors: [{ pid: replacementPid, startIdentity: "5501:old", bootEpoch: BOOT_EPOCH }],
+      signal: pid => { signals.push(pid); },
+      terminateOwnedHost: async () => false,
+      deadlineMs: 0,
+    },
+  );
+
+  expect(outcome).toMatchObject({ ok: false, status: 409, error: expect.stringContaining("identity changed") });
+  expect(signals).toEqual([]);
+});
+
 test("a refused signal is a failure, not a success, and the registry row stays", async () => {
   const retired: SessionKey[] = [];
 

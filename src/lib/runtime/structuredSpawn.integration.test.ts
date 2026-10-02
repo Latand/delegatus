@@ -4776,6 +4776,87 @@ test("a queued kill waits when an unadopted structured process may still be live
   expect(await client.effectBatch(["runtime.kill"], 0)).toHaveLength(1);
 });
 
+test("a partial structured kill retains child identity across a root-dead retry", async () => {
+  const id = crypto.randomUUID();
+  const cwd = fs.mkdtempSync(path.join(sandbox, `partial-kill-${id}-`));
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const childPidFile = path.join(cwd, "child.pid");
+  const childScript = `require("node:fs").writeFileSync(process.env.CHILD_PID_FILE, String(process.pid)); setInterval(() => {}, 1000)`;
+  const parentScript = `const { spawn } = require("node:child_process");\nspawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { detached: true, stdio: "ignore", env: process.env });\nsetInterval(() => {}, 1000);`;
+  const root = spawn(process.execPath, ["-e", parentScript], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, CHILD_PID_FILE: childPidFile },
+  });
+  await new Promise<void>((resolve, reject) => { root.once("spawn", resolve); root.once("error", reject); });
+  const rootExited = new Promise<void>(resolve => { root.once("exit", () => resolve()); });
+  let childPid: number | null = null;
+  await waitFor(() => {
+    if (!fs.existsSync(childPidFile)) return false;
+    childPid = Number(fs.readFileSync(childPidFile, "utf8"));
+    return Number.isSafeInteger(childPid) && childPid! > 1;
+  });
+  const childIdentity = captureProcessIdentity(childPid!);
+  const registryPath = path.join(cwd, "registry.json");
+  const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  const key = { engine: "codex" as const, sessionId: id };
+  const rootIdentity = captureProcessIdentity(root.pid!);
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "codex-subscription", status: "live", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: `stdio:${root.pid}`, process: rootIdentity,
+      eventCursor: 1, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: "turn:live",
+      pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, pendingAction: null,
+  });
+  const operationId = `kill_partial_${id}`;
+  await client.command({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey: key });
+  const originalKill = process.kill.bind(process);
+  let refuseChildSignals = true;
+  const killSpy = spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    if (pid === childPid && refuseChildSignals && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    }
+    return originalKill(pid, signal as NodeJS.Signals);
+  }) as typeof process.kill);
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client }).catch(error => {
+      expect(String(error)).toContain("the kill was refused");
+    });
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      if (journal.operationResult(operationId)?.receipt.status === "queued"
+        && !procBackend.pidAlive(root.pid!) && procBackend.pidAlive(childPid!)) break;
+      await Bun.sleep(10);
+    }
+    expect((await client.operationStatus(operationId))?.receipt.status).toBe("queued");
+    expect(procBackend.pidAlive(root.pid!)).toBeFalse();
+    expect(procBackend.pidAlive(childPid!)).toBeTrue();
+    expect(registry.readOnlySnapshot().entries[`codex:${id}`]).toMatchObject({ status: "live", structuredHost: { process: rootIdentity } });
+    expect(captureProcessIdentity(childPid!)).toEqual(childIdentity);
+    const reopenedRegistry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors).toContainEqual(childIdentity);
+
+    refuseChildSignals = false;
+    await Bun.sleep(1_100);
+    await bindStructuredDeliveryQueue([], { registry: reopenedRegistry, client });
+    await kickStructuredDeliveryQueue();
+
+    expect(procBackend.pidAlive(childPid!)).toBeFalse();
+    expect((await client.operationStatus(operationId))?.receipt.status).toBe("delivered");
+    expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]).toMatchObject({ status: "dead", structuredHost: null, structuredTerminationSurvivors: [] });
+    expect(killSpy.mock.calls.filter(([pid]) => pid === childPid).length).toBeGreaterThan(0);
+  } finally {
+    killSpy.mockRestore();
+    if (procBackend.pidAlive(childPid!)) originalKill(childPid!, "SIGKILL");
+    if (procBackend.pidAlive(root.pid!)) originalKill(root.pid!, "SIGKILL");
+    await rootExited;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+}, 20_000);
+
 test("a queued kill waits through a processless structured adoption claim", async () => {
   const id = crypto.randomUUID();
   const cwd = path.join(sandbox, `claimed-kill-recovery-${id}`);

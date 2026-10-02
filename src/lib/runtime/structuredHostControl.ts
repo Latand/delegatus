@@ -332,7 +332,9 @@ export interface StructuredHostTerminationDependencies {
   processGroupId?(pid: number): number | null;
   signal?(pid: number, signal: NodeJS.Signals): void;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
-  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity): void;
+  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): void;
+  /** Previously captured descendants whose root may have exited between retries. */
+  retainedSurvivors?: readonly ProcessIdentity[];
   protectedPids?(): Set<number>;
   /** The caller's own authority over this target, asked again after every
       asynchronous boundary and one step before each signal (#1501): a seat
@@ -408,7 +410,9 @@ export async function terminateStructuredHostTree(
   const groupOf = dependencies.processGroupId ?? linuxProcessGroupId;
   const signal = dependencies.signal ?? ((pid: number, value: NodeJS.Signals) => { process.kill(pid, value); });
   const retire = dependencies.retireRegistryEntry
-    ?? ((key: SessionKey, expected: ProcessIdentity) => { agentRegistry().terminateStructuredHost(key, expected); });
+    ?? ((key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]) => {
+      agentRegistry().terminateStructuredHost(key, expected, confirmed);
+    });
   const terminateOwned = dependencies.terminateOwnedHost ?? terminateStructuredDeliveryHost;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const graceMs = dependencies.graceMs ?? TERMINATION_GRACE_MS;
@@ -430,27 +434,39 @@ export async function terminateStructuredHostTree(
 
   const initialStatus = processIdentityStatus(expected, identityProbe);
   if (initialStatus === "dead" && !alive(pid)) {
-    if (key) retire(key, expected);
-    return { ok: true, via: "already-exited", pids: [] };
+    const retained = dependencies.retainedSurvivors ?? [];
+    if (retained.length === 0) {
+      if (key) retire(key, expected, []);
+      return { ok: true, via: "already-exited", pids: [] };
+    }
+    const stillUnresolved = retained.filter(identity => {
+      try { return processIdentityStatus(identity, identityProbe) !== "dead" || alive(identity.pid); }
+      catch { return true; }
+    });
+    if (stillUnresolved.length === 0) {
+      if (key) retire(key, expected, retained);
+      return { ok: true, via: "already-exited", pids: retained.map(identity => identity.pid) };
+    }
   }
   if (initialStatus === "unverified") {
     return { ok: false, status: 409, error: "host process identity cannot be verified — refresh the resource list", remaining: [], survivors: [] };
   }
   /* The fence the whole endpoint rests on: this pid must still be the process
      the snapshot listed, or the kernel handed it to something else. */
-  if (initialStatus === "dead") {
+  if (initialStatus === "dead" && alive(pid)) {
     return { ok: false, status: 409, error: "host has changed — refresh the resource list", remaining: [], survivors: [], stale: true };
   }
 
   /* Snapshot the tree before anything dies: a reparented child is invisible to
      a ppid walk taken after the root is gone. */
   const processParents = ppids();
-  const tree = descendantPids(pid, processParents);
+  const rootAlive = initialStatus === "alive";
+  const tree = rootAlive ? descendantPids(pid, processParents) : [];
   /* A host is spawned detached, so it leads its own group. Signalling the
      group reaches reparented members that a descendant walk cannot see. Add
      every observed member to the identity snapshot before granting that wider
      signal; any observed member without a verifiable identity refuses the kill. */
-  const groupLeader = groupOf(pid) === pid ? pid : null;
+  const groupLeader = rootAlive && groupOf(pid) === pid ? pid : null;
   if (groupLeader !== null) {
     const known = new Set(tree);
     for (const candidate of processParents.keys()) {
@@ -460,8 +476,17 @@ export async function terminateStructuredHostTree(
       }
     }
   }
-  const identities = new Map<number, ProcessIdentity>();
+  const identities = new Map<number, ProcessIdentity>([[pid, expected]]);
+  for (const retained of dependencies.retainedSurvivors ?? []) {
+    const prior = identities.get(retained.pid);
+    if (prior && (prior.startIdentity !== retained.startIdentity || prior.bootEpoch !== retained.bootEpoch)) {
+      return { ok: false, status: 409, error: `process ${retained.pid} identity changed before retry`, remaining: [retained.pid], survivors: [], stale: true };
+    }
+    identities.set(retained.pid, retained);
+    if (!tree.includes(retained.pid)) tree.push(retained.pid);
+  }
   for (const candidate of tree) {
+    if (identities.has(candidate)) continue;
     const candidateIdentity = identityOf(candidate);
     if (candidateIdentity !== null) {
       if (candidate === pid && candidateIdentity !== ref.startIdentity) {
@@ -536,7 +561,7 @@ export async function terminateStructuredHostTree(
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
     let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
-    if (key) {
+    if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       terminationStarted = true;
       try {
         if (await terminateOwned(key, expected)) via = "runtime";
@@ -624,7 +649,7 @@ export async function terminateStructuredHostTree(
       };
     }
     /* The runtime path already retired the row as part of its own lifecycle. */
-    if (key && via !== "runtime") retire(key, expected);
+    if (key && via !== "runtime") retire(key, expected, [...identities.values()]);
     return { ok: true, via, pids: tree };
   } catch (error) {
     const evidence = partialEvidence();
