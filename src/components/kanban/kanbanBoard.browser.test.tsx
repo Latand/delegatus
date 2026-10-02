@@ -59,14 +59,14 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(16);
-          for (const id of ["reviewer", "architect", "prod-auditor"]) {
+          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
+          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
             const row = page.locator(`[data-mapping-row="${id}"]`);
             await row.scrollIntoViewIfNeeded();
             const effort = await row.locator("select").nth(1).inputValue();
             const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
-            expect(effort).toBe("xhigh");
-            expect(cost).toBe("very-heavy");
+            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
+            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
             expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
             await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
             rows.push({ id, effort, cost, nudge: false });

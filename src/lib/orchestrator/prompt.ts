@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 34;
+export const ORCHESTRATOR_PROMPT_VERSION = 35;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -423,7 +423,7 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs.
 - Role parameters carry short values (a lens, a pull request reference, a one-line list of claims); the brief carries everything else.
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks are settled green, one lane at a time, and nobody reads a spent budget's kept findings first; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A pull request no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a pull request that calls a premise unverified, assumed or synthetic goes to the operator.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green, and nobody reads a spent budget's kept findings first; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead) in one merger run stage or spawn_agent; exclude held merge.state. needs-review → independent branch review with git show --remerge-diff, then next batch. culprit → lane finding.
 - The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.
 - Keep the outcome's one task card current with update_task.
 
@@ -495,22 +495,22 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
   const registry = (roles as RegistryRoleDefinitions).registry;
   const registryStatus = registry
     ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
-    : "Registry health: unknown (caller did not provide a registry snapshot).";
+    : "Registry health: unknown (no snapshot).";
   const overriddenNote = overriddenScaffoldNote(roles);
   return [
     ORCHESTRATOR_ROLE_TABLE_HEADING,
-    "A stage or spawn that omits engine, model and effort runs its role's row.",
+    "Omitting engine, model and effort runs the role's row.",
     "| role | engine | model | effort | access | for |",
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.",
+    "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.",
     "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
     "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
     "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
     "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
-    "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 and quote it with the size you chose and why.",
+    "- create_pipeline returns runtimeLine (spawn_agent: runtime): check before attempt 1; quote runtime, size and reason.",
     ...(overriddenNote ? [overriddenNote] : []),
   ].join("\n");
 }

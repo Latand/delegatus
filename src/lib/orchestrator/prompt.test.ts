@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 34, and a v33 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(34);
+test("the default mandate is at version 35, and a v34 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(35);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -110,7 +110,8 @@ test("the default mandate is at version 34, and a v33 seat reads as stale", () =
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
   expect(orchestratorMandateStale(33)).toBe(true);
-  expect(orchestratorMandateStale(34)).toBe(false);
+  expect(orchestratorMandateStale(34)).toBe(true);
+  expect(orchestratorMandateStale(35)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -151,6 +152,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
   33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
   34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
+  35: "4595b2c267245be5d54a07be96a426cf64995294a69e60aac0a7575d289f5a17",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -164,7 +166,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never merge red");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
@@ -645,7 +647,7 @@ test("the delivered mandate renders the role table from the registry it is hande
 test("the role table carries the runtime guidance beside it", () => {
   const delivered = orchestratorMandateForDelivery("Bespoke mandate");
   const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
-  expect(section).toContain("omits engine, model and effort");
+  expect(section).toContain("Omitting engine, model and effort");
   expect(section).toContain("on the stage");
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
@@ -749,9 +751,9 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("OVER-BUILT cuts included");
   expect(table).toContain("which parks the lane: re-plan it.");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
-  expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.");
-  expect(table).toContain("quote it with the size you chose and why");
+  expect(table).toContain("runtimeLine (spawn_agent: runtime)");
+  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.");
+  expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
   expect(table).not.toContain("\n\n");

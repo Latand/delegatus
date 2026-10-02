@@ -74,10 +74,11 @@ function view(fields: Partial<FileView> = {}): FileView {
   return { conversations: {}, conversationAliases: {}, lineageEdges: {}, memberships: {}, ...fields };
 }
 
-test("the denied-role contract pins reviewer, verifier and maintainer", () => {
-  expect(SPAWN_DENIED_ROLE_IDS).toEqual(["reviewer", "verifier", "maintainer"]);
+test("the denied-role contract pins reviewer, verifier, maintainer and merger", () => {
+  expect(SPAWN_DENIED_ROLE_IDS).toEqual(["reviewer", "verifier", "maintainer", "merger"]);
   expect(isSpawnDeniedRole("reviewer")).toBe(true);
   expect(isSpawnDeniedRole("verifier")).toBe(true);
+  expect(isSpawnDeniedRole("merger")).toBe(true);
   expect(isSpawnDeniedRole("builder")).toBe(false);
   expect(isSpawnDeniedRole(null)).toBe(false);
   expect(isSpawnDeniedRole(undefined)).toBe(false);
