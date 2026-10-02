@@ -4,7 +4,10 @@ on:
   # A pull request builds the image only when something the Dockerfile copies,
   # installs from or compiles changes. The build runs next build, whose type
   # check covers every TypeScript file in the checkout (tsconfig.json include),
-  # so the three TypeScript globs sit beside the directory paths.
+  # and resolveJsonModule lets any of them import JSON, so those globs sit
+  # beside the directory paths. Tailwind scans every non-ignored file under the
+  # root for class names, not only src/, and .gitignore decides which files it
+  # skips, so markup and script globs and every .gitignore are inputs as well.
   # Pushes to main and v* tags always build.
   pull_request:
     paths:
@@ -25,6 +28,13 @@ on:
       - "**/*.ts"
       - "**/*.tsx"
       - "**/*.mts"
+      - "**/*.json"
+      - "**/*.html"
+      - "**/*.js"
+      - "**/*.jsx"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "**/.gitignore"
       - .github/workflows/docker-image.yml
   push:
     branches: [main]
