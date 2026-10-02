@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { discover, isolatedEnvironment, pinnedBunVersion, plan, requiresMediaTools, type PlanEnvironment } from "./local-gate";
+import { discover, gateTemporaryRoot, isolatedEnvironment, pinnedBunVersion, plan, requiresMediaTools, type PlanEnvironment } from "./local-gate";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -125,4 +125,15 @@ test("media deferral recognizes disguised raster magic without loading the priva
   expect(requiresMediaTools(disguised)).toBeTrue();
   const text = path.join(dir, "note.md"); writeFileSync(text, "plain text");
   expect(requiresMediaTools(text)).toBeFalse();
+});
+
+test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", () => {
+  const original = process.env.TMPDIR;
+  try {
+    process.env.TMPDIR = path.join(tmpdir(), "operator-state", "scratch");
+    expect(gateTemporaryRoot("linux")).toBe("/var/tmp");
+    expect(gateTemporaryRoot("darwin")).toBe("/var/tmp");
+  } finally {
+    if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
+  }
 });

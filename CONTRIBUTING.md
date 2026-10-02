@@ -72,7 +72,9 @@ content, including unstaged edits in a partially staged file. Pre-push checks
 publication including commit messages and identities, incremental TypeScript,
 changed-file lint, and touched test files. Tests run by explicit file path under
 an isolated home, config, state and temp root. Git repository variables exported
-to hooks are removed from child checks so fixture repositories remain isolated. Browser tests keep their rendered
+to hooks are removed from child checks so fixture repositories remain isolated.
+On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
+a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
 The pre-push gate reuses the platform import closure to scope Linux tests,

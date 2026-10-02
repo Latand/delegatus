@@ -20,9 +20,9 @@ lock_dir=${LLV_GATE_LOCK_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/delegatus-gate
 mkdir -p "$lock_dir"
 while :; do
   for ((i=1; i<=slots; i++)); do
-    exec {fd}>"$lock_dir/llv-heavy-gate.slot$i.lock"
-    if flock -n "$fd"; then run "$@"; fi
-    exec {fd}>&-
+    exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
+    if flock -n 9; then run "$@"; fi
+    exec 9>&-
   done
   sleep 2
 done

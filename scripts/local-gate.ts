@@ -137,6 +137,14 @@ export function discover(root: string, base: string, files: readonly string[]): 
   };
 }
 
+/** A pipeline may inherit TMPDIR below live state/scratch. Nested runtime
+ * probes replace TMPDIR again, losing that exemption. Use an OS temp root
+ * outside the operator installation for the gate's whole sandbox tree.
+ */
+export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? tmpdir() : "/var/tmp";
+}
+
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
@@ -223,7 +231,7 @@ function main(mode: Mode): void {
   const steps = plan(mode, files, context);
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   const runtime = steps.some(step => step.pinned) ? pinnedRuntime(root, cache) : process.execPath;
-  const sandbox = mkdtempSync(path.join(tmpdir(), "delegatus-local-gate-"));
+  const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-local-gate-"));
   try {
     const isolated = isolatedEnvironment(sandbox, process.env);
     const privacyEnv = {
