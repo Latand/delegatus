@@ -49,6 +49,10 @@ const unitLookingRealAddresses = [
   ["delegatus", "review.serviceevil"].join("@"),
   ["someone", "b.service.TaRgEt"].join("@"),
   ["someone", "b.SeRvIcE.укр"].join("@"),
+  ["probe", "b.service.xn--j1amh"].join("@"),
+  ["probe", "b.SeRvIcE.XN--J1aMh"].join("@"),
+  ["probe", "b.service.xn--p1ai"].join("@"),
+  ["probe", "b.service.xn--j1amh.com"].join("@"),
 ];
 
 afterEach(() => {

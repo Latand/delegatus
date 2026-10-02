@@ -577,7 +577,7 @@ type EmailOccurrence = {
    detection reads both rather than only the shape that is easy to match. */
 const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-const emailDomain = /([A-Z0-9.\p{L}\p{M}-]+\.[A-Z\p{L}\p{M}]{2,})(?![A-Z0-9\p{L}\p{M}-])/u;
+const emailDomain = /([A-Z0-9\p{L}\p{M}-]+(?:\.[A-Z0-9\p{L}\p{M}-]+)+)(?![A-Z0-9\p{L}\p{M}-]|\.[A-Z0-9\p{L}\p{M}-])/u;
 const emailAddressSource =
   `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
 
