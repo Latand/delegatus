@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import type { TaskWithRevision } from "@/lib/tasks/revision";
 import { randomUUID } from "node:crypto";
@@ -10,7 +10,7 @@ import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { deleteTask, patchTask, createTask } from "@/lib/tasks/commands";
 import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource } from "@/lib/tasks/store";
 import { BOARD_TASKS_PER_PROJECT_LIMIT } from "@/lib/tasks/commands";
-import { countBoardTasks } from "@/lib/tasks/boardVisibility";
+import { countBoardTasks, DONE_TASK_BOARD_RETENTION_MS } from "@/lib/tasks/boardVisibility";
 import { type BoardTask } from "@/lib/tasks/types";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 
@@ -237,6 +237,34 @@ test("wire bounds: a stored 530 000-character repository is withheld as a stub, 
   expect("withheld" in big.row).toBe(false);
   expect(big.bytes).toBeLessThanOrEqual(MAX_WIRE_ROW_BYTES);
   expect(big.bytes).toBeLessThan(PAGE_BYTES);
+});
+
+test("log and scan exports share the board's strict done expiry and preserve manual board preferences", () => {
+  const { file, db } = linkedInstall();
+  const self = linkedContext().self!;
+  const at = Date.now();
+  const recent = edit(file, create(file, "Recent completion").id, { status: "done" });
+  const boundary = edit(file, create(file, "Exactly three days").id, { status: "done" });
+  const old = edit(file, create(file, "Expired completion").id, { status: "done" });
+  const hidden = edit(file, create(file, "Hidden active task").id, { board: "hidden" });
+  mutateTasks((tasks) => ({ tasks: tasks.map((task) => ({ ...task,
+    ...(task.id === recent.id ? { board: "hidden" as const } : {}),
+    ...(task.id === boundary.id ? { doneAt: new Date(at - DONE_TASK_BOARD_RETENTION_MS).toISOString() } : {}),
+    ...(task.id === old.id ? { doneAt: new Date(at - DONE_TASK_BOARD_RETENTION_MS - 1).toISOString() } : {}),
+  })), result: null }), file);
+  const filter = { self, projects: new Set([key]), skipPrefix: installPrefix(PEER), filePath: file };
+  const now = spyOn(Date, "now").mockReturnValue(at);
+  try {
+    const log = readLogPage([0], filter);
+    if (log.kind !== "page") throw new Error("resync");
+    const expected = [recent.id, boundary.id, hidden.id].sort();
+    expect(log.rows.map((row) => row.id).sort()).toEqual(expected);
+    expect(log.cursor).toEqual([taskFeedSource(file)!.revision()]);
+    expect(readLogPage(log.cursor, filter)).toMatchObject({ rows: [], more: false });
+    expect(readScanPage("", filter).rows.map((row) => row.id).sort()).toEqual(expected);
+    expect(loadTasks(file)).toHaveLength(4);
+    expect(tombstoneCollection(db, false)?.keyRange("g:", "g:\uffff", 10) ?? []).toEqual([]);
+  } finally { now.mockRestore(); }
 });
 
 test("a transaction of 201 linked tasks pages in two inside one revision, and cap-sized rows split before 200 on the byte bound; nothing repeats or is skipped", () => {

@@ -749,6 +749,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.branch === "string" &&
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
+    (pipeline.baseRefPinned === undefined || typeof pipeline.baseRefPinned === "boolean") &&
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
@@ -1217,8 +1218,9 @@ export function pipelineLockWaitMs(): number {
  * A refusal raised before `mutate` runs is a {@link StoreBusyBeforeAdmissionError}
  * (#1766): the lease was never taken, so nothing was read, written or reserved
  * and the same request may run again under the same idempotency key. A busy
- * error from anywhere after that keeps its ordinary ambiguous meaning — the
- * lease release raises the same message after the row is committed. */
+ * error from inside the callback keeps its ordinary ambiguous meaning: an
+ * earlier persist may have committed. Lease release never throws; failed
+ * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;
@@ -1276,27 +1278,17 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
   delivery.journal = [...delivery.journal, { at: new Date().toISOString(), kind, ownerId: delivery.ownerId, epoch: delivery.epoch, conversationId, reason }].slice(-100);
 }
 
-function terminalDeliveryFailure(pipeline: Pipeline): string | null {
-  const terminalAttempt = pipeline.state === "needs_decision" && pipeline.cursor
-    ? pipeline.runs.find((run) => run.stageId === pipeline.cursor!.stageId)?.attempts.findLast((attempt) => !attempt.historical)
-    : null;
-  return terminalAttempt?.verdict?.status === "fail" && terminalAttempt.completedAt
-    ? `${pipeline.cursor!.stageId}:${terminalAttempt.n}:${terminalAttempt.startedAt ?? ""}` : null;
-}
-
 function releaseTerminalDelivery(pipeline: Pipeline): void {
   if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
-  const failure = terminalDeliveryFailure(pipeline);
-  const failed = failure !== null && failure !== delivery?.settledFailure;
-  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed" && !failed)) return;
+  // Parks retain the lane's claim so its cursor can resume and publish.
+  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
   if (delivery.operation?.state === "running") return;
   delivery.active = false;
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
-  if (failed) delivery.settledFailure = failure;
-  deliveryJournal(pipeline, "release", failed ? "terminal failure without an active fail edge" : `pipeline ${pipeline.state}`);
+  deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -1378,8 +1370,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       tx.put(old);
     }
     pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
-      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal,
-      settledFailure: terminalDeliveryFailure(pipeline) ?? pipeline.delivery.settledFailure };
+      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
@@ -1520,6 +1511,7 @@ export function buildPipeline(input: {
     ...identity,
     baseBranch: "",
     baseRef: "",
+    baseRefPinned: false,
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,

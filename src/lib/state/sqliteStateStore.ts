@@ -8,6 +8,99 @@ import { procBackend } from "@/lib/proc";
 
 import { openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
+import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
+
+export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
+export class StateLeaseLostError extends FileTransactionBusyError {
+  constructor(message: string) {
+    super(`${message}: this writer's lease expired or was taken over; nothing was written`);
+    this.name = "StateLeaseLostError";
+  }
+}
+function classifyStateError(error: unknown, detail: string): unknown {
+  if (!isDiskFullError(error)) return error;
+  noteStateDiskFull(detail);
+  return error instanceof StateDiskFullError ? error : new StateDiskFullError(detail, error);
+}
+
+type WriteFault = { site: "release" | "commit"; collection?: string; times?: number; error: Error };
+const writeFaults = new Map<WriteFault["site"], WriteFault>();
+export function injectStateWriteFaultForTests(fault: WriteFault | null): void {
+  if (fault === null) writeFaults.clear();
+  else writeFaults.set(fault.site, { ...fault });
+}
+function injectWriteFault(site: WriteFault["site"], collection?: string): void {
+  const fault = writeFaults.get(site);
+  if (!fault || (fault.collection !== undefined && fault.collection !== collection)) return;
+  if (fault.times !== undefined) {
+    if (fault.times <= 0) return;
+    fault.times -= 1;
+  }
+  throw fault.error;
+}
+
+type AbandonedLease = { filename: string; collection: string; token: string; abandonedAt: number };
+type AbandonedLeases = { entries: Map<string, Map<string, Map<string, AbandonedLease>>>; timer: ReturnType<typeof setTimeout> | null; deadline?: number; delay: number };
+const leaseGlobal = globalThis as typeof globalThis & { __llvAbandonedStateLeases?: AbandonedLeases };
+const abandoned: AbandonedLeases = leaseGlobal.__llvAbandonedStateLeases ??= { entries: new Map(), timer: null, delay: 250 };
+function abandonedTokens(filename: string, collection: string) {
+  return abandoned.entries.get(path.resolve(filename))?.get(collection);
+}
+function forgetAbandoned(lease: AbandonedLease): void {
+  const filename = path.resolve(lease.filename);
+  const collections = abandoned.entries.get(filename);
+  const tokens = collections?.get(lease.collection);
+  if (!tokens?.delete(lease.token)) return;
+  if (!tokens.size) collections!.delete(lease.collection);
+  if (!collections!.size) abandoned.entries.delete(filename);
+  console.info(`[state lease] cleared abandoned ${lease.collection} after ${Date.now() - lease.abandonedAt} ms`);
+}
+function deleteLease(lease: AbandonedLease): void {
+  // If a sandbox or retired database has disappeared, do not recreate it.
+  if (!fs.existsSync(lease.filename)) return;
+  const db = connectDatabase(lease.filename);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    injectWriteFault("release", lease.collection);
+    db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
+    db.exec("COMMIT");
+  } catch (error) { rollbackQuietly(db); throw error; }
+  finally { db.close(); }
+}
+function scheduleAbandonedRetry(): void {
+  if (!abandoned.entries.size) return;
+  const deadline = Date.now() + abandoned.delay;
+  // New abandoned tokens may shorten a pending retry, never postpone it.
+  if (abandoned.timer) {
+    if (abandoned.deadline === undefined || abandoned.deadline <= deadline) return;
+    clearTimeout(abandoned.timer);
+  }
+  abandoned.deadline = deadline;
+  abandoned.timer = setTimeout(() => {
+    abandoned.timer = null;
+    abandoned.deadline = undefined;
+    for (const collections of abandoned.entries.values()) for (const tokens of collections.values()) for (const lease of tokens.values()) {
+      try { deleteLease(lease); forgetAbandoned(lease); }
+      catch (error) { classifyStateError(error, `${lease.collection} release`); }
+    }
+    abandoned.delay = Math.min(5_000, abandoned.delay * 2);
+    scheduleAbandonedRetry();
+  }, abandoned.delay);
+  abandoned.timer.unref();
+}
+function abandonLease(lease: AbandonedLease, error: unknown): void {
+  const filename = path.resolve(lease.filename);
+  let collections = abandoned.entries.get(filename);
+  if (!collections) abandoned.entries.set(filename, collections = new Map());
+  let tokens = collections.get(lease.collection);
+  if (!tokens) collections.set(lease.collection, tokens = new Map());
+  if (!tokens.has(lease.token)) {
+    tokens.set(lease.token, lease);
+    console.warn(`[state lease] abandoned ${lease.collection}: ${String(classifyStateError(error, `${lease.collection} release`))}`);
+  }
+  abandoned.delay = 250;
+  scheduleAbandonedRetry();
+}
 import {
   hotStatePreparingWriterReady,
   hotStateSqliteWriterReady,
@@ -68,6 +161,7 @@ type LeaseRow = {
   owner_token: string;
   owner_pid: number;
   owner_start_identity: string | null;
+  acquired_at: number;
 };
 
 type CachedRecord<T> = {
@@ -192,7 +286,8 @@ function assertSqliteInitializationAuthority(filename: string, allowFencedExisti
    activation fallback replaced is reopened, never written through the moved
    handle (currentDatabase.ts). */
 function connectDatabase(filename: string): Database {
-  return openCurrentDatabase(filename, () => connectRawDatabase(filename));
+  try { return openCurrentDatabase(filename, () => connectRawDatabase(filename)); }
+  catch (error) { throw classifyStateError(error, "state database connection"); }
 }
 
 function connectRawDatabase(filename: string): Database {
@@ -205,7 +300,7 @@ function connectRawDatabase(filename: string): Database {
         db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;");
         return db;
       } catch (error) {
-        if (!isBusyError(error)) throw error;
+        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -229,7 +324,8 @@ function connectRawReadonlyDatabase(filename: string): Database {
 }
 
 function openDatabase(filename: string): Database {
-  return openCurrentDatabase(filename, () => openRawDatabase(filename));
+  try { return openCurrentDatabase(filename, () => openRawDatabase(filename)); }
+  catch (error) { throw classifyStateError(error, "state database initialization"); }
 }
 
 function openRawDatabase(filename: string): Database {
@@ -317,7 +413,7 @@ function openRawDatabase(filename: string): Database {
         return db;
       } catch (error) {
         rollbackQuietly(db);
-        if (!isBusyError(error)) throw error;
+        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -346,16 +442,20 @@ function isBusyError(error: unknown): boolean {
   return /database is (?:locked|busy)|SQLITE_BUSY/i.test(message);
 }
 
-function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T): T {
+function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
     try {
       db.exec("BEGIN IMMEDIATE");
+      const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
       const result = operation();
+      const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
+      injectWriteFault("commit", collection);
       db.exec("COMMIT");
+      if (after > before) noteStateCommit();
       return result;
     } catch (error) {
       rollbackQuietly(db);
-      if (!isBusyError(error)) throw error;
+      if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
       Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
     }
   }
@@ -373,8 +473,10 @@ export function stateLeaseOwnerAlive(owner: { pid: number; startIdentity: string
   return Number.isInteger(owner.pid) && owner.pid > 0 && processAlive(owner.pid, owner.startIdentity);
 }
 
-function leaseIsStale(lease: LeaseRow): boolean {
-  return !stateLeaseOwnerAlive({ pid: lease.owner_pid, startIdentity: lease.owner_start_identity });
+function leaseIsStale(lease: LeaseRow, filename: string, collection: string, now: number): boolean {
+  return abandonedTokens(filename, collection)?.has(lease.owner_token) === true
+    || now - lease.acquired_at > STATE_LEASE_MAX_AGE_MS
+    || !stateLeaseOwnerAlive({ pid: lease.owner_pid, startIdentity: lease.owner_start_identity });
 }
 
 function insertSeed<T>(db: Database, seed: StateCollectionSeed<T>): void {
@@ -444,7 +546,7 @@ export function initializeStateCollections(
         return;
       } catch (error) {
         rollbackQuietly(db);
-        if (!isBusyError(error)) throw error;
+        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -953,7 +1055,7 @@ export class SqliteStateCollection<T> {
             this.pruneChanges(db, revision);
           }
           return result;
-        });
+        }, this.options.collection);
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
         return result;
@@ -1173,7 +1275,7 @@ export class SqliteStateCollection<T> {
           if (targetChanged.length > 0) target.pruneChanges(db, targetRevision);
           options.beforeCommit?.();
           return selected.length;
-        });
+        }, this.options.collection);
         if (moved > 0) {
           secureDatabaseFiles(this.filename);
           this.invalidateAfterCommit();
@@ -1551,7 +1653,7 @@ export class SqliteStateCollection<T> {
           .run(nextRevision, this.options.collection);
         this.pruneChanges(db, nextRevision);
         return nextRevision;
-      });
+      }, this.options.collection);
       if (revision !== null) {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
@@ -1642,7 +1744,7 @@ export class SqliteStateCollection<T> {
           .run(nextRevision, this.options.collection);
         this.pruneChanges(db, nextRevision);
         return nextRevision;
-      });
+      }, this.options.collection);
       if (revision !== null) {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
@@ -1695,7 +1797,7 @@ export class SqliteStateCollection<T> {
     const lease = db.query<Pick<LeaseRow, "owner_token">, [string]>(
       "SELECT owner_token FROM state_leases WHERE collection = ?",
     ).get(this.options.collection);
-    if (lease?.owner_token !== ownerToken) throw new FileTransactionBusyError(this.options.busyMessage);
+    if (lease?.owner_token !== ownerToken) throw new StateLeaseLostError(this.options.busyMessage);
   }
 
   private pruneChanges(db: Database, revision: number): void {
@@ -1718,10 +1820,11 @@ export class SqliteStateCollection<T> {
     try {
       db.exec("BEGIN IMMEDIATE");
       const held = db.query<LeaseRow, [string]>(`
-        SELECT owner_token, owner_pid, owner_start_identity
+        SELECT owner_token, owner_pid, owner_start_identity, acquired_at
         FROM state_leases WHERE collection = ?
       `).get(this.options.collection);
-      if (held && !leaseIsStale(held)) {
+      const now = Date.now();
+      if (held && !leaseIsStale(held, this.filename, this.options.collection, now)) {
         db.exec("ROLLBACK");
         return false;
       }
@@ -1731,11 +1834,16 @@ export class SqliteStateCollection<T> {
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
       db.exec("COMMIT");
+      if (held) {
+        if (now - held.acquired_at > STATE_LEASE_MAX_AGE_MS) console.warn(`[state lease] taking over ${this.options.collection} from pid ${held.owner_pid}, age ${now - held.acquired_at} ms`);
+        const old = abandonedTokens(this.filename, this.options.collection)?.get(held.owner_token);
+        if (old) forgetAbandoned(old);
+      }
       return true;
     } catch (error) {
       rollbackQuietly(db);
       if (isBusyError(error)) return false;
-      throw error;
+      throw classifyStateError(error, `${this.options.collection} acquisition`);
     }
   }
 
@@ -1745,8 +1853,10 @@ export class SqliteStateCollection<T> {
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
+      this.assertDiskHasSpace();
       throw new FileTransactionBusyError(this.options.busyMessage);
     } finally {
       db.close();
@@ -1764,56 +1874,33 @@ export class SqliteStateCollection<T> {
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         if (deadline !== null && Date.now() >= deadline) break;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
       }
+      this.assertDiskHasSpace();
       throw new FileTransactionBusyError(this.options.busyMessage);
     } finally {
       db.close();
+    }
+  }
+
+  private assertDiskHasSpace(): void {
+    const free = stateFreeBytes(path.dirname(this.filename));
+    if (free !== null && free < STATE_DISK_FULL_FLOOR_BYTES) {
+      const detail = `${this.options.collection} is held by a writer that cannot release it`;
+      noteStateDiskFull(detail);
+      throw new StateDiskFullError(detail);
     }
   }
 
   private releaseLeaseSync(ownerToken: string): void {
-    const db = connectDatabase(this.filename);
-    try {
-      for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-        try {
-          db.exec("BEGIN IMMEDIATE");
-          db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?")
-            .run(this.options.collection, ownerToken);
-          db.exec("COMMIT");
-          return;
-        } catch (error) {
-          rollbackQuietly(db);
-          if (!isBusyError(error)) throw error;
-          Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
-        }
-      }
-      throw new FileTransactionBusyError(this.options.busyMessage);
-    } finally {
-      db.close();
-    }
+    const lease = { filename: this.filename, collection: this.options.collection, token: ownerToken, abandonedAt: Date.now() };
+    try { deleteLease(lease); }
+    catch (error) { abandonLease(lease, error); }
   }
 
   private async releaseLease(ownerToken: string): Promise<void> {
-    const db = connectDatabase(this.filename);
-    try {
-      for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-        try {
-          db.exec("BEGIN IMMEDIATE");
-          db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?")
-            .run(this.options.collection, ownerToken);
-          db.exec("COMMIT");
-          return;
-        } catch (error) {
-          rollbackQuietly(db);
-          if (!isBusyError(error)) throw error;
-          await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
-        }
-      }
-      throw new FileTransactionBusyError(this.options.busyMessage);
-    } finally {
-      db.close();
-    }
+    this.releaseLeaseSync(ownerToken);
   }
 }

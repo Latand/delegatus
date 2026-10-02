@@ -5,7 +5,7 @@ import type { FlowEngine, RoleConfig, Round } from "./types";
 import { outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
 import {
   DEFAULT_TIMEOUT_MS, headlessRuns as runs, pidAlive, processMatches, killTree,
-  refreshRunIdentity, killOwnedRun, launchDetached, readOptional, reviewerCommand,
+  refreshRunIdentity, killOwnedRun, launchDetached, readOptional, reviewerCommand, prepareHeadlessPublication,
   scanEventStream, terminateHeadlessReviewerGroupAndWait,
   type HeadlessRunResult, type HeadlessCodexAccount, type HeadlessClaudeAccount, type HeadlessReviewRuntime,
 } from "@/lib/agent/headless";
@@ -48,7 +48,7 @@ export async function startHeadlessReview(
   const outputPath = outputPathFor(flowId, round);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   clearHeadlessReviewArtifacts(flowId, round);
-  const built = reviewerCommand(role, reviewRequest, outputPath, cwd, codexAccount, claudeAccount, spawnCapability, { sandbox });
+  const built = await prepareHeadlessPublication(reviewerCommand(role, reviewRequest, outputPath, cwd, codexAccount, claudeAccount, spawnCapability, { sandbox }), cwd);
   let completionSignaled = false;
   const signalCompletion = () => {
     if (completionSignaled) return;

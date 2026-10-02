@@ -800,7 +800,7 @@ test("conversation_messages resolves id, path, and selectedContext through one p
   } as never);
 
   const byId = await bindings.conversation_messages({
-    clientRequestId: "messages-by-id",
+    clientRequestId: "messages-by-id", includeMetadata: true,
     conversationId: "conversation_fixture",
     roles: ["user", "assistant"],
   });
@@ -815,8 +815,13 @@ test("conversation_messages resolves id, path, and selectedContext through one p
   });
   expect((byId.records as Array<{ author?: unknown }>)[2]?.author).toBeUndefined();
 
+  const compact = await bindings.conversation_messages({ conversationId: "conversation_fixture", roles: ["user", "assistant"] });
+  expect(compact.records).toEqual(byId.records);
+  expect(compact.cursor).toEqual(byId.cursor);
+  for (const field of ["transcriptPath", "engine", "lastRecordAt", "scanned"]) expect(compact).not.toHaveProperty(field);
+
   const byPath = await bindings.conversation_messages({
-    clientRequestId: "messages-by-path",
+    clientRequestId: "messages-by-path", includeMetadata: true,
     transcriptPath,
   });
   expect(byPath).toMatchObject({ conversationId: null, transcriptPath, engine: "codex",
@@ -1755,7 +1760,7 @@ test("deployment_status uses Viewer HTTP while resources keeps its resource read
     count: 1,
     deployments: [{ deploymentId: "deployment_recent", phase: "running", revision: "b".repeat(40) }],
   });
-  expect(await bindings.resources({ clientRequestId: "resources-read", fresh: true })).toMatchObject({ system: { ramAvailable: 5 }, sessions: [] });
+  expect(await bindings.resources({ clientRequestId: "resources-read", fresh: true, full: true })).toMatchObject({ system: { ramAvailable: 5 }, sessions: [] });
   expect(calls).toEqual([
     "/api/runtime/deployments/deployment_608",
     "/api/runtime/operations/operation_608",
@@ -2477,7 +2482,7 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   pipeline.closeReport = close as import("@/lib/pipelines/types").PipelineCloseReport;
   pipeline.closeTeardown = { id: "close-fixture", phase: "settled", waitingForActivation: false, acknowledgeHosts: false, flow: null };
   savePipelines([pipeline]);
-  const read = await bindings.get_pipeline({ clientRequestId: "close-read-final", pipelineId: pipeline.id });
+  const read = await bindings.get_pipeline({ clientRequestId: "close-read-final", full: true, pipelineId: pipeline.id });
   expect(read).toMatchObject({ pipeline: { closeReport: { status: "settled", pending: [], stopped: [target] } } });
 });
 
@@ -3249,7 +3254,7 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
 test("seat_tick_settings refuses only the change that would leave no reason behind", async () => {
   const { bindings, store } = tickSettingsBindings();
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-no-reason", enabled: false }))
-    .rejects.toThrow("a reason is required");
+    .rejects.toThrow("instructions (reason) are required");
   expect(store.size).toBe(0);
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-empty" })).resolves.toMatchObject({ changed: false });
 });
@@ -3632,8 +3637,14 @@ test("the single dispatch classifies every transport outcome by what it can prov
     await viewer.stop(true);
   }
   /* A refused connection never carried the request: proven not executed. */
-  expect(await classify(send)).toMatchObject({ kind: "not-executed", value: expect.stringContaining("connection was refused") });
+  expect(await classify(send)).toMatchObject({
+    kind: "refusal", value: { message: expect.stringContaining("connection was refused"),
+      details: { outcome: "not-executed", nextAction: "retry-same-key", endpoint: viewer.url.origin } },
+  });
   expect(tracker.attempted).toBe(true);
+  // Spawn keeps its permanent single-attempt refusal contract.
+  expect(await classify(() => dispatch("/api/spawn", {}, {}, { deadlineAt: Date.now() + 2_000 })))
+    .toMatchObject({ kind: "not-executed" });
 });
 
 test("send and spawn bindings dispatch through the single-attempt seam with the persisted downstream key", async () => {

@@ -15,6 +15,7 @@ import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDeliver
 import { TmuxDeliveryUncertainError } from "@/lib/tmux";
 import { LIMITS_RATE_LIMITED_REASON } from "@/lib/types";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 import type { Flow } from "./types";
 
@@ -22,6 +23,7 @@ let relayDeliveries = 0;
 let releaseRelayDeliveries: Array<() => void> = [];
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-engine-test-"));
+const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 const { captureReviewHead, newRound, tickFlow, tickFlows, persistTickFlows, flowTickBase, reviewerLaunchPersisted, abandonLaunch, adoptSyntheticLaunchTakeover, recordHeadlessLaunch, relayFixOrPark, reserveReviewerSpawn, sendToImplementer, setRelayDeliveryForTest } = await import("./engine");
 const { loadFlows, outputPathFor, saveFlows, stderrPathFor, stdoutPathFor } = await import("./store");
 const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
@@ -29,6 +31,7 @@ const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/
 const tasksStore = await import("@/lib/tasks/store");
 
 afterAll(() => {
+  restorePolicyReader();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
 });
 
@@ -344,6 +347,31 @@ test("launch-time drift parks before reviewer process actuation (#522)", async (
     expect(Object.keys(agentRegistry().snapshot().receipts)).toEqual(receiptsBefore);
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test.each(["headless", "pane"] as const)("invalid publication settings allocate no %s reviewer receipt", (reviewerMode) => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `invalid-publication-${reviewerMode}.json`));
+  const owner = registry.ensureConversation("codex", "/sessions/fixture.jsonl", null);
+  const flow = {
+    id: `flow-invalid-${reviewerMode}`, project: "viewer", cwd: "/repo", spec: "Verify publication",
+    implementerPath: "/sessions/fixture.jsonl", implementerConversationId: owner.id,
+    roles: { implementer: { engine: "codex" }, reviewer: { engine: "codex", model: null, effort: "high" } },
+    reviewerMode, rounds: [],
+  } as unknown as Flow;
+  const round = newRound(flow, "button", null);
+  const keys = ["LLV_PUBLICATION_EMAIL", "DELEGATUS_PUBLICATION_EMAIL"];
+  const previous = keys.map((key) => process.env[key]);
+  keys.forEach((key) => { process.env[key] = "invalid"; });
+  try {
+    expect(() => reserveReviewerSpawn(flow, round, flow.roles.reviewer, null, registry)).toThrow("Invalid agent publication identity");
+    expect(Object.keys(registry.snapshot().receipts)).toHaveLength(0);
+    expect(round.launchId).toBeNull();
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
   }
 });
 
@@ -1608,6 +1636,7 @@ test("a definitive structured journal rejection retries with a fresh identity an
   const commands: Parameters<RuntimeHostClient["command"]>[0][] = [];
   const client = {
     snapshot: async () => journal.snapshot(),
+    readSession: async (identity: Parameters<RuntimeJournal["readSession"]>[0]) => journal.readSession(identity),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       expect(loadFlows()[0]!.rounds[0]).toMatchObject({ relayDeliveryTransport: "structured" });
       commands.push(command);
@@ -2711,6 +2740,7 @@ function structuredImplementer(name: string) {
     cwd: "/repo",
     implementerPath,
     implementerConversationId: conversation.id,
+    rounds: [],
   } as unknown as Flow;
   return { flow, implementerPath, conversationId: conversation.id, entries: new Map([[implementerPath, entryFor(implementerPath, 1)]]) };
 }

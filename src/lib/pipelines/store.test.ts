@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
-import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
+import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
@@ -110,6 +110,49 @@ test("a process crash inside the claim transaction leaves no partial owner", asy
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
   const recovered = await createPipelineWithDelivery(deliveryFixture("crashed"), deliveryTarget);
   expect(recovered.delivery).toMatchObject({ active: true, epoch: 1 });
+}));
+
+test.each([
+  { detail: "stage failed without a fail edge", status: "fail" as const },
+  { detail: "stage needs a decision", status: "needs_decision" as const },
+  { detail: "budget spent: 2 findings left", status: "fail" as const },
+  { detail: "provider wait", status: "fail" as const },
+])("a recoverable park keeps delivery: $detail", async ({ detail, status }) => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("park-owner"), deliveryTarget);
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.state = "needs_decision";
+    record.stateDetail = detail;
+    record.cursor!.state = "running";
+    record.runs[0]!.attempts.push({ n: 1, state: "needs_decision", effectiveRole: record.stages[0]!.effectiveRole,
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: "2026-07-01T00:00:00.000Z", completedAt: "2026-07-01T00:01:00.000Z",
+      input: null, activatedBy: null, output: null, verdict: { status }, error: detail });
+    tx.put(record);
+  });
+  const parked = pipelineDeliveryLookup({ ...deliveryTarget, active: true })!;
+  expect(parked?.id).toBe(owner.id);
+  expect(parked.delivery).toMatchObject({ active: true, publish: "enabled", ownerId: owner.id, epoch: 1 });
+  expect(parked.delivery!.journal.map((item) => item.kind)).toEqual(["claim"]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("park-comparison"), deliveryTarget);
+  expect(comparison.delivery).toMatchObject({ disposition: "comparison", active: false, ownerId: owner.id, epoch: 1 });
+}));
+
+test("a competing lane's explicit takeover fences the parked owner", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("parked-owner"), deliveryTarget);
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.state = "needs_decision";
+    record.stateDetail = "budget spent: 1 findings left";
+    tx.put(record);
+  });
+  const comparison = await createPipelineWithDelivery(deliveryFixture("successor"), deliveryTarget);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "select the successor", null);
+  expect(taken.pipeline?.delivery).toMatchObject({ active: true, ownerId: comparison.id, epoch: 2 });
+  const old = findPipelineRecord(owner.id)!;
+  expect(old).toMatchObject({ state: "needs_decision", delivery: { active: false, publish: "disabled", epoch: 1 } });
+  expect(deliveryOwnerError(old, pipelineDeliveryLookup({ ...deliveryTarget, active: true }))).toContain(comparison.id);
+  expect((await takeoverPipelineDelivery(owner.id, owner.id, 1, "stale retry", null)).status).toBe(409);
 }));
 
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {

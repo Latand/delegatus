@@ -95,7 +95,7 @@ export function OpenAgentsList({ agents, current, onJump, onClose, onCloseAll }:
       <ol ref={listRef} className="or-list">
         {agents.map((agent, index) => {
           const role = frameRoleName(t, agent.role);
-          const state = t(`kanban.memberState.${agent.state}`);
+          const state = agent.draft ? t("kanban.openAgents.draftState") : t(`kanban.memberState.${agent.state}`);
           const label = agent.card ? `${agent.name} · ${agent.card}` : agent.name;
           return (
             <li key={agent.key} className="or-seg" data-role={agent.role} data-open-agent={agent.key} data-current={current === agent.key ? "" : undefined}>

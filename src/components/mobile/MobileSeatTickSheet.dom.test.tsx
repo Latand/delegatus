@@ -44,6 +44,7 @@ Object.assign(globalThis, {
 });
 
 const { MobileOrchestratorSheet } = await import("./MobileOrchestratorSheet");
+const { setLocale } = await import("@/lib/i18n");
 const { resetSeatTickSettingsCacheForTests } = await import("../orchestrator/useSeatTickSettings");
 const { resetMaintainerRoleCacheForTests } = await import("../orchestrator/useMaintainerRole");
 import type { OrchestratorPanelState } from "../orchestrator/seatState";
@@ -332,25 +333,36 @@ test("a save on the phone adopts the record the route read back", async () => {
   expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
 });
 
-test("a refused save on the phone rolls the display back and shows the module's own words", async () => {
-  getAnswer = record();
-  const root = await mount();
-  await openTick(root);
-  type(interval(), "30");
-  putAnswers = [{
-    status: 400,
-    body: { error: "a reason is required when the tick is disabled or its wake interval is changed; a quiet tick with no recorded reason is indistinguishable from a broken one" },
-  }];
-  press(save());
-  await settle(root);
+const REQUIRED_REFUSAL = "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
+const OVER_LIMIT_REFUSAL = "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again";
 
-  expect(puts()).toHaveLength(1);
-  expect(summary()).toContain("every 60 min");
-  const error = body().querySelector("[data-seat-tick-error]");
-  expect(error?.getAttribute("role")).toBe("alert");
-  expect(error?.textContent).toContain("a reason is required when the tick is disabled or its wake interval is changed");
-  /* The field being corrected keeps what was typed into it. */
-  expect(interval().value).toBe("30");
+test.each([
+  ["en", REQUIRED_REFUSAL, "«Instructions for every wake» is required when disabling wakes or changing the cadence. Write what the agent should do"],
+  ["uk", REQUIRED_REFUSAL, "«Вказівки на кожне пробудження» потрібні, щоб вимкнути пробудження або змінити інтервал."],
+  ["en", OVER_LIMIT_REFUSAL, "«Instructions for every wake» is 501 characters; the limit is 500."],
+  ["uk", OVER_LIMIT_REFUSAL, "«Вказівки на кожне пробудження» перевищують ліміт 500 символів: 501."],
+] as const)("a refused save on the phone rolls the display back and shows the panel's own field name (%s)", async (locale, refusal, shown) => {
+  setLocale(locale);
+  try {
+    getAnswer = record();
+    const root = await mount();
+    await openTick(root);
+    type(interval(), "30");
+    putAnswers = [{ status: 400, body: { error: refusal } }];
+    press(save());
+    await settle(root);
+
+    expect(puts()).toHaveLength(1);
+    expect(summary()).toContain(locale === "en" ? "every 60 min" : "кожні 60 хв");
+    const error = body().querySelector("[data-seat-tick-error]");
+    expect(error?.getAttribute("role")).toBe("alert");
+    expect(error?.textContent).toContain(shown);
+    expect(error?.textContent).not.toContain("(reason)");
+    /* The field being corrected keeps what was typed into it. */
+    expect(interval().value).toBe("30");
+  } finally {
+    setLocale("en");
+  }
 });
 
 /*

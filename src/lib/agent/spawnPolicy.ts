@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
 import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
@@ -403,6 +404,8 @@ export function applyClaudeSpawnPolicy(
     allowSubagents?: boolean;
     baseSettingsPath?: string | null;
     providerAccount?: boolean;
+    /** Installation publication settings from the launch's original env. */
+    publicationEnv?: NodeJS.ProcessEnv;
     profileId?: string;
     cwd?: string;
     mcpServers?: readonly string[];
@@ -412,6 +415,7 @@ export function applyClaudeSpawnPolicy(
     viewerTransport?: ViewerMcpTransport;
   } = {},
 ): ClaudeSpawnPolicyResult {
+  const publicationIdentity = agentPublicationIdentityEnv(options.publicationEnv ?? process.env);
   const sourceSettingsPath = path.join(home, "settings.json");
   const profileId = options.profileId ?? crypto.randomUUID();
   const result = claudeSpawnPolicyPaths(home, profileId);
@@ -481,6 +485,8 @@ export function applyClaudeSpawnPolicy(
   atomicWrite(result.settingsPath, JSON.stringify({
     ...settingsWithoutMcp,
     ...approvalSettings,
+    // Claude reapplies settings.env after startup, over the child's launch env.
+    env: { ...(record(settingsWithoutMcp.env) ?? {}), ...publicationIdentity },
     hooks: { ...hooks, PreToolUse: preToolUse },
   }, null, 2) + "\n", 0o600);
   atomicWrite(result.mcpConfigPath, JSON.stringify({ mcpServers }, null, 2) + "\n", 0o600);
