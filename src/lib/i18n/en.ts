@@ -4,6 +4,12 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "stateWrites.title": "Disk full: state writes are failing",
+  "stateWrites.free": "Free space: {free}.",
+  "stateWrites.unknown": "unknown",
+  "stateWrites.since": "Failing since {time}.",
+  "stateWrites.recovery": "Free space on this disk; Delegatus recovers by itself.",
+
   "telemetry.settings": "Settings",
   "telemetry.label": "Anonymous install ping",
   "telemetry.locked": "Disabled by an environment variable.",
