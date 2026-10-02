@@ -200,7 +200,48 @@ test("the creator, a mid-turn attempt, and a runtime-active session are preserve
   expect(h.resident.get("conversation_helper")).toBe(true);
   const settled = loadPipelines()[0]!;
   expect(settled.terminalReap).toMatchObject({ rounds: 0, stopped: 0 });
-  expect(settled.terminalReap!.settledAt).not.toBeNull();
+  expect(settled.terminalReap!.settledAt).toBeNull();
+});
+
+test("a finished attempt that is still active is rechecked and reaped after its live work settles", async () => {
+  const h = harness();
+  savePipelines([pipelineRecord({
+    id: "reap-active-then-idle",
+    state: "completed",
+    attempts: [attempt(1, "conversation_finishing", true)],
+  })]);
+  h.resident.set("conversation_finishing", true);
+  h.active.set("conversation_finishing", true);
+  // A live turn can span many sweeps without exhausting the teardown budget.
+  for (let tick = 0; tick < 7; tick++) await tickPipelines([], h.ports);
+  expect(h.stops).toEqual([]);
+  h.active.set("conversation_finishing", false);
+  await tickPipelines([], h.ports);
+  expect(h.stops).toEqual(["implement:1:conversation_finishing"]);
+  expect(loadPipelines()[0]!.terminalReap!.settledAt).not.toBeNull();
+  expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.stops).toHaveLength(1);
+});
+
+test("an unconfirmed sibling cannot settle the reap while another attempt still owns live work", async () => {
+  const h = harness();
+  savePipelines([pipelineRecord({
+    id: "reap-active-and-unconfirmed",
+    state: "completed",
+    attempts: [attempt(1, "conversation_busy", true), attempt(2, "conversation_stubborn", true)],
+  })]);
+  h.resident.set("conversation_busy", true);
+  h.resident.set("conversation_stubborn", true);
+  h.active.set("conversation_busy", true);
+  h.stopResults.set("conversation_stubborn", { outcome: "unconfirmed", operationId: "stop-stubborn", detail: "still resident" });
+  for (let tick = 0; tick < 7; tick++) await tickPipelines([], h.ports);
+  expect(h.stops.every((stop) => stop.includes("conversation_stubborn"))).toBe(true);
+  expect(loadPipelines()[0]!.terminalReap!.settledAt).toBeNull();
+  expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
+  h.active.set("conversation_busy", false);
+  await tickPipelines([], h.ports);
+  expect(h.stops).toContain("implement:1:conversation_busy");
 });
 
 test("a parked terminal attempt is swept while closed teardown stays the close action's job", async () => {

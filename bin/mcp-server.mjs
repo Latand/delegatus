@@ -181,12 +181,43 @@ let replayId = null;
 let toolsList = null;
 const pending = new Map();
 let closing = false;
-let shutdownSignal = null;
 let protocolProbe = null;
 let protocolProbeTimer = null;
 let initializationTimer = null;
 const PROTOCOL_PROBE_INTERVAL_MS = 30_000;
 const PROTOCOL_PROBE_TIMEOUT_MS = 10_000;
+const CHILD_SHUTDOWN_GRACE_MS = 1_000;
+// Keep ownership until exit, including children displaced by a release change.
+const ownedChildren = new Map();
+
+function stopChild(current, signal = null) {
+  const owned = ownedChildren.get(current);
+  if (!owned || current.exitCode !== null || current.signalCode !== null) return;
+  if (signal) current.kill(signal);
+  else current.stdin.end();
+  if (owned.timer) return;
+  if (signal) {
+    owned.timer = setTimeout(() => {
+      if (ownedChildren.has(current)) current.kill("SIGKILL");
+    }, CHILD_SHUTDOWN_GRACE_MS);
+  } else {
+    owned.timer = setTimeout(() => {
+      owned.timer = null;
+      stopChild(current, "SIGTERM");
+    }, CHILD_SHUTDOWN_GRACE_MS);
+  }
+}
+
+function shutdown(signal = null) {
+  closing = true;
+  clearInterval(heartbeatTimer);
+  if (protocolProbeTimer) clearInterval(protocolProbeTimer);
+  if (restartTimer) clearTimeout(restartTimer);
+  if (initializationTimer) clearTimeout(initializationTimer);
+  if (protocolProbe) clearTimeout(protocolProbe.timer);
+  for (const current of ownedChildren.keys()) stopChild(current, signal);
+  finishShutdown();
+}
 
 function transportFailure(result, protocolError) {
   const verdict = result?.structuredContent;
@@ -206,7 +237,6 @@ function probeProtocol(current) {
   const id = `llv-probe-${process.pid}-${Date.now()}`;
   const timer = setTimeout(() => {
     disconnect(current, "Viewer MCP child stopped responding");
-    current.kill("SIGTERM");
   }, PROTOCOL_PROBE_TIMEOUT_MS);
   protocolProbe = { id, timer };
   writeChild(current, `${JSON.stringify({ jsonrpc: "2.0", id, method: "ping" })}\n`);
@@ -218,7 +248,6 @@ function writeChild(current, line) {
     current.stdin.write(line);
   } catch (error) {
     disconnect(current, `Viewer MCP child pipe failed: ${error instanceof Error ? error.message : String(error)}`);
-    current.kill("SIGTERM");
   }
 }
 
@@ -245,14 +274,15 @@ function scheduleRestart() {
     if (error) scheduleRestart();
   }, delay);
 }
-function finishSignalShutdown() {
-  if (!shutdownSignal || child) return;
+function finishShutdown() {
+  if (!closing || ownedChildren.size) return;
   input.close();
   process.stdin.destroy();
   process.stdout.end();
 }
 function disconnect(current, detail, planned = false) {
   if (child !== current) return;
+  stopChild(current, "SIGTERM");
   if (protocolProbe) clearTimeout(protocolProbe.timer);
   protocolProbe = null;
   if (initializationTimer) clearTimeout(initializationTimer);
@@ -273,7 +303,7 @@ function disconnect(current, detail, planned = false) {
   scheduleRestart();
   heartbeat();
   for (const request of interrupted) if (request.method !== "initialize") unavailable(request, detail);
-  finishSignalShutdown();
+  finishShutdown();
 }
 function sendInitialization(current) {
   if (!initialization || replayId !== null) return;
@@ -282,24 +312,36 @@ function sendInitialization(current) {
   if (child !== current) return;
   initializationTimer = setTimeout(() => {
     disconnect(current, "Viewer MCP initialization timed out");
-    current.kill("SIGTERM");
   }, 30_000);
 }
 function start(selected) {
   const env = { ...process.env };
   if (selected.revision) env.LLV_HOT_STATE_RELEASE_REVISION = selected.revision;
   const current = spawn(bunRuntime, [selected.entry], viewerChildProcessOptions({ cwd: selected.root, env, stdio: admissionStdio() }));
+  const owned = { timer: null };
+  ownedChildren.set(current, owned);
+  const forget = () => {
+    if (owned.timer) clearTimeout(owned.timer);
+    ownedChildren.delete(current);
+  };
   child = current;
   childKey = `${selected.root}\0${selected.revision}`;
   activeReleaseId = selected.releaseId;
   ready = false;
   replayId = null;
-  current.once("error", (error) => disconnect(current, `Viewer MCP child could not start: ${error.message}`));
-  current.once("exit", () => disconnect(current, "Viewer MCP child exited"));
+  current.once("error", (error) => {
+    if (!current.pid) forget();
+    disconnect(current, `Viewer MCP child could not start: ${error.message}`);
+    finishShutdown();
+  });
+  current.once("exit", () => {
+    forget();
+    disconnect(current, "Viewer MCP child exited");
+    finishShutdown();
+  });
   current.stdin.on("error", (error) => {
     if (child !== current) return;
     disconnect(current, `Viewer MCP child pipe failed: ${error.message}`);
-    current.kill("SIGTERM");
   });
   sendInitialization(current);
   createInterface({ input: current.stdout }).on("line", (line) => {
@@ -311,7 +353,6 @@ function start(selected) {
       protocolProbe = null;
       if (message.error) {
         disconnect(current, "Viewer MCP child rejected its protocol probe");
-        current.kill("SIGTERM");
       }
       return;
     }
@@ -332,7 +373,6 @@ function start(selected) {
         reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
       } else {
         disconnect(current, "Viewer MCP initialization failed");
-        current.kill("SIGTERM");
       }
       heartbeat();
       return;
@@ -372,7 +412,6 @@ function ensureChild() {
     if (child) {
       const old = child;
       disconnect(old, "Viewer MCP release target is unreadable");
-      old.kill("SIGTERM");
     }
     return { message: error instanceof Error ? error.message : String(error), recoverable: error?.recoverable === true };
   }
@@ -380,7 +419,6 @@ function ensureChild() {
   if (child && childKey !== key) {
     const old = child;
     disconnect(old, "Viewer MCP release changed", true);
-    old.kill("SIGTERM");
     nextStartAt = 0;
   }
   if (!child && Date.now() >= nextStartAt) {
@@ -420,21 +458,9 @@ const input = createInterface({ input: process.stdin }).on("line", (line) => {
   if (request?.id !== undefined && request?.id !== null) pending.set(JSON.stringify(request.id), request);
   writeChild(child, `${line}\n`);
 }).on("close", () => {
-  closing = true;
-  clearInterval(heartbeatTimer);
-  if (protocolProbeTimer) clearInterval(protocolProbeTimer);
-  if (restartTimer) clearTimeout(restartTimer);
-  if (child) child.stdin.end();
+  shutdown();
 });
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
-  closing = true;
-  shutdownSignal = signal;
-  clearInterval(heartbeatTimer);
-  if (protocolProbeTimer) clearInterval(protocolProbeTimer);
-  if (restartTimer) clearTimeout(restartTimer);
-  if (child) child.kill(signal);
-  else finishSignalShutdown();
-});
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => shutdown(signal));
 process.on("beforeExit", () => {
   if (!heartbeatPath) return;
   try {

@@ -5905,6 +5905,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   const survivors: Array<PipelineStageHostRef & { operationId: string | null; detail: string }> = [];
   let attempted = false;
   let deferred = false;
+  let liveWork = false;
   for (const [index, { target, attempt }] of candidates.entries()) {
     const attemptKey = `${target.stageId}:${target.attempt}`;
     if (ports.monotonicNow() >= deadline) {
@@ -5931,11 +5932,11 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       settledAttempts.add(attemptKey);
       continue;
     }
-    /* The attempt's own evidence says its turn ended, but a host the runtime
-       still reports mid-turn (an adopted helper on a fresh turn) is live work,
-       so it stays; the idle-TTL reaper owns it from here. */
+    /* Runtime can still be settling the reported turn, or own a fresh turn.
+       Keep live work and recheck next tick. A temporary active observation is
+       not evidence that this tree was reaped. It consumes no teardown round. */
     if (target.conversationId && await ports.conversationAgentActive(target.conversationId) === true) {
-      settledAttempts.add(attemptKey);
+      liveWork = true;
       continue;
     }
     attempted = true;
@@ -5951,9 +5952,9 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   reap.lastAt = ports.now();
   reap.settledAttempts = [...settledAttempts];
   if (attempted || deferred) reap.rounds += 1;
-  const clean = !deferred && survivors.length === 0;
+  const clean = !deferred && !liveWork && survivors.length === 0;
   if (clean || reap.rounds >= TERMINAL_REAP_MAX_ROUNDS) {
-    reap.settledAt = reap.lastAt;
+    reap.settledAt = liveWork ? null : reap.lastAt;
     if (survivors.length > 0) {
       const known = new Set((pipeline.unconfirmedHosts ?? []).map((host) => `${host.stageId}:${host.attempt}`));
       pipeline.unconfirmedHosts = [
@@ -5966,7 +5967,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
           paneId: host.paneId,
           operationId: host.operationId,
           detail: host.detail,
-          at: reap.settledAt!,
+          at: reap.lastAt,
         })),
       ];
     }
