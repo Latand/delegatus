@@ -711,25 +711,34 @@ function emailTextViews(text: string): EmailTextView[] {
   return views;
 }
 
-function isRawPackageVersion(text: string, domainStart: number, source?: EmailTextView["source"]): boolean {
+function rawPackageVersionEnd(text: string, domainStart: number, source?: EmailTextView["source"]): number | undefined {
   const start = domainStart - 1; // Include the @: an encoded separator earns no exemption.
   const rawStart = source ? source.raw.offsets[start] : start;
-  if (rawStart === undefined || rawStart < 0) return false;
+  if (rawStart === undefined || rawStart < 0) return undefined;
   const rawText = source ? source.raw.text : text;
-  if (rawText[rawStart] !== "@") return false;
+  if (rawText[rawStart] !== "@") return undefined;
   rawPackageVersion.lastIndex = rawStart + 1;
   const version = rawPackageVersion.exec(rawText)?.[0];
-  if (!version || version.endsWith(".")) return false;
+  if (!version || version.endsWith(".")) return undefined;
   const end = start + 1 + version.length;
-  if (text.slice(start, end) !== "@" + version) return false;
+  if (text.slice(start, end) !== "@" + version) return undefined;
   if (source) {
     for (let i = start; i < end; i += 1) {
-      if (source.raw.offsets[i] !== rawStart + i - start) return false;
+      if (source.raw.offsets[i] !== rawStart + i - start) return undefined;
     }
   }
   const following = text[end];
-  return following === undefined || packageVersionFollowing.test(following)
-    || (following === "." && (text[end + 1] === undefined || /^[\x09-\x0d ]$/.test(text[end + 1])));
+  if (following === "\\") {
+    const hexEscape = /^\\x([0-9a-f]{2})/i.exec(text.slice(end));
+    const escapedCodePoint = hexEscape ? Number.parseInt(hexEscape[1], 16) : undefined;
+    if (escapedCodePoint !== undefined && escapedCodePoint > 0x20 && escapedCodePoint !== 0x7f) {
+      return undefined;
+    }
+  } else if (following !== undefined && !packageVersionFollowing.test(following)
+    && !(following === "." && (text[end + 1] === undefined || /^[\x09-\x0d ]$/.test(text[end + 1])))) {
+    return undefined;
+  }
+  return end;
 }
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */
@@ -737,7 +746,13 @@ function* emailOccurrences(text: string, source?: EmailTextView["source"]): Gene
   const pattern = new RegExp(emailAddressSource, "giu");
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const following = text[pattern.lastIndex];
-    if (!match[1].startsWith('"') && isRawPackageVersion(text, pattern.lastIndex - match[2].length, source)) continue;
+    const exemptVersionEnd = !match[1].startsWith('"')
+      ? rawPackageVersionEnd(text, pattern.lastIndex - match[2].length, source)
+      : undefined;
+    if (exemptVersionEnd !== undefined) {
+      pattern.lastIndex = exemptVersionEnd;
+      continue;
+    }
     // A quoted mailbox can contain another real address. Systemd names have
     // unquoted local parts, so that outer mailbox earns no unit exemption.
     if (!match[1].startsWith('"') && systemdUnitDomain.test(match[2])) {
