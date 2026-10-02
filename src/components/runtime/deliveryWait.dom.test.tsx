@@ -183,8 +183,8 @@ test("#1213 the composer's own unconfirmed row says so, and never claims a turn 
     />,
   );
   const details = open(view.host);
-  expect(details.querySelector('[role="status"]')?.textContent).toBe(t("orchPanel.errorUnknownTitle"));
-  expect(details.querySelector("[data-receipt-uncertain-why]")?.textContent).toBe(t("composer.deliveryUnconfirmed"));
+  expect(details.querySelector('[role="status"]')?.textContent).toBe(t("composer.deliveryChecking"));
+  expect(details.querySelector("[data-receipt-uncertain-why]")?.textContent).toBe(t("composer.deliveryCheckingDetail"));
   expect(details.textContent).not.toContain(t("runtime.receipt.awaitingTurnFor", {
     waited: t("runtime.receipt.waitedMin", { n: PAST_BOUND_MIN }),
   }));

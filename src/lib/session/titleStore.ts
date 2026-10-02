@@ -6,6 +6,7 @@ import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
+import { jsonArrayRecordBytes, registryRecordKey, reportRegistryRecord } from "@/lib/state/registryRecords";
 
 /** Longest custom title we store; the derived title uses the same 120 cap. */
 export const MAX_CUSTOM_TITLE = 120;
@@ -34,15 +35,15 @@ export interface SessionTitleOverride {
 
 type TitlesFile = { version?: unknown; titles?: unknown };
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+function atomicWriteText(filePath: string, value: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf8");
+  fs.writeFileSync(tmp, value, "utf8");
   fs.renameSync(tmp, filePath);
 }
 
 /** The store exists but cannot be trusted (unreadable, invalid JSON, unknown
-    schema, or malformed records). Mutations must abort on this rather than
+    schema). Mutations must abort on this rather than
     persist over it — a blind rewrite would erase every existing title. */
 export class TitleStoreUnreadableError extends Error {
   constructor(message: string) {
@@ -68,16 +69,21 @@ function isRecord(value: unknown): value is SessionTitleOverride {
 /**
  * Reads the store, distinguishing "not there yet" from "there but broken". A
  * missing file (ENOENT) is a legitimately empty store; anything else — an I/O
- * error, invalid JSON, an unknown schema version, or a malformed record —
+ * error, invalid JSON, or an unknown schema version —
  * throws {@link TitleStoreUnreadableError} so a mutation aborts instead of
- * overwriting existing titles.
+ * overwriting existing titles. Individual rejected records are preserved
+ * separately while valid overrides remain available.
  */
 export function readSessionTitles(filePath = titlesFile()): SessionTitleOverride[] {
+  return readTitlesDocument(filePath).records;
+}
+
+function readTitlesDocument(filePath: string): { records: SessionTitleOverride[]; preserved: { key: string; json: string }[] } {
   let text: string;
   try {
     text = fs.readFileSync(filePath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { records: [], preserved: [] };
     throw new TitleStoreUnreadableError(`session titles store is unreadable: ${(error as Error).message}`);
   }
   let parsed: unknown;
@@ -97,10 +103,15 @@ export function readSessionTitles(filePath = titlesFile()): SessionTitleOverride
     throw new TitleStoreUnreadableError("session titles store is missing its titles array");
   }
   const records = file.titles.filter(isRecord);
-  if (records.length !== file.titles.length) {
-    throw new TitleStoreUnreadableError("session titles store contains malformed records");
-  }
-  return records;
+  const bytes = jsonArrayRecordBytes(text, "titles");
+  const preserved = file.titles.flatMap((record, index) => {
+    if (isRecord(record)) return [];
+    const ownKey = record && typeof record === "object" ? (record as { key?: unknown }).key : undefined;
+    const key = typeof ownKey === "string" && ownKey ? ownKey : registryRecordKey(record);
+    reportRegistryRecord("session-titles", { id: key });
+    return [{ key, json: bytes[index]! }];
+  });
+  return { records, preserved };
 }
 
 /** Read consumers (overlay, projection) degrade to no overrides when the store
@@ -115,7 +126,12 @@ export function loadSessionTitles(filePath = titlesFile()): SessionTitleOverride
 }
 
 export function saveSessionTitles(records: SessionTitleOverride[], filePath = titlesFile()): void {
-  atomicWriteJson(filePath, { version: 1, titles: records });
+  const { preserved } = readTitlesDocument(filePath);
+  const protectedKeys = new Set(preserved.map((record) => record.key));
+  for (const record of records) {
+    if (!isRecord(record) || protectedKeys.has(record.key)) throw new TitleStoreUnreadableError(`refusing to overwrite preserved title record: ${record.key}`);
+  }
+  atomicWriteText(filePath, `{\n  "version": 1,\n  "titles": [\n${[...records.map((record) => JSON.stringify(record)), ...preserved.map((record) => record.json)].join(",\n")}\n  ]\n}\n`);
 }
 
 /** Sanitize + bound a user title. Returns null when it collapses to empty (an

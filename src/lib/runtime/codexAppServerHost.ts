@@ -1075,6 +1075,19 @@ function rolloutConfirmedDelivery(
   });
 }
 
+/** Exceptional settlement reads the whole immutable evidence afresh. A rewrite
+ * plus growth must not inherit a positive result from the incremental cache. */
+export async function readCodexConfirmedDelivery(pathname: string, entry: QueueEntry): Promise<DeliveryReceipt | null> {
+  try {
+    const before = await fs.promises.stat(pathname);
+    if (!before.isFile()) return null;
+    const scanned = await scanRolloutStructuredUserDeliveries(pathname, before.size, rolloutFileIdentity(before), undefined);
+    const after = await fs.promises.stat(pathname);
+    if (!sameRolloutFile(after, { size: before.size, mtimeMs: before.mtimeMs, fileIdentity: rolloutFileIdentity(before) })) return null;
+    return rolloutDeliveryReceipt(entry, scanned.deliveries.get(codexDeliveryDedup(entry.id)));
+  } catch { return null; }
+}
+
 function resumedActiveTurnId(value: unknown): string | null {
   const activeTurn = resumedTurns(value).findLast((turn) => stringField(turn, "status") === "inProgress");
   return activeTurn ? stringField(activeTurn, "id") : null;
@@ -1496,21 +1509,26 @@ export class CodexAppServerHost implements EngineHost {
         viewerMcpTransportForLaunch(childEnv),
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      // Resume resolves engine defaults again; replay the same launch access
+      // that thread/start received, including named scratch profiles.
+      const launchAccess = {
+        ...(options.permissionProfile
+          ? { permissions: options.permissionProfile }
+          : { sandbox: options.sandbox ?? "read-only" }),
+        approvalPolicy: options.approvalPolicy ?? "never",
+      };
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
-          ...(options.permissionProfile ? { permissions: options.permissionProfile } : {}),
+          ...launchAccess,
           config,
         })
         : await provisional.rpc("thread/start", {
           cwd: options.cwd,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
-          ...(options.permissionProfile
-            ? { permissions: options.permissionProfile }
-            : { sandbox: options.sandbox ?? "read-only" }),
-          approvalPolicy: options.approvalPolicy ?? "never",
+          ...launchAccess,
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
