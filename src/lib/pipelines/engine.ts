@@ -109,6 +109,7 @@ import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest } from "@/lib/
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
+import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -7624,12 +7625,32 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
   return { changed: true, repositories: [...new Set(links.map((link) => link.repository))] };
 }
 
+/** Decision authority follows a project's designated seat across rotations.
+    Read one server-side seat snapshot for both lineage and current authority;
+    caller-supplied roles confer no authority. Revocation also fences a creator. */
+function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null): actor is PauseResumeActor {
+  if (!actor) return false;
+  if (actor.kind === "operator") return true;
+  if (!actor.conversationId) return false;
+  const file = readOrchestratorSeatFileOrNull();
+  if (!file) return false;
+  const activeEpoch = Math.max(0, ...Object.values(file.seats)
+    .filter((seat) => seat.conversationId === actor.conversationId).map((seat) => seat.seatEpoch));
+  if (file.revocations.some((entry) => entry.conversationId === actor.conversationId && entry.seatEpoch >= activeEpoch)) return false;
+  if (actor.conversationId === pipeline.srcConversationId) return true;
+  const project = canonicalOrchestratorProject(pipeline.project);
+  const current = orchestratorSeatIn(file, project).active;
+  if (current?.conversationId !== actor.conversationId || !pipeline.srcConversationId) return false;
+  return file.revocations.some((entry) =>
+    entry.project === project && entry.conversationId === pipeline.srcConversationId);
+}
+
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
 export function decisionAnswerActorRefusal(
   pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
 ): PipelinePatchResult | null {
-  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
-    return { error: "only the pipeline creator conversation or a direct user action can answer this decision", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor)) {
+    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can answer this decision", status: 403 };
   }
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
   if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
@@ -7700,11 +7721,11 @@ function resolveDecision(
   return { pipeline, decisionAnswer: decision, replayed: false };
 }
 
-/** Who may continue a needs_review lane (#1938): the creator conversation or
-    the operator. Also checked before MCP receipt access, as for resolve-decision. */
+/** Who may continue a needs_review lane (#1938): the creator, its project's
+    current seat, or the operator. Also checked before MCP receipt access. */
 export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
-  if (!actor || (actor.kind === "agent" && (!actor.conversationId || actor.conversationId !== pipeline.srcConversationId))) {
-    return { error: "only the pipeline creator conversation or a direct user action can continue this review", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor)) {
+    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can continue this review", status: 403 };
   }
   return null;
 }
@@ -7786,7 +7807,7 @@ function acceptHead(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
   const refusal = continueReviewActorRefusal(pipeline, actor);
-  if (refusal) return { ...refusal, error: "only the pipeline creator conversation or a direct user action can accept this head" };
+  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
