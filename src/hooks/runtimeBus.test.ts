@@ -270,6 +270,35 @@ const sessionEvent = (seq: number, revision: number, turn: "running" | "idle", t
 
 /* ---------------------------- tests ---------------------------- */
 
+for (const recovery of ["reset", "reconnect", "refresh"] as const) {
+  test(`coalesced terminal identity survives ${recovery} snapshot replacement`, async () => {
+    const h = harness();
+    try {
+      h.bus.start();
+      await flush();
+      h.sources[0]!.open();
+      h.sources[0]!.message(sessionEvent(101, 2, "running", "t1"));
+      h.sources[0]!.message(sessionEvent(102, 3, "idle", "t1"));
+      const recovered = snapshot(102);
+      recovered.sessions[0] = { ...recovered.sessions[0]!, revision: 3, turn: "unknown", activeTurnId: null };
+      h.setSnapshot(recovered);
+      if (recovery === "refresh") expect(await h.bus.refresh()).toBe(true);
+      else if (recovery === "reset") h.sources[0]!.named("reset", {});
+      else { h.sources[0]!.error(); h.clock.advance(500); }
+      await flush();
+      expect(h.fetchCalls()).toBe(2);
+      expect(h.bus.getState().store.sessions.conv_a?.settledTurnId).toBe("t1");
+      const latest = h.sources.at(-1)!;
+      latest.open();
+      latest.message(sessionEvent(103, 4, "running", "t2"));
+      h.clock.advance(16);
+      expect(h.bus.getState().store.sessions.conv_a).toMatchObject({
+        turn: "running", activeTurnId: "t2", settledTurnId: null,
+      });
+    } finally { h.bus.stop(); }
+  });
+}
+
 describe("runtimeBus join", () => {
   let h: Harness;
   beforeEach(() => (h = harness()));

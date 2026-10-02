@@ -31,6 +31,9 @@ import type { ManagedOn } from "./remoteLaneSummary";
 import {
   latestAttempt, pipelineReviewHeads, pipelineStagePosition, pipelineStateLabel, stageChipLabel, stageConfigurable, stageDisplayName, stageLatestAttemptPlace, stageNames, stageRoleAside,
   type StageChipState,
+  type StageNavTarget,
+  attemptStateLabel,
+  stageAgentRowModel,
 } from "./pipelineModel";
 import {
   answerLabel, blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
@@ -505,6 +508,8 @@ export interface PipelineBlockProps {
   graphOpen?: boolean;
   onToggleGraph?: (open: boolean) => void;
   onOpenStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
+  /** Screen density: opens a recorded earlier attempt through the normal reader. */
+  onOpenAttempt?: (target: StageNavTarget) => void;
   /** The head's ›: the Stages sheet on the desktop, the pipeline screen on the phone. */
   onOpenStages?: (pipeline: Pipeline) => void;
   onMenu?: (pipeline: Pipeline, anchor: HTMLElement) => void;
@@ -866,6 +871,7 @@ function ScreenBlock(props: PipelineBlockProps & {
   const row = (chip: KanbanStageChip, index: number) => {
     const { stage } = chip;
     const isCurrent = stage.id === currentId;
+    const agent = stageAgentRowModel(pipeline, stage.id);
     const conversation = conversationOf(stage);
     const openable = Boolean(props.onOpenStage) && conversation.openable;
     const configurable = !conversation.openable && Boolean(props.onConfigureStage) && stageConfigurable(pipeline, stage.id);
@@ -944,27 +950,39 @@ function ScreenBlock(props: PipelineBlockProps & {
         data-stage-current={isCurrent ? "1" : undefined}
       >
         {control}
-        {isCurrent ? (
+        {isCurrent || agent.target || agent.earlier.length ? (
           <div className="pb-stage-body">
-            {answers ? (
+            {agent.question ? <p className="pb-latest whitespace-pre-wrap" data-stage-question={stage.id}>{agent.question}</p> : null}
+            {isCurrent && answers ? (
               <div className="pb-answer" data-answer={answers.kind}>
                 <AnswerReport pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
                 {edges.map((edge) => <p key={edge.id} className="pb-edge" data-stage-edge={edge.id}>{`↺ ${edge.text}`}</p>)}
                 {answers.kind === "review" && answers.stage && !answers.stop ? <FindingList findings={stageFindings(pipeline, answers.stage.id)} shown={ANSWER_FINDINGS} /> : null}
                 {props.onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={props.acting ?? null} large onAnswer={props.onAnswer} /> : null}
               </div>
-            ) : (
+            ) : isCurrent ? (
               <>
                 {stageNow(chip)}
                 {latest ? <p className="pb-latest" data-stage-latest={stage.id}>{t("pipelineBlock.latest", { text: latest })}</p> : null}
                 {edges.map((edge) => <p key={edge.id} className="pb-edge" data-stage-edge={edge.id}>{`↺ ${edge.text}`}</p>)}
               </>
-            )}
-            {openable ? (
+            ) : null}
+            {openable && agent.target ? (
               <button type="button" className="pb-open-conv" data-open-conversation={stage.id} aria-label={t("mobile2.pipeline.openStage", { stage: name })} onClick={() => props.onOpenStage!(pipeline, stage)}>
-                <span>{t("pipelineBlock.openConversation")}</span>
+                <span>{t("pipelineStage.openAgent")}</span>
                 <ChevronRight />
               </button>
+            ) : null}
+            {agent.earlier.length && props.onOpenAttempt ? (
+              <details data-stage-attempts={stage.id}>
+                <summary className="min-h-11 cursor-pointer content-center text-label text-secondary">{t("pipelineVerdict.priorAttempts")}</summary>
+                {agent.earlier.map((attempt) => (
+                  <button key={attempt.n} type="button" className="pb-open-conv" data-open-attempt={attempt.n} onClick={() => props.onOpenAttempt!(attempt.target)}>
+                    <span>{t("pipelineVerdict.attemptLine", { n: attempt.position, status: attemptStateLabel(t, attempt.state) })}</span>
+                    <ChevronRight />
+                  </button>
+                ))}
+              </details>
             ) : null}
           </div>
         ) : null}

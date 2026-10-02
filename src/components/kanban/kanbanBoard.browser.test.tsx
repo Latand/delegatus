@@ -12,7 +12,7 @@ import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
-import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -44,6 +44,90 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("batched turn settlement", () => {
+  browserTest("retained terminal events settle desktop and phone before a different turn starts", async () => {
+    const out = path.resolve(".artifacts/batched-turn-settlement");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        for (const lateTurn of ["running", "unknown"] as const) {
+          const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width === 390, isMobile: width === 390 });
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          try {
+            await context.addInitScript(({ locale }) => {
+              localStorage.setItem("llv_lang", locale);
+              // The fixture installs its silent transport. Capture its runtime
+              // source and drive the real bus's canonical event entry point.
+              let installed = window.EventSource;
+              Object.defineProperty(window, "EventSource", { configurable: true,
+                get: () => installed,
+                set: (Source: typeof EventSource) => {
+                  installed = class extends Source {
+                    constructor(url: string | URL) {
+                      super(url);
+                      if (String(url).startsWith("/api/runtime/stream")) {
+                        Object.assign(window, { settlementSource: this });
+                        setTimeout(() => this.onopen?.(new Event("open")), 0);
+                      }
+                    }
+                  };
+                },
+              });
+            }, { locale });
+            await page.goto(`${server.base}?runtime=structured#c=conversation_search-ver-2`);
+            const stateSelector = width === 390 ? "[data-mobile2-chat-state]" : '[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]';
+            await page.locator(stateSelector).waitFor();
+            if (width === 390) expect(await page.locator(stateSelector).innerText()).toContain(translate(locale, "mobile2.chat.stateWorking"));
+            await page.waitForFunction(() => Boolean((window as unknown as { settlementSource?: EventSource }).settlementSource?.onmessage));
+            const initialCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            const send = async (successor: boolean) => page.evaluate(({ lateTurn, successor }) => {
+              const source = (window as unknown as { settlementSource: EventSource }).settlementSource;
+              const conversationId = "conversation_search-ver-2";
+              const events = successor ? [{ kind: "turn-started", revision: 5, payload: { conversationId, turnId: "turn-2" } }]
+                : [
+                  { kind: "turn-started", revision: 2, payload: { conversationId, turnId: "turn-1" } },
+                  { kind: "turn-ended", revision: 3, payload: { conversationId, turnId: "turn-1", outcome: "completed" } },
+                  { kind: "session-status", revision: 4, payload: { conversationId, turn: lateTurn, activeTurnId: lateTurn === "running" ? "turn-1" : null } },
+                ];
+              for (const event of events) source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({
+                schemaVersion: 1, seq: 100 + event.revision, eventId: `settlement-${event.revision}`,
+                scope: { type: "session", id: conversationId }, ...event,
+              }) }));
+            }, { lateTurn, successor });
+            await send(false);
+            await page.waitForFunction(({ width, working }) => width === 390
+              ? !document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working)
+              : !document.querySelector('[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]'),
+            { width, working: translate(locale, "mobile2.chat.stateWorking") });
+            const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            if (width === 1440) {
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
+              expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
+            }
+            const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${lateTurn}.png`) });
+            await send(true);
+            if (width === 1440) {
+              await page.locator(stateSelector).waitFor();
+              expect(await page.locator("[data-bar-working]").innerText()).toBe(initialCount!);
+            } else {
+              await page.waitForFunction((working) => document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working), translate(locale, "mobile2.chat.stateWorking"));
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ locale, width, lateTurn, initialCount, settledCount, phoneState, pageErrors });
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("shipped role defaults rendered evidence", () => {
   browserTest("default xhigh rows keep their chosen effort without a downgrade nudge in every locale and layout", async () => {
     const out = path.resolve(".artifacts/role-defaults");
@@ -60,14 +144,14 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(16);
-          for (const id of ["reviewer", "architect", "prod-auditor"]) {
+          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
+          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
             const row = page.locator(`[data-mapping-row="${id}"]`);
             await row.scrollIntoViewIfNeeded();
             const effort = await row.locator("select").nth(1).inputValue();
             const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
-            expect(effort).toBe("xhigh");
-            expect(cost).toBe("very-heavy");
+            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
+            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
             expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
             await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
             rows.push({ id, effort, cost, nudge: false });
@@ -13681,6 +13765,195 @@ describe("seat panel carries no internal noise", () => {
   }, 1_800_000);
 });
 
+describe("a new conversation's first message is a normal row", () => {
+  /*
+   * The rendered evidence for docs/design/first-bubble-no-raw-json.md: the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=first-message&case=<p|s|f>`,
+   * the window every conversation renders, at 1440 and 1280, light and dark,
+   * English and Ukrainian.
+   *
+   *   (p) a plain spawn's prompt: Pending -> Delivered -> Transcript arrived ->
+   *       Answered, the raw recovery envelope fed on the pending steps
+   *   (s) a seat: the create draft with Confirm actually pressed, so the real
+   *       provisional card is built, then the same steps
+   *   (f) a failed launch: the only state allowed to be red
+   *
+   * A MutationObserver installed before the first step records, across every
+   * mutation, whether the envelope text, a red element outside the failure
+   * line and its chip, or an operator bubble for a seat's mandate ever showed.
+   * Per step: one first-message row, the same node and the same left edge and
+   * width as at Pending, no horizontal overflow and no zero-width control.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "first message is a normal row"
+   *
+   * Readings go to `evidence/first-message/desktop.json`; frames to
+   * `.artifacts/first-message/`.
+   */
+  const OUT = path.resolve(".artifacts/first-message");
+  const EVIDENCE = path.resolve("evidence/first-message");
+  const SEAT = "[data-kanban-seat]";
+  const FRAMES = [{ width: 1440, height: 900 }, { width: 1280, height: 800 }] as const;
+  const HIDE_TOAST = "[data-attention-toast] { display: none !important; }";
+  const PLAIN_LINE = "Fix the failing export test.";
+  const MANDATE_LINE = "Keep the project moving.";
+
+  type Evidence = { advanceFirstMessage(): number };
+  /* Red as drawn: a `danger` utility with no hover/focus variant, inside the feed. */
+  const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
+  const watch = (page: Page) => page.evaluate(([seat, red]) => {
+    const reds = (0, eval)(red as string) as (root: Element) => Element[];
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
+    (window as unknown as { __fm: typeof sink }).__fm = sink;
+    const scan = () => {
+      const root = document.querySelector(`${seat} [data-orchestrator-panel]`);
+      if (!root) return;
+      if (/structured launch recovery|"phase"|\{\s*"/.test((root as HTMLElement).innerText)) sink.envelope = true;
+      for (const el of reds(root)) {
+        if (el.closest("[data-outbox-failure], [data-launch-chip]")) continue;
+        const mark = (el.outerHTML ?? "").slice(0, 160);
+        if (!sink.danger.includes(mark)) sink.danger.push(mark);
+      }
+      sink.outboxMax = Math.max(sink.outboxMax, root.querySelectorAll("[data-outbox-entry]").length);
+      sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
+      sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
+      /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
+      const state = `panel ${root.getAttribute("data-orchestrator-state")}, outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}, feed ${root.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? "none"}, draft ${root.querySelector("[data-orchestrator-draft]") ? "yes" : "no"}`;
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);
+      /* After the first card: a state with no card (the first message gone) or with the create draft back (the Confirm flashed). */
+      if (sink.mandateMax >= 1 && (!root.querySelector("[data-mandate-card]") || root.querySelector("[data-orchestrator-draft]")) && !sink.lapses.includes(state)) sink.lapses.push(state);
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    scan();
+  }, [SEAT, RED] as const);
+
+  const readPane = (page: Page, line: string, mark: boolean) => page.evaluate(({ seat, line, mark, red }) => {
+    const reds = (0, eval)(red) as (root: Element) => Element[];
+    const root = document.querySelector(`${seat} [data-orchestrator-panel]`)!;
+    const visible = (root as HTMLElement).innerText;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(line));
+    const card = root.querySelector<HTMLElement>("[data-mandate-card]");
+    const first = rows[0] ?? card;
+    if (mark && first) first.setAttribute("data-fm-mark", "1");
+    const rect = first ? first.getBoundingClientRect() : null;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    return {
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      danger: reds(root).filter((el) => !el.closest("[data-outbox-failure], [data-launch-chip]")).length,
+      rows: rows.length,
+      outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
+      userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
+      rowState: rows[0]?.getAttribute("data-message-row") ?? null,
+      sameNode: first ? first.hasAttribute("data-fm-mark") : null,
+      rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+      failureLines: root.querySelectorAll("[data-outbox-failure]").length,
+      failureText: root.querySelector("[data-outbox-failure] [data-outbox-status]")?.textContent ?? null,
+      errorChips: [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')].map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      overflowX: Math.max(document.documentElement.scrollWidth - innerWidth, (root as HTMLElement).scrollWidth - (root as HTMLElement).clientWidth),
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answered: (root.textContent ?? "").includes("Looking at the export test."),
+    };
+  }, { seat: SEAT, line, mark, red: RED });
+
+  browserTest("cases p, s and f hold one clean row at 1440 and 1280, light and dark, en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/first-message-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const viewport of FRAMES) for (const kind of ["p", "s", "f"] as const) {
+        const label = `${kind}-${viewport.width}-${scheme}-${lang}`;
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const line = kind === "s" ? MANDATE_LINE : PLAIN_LINE;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=first-message&case=${kind}`, viewport, scheme, lang);
+        try {
+          await page.addStyleTag({ content: HIDE_TOAST });
+          if (kind === "s") {
+            await page.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+            await watch(page);
+            await page.locator("[data-orchestrator-confirm]").first().click();
+            await page.waitForSelector(`${SEAT} [data-mandate-card], ${SEAT} [data-outbox-entry]`, { state: "attached", timeout: 20_000 });
+          } else {
+            await page.waitForSelector(`${SEAT} [data-orchestrator-panel]`, { state: "attached", timeout: 20_000 });
+            await page.waitForFunction((seat) => Boolean(document.querySelector(`${seat} [data-feed-state]`)), SEAT, { timeout: 15_000 });
+            await watch(page);
+          }
+          const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
+          const readings: Array<Record<string, unknown>> = [];
+          let pendingRect: { left: number; width: number; top: number } | null = null;
+          /* The seat's mandate opened at Pending (a real click on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
+          for (const [index, step] of steps.entries()) {
+            if (index > 0) {
+              await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
+              if (step === "answered") await page.waitForFunction((seat) => (document.querySelector(`${seat} [data-orchestrator-panel]`)?.textContent ?? "").includes("Looking at the export test."), SEAT, { timeout: 25_000 });
+              else await page.waitForTimeout(1_800);
+            } else await page.waitForTimeout(600);
+            const read = await readPane(page, line, index === 0);
+            await page.screenshot({ path: path.join(OUT, `${label}-${step}.png`) });
+            readings.push({ step, ...read });
+            const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator(`${SEAT} [data-mandate-card] summary`).first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            }
+            if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
+            if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
+            if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);
+            if (read.zeroWidthControls.length) failures.push(`${at}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+            if (kind === "f") {
+              if (read.rows !== 1 || read.failureLines !== 1) failures.push(`${at}: ${read.rows} rows and ${read.failureLines} failure lines`);
+              if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${at}: error chips ${JSON.stringify(read.errorChips)}`);
+              if (read.failureText?.includes("runtime host unavailable")) failures.push(`${at}: the failure line prints the raw reason`);
+              continue;
+            }
+            if (read.errorChips.length) failures.push(`${at}: an error chip ${JSON.stringify(read.errorChips)}`);
+            if (kind === "p") {
+              if (read.rows !== 1) failures.push(`${at}: ${read.rows} rows carry the prompt`);
+              if (index > 0 && read.sameNode !== true) failures.push(`${at}: the prompt row is a different node than at pending`);
+              if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
+              if (index === 0 && read.rect) pendingRect = read.rect;
+              if (pendingRect && read.rect && (Math.abs(read.rect.left - pendingRect.left) > 1 || Math.abs(read.rect.width - pendingRect.width) > 1 || (index < 3 && Math.abs(read.rect.top - pendingRect.top) > 1))) failures.push(`${at}: the row moved from ${JSON.stringify(pendingRect)} to ${JSON.stringify(read.rect)}`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
+          }
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
+          if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
+          if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
+          if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
+          if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
+          if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card or the create draft: ${JSON.stringify(seen.lapses)}`);
+          frames[label] = { readings, seen, pageErrors };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});
+
 describe("done task retention", () => {
   browserTest("old staffed completions leave desktop and 390px board; task lists retain them", async () => {
     const out = path.resolve("evidence/board-done-retention");
@@ -14539,6 +14812,50 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 600_000);
 });
 
+describe("agent memory isolation", () => {
+  browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
+    const out = path.resolve(".artifacts/agent-memory-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 },  colorScheme: "light", reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${locale}&memory=1&open=1`);
+          const row = page.locator("[data-needs-you-panel] [data-needs-you-row]").filter({ hasText: locale === "en" ? "Killed: out of memory" : "Зупинено: нестача пам’яті" });
+          await row.waitFor({ timeout: 15000 });
+          expect(await row.innerText()).toContain(locale === "en" ? "build · limit 15 GB" : "build · ліміт 15 ГБ");
+          await row.scrollIntoViewIfNeeded();
+          const geometry = await row.evaluate((element) => ({ width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, overflow: document.documentElement.scrollWidth > innerWidth }));
+          expect(geometry.right).toBeLessThanOrEqual(1440);
+          expect(geometry.overflow).toBeFalse();
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+          cases.push({ locale, ...geometry, errors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/agent-memory", { recursive: true });
+      fs.writeFileSync("evidence/agent-memory/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
+
+// The focused common-path case shares its assertions with the phone driver.
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 1440 in en and uk", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/seat-handover/desktop-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    try { await captureSeatMandateHandover(browser, server.base, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("state writes disk-full alert", () => {
   browserTest("desktop alert stays clear of header and composer in both schemes and locales", async () => {
     const out = path.resolve(".artifacts/self-update-reload/state-writes");
@@ -15071,4 +15388,279 @@ describe("launch layout shift rendered evidence", () => {
       if (label === "after") expect(reading.clsWithoutMandate, `${reading.viewport} cumulative layout shift of creating an orchestrator, the mandate bubble's hand-over apart`).toBeLessThan(LAUNCH_CLS_LIMIT);
     }
   }, 240_000);
+});
+
+describe("task chip: the card's Ask button puts a task in the orchestrator's composer", () => {
+  /*
+   * Rendered evidence for the card's one «Ask» button. With the seat folded, a press on a card in the Assigned
+   * column attaches the task as a chip above the seat's composer (never as text in the input), unfolds the seat,
+   * and leaves the card where it was on the screen. A second card adds a second chip, × takes one back out, and
+   * the longer Ukrainian label holds in the narrowest card foot.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task chip"
+   *
+   * Measurements go to `evidence/task-chip-to-orchestrator/geometry.json`; frames to `.artifacts/task-chip/`.
+   */
+  const OUT = path.resolve(".artifacts/task-chip");
+  const EVIDENCE = path.resolve("evidence/task-chip-to-orchestrator");
+  const FOLDED = JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null, topWidths: {}, sideWidths: {} });
+
+  browserTest("task chip: a mouse press keeps Ask in place on a note card and the card below it", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const focusTarget of ["card", "control"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, VIEWPORT, "light", locale, "reduce");
+        try {
+          const note = page.locator(card("t-note"));
+          await note.waitFor();
+          for (const [id, expectedChips] of [["t-note", 1], ["t-pending", 2]] as const) {
+            // Losing focus from the note must also leave its neighbour in place.
+            if (id === "t-pending") {
+              await note.focus();
+              await page.keyboard.press("Tab");
+              if (focusTarget === "card") await page.keyboard.press("Shift+Tab");
+              await note.locator('[data-task-note="full"]').waitFor();
+            }
+            const ask = page.locator(`[data-ask-orchestrator="task:${id}"]`);
+            await ask.scrollIntoViewIfNeeded();
+            const before = (await ask.boundingBox())!;
+            await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+            await page.mouse.down();
+            const during = (await ask.boundingBox())!;
+            await ask.evaluate(element => element.addEventListener("mouseup", () => {
+              element.setAttribute("data-test-release-top", String(element.getBoundingClientRect().top));
+            }, { once: true }));
+            // Release at the original pointer coordinates, as a physical mouse does.
+            await page.mouse.up();
+            const releaseTop = await ask.getAttribute("data-test-release-top");
+            const pressed = await ask.getAttribute("aria-pressed");
+            const chips = await page.locator("[data-orchestrator-conversation] [data-task-chip]").count();
+            cases.push({ locale, focusTarget, id, before, during, releaseTop, pressed, chips });
+            if (releaseTop === null || Math.abs(Number(releaseTop) - before.y) > 0.5 || Math.abs(during.y - before.y) > 0.5) failures.push(`${locale} ${focusTarget} ${id}: Ask moved during the mouse press`);
+            if (pressed !== "true" || chips !== expectedChips) failures.push(`${locale} ${id}: pressed=${pressed}, chips=${chips}`);
+            await page.screenshot({ path: path.join(OUT, `note-ask-${locale}-${focusTarget}-${id}.png`) });
+          }
+          if (pageErrors.length) failures.push(`${locale}: ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(EVIDENCE, "note-press.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, cases }, null, 2)}\n`);
+  }, 120_000);
+
+  browserTest("task chip: pressing Ask on a card adds a chip to the seat's composer, unfolds the seat and keeps the card in place", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const passes: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string>) => translate(lang, key, vars);
+        const record: Record<string, unknown> = { lang };
+        passes.push(record);
+        const opened = await openFixture(browser, `${server.base}?scenario=seat-noise`, VIEWPORT, "light", lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.evaluate((folded) => localStorage.setItem("llv:kanban-seat:v2", folded), FOLDED);
+          await page.reload();
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const ids = await page.$$eval('.card[data-id^="task:"] [data-ask-orchestrator]', (nodes) => nodes.map((node) => node.getAttribute("data-ask-orchestrator")!));
+          record.askButtons = ids.length;
+          if (ids.length < 2) { failures.push(`${lang}: expected an Ask button on every task card, found ${ids.length}`); continue; }
+          const [first, second] = ids as [string, string];
+          const top = (id: string) => page.$eval(`.card[data-id="${id}"]`, (node) => Math.round(node.getBoundingClientRect().top * 10) / 10);
+          const seatState = () => page.$eval("[data-kanban-seat]", (node) => node.getAttribute("data-collapsed"));
+          const foldedBefore = await seatState() === "1";
+          await page.$eval(`.card[data-id="${first}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          const topBefore = await top(first);
+          await page.click(`[data-ask-orchestrator="${first}"]`);
+          await page.waitForSelector("[data-orchestrator-conversation] [data-task-chip]", { timeout: 10_000 });
+          await page.waitForTimeout(600);
+          const topAfter = await top(first);
+          const seatAfter = await seatState();
+          const pressed = await page.$eval(`[data-ask-orchestrator="${first}"]`, (node) => node.getAttribute("aria-pressed"));
+          /* Nothing has scrolled the seat into view yet: what the operator sees at the press is the receipt. */
+          const receipt = await page.$eval("[data-kanban-receipt]", (node) => {
+            const rect = node.getBoundingClientRect();
+            const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+            return {
+              text: node.querySelector(".msg")?.textContent?.trim() ?? "",
+              action: node.querySelector(".act")?.textContent?.trim() ?? "",
+              inView: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth,
+              seatInView: seat.top >= 0 && seat.bottom <= innerHeight,
+            };
+          }).catch(() => null);
+          await page.click("[data-kanban-receipt] .act");
+          await page.waitForTimeout(600);
+          const composerInView = await page.$eval("[data-kanban-seat] textarea", (node) => {
+            const rect = node.getBoundingClientRect();
+            return rect.top >= 48 && rect.bottom <= innerHeight && document.activeElement === node;
+          });
+          const chip = await page.$eval("[data-orchestrator-conversation] [data-task-chip]", (node) => ({
+            text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            width: Math.round(node.getBoundingClientRect().width),
+            inView: node.getBoundingClientRect().top >= 0 && node.getBoundingClientRect().bottom <= innerHeight,
+            cut: [node, ...node.querySelectorAll<HTMLElement>("*")].some((child) => child.scrollWidth > child.clientWidth + 1 && getComputedStyle(child).overflow !== "visible" && !child.classList.contains("truncate")),
+          }));
+          const draft = await page.$eval("[data-orchestrator-conversation] textarea", (node) => (node as HTMLTextAreaElement).value);
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chip-${lang}.png`) });
+          await page.$eval(`.card[data-id="${second}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          await page.click(`[data-ask-orchestrator="${second}"]`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length === 2);
+          await page.$eval("[data-kanban-seat]", (node) => node.scrollIntoView({ block: "start" }));
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chips-two-${lang}.png`) });
+          await page.screenshot({ path: path.join(OUT, `board-${lang}.png`) });
+          const removed = await page.evaluate(async () => {
+            const before = document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length;
+            document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-task-chip-remove]")!.click();
+            await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+            return { before, after: document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length };
+          });
+          const footFit = await page.$$eval('.card[data-id^="task:"] .foot', (foots) => foots.filter((foot) => foot.scrollWidth > foot.clientWidth + 1).length);
+          const ask = await page.$eval(`[data-ask-orchestrator="${second}"]`, (node) => ({ label: node.getAttribute("aria-label"), text: node.textContent?.trim(), height: Math.round(node.getBoundingClientRect().height) }));
+          Object.assign(record, { foldedBefore, seatAfter, pressed, topBefore, topAfter, receipt, composerInView, chip, draft, removed, footOverflow: footFit, ask });
+          if (!foldedBefore) failures.push(`${lang}: the seat was not folded before the press`);
+          if (Math.abs(topAfter - topBefore) > 2) failures.push(`${lang}: the card moved ${topAfter - topBefore} px when the seat unfolded`);
+          if (seatAfter !== "0") failures.push(`${lang}: the seat is still folded after the press`);
+          if (!receipt || !receipt.inView || !/^«.+»/.test(receipt.text) || receipt.action !== tr("taskChip.show")) failures.push(`${lang}: no visible receipt at the press ${JSON.stringify(receipt)}`);
+          if (!composerInView) failures.push(`${lang}: the receipt's ${tr("taskChip.show")} did not bring the composer into view`);
+          if (pressed !== "true") failures.push(`${lang}: the card's button does not read as pressed`);
+          if (draft !== "") failures.push(`${lang}: the input holds "${draft}" after the press`);
+          if (!chip.inView || chip.cut) failures.push(`${lang}: the chip ${JSON.stringify(chip)}`);
+          if (removed.before !== 2 || removed.after !== 1) failures.push(`${lang}: × ${JSON.stringify(removed)}`);
+          if (footFit > 0) failures.push(`${lang}: ${footFit} card foot(s) overflow sideways`);
+          if (ask.text !== tr("taskChip.ask")) failures.push(`${lang}: the button says "${ask.text}"`);
+          if (opened.pageErrors.length) failures.push(`${lang}: page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    /* The record is written only by a run that held: a failing run must not leave
+       its numbers where a reviewer reads them as the outcome. */
+    expect(failures).toEqual([]);
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
+  }, 300_000);
+});
+
+
+describe("task chip native queue presentation", () => {
+  browserTest("task chip queue badges and clean editor fit desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/task-chip-native-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-queue-preview`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          /* Recovery is exercised after a normal reload; it also gives headless
+             Chromium a fresh paint of the mixed-locale text. */
+          await page.reload();
+          const panel = page.locator('[data-testid="native-queue-panel"]');
+          await panel.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          await page.waitForTimeout(1000);
+          for (const selector of ['[data-testid="native-queue-row"]', '[data-testid="native-queue-unresolved-row"]', '[data-testid="native-queue-refused-row"]']) {
+            const row = panel.locator(selector);
+            expect(await row.textContent()).not.toContain("task reference");
+            expect(await row.textContent()).toContain("start this one");
+            const wordsFit = await row.evaluate((node) => {
+              const words = node.querySelector("p")!.lastElementChild!;
+              const range = document.createRange(); range.selectNodeContents(words);
+              const box = range.getBoundingClientRect(); const parent = words.parentElement!.getBoundingClientRect();
+              const style = getComputedStyle(words);
+              return box.width > 0 && box.height > 0 && box.top >= parent.top && box.bottom <= parent.bottom + 1
+                && style.visibility === "visible" && style.opacity === "1";
+            });
+            expect(wordsFit).toBeTrue();
+            expect(await row.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          }
+          const deputyHead = page.locator('[data-deputy-head]');
+          expect(await deputyHead.textContent()).toContain("start this one");
+          expect(await deputyHead.textContent()).not.toContain("task reference");
+          expect(await deputyHead.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          expect(await page.locator('[data-seat-deputy-chip]').getAttribute("title")).toBe("start this one");
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          await panel.locator('[data-testid="native-queue-edit"]').click();
+          const field = panel.locator('[data-testid="native-queue-edit-field"]');
+          expect(await field.inputValue()).toBe("start this one");
+          await page.waitForTimeout(1000);
+          expect(await panel.locator('[data-testid="native-queue-row"] [data-task-badge]').count()).toBe(1);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-edit.png`) });
+          cases.push({ locale, width, cleanPreview: true, wordsWithinBounds: true, cleanEdit: true, cleanDeputy: true, badge: "Fix __init__.py (#42)", overflow: false });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/task-chip-to-orchestrator", { recursive: true });
+    fs.writeFileSync("evidence/task-chip-to-orchestrator/native-queue.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 120_000);
+});
+
+describe("passive task status note", () => {
+  browserTest("notes stay within two lines on desktop and phone, with full text in the task", async () => {
+    const out = path.resolve(".artifacts/card-status-note");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const surface = page.locator(width === 390 ? '[data-phone-card="task:t-note"]' : card("t-note"));
+          await surface.waitFor();
+          await surface.scrollIntoViewIfNeeded();
+          const line = surface.locator('[data-task-note="compact"]');
+          const text = await line.locator("[data-task-note-text]").textContent();
+          const geometry = await line.locator("[data-task-note-text]").evaluate(element => {
+            const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+            return { height: rect.height, lineHeight: parseFloat(style.lineHeight), clamp: style.webkitLineClamp, fullHeight: element.scrollHeight };
+          });
+          expect(geometry.clamp).toBe("2");
+          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight * 2 + 1);
+          expect(geometry.fullHeight).toBeGreaterThan(geometry.height);
+          expect(await line.locator("button,input,textarea").count()).toBe(0);
+          expect(await line.locator("time").textContent()).toBeTruthy();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-card.png`) });
+          if (width === 390) await surface.click();
+          else await surface.focus();
+          const full = page.locator('[data-task-note="full"]').filter({ hasText: text! }).first();
+          await full.waitFor();
+          expect(await full.locator("[data-task-note-text]").textContent()).toBe(text);
+          expect(await full.locator("[data-task-note-text]").evaluate(element => getComputedStyle(element).webkitLineClamp)).toBe("none");
+          await full.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-task.png`) });
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          if (width === 1440) {
+            // A folded task retains its compact note even with a reader open.
+            await surface.locator("button.fold").click();
+            await surface.evaluate(element => element.classList.add("has-reader"));
+            expect(await line.isVisible()).toBe(true);
+            expect(await surface.locator('[data-task-note="full"]').count()).toBe(0);
+          }
+          cases.push({ locale, width, geometry, overflow, passive: true, fullText: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/card-status-note", { recursive: true });
+      fs.writeFileSync("evidence/card-status-note/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });

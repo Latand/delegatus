@@ -98,6 +98,7 @@ function task(id: string, status: TaskStatus, paths: readonly string[] = [], tex
     id, project: "fixture", text, status, placement: "unplaced", revision: `r-${id}-1`,
     assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at })),
     createdAt: at, updatedAt: at,
+    ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}),
   } as BoardTask;
 }
 
@@ -751,4 +752,15 @@ test("a conversation row no task owns keeps today's hold: its sheet, with no doc
   expect(dock()).toBeNull();
   fireOn(loose!, finger("pointerup", 40, 40));
   expect(nav.getState().sheet).toBe("card");
+});
+
+test("phone cards show a passive status note below the title", () => {
+  const row = task("note", "inbox");
+  row.note = { text: "Review is running. Route checks are next.", author: { kind: "orchestrator" }, updatedAt: new Date((NOW - 120) * 1000).toISOString() };
+  const { host } = mount({ files: [], tasks: [row] });
+  const card = host.querySelector('[data-phone-card="task:note"]')!;
+  const line = card.querySelector('[data-task-note="compact"]')!;
+  expect(line.textContent).toContain(row.note.text);
+  expect(line.querySelectorAll("button,input,textarea")).toHaveLength(0);
+  expect(card.querySelector("[data-phone-card-title]")!.compareDocumentPosition(line) & 4).toBe(4);
 });

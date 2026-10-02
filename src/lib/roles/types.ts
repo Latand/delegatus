@@ -7,6 +7,7 @@ export const ROLE_IDS = [
   "cleaner",
   "prod-auditor",
   "deployer",
+  "merger",
   "maintainer",
 ] as const;
 

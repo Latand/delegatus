@@ -1,5 +1,6 @@
 "use client";
 
+import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -541,6 +542,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         ) : null}
         <NeedBadge item={item} />
       </span>
+      {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}

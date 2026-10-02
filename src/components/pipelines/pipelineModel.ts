@@ -41,7 +41,7 @@ export { PIPELINES_CHANGED_EVENT };
     minus the ones a pipeline may not use (deployer needs interactive deploy
     confirmation). Mirrors the server's PIPELINE_ROLE_IDS; the API re-validates. */
 export const PIPELINE_ROLE_OPTIONS: readonly PipelineRoleId[] = (
-  ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer"] as const
+  ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger"] as const
 ).filter((roleId) => !PIPELINE_DISALLOWED_ROLE_IDS.includes(roleId));
 
 /** The stage-override form's raw values (issue #118 on-canvas controls). */
@@ -582,6 +582,20 @@ export function attemptNavTarget(attempt: PipelineStageAttempt | null): StageNav
   if (!attempt) return null;
   if (!attempt.conversationId && !attempt.agentPath) return null;
   return { conversationId: attempt.conversationId, agentPath: attempt.agentPath };
+}
+
+/** The stage's own conversations and parked question, independent of scan timing. */
+export function stageAgentRowModel(pipeline: Pipeline, stageId: string) {
+  const attempts = stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
+  const latest = attempts.at(-1) ?? null;
+  return {
+    target: attemptNavTarget(latest),
+    question: latest?.state === "needs_decision" ? latest.report?.summary?.trim() || null : null,
+    earlier: attempts.slice(0, -1).flatMap((attempt, index) => {
+      const target = attemptNavTarget(attempt);
+      return target ? [{ n: attempt.n, position: index + 1, state: attempt.state, target }] : [];
+    }),
+  };
 }
 
 /** Resolve a stage-graph navigation target to the file its card should open.

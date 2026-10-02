@@ -493,6 +493,10 @@ export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntr
        still hold, so this can never be the way a second copy is sent. */
     onClear: (id) => {
       const entry = entries.find((candidate) => candidate.id === id);
+      if (entry?.selectedContext?.tasks?.length) {
+        recovery?.takeBack?.(id);
+        return;
+      }
       const cleared = clearParkedOutbox(cardId, id);
       if (cleared) {
         if (cleared.text.trim()) appendComposerDraft(cardId, cleared.text);
@@ -506,6 +510,10 @@ export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntr
        appended to the draft. Sending them again mints a new key, which is a
        fresh injection. */
     onEdit: (id) => {
+      if (entries.find((entry) => entry.id === id)?.selectedContext?.tasks?.length) {
+        recovery?.editContext?.(id);
+        return;
+      }
       const edited = editContextOutbox(cardId, id);
       if (edited?.text.trim()) appendComposerDraft(cardId, edited.text);
     },

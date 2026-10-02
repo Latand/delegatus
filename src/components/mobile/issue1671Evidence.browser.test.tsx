@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
@@ -360,7 +360,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
         const read = () => page.evaluate(() => ({
           engine: document.querySelector('[data-onboarding-relay-engine][aria-checked="true"]')?.getAttribute("data-onboarding-relay-engine") ?? null,
           account: document.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account") ?? null,
-          pairDisabled: (document.querySelector("[data-external-relay-connect] input") as HTMLInputElement | null)?.disabled ?? null,
+          pairDisabled: (document.querySelector("[data-external-relay-connect-known]") as HTMLButtonElement | null)?.disabled ?? null,
           overflow: document.documentElement.scrollWidth > window.innerWidth,
           minControlHeight: Math.min(...Array.from(document.querySelectorAll<HTMLElement>("[data-onboarding-relay] button, [data-onboarding-relay] input"))
             .filter((control) => control.getClientRects().length > 0).map((control) => control.getBoundingClientRect().height)),
@@ -5306,6 +5306,217 @@ browserTest("narrow card: a finished lane on the task screen stands its stages o
   expect(failures).toEqual([]);
 }, 300_000);
 
+describe("a new conversation's first message is a normal row on the phone", () => {
+  /*
+   * docs/design/first-bubble-no-raw-json.md on the phone: the cases and the
+   * per-step checks are the desktop block's (`kanbanBoard.browser.test.tsx`,
+   * "a new conversation's first message is a normal row") at 390 x 844 with
+   * touch, light and dark, English and Ukrainian, over the fixture's
+   * `?firstmessage=<p|s|f>`: p a plain spawn's prompt in the focus view, s a
+   * seat created from the sheet's draft with Confirm actually pressed, f a
+   * failed launch. Added here: the affordances a coarse pointer reaches (the
+   * failure's resend, the row's gutter control) are at least 44 px. The phone's
+   * focus view re-resolves a conversation when its path flips from `spawn:` to
+   * the transcript, so the plain case reads each state as a first paint of its
+   * own (`&step=<n>`); the in-page hand-off (same node, no empty frame) is the
+   * desktop block's and the DOM test's. The seat case stays in one page.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "first message is a normal row"
+   *
+   * Readings go to `evidence/first-message/phone.json`; frames to `.artifacts/first-message-phone/`.
+   */
+  const PLAIN_LINE = "Fix the failing export test.";
+  const MANDATE_LINE = "Keep the project moving.";
+  type Evidence = { advanceFirstMessage(): number };
+  const SHEET = '[data-testid="mobile-orchestrator-sheet"]';
+  /* Red as drawn: a `danger` utility with no hover/focus variant, inside the feed. */
+  const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
+  const ROOT = `(document.querySelector('${SHEET}') ?? document.body)`;
+
+  const watch = (page: Page) => page.evaluate(([red, rootOf]) => {
+    const reds = (0, eval)(red as string) as (root: Element) => Element[];
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
+    (window as unknown as { __fm: typeof sink }).__fm = sink;
+    const scan = () => {
+      const root = (0, eval)(rootOf as string) as HTMLElement;
+      if (/structured launch recovery|"phase"|\{\s*"/.test(root.innerText)) sink.envelope = true;
+      for (const el of reds(root)) {
+        if (el.closest("[data-outbox-failure], [data-launch-chip]")) continue;
+        const mark = (el.outerHTML ?? "").slice(0, 160);
+        if (!sink.danger.includes(mark)) sink.danger.push(mark);
+      }
+      sink.outboxMax = Math.max(sink.outboxMax, root.querySelectorAll("[data-outbox-entry]").length);
+      sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
+      sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
+      /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
+      const state = `outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}`;
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);      /* After the first card: a state with no card means the first message is gone. */
+      if (sink.mandateMax >= 1 && !root.querySelector("[data-mandate-card]") && !sink.lapses.includes(state)) sink.lapses.push(state);
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    scan();
+  }, [RED, ROOT] as const);
+
+  const readPane = (page: Page, line: string, mark: boolean) => page.evaluate(({ line, mark, red, rootOf }) => {
+    const reds = (0, eval)(red) as (root: Element) => Element[];
+    const root = (0, eval)(rootOf) as HTMLElement;
+    const visible = root.innerText;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(line));
+    const card = root.querySelector<HTMLElement>("[data-mandate-card]");
+    const first = rows[0] ?? card;
+    if (mark && first) first.setAttribute("data-fm-mark", "1");
+    const rect = first ? first.getBoundingClientRect() : null;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    /* What a thumb has to hit on the message itself: the gutter control and the failure's actions. */
+    const reach = [...root.querySelectorAll<HTMLElement>("[data-outbox-progress], [data-outbox-failure] button:not([data-outbox-reason]), [data-launch-retry]")]
+      .filter((el) => el.getClientRects().length > 0)
+      .map((el) => ({ label: el.getAttribute("aria-label") ?? el.getAttribute("data-outbox-progress") ?? (el.textContent ?? "").trim().slice(0, 30), width: Math.round(el.getBoundingClientRect().width), height: Math.round(el.getBoundingClientRect().height) }));
+    return {
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      danger: reds(root).filter((el) => !el.closest("[data-outbox-failure], [data-launch-chip]")).length,
+      rows: rows.length,
+      outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
+      userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
+      rowState: rows[0]?.getAttribute("data-message-row") ?? null,
+      sameNode: first ? first.hasAttribute("data-fm-mark") : null,
+      rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+      failureLines: root.querySelectorAll("[data-outbox-failure]").length,
+      failureText: root.querySelector("[data-outbox-failure] [data-outbox-status]")?.textContent ?? null,
+      errorChips: [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')].map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      reach,
+      overflowX: document.documentElement.scrollWidth - innerWidth,
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answered: (root.textContent ?? "").includes("Looking at the export test."),
+    };
+  }, { line, mark, red: RED, rootOf: ROOT });
+
+  browserTest("cases p, s and f hold one clean row at 390, light and dark, en and uk", async () => {
+    const out = path.resolve(".artifacts/first-message-phone");
+    const evidence = path.resolve("evidence/first-message");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const kind of ["p", "s", "f"] as const) {
+        const label = `${kind}-390-${scheme}-${lang}`;
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const line = kind === "s" ? MANDATE_LINE : PLAIN_LINE;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const pageErrors: string[] = [];
+          const openPage = async (url: string) => {
+            const opened = await context.newPage();
+            opened.on("pageerror", (error) => pageErrors.push(error.message));
+            await opened.goto(url);
+            await opened.waitForFunction(() => Boolean(document.querySelector("[data-feed-state]")), undefined, { timeout: 20_000 })
+              .catch(async (error) => { await opened.screenshot({ path: path.join(out, `${label}-stuck.png`) }); throw new Error(`${label}: ${error.message.split("\n")[0]}`); });
+            return opened;
+          };
+          let page: Page;
+          if (kind === "s") {
+            page = await context.newPage();
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${base}/?kanban=1&seatless=donly&firstmessage=s#p=atlas`);
+            await page.waitForSelector("[data-mobile2-seat-open]", { timeout: 20_000 });
+            await page.locator("[data-mobile2-seat-open]").first().click();
+            await page.waitForSelector('[data-orchestrator-sheet-mode="create"]', { timeout: 10_000 });
+            await watch(page);
+            await page.locator("[data-orchestrator-confirm]").first().click();
+            /* The sheet hands off to the focused pane, so the first paint is read wherever the window is. */
+            await page.waitForSelector("[data-mandate-card], [data-outbox-entry]", { state: "attached", timeout: 20_000 });
+          } else {
+            page = await openPage(`${base}/?firstmessage=${kind}&step=0#c=conversation_running`);
+            await watch(page);
+          }
+          const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
+          const readings: Array<Record<string, unknown>> = [];
+          const timelines: string[][] = [];
+          /* The seat's mandate opened at Pending (a real tap on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
+          for (const [index, step] of steps.entries()) {
+            if (index > 0 && kind === "s") {
+              await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
+              if (step === "answered") await page.waitForFunction(() => (document.body.textContent ?? "").includes("Looking at the export test."), undefined, { timeout: 25_000 });
+              else await page.waitForTimeout(1_800);
+            } else if (index > 0) {
+              /* The focus view re-resolves the conversation when its path flips, so each later state of the plain case is a first paint of its own. */
+              const seenSoFar = await page.evaluate(() => (window as unknown as { __fm: { timeline: string[] } }).__fm.timeline);
+              timelines.push(seenSoFar);
+              await page.close();
+              page = await openPage(`${base}/?firstmessage=${kind}&step=${index}#c=conversation_running`);
+              await watch(page);
+              if (step === "answered") await page.waitForFunction(() => (document.body.textContent ?? "").includes("Looking at the export test."), undefined, { timeout: 25_000 });
+              await page.waitForTimeout(600);
+            } else await page.waitForTimeout(600);
+            const read = await readPane(page, line, false);
+            await page.screenshot({ path: path.join(out, `${label}-${step}.png`) });
+            readings.push({ step, ...read });
+            const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator("[data-mandate-card] summary").first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(out, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(out, `${label}-${step}-open.png`) });
+            }
+            if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
+            if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
+            if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);
+            if (read.zeroWidthControls.length) failures.push(`${at}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+            const small = read.reach.filter((control) => control.height < 44 || control.width < 44);
+            if (small.length) failures.push(`${at}: touch targets under 44 px ${JSON.stringify(small)}`);
+            if (kind === "f") {
+              if (read.rows !== 1 || read.failureLines !== 1) failures.push(`${at}: ${read.rows} rows and ${read.failureLines} failure lines`);
+              if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${at}: error chips ${JSON.stringify(read.errorChips)}`);
+              if (read.failureText?.includes("runtime host unavailable")) failures.push(`${at}: the failure line prints the raw reason`);
+              continue;
+            }
+            if (read.errorChips.length) failures.push(`${at}: an error chip ${JSON.stringify(read.errorChips)}`);
+            if (kind === "p") {
+              if (read.userBubbles.length !== 1) failures.push(`${at}: ${read.userBubbles.length} bubbles carry the prompt`);
+              if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
+          }
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
+          if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
+          if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
+          if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
+          if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
+          if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card: ${JSON.stringify(seen.lapses)}`);
+          frames[label] = { readings, seen, timelines, pageErrors };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});
+
 describe("fast TTS header", () => {
   browserTest("phone header renders idle, loading and playing and shares row Stop", async () => {
     const { captureFastTtsHeaders } = await import("@/components/kanban/issue1695BrowserHarness");
@@ -5811,6 +6022,220 @@ describe("tool call context tokens", () => {
     fs.writeFileSync("evidence/tool-call-tokens/rows.json", `${JSON.stringify({ readings }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 120_000);
+});
+
+browserTest("task chip: the phone task screen's Ask button attaches the task and opens the orchestrator's conversation", async () => {
+  /* The phone's card is one button (#699), so the task chip's button sits where the phone keeps the card's
+     actions: the opened task's bottom bar, beside «+ Agent». Pressing it attaches the task as a chip and opens
+     the seat's conversation over the task screen, with the chip above the composer and the input empty. */
+  const OUT_CHIP = path.resolve(".artifacts/task-chip-phone");
+  const EVIDENCE_CHIP = path.resolve("evidence/task-chip-to-orchestrator");
+  fs.mkdirSync(OUT_CHIP, { recursive: true });
+  fs.mkdirSync(EVIDENCE_CHIP, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const readings: Record<string, unknown>[] = [];
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      const key = `390-${lang}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "light" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 600);
+        const cardSelector = '[data-phone-card-kind="task"]';
+        await page.locator(cardSelector).first().click();
+        await page.waitForSelector("[data-phone-task-ask-orchestrator]", { timeout: 10_000 });
+        await pause(page, 400);
+        const bar = await page.evaluate(() => {
+          const ask = document.querySelector<HTMLElement>("[data-phone-task-ask-orchestrator]")!;
+          const bar = ask.closest<HTMLElement>("[data-phone-task-bar]")!;
+          const box = ask.getBoundingClientRect();
+          const barBox = bar.getBoundingClientRect();
+          const text = (node: Element) => node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+          return {
+            label: ask.getAttribute("aria-label"), text: text(ask), height: Math.round(box.height), width: Math.round(box.width),
+            inside: box.left >= barBox.left - 1 && box.right <= barBox.right + 1,
+            overflow: bar.scrollWidth - bar.clientWidth,
+            siblings: [...bar.querySelectorAll("button")].map((button) => ({ text: text(button), right: Math.round(button.getBoundingClientRect().right) })),
+          };
+        });
+        await page.screenshot({ path: path.join(OUT_CHIP, `task-bar-${lang}.png`) });
+        await page.click("[data-phone-task-ask-orchestrator]");
+        const opened = await page.waitForSelector("[data-task-chip]", { timeout: 10_000 }).then(() => true, () => false);
+        await pause(page, 500);
+        const chip = opened ? await page.evaluate(() => {
+          const node = document.querySelector<HTMLElement>("[data-task-chip]")!;
+          const box = node.getBoundingClientRect();
+          const textarea = [...document.querySelectorAll<HTMLTextAreaElement>("textarea")].find((area) => area.getBoundingClientRect().height > 0);
+          return { text: node.textContent?.replace(/\s+/g, " ").trim() ?? "", inView: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth, removeHeight: Math.round(node.querySelector<HTMLElement>("[data-task-chip-remove]")!.getBoundingClientRect().height), draft: textarea?.value ?? null };
+        }) : null;
+        await page.screenshot({ path: path.join(OUT_CHIP, `chip-composer-${lang}.png`) });
+        readings.push({ key, bar, opened, chip });
+        if (bar.text !== translate(lang, "taskChip.ask")) fail(`the button says ${JSON.stringify(bar.text)}`);
+        if (bar.height < 44) fail(`the button is ${bar.height} px tall, under the 44 px target`);
+        if (!bar.inside || bar.overflow > 0) fail(`the bar's row overflows ${JSON.stringify(bar)}`);
+        if (!opened) fail("no chip reached a composer after the press");
+        else if (!chip!.inView || chip!.draft !== "") fail(`the chip ${JSON.stringify(chip)}`);
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(EVIDENCE_CHIP, "phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 180_000);
+
+describe("agent memory isolation", () => {
+  browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
+    const out = path.resolve(".artifacts/agent-memory-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${locale}&memory=1&open=1`);
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const row = page.locator("[data-needs-you-row]").filter({ hasText: locale === "en" ? "Killed: out of memory" : "Зупинено: нестача пам’яті" });
+          await row.waitFor({ timeout: 15000 });
+          expect(await row.innerText()).toContain(locale === "en" ? "build · limit 15 GB" : "build · ліміт 15 ГБ");
+          await row.scrollIntoViewIfNeeded();
+          const geometry = await row.evaluate((element) => ({ width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, overflow: document.documentElement.scrollWidth > innerWidth }));
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.overflow).toBeFalse();
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+          cases.push({ locale, ...geometry, errors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/agent-memory", { recursive: true });
+      fs.writeFileSync("evidence/agent-memory/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
+browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium().catch((error) => { stop(); throw error; });
+  const out = path.resolve(".artifacts/stage-open-agent");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  try {
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const state of ["running", "passed", "failed", "needs_decision"]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390, colorScheme: "dark" });
+      try {
+        await context.addInitScript((locale) => localStorage.setItem("llv_lang", locale), lang);
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?kanban=1&stage-agent=${state}#p=atlas`);
+        if (width === 390) {
+          await page.locator('[data-phone-card="task:t-data"]').waitFor();
+          await page.locator('[data-phone-card="task:t-data"]').click();
+          if (state === "passed") await page.locator('[data-phone-task-ended]').click();
+          await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click();
+        } else {
+          await page.locator('.card[data-id="task:t-data"]').waitFor();
+          await page.locator('.card[data-id="task:t-data"] [data-open-stages="lane-decision"]').click();
+        }
+        const stage = page.locator(width === 390 ? '[data-mobile2-pipeline="lane-decision"] .pb-stage[data-stage="design"]' : '[data-stages-sheet] .pane[data-stage="design"]');
+        const open = stage.locator('[data-open-conversation="design"]');
+        await open.waitFor();
+        expect(await open.innerText()).toBe(lang === "uk" ? "Відкрити агента" : "Open agent");
+        const box = await open.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThan(50);
+        if (width === 390) expect(box!.height).toBeGreaterThanOrEqual(44);
+        const question = stage.locator('[data-stage-question="design"]');
+        if (state === "needs_decision") {
+          expect(await question.innerText()).toContain("Яке компонування обрати?");
+          const geometry = await question.evaluate((element) => ({ width: element.clientWidth, scroll: element.scrollWidth, whiteSpace: getComputedStyle(element).whiteSpace }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
+          expect(geometry.whiteSpace).toBe("pre-wrap");
+          if (width === 1440) {
+            expect(await question.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+            await question.focus();
+            await page.keyboard.press("End");
+            await page.waitForFunction(() => {
+              const element = document.querySelector('[data-stage-question="design"]');
+              return !!element && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+            }, undefined, { timeout: 5_000 });
+            const buttonReachable = await open.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+            });
+            expect(buttonReachable).toBe(true);
+          }
+        } else expect(await question.count()).toBe(0);
+        await stage.screenshot({ path: path.join(out, `${width}-${lang}-${state}.png`) });
+        if (width === 390) {
+          await stage.locator('details summary').click();
+          expect(await stage.locator('[data-open-attempt="1"]').isVisible()).toBe(true);
+          await stage.locator('[data-open-attempt="1"]').click();
+          await page.locator('[data-mobile2-conversation]').waitFor();
+          await page.goBack();
+          await open.waitFor();
+        } else {
+          await stage.locator('[data-attempt="1"]').click();
+          expect(await stage.locator('[data-kanban-reader]').count()).toBe(1);
+        }
+        if (width === 1440) expect(await stage.locator('[data-attempt="1"]').isVisible()).toBe(true);
+        await open.click();
+        if (width === 1440) {
+          await page.locator('[data-stages-sheet]').waitFor({ state: "detached", timeout: 5_000 });
+        }
+        const reader = page.locator(width === 390 ? '[data-mobile2-conversation="conversation_kanban-1"]' : '[data-kanban-reader="conversation_kanban-1"]').filter({ has: page.locator('textarea') });
+        await reader.waitFor();
+        expect(await reader.isVisible()).toBe(true);
+        expect(await reader.evaluate((element) => element.closest('[data-stages-sheet]') === null)).toBe(true);
+        const composer = reader.locator('textarea').first();
+        expect(await composer.isEnabled()).toBe(true);
+        await composer.scrollIntoViewIfNeeded();
+        const visibleComposer = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const x = rect.x + rect.width / 2;
+          const y = rect.y + rect.height / 2;
+          return x > 0 && x < innerWidth && y > 0 && y < innerHeight
+            && element.contains(document.elementFromPoint(x, y));
+        });
+        expect(visibleComposer).toBe(true);
+        await composer.fill("Use the compact layout.");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${state}-reader.png`) });
+        await composer.press("Enter");
+        await page.waitForFunction(() => (window as unknown as { evidence: { sends: Array<{ text?: string; path?: string; conversationId?: string }> } }).evidence.sends.some((send) => send.text === "Use the compact layout." && (send.path === "/repo/kanban-1.jsonl" || send.conversationId === "conversation_kanban-1")));
+        readings.push({ width, lang, state, buttonHeight: box!.height, readerOutsideSheet: true, visibleComposer, composerEnabled: true, sends: await page.evaluate(() => (window as unknown as { evidence: { sends: unknown[] } }).evidence.sends.length) });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2));
+    fs.mkdirSync("evidence/stage-open-agent", { recursive: true });
+    fs.writeFileSync("evidence/stage-open-agent/geometry.json", JSON.stringify(readings, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 180_000);
+
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try { await captureSeatMandateHandover(browser, base, true); }
+    finally { await browser.close(); stop(); }
+  }, 180_000);
 });
 
 describe("state writes disk-full alert", () => {

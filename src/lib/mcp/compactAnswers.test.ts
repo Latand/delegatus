@@ -134,8 +134,8 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
     baseRef: CURRENT_HEAD,
     autoStart: false,
     stages: [
-      { id: "build", kind: "run", prompt: CORPUS_BODY_MARKERS.stagePrompt.repeat(400), next: "verify" },
-      { id: "verify", kind: "run", prompt: "verify ".repeat(400), next: null },
+      { id: "build", kind: "run", engine: "codex", model: "gpt-6-astra", effort: "medium", prompt: CORPUS_BODY_MARKERS.stagePrompt.repeat(400), next: "verify" },
+      { id: "verify", kind: "run", engine: "codex", model: "gpt-6-astra", effort: "medium", prompt: "verify ".repeat(400), next: null },
     ],
   }) as { pipelineId: string; stages: unknown[]; stageDigests: Record<string, string> };
   /* Read before toMatchObject, which rewrites matched values in place. */
@@ -146,7 +146,7 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
   /* docs/design/model-sizing-tiers.md §3: which model each stage runs, and the
      one line a seat quotes in its launch message. */
   expect((created.stages as { role: unknown; variant: unknown }[]).map((stage) => [stage.role, stage.variant])).toEqual([[null, null], [null, null]]);
-  expect((created as unknown as { runtimeLine: string }).runtimeLine).toBe("build: codex/gpt-6-astra/medium · verify: codex/gpt-6-astra/medium");
+  expect((created as unknown as { runtimeLine: string }).runtimeLine).toBe("build: codex/gpt-6-astra/medium (explicit) · verify: codex/gpt-6-astra/medium (explicit)");
   // Includes the delivery ownership acknowledgement already present on main.
   expect(bytes(created)).toBeLessThan(1_600);
 
@@ -162,7 +162,7 @@ test("create_pipeline answers an acknowledgement, and get_pipeline still reads t
   });
   expect(created).not.toHaveProperty("pipeline");
 
-  const full = await bindings.get_pipeline({ clientRequestId: "compact-create-read", pipelineId }) as { pipeline: { spec: string; stages: Array<{ prompt: string }> }; stageDigests: unknown };
+  const full = await bindings.get_pipeline({ clientRequestId: "compact-create-read", full: true, pipelineId }) as { pipeline: { spec: string; stages: Array<{ prompt: string }> }; stageDigests: unknown };
   expect(full.pipeline.spec).toBe(CORPUS_BODY_MARKERS.spec.repeat(300).trim());
   expect(full.pipeline.stages[0]!.prompt).toContain(CORPUS_BODY_MARKERS.stagePrompt.repeat(100));
   expect(full.stageDigests).toEqual(createdDigests);
@@ -173,7 +173,7 @@ test("get_pipeline with stageId answers one stage's conclusion without prompts o
   savePipelines([pipeline]);
   const bindings = viewerMcpBindings();
 
-  const whole = await bindings.get_pipeline({ clientRequestId: "stage-whole", pipelineId: pipeline.id });
+  const whole = await bindings.get_pipeline({ clientRequestId: "stage-whole", full: true, pipelineId: pipeline.id });
   const stage = await bindings.get_pipeline({ clientRequestId: "stage-read", pipelineId: pipeline.id, stageId: "build" });
   expectNoBodies(stage);
   expect(bytes(stage)).toBeLessThan(1_500);
@@ -309,13 +309,12 @@ test("pipeline_action answers the acknowledgement for every accepted action (#18
     const answer = await bindings.pipeline_action({ clientRequestId: `ack-${action}`, pipelineId: pipeline.id, action, stageId: "build" });
     expectNoBodies(answer);
     expect(bytes(answer)).toBeLessThan(1_000);
-    expect(Object.keys(answer).sort()).toEqual(["changedFields", "closedAt", "cursor", "graphDigest", "omittedRecordCount", "pipelineId", "readMore", "revision", "stageDigests", "state", "taskIds"]);
+    expect(Object.keys(answer).sort()).toEqual(["changedFields", "closedAt", "cursor", "omittedRecordCount", "pipelineId", "revision", "state", "taskIds"]);
     expect(answer).toMatchObject({
       pipelineId: pipeline.id,
       state: "running",
       cursor: { stageId: "build" },
       closedAt: null,
-      stageDigests: { build: expect.any(String), review: expect.any(String) },
     });
     expect(answer).not.toHaveProperty("pipeline");
   }

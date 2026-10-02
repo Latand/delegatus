@@ -1,3 +1,5 @@
+import { memoryKillText } from "./agentMemoryState";
+import type { AgentMemoryCell } from "./agentMemory";
 import { normalizeNativeQueueObservation } from "./nativeQueueContent";
 import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity";
 import { CodexRealtimeTranscript } from "./codexRealtimeTranscript";
@@ -212,6 +214,7 @@ export interface CodexAppServerHostOptions {
   shutdownGraceMs?: number;
   initialEventCursor?: number;
   onEventCursorRecovery?: RuntimeEventCursorRecoveryReporter;
+  memoryCell?: AgentMemoryCell | null;
   spawnProcess?: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
   eventStore?: RuntimeEventStore;
   signalProcess?: ProcessSignal;
@@ -1268,6 +1271,10 @@ export class CodexAppServerHost implements EngineHost {
     resolve(value: "landed" | "dropped" | "unknown"): void;
   }>();
   private readonly pendingDeliveries = new Map<string, PendingDelivery>();
+  private readonly sendingDeliveries = new Map<string, {
+    contentDigest: string;
+    promise: Promise<DeliveryReceipt>;
+  }>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
   private readonly realtimeDeliveries = new Map<string, RealtimeDeliveryState>();
   private readonly voiceStreams = new Map<string, VoiceStreamState>();
@@ -1325,6 +1332,7 @@ export class CodexAppServerHost implements EngineHost {
   private imageInputSupport: "supported" | "unsupported" | "unknown" = "unknown";
   private requestedModel: string | undefined;
   private realtimeDeliveryEpoch = 0;
+  private readonly memoryCell: AgentMemoryCell | null;
   private releasing = false;
   private released = false;
   private dead = false;
@@ -1344,6 +1352,8 @@ export class CodexAppServerHost implements EngineHost {
 
   private constructor(child: ChildProcessWithoutNullStreams, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
     this.child = child;
+    this.memoryCell = options.memoryCell ?? null;
+    this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.realtimeStartTimeoutMs = options.realtimeStartTimeoutMs ?? REALTIME_START_TIMEOUT_MS;
@@ -1374,7 +1384,13 @@ export class CodexAppServerHost implements EngineHost {
       if (!this.releasing && !this.released) this.fail(new Error(`Codex app-server stdin failed: ${safeError(error)}`));
     });
     child.on("error", (error) => this.fail(new Error(`Codex app-server child failed: ${safeError(error)}`)));
+    // Exit arrives before inherited pipes close; reap OOM survivors immediately.
+    child.on("exit", () => {
+      const kill = this.memoryCell?.settleExit({ expected: this.releasing || this.released });
+      if (kill?.fatal && !this.releasing && !this.released) this.fail(new Error(memoryKillText(kill)));
+    });
     child.on("close", () => {
+      this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       this.reaped = true;
       this.completeGroupCleanupAfterReap();
       this.resolveReaped();
@@ -1384,7 +1400,7 @@ export class CodexAppServerHost implements EngineHost {
         if (this.dead) this.notifyStateListeners();
         else {
           const diagnostic = stderrExitDiagnostic(this.stderrTail);
-          this.fail(new Error(`Codex app-server child exited${diagnostic ? `: ${diagnostic}` : ""}`));
+          this.fail(new Error(this.memoryCell?.launchFailure() ?? `Codex app-server child exited${diagnostic ? `: ${diagnostic}` : ""}`));
         }
       }
     });
@@ -1400,7 +1416,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
-    const spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) =>
+    const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const args = [
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
@@ -1826,6 +1842,35 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      return { outcome: "rejected", reason: "dead-host" };
+    }
+    const normalized = normalizeQueueEntry(entry);
+    const sending = this.sendingDeliveries.get(normalized.id);
+    if (sending) {
+      if (sending.contentDigest !== normalized.contentDigest) {
+        throw new Error("Codex queue entry id belongs to a different payload");
+      }
+      return sending.promise;
+    }
+    // Claim the delivery before any history/image read can yield. Confirmation
+    // alone cannot fence overlapping launch retries: both can observe absence
+    // before either turn/start has written the recipient's first user record.
+    let resolve!: (receipt: DeliveryReceipt) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<DeliveryReceipt>((fulfill, fail) => { resolve = fulfill; reject = fail; });
+    this.sendingDeliveries.set(normalized.id, { contentDigest: normalized.contentDigest, promise });
+    void this.sendOnce(normalized, firstDispatch).then(resolve, reject);
+    try {
+      return await promise;
+    } finally {
+      if (this.sendingDeliveries.get(normalized.id)?.promise === promise) {
+        this.sendingDeliveries.delete(normalized.id);
+      }
+    }
+  }
+
+  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -2811,6 +2856,7 @@ export class CodexAppServerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
+      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
       activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.supportsNativeHistory() && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
       account: this.account,
       diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery },
@@ -2928,6 +2974,7 @@ export class CodexAppServerHost implements EngineHost {
     this.setSessionStatus("unhosted", []);
     if (this.ledgerFailed || !this.eventLedgerRestored) this.notifyStateListeners();
     this.closeSubscribers();
+    this.memoryCell?.close();
     const cleanup = this.releaseCleanup;
     this.releaseCleanup = null;
     cleanup?.();
@@ -2940,7 +2987,7 @@ export class CodexAppServerHost implements EngineHost {
       this.terminationTimer = null;
     }
     try {
-      if (this.childProcessOwnership() === "gone") {
+      if (!this.memoryCell?.fatalMemoryExit && this.childProcessOwnership() === "gone") {
         signalProcessGroup(this.child.pid, "SIGKILL", this.signalProcess);
       }
     } finally {
@@ -2950,6 +2997,18 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private startTermination(): boolean {
+    if (this.memoryCell?.fatalMemoryExit) {
+      if (this.terminationTimer) clearTimeout(this.terminationTimer);
+      this.terminationTimer = null;
+      this.resolveTermination?.();
+      this.resolveTermination = null;
+      this.terminationPromise = Promise.resolve();
+      for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) stream.destroy();
+      this.reaped = true;
+      this.resolveReaped();
+      this.terminationStarted = true;
+      return true;
+    }
     if (this.terminationStarted) return true;
     try { this.child.stdin.end(); } catch { /* already closed */ }
     const ownership = this.childProcessOwnership();
@@ -2985,6 +3044,8 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private signalTermination(signal: NodeJS.Signals): TerminationSignalResult {
+    // Fatal OOM cleanup is owned by the cell, without legacy group signals.
+    if (this.memoryCell?.fatalMemoryExit) return "attempted";
     const ownership = this.childProcessOwnership();
     if (ownership === "gone") {
       signalProcessGroup(this.child.pid, signal, this.signalProcess);
