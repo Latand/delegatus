@@ -1,7 +1,9 @@
 {
-  "commit": "0385d3aa1ebf8e432551b00cf9c2a63074e2fcb9",
+  "commit": "c88a98bd7aa1cfe51383e1ed05a305f74cfbea89",
   "frames": {
     "1440-en-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -13,6 +15,30 @@
       "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-waiting": {
+      "blockerRows": [
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 340.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 360.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -24,6 +50,51 @@
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
     },
     "1440-en-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 475.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 298.046875,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 340.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 360.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.5625,
+          "lines": 1
+        },
+        {
+          "text": "The pipeline controller is working.",
+          "overflow": 0,
+          "left": 222,
+          "right": 400.09375,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -35,6 +106,44 @@
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\nThe pipeline controller is working.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 475.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 298.046875,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 340.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 360.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -46,6 +155,37 @@
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nDraining since 2 Jan 2026 02:00: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 222,
+          "right": 439.484375,
+          "lines": 3
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 340.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 360.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -56,7 +196,58 @@
       "controlVisible": true,
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nHeld launches for 2 h and released them; the listed work is still running. Next attempt 2 Jan 2026 08:00.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
+    "1440-en-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 222,
+          "right": 844.21875,
+          "lines": 3
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 222,
+          "right": 664.84375,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 340.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 360.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 258
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
     "1440-en-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -68,6 +259,8 @@
       "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -79,6 +272,8 @@
       "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
     },
     "1440-uk-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -90,6 +285,30 @@
       "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-waiting": {
+      "blockerRows": [
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 391.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 448.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -101,6 +320,51 @@
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
     },
     "1440-uk-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 475.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 298.046875,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 391.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 448.71875,
+          "lines": 1
+        },
+        {
+          "text": "Контролер пайплайнів працює.",
+          "overflow": 0,
+          "left": 222,
+          "right": 395.484375,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -112,6 +376,44 @@
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\nКонтролер пайплайнів працює.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 475.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 298.046875,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 391.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 448.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -123,6 +425,37 @@
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікуємо завершення від 2 січ. 2026 р. 02:00: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 222,
+          "right": 439.484375,
+          "lines": 3
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 391.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 448.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -133,7 +466,58 @@
       "controlVisible": true,
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗапуски стримувалися 2 год і знову дозволені; перелічена робота ще триває. Наступна спроба 2 січ. 2026 р. 08:00.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
+    "1440-uk-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 222,
+          "right": 844.21875,
+          "lines": 3
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 222,
+          "right": 664.84375,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 391.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 448.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 258
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
     "1440-uk-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -145,6 +529,8 @@
       "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 185,
@@ -156,6 +542,8 @@
       "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
     },
     "390-en-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -167,6 +555,30 @@
       "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-waiting": {
+      "blockerRows": [
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 169.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 189.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -178,6 +590,51 @@
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
     },
     "390-en-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 304.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 127.046875,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 169.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 189.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.5625,
+          "lines": 1
+        },
+        {
+          "text": "The pipeline controller is working.",
+          "overflow": 0,
+          "left": 51,
+          "right": 229.09375,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -189,6 +646,44 @@
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\nThe pipeline controller is working.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 304.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 127.046875,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 169.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 189.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -200,6 +695,37 @@
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nDraining since 2 Jan 2026 02:00: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 51,
+          "right": 268.484375,
+          "lines": 3
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 169.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 189.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -210,7 +736,58 @@
       "controlVisible": true,
       "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nHeld launches for 2 h and released them; the listed work is still running. Next attempt 2 Jan 2026 08:00.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
+    "390-en-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 51,
+          "right": 358.875,
+          "lines": 4
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 51,
+          "right": 357.796875,
+          "lines": 2
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 169.078125,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 189.09375,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.5625,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 401.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
     "390-en-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -222,6 +799,8 @@
       "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -233,6 +812,8 @@
       "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
     },
     "390-uk-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -244,6 +825,30 @@
       "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-waiting": {
+      "blockerRows": [
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 220.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 277.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -255,6 +860,51 @@
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
     },
     "390-uk-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 304.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 127.046875,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 220.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 277.71875,
+          "lines": 1
+        },
+        {
+          "text": "Контролер пайплайнів працює.",
+          "overflow": 0,
+          "left": 51,
+          "right": 224.484375,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -266,6 +916,44 @@
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\nКонтролер пайплайнів працює.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 304.5,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 127.046875,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 220.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 277.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -277,6 +965,37 @@
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікуємо завершення від 2 січ. 2026 р. 02:00: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 51,
+          "right": 268.484375,
+          "lines": 3
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 220.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 277.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -287,7 +1006,58 @@
       "controlVisible": true,
       "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗапуски стримувалися 2 год і знову дозволені; перелічена робота ще триває. Наступна спроба 2 січ. 2026 р. 08:00.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
+    "390-uk-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 51,
+          "right": 358.875,
+          "lines": 4
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 51,
+          "right": 357.796875,
+          "lines": 2
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.953125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 220.90625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 277.71875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 401.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
     "390-uk-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
@@ -299,6 +1069,8 @@
       "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
       "overflow": 0,
       "card": {
         "x": 16,
