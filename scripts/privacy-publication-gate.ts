@@ -200,10 +200,10 @@ function maskApprovedPublicValues(text: string): string {
   type OperandGroup = { attached: boolean; indexed?: boolean; parent?: OperandGroup };
   const candidates: Array<{ start: number; end: number; allowed: boolean; opensComment: boolean; closesComment: boolean; sourceColonValue: boolean; propertyKey: boolean; sourceCommentTail: boolean; sourceOptionalCall: boolean; sourceOptionalIndex: boolean; group?: OperandGroup }> = [];
   // Delimiters such as '=' or '(' inside a string do not end its URI.
-  // Treat '#' in member access or a private declaration as syntax.
+  // Treat '#' in entities, member access or a private declaration as syntax.
   // Unclosed block comments and quoted tokens consume their remaining span once;
   // retrying a closing-delimiter search at each inner opener is quadratic.
-  const literals = text.matchAll(/\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<!\.)#(?![\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
+  const literals = text.matchAll(/\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?![\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
   let literal = literals.next().value;
   let previousLiteralEnd = 0;
   let syntaxCursor = 0;
@@ -470,8 +470,10 @@ function maskApprovedPublicValues(text: string): string {
   let rawCommentCursor = 0;
   let rawCommentFrame: { end: number; depth: number; completed: Map<number, RawGroup> } | undefined;
   function skipRawTrivia(before: number): number {
+    // Trivia belongs inside the raw callee span. Its Unicode bytes stay intact;
+    // the callee's outer neighbours still use the strict ASCII boundary rules.
     for (;;) {
-      while (before >= 0 && /[\t\n\v\f\r ]/.test(text[before])) before -= 1;
+      while (before >= 0 && /[\s\p{Default_Ignorable_Code_Point}]/u.test(text[before])) before -= 1;
       let commentStart = rawTriviaEnds.get(before);
       // A source-shaped block comment may also occur inside a prose/line
       // comment. Its closing bytes still separate a raw callee from its group.

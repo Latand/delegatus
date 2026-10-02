@@ -1391,6 +1391,19 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         { name: `raw entity comment index prefix ${form}`, text: `&#x200b;x /*comment*/ ["${value}"]`, pass: false },
         { name: `raw entity comment chained call prefix ${form}`, text: `&#160;(x) /*comment*/ ("${value}")`, pass: false },
       ]),
+      ...[host, origin, discovery].flatMap((value, form) =>
+        ["\u00a0", "\ufeff", "\u3000", "\u200b"].flatMap((gap, space) =>
+          ["\u00a0", "&#160;"].flatMap((prefix, boundary) => [
+            { name: `raw Unicode trivia call prefix ${form} ${space} ${boundary}`, text: `${prefix}f${gap} ("${value}")`, pass: false },
+            { name: `raw Unicode trivia index prefix ${form} ${space} ${boundary}`, text: `${prefix}x${gap} ["${value}"]`, pass: false },
+            { name: `raw Unicode trivia chained prefix ${form} ${space} ${boundary}`, text: `${prefix}(x)${gap} ("${value}")`, pass: false },
+          ]))),
+      ...[host, origin, discovery].flatMap((value, form) =>
+        ['/* " */', `/* ${tick} */`].flatMap((comment, quote) => [
+          { name: `raw entity quoted comment call ${form} ${quote}`, text: `&#160;f ${comment} ("${value}", 1)`, pass: false },
+          { name: `raw entity quoted comment index ${form} ${quote}`, text: `&#160;x ${comment} ["${value}"]`, pass: false },
+          { name: `raw entity quoted comment chained ${form} ${quote}`, text: `&#160;(x) ${comment} ("${value}", 1)`, pass: false },
+        ])),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
       { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
       { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: false },
@@ -2007,6 +2020,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         || c.name.startsWith("raw quoted wrapper suffix")
         || c.name.startsWith("raw bare ")
         || c.name.startsWith("raw entity comment ")
+        || c.name.startsWith("raw entity quoted comment ")
+        || c.name.startsWith("raw Unicode trivia ")
         || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
         || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
         || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {

@@ -175,7 +175,9 @@ spaces, zero-width characters, a dot, hyphen, letter, percent escape or entity.
 
 Quotes and balanced wrappers retain their raw outer boundaries; quoting a
 fragment cannot conceal an adjacent Unicode or encoded continuation. Call and
-index envelopes retain their callees across ASCII whitespace and source comments.
+index envelopes retain their callees across whitespace, default-ignorable code
+points and source comments.
+These bytes stay inside the raw envelope; its outer boundaries remain strict.
 A separator inside that span cannot conceal the raw character before the callee. Source
 operand checks and decoded inspection views can revoke a raw-approved candidate
 when it belongs to an extended email, host, URI or concatenated expression.
