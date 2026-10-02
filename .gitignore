@@ -64,6 +64,9 @@ docs/screenshots/issue-499/geometry.list
 # #2162 case. The publication gate admits a raster only when a trusted in-repo
 # generator reproduces it byte for byte, which a browser capture cannot do.
 docs/design/board-maintainer-ui/*.png
+# Orchestrator arrows design frames: written by the kanban driver's
+# "orchestrator arrows design variants" block, kept local for the same reason.
+docs/design/orchestrator-arrows/*.png
 
 # The conversation-window visual evidence: the objective geometry manifest
 # (geometry.json — overflow/proportions/control-placement measurements) is
