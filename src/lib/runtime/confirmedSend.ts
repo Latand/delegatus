@@ -3,7 +3,7 @@ import type { RegistryFile } from "@/lib/agent/registry";
 
 /** Positive recipient evidence for one admitted operation. Absence, unreadable
  * history and a different key prove nothing; this function never writes input. */
-export async function confirmedSend(file: RegistryFile, operationId: string): Promise<boolean> {
+export async function confirmedSend(file: RegistryFile, operationId: string, consumeCanonicalTurn = false): Promise<boolean> {
   const owner = file.deliveryOperationOwners[operationId];
   if (!owner || (owner.command?.kind !== "send" && owner.command?.kind !== "steer")) return false;
   if (owner.terminalReason === "delivery-discarded"
@@ -33,9 +33,9 @@ export async function confirmedSend(file: RegistryFile, operationId: string): Pr
     if (!target || target.entry.contentDigest !== owner.contentDigest) return false;
     // A durable echo names the exact operation and payload, even if its runtime
     // transition timed out before that echo arrived.
-    if (target.delivered && target.engineMessageId) return true;
+    if (target.delivered && target.confirmation === "operation-bound" && target.engineMessageId) return true;
     const users = readClaudeTranscriptUsers(generation.path);
-    const consumed = new Set(states.filter((state) => state.delivered && state.engineMessageId)
+    const consumed = new Set(states.filter((state) => state.delivered && state.entry.id !== operationId && state.engineMessageId)
       .map((state) => state.engineMessageId));
     const candidates = users.filter((user) => user.uuid && !consumed.has(user.uuid));
     const matchesState = (user: typeof users[number], state: typeof states[number]): boolean => {
@@ -58,8 +58,15 @@ export async function confirmedSend(file: RegistryFile, operationId: string): Pr
     });
     if (targetCandidates.length !== 1) return false;
     const user = targetCandidates[0]!;
-    const matchingStates = states.filter((state) => !state.delivered && matchesState(user, state));
-    if (matchingStates.length === 1 && matchingStates[0]?.entry.id === operationId) return true;
+    const matchingStates = states.filter((state) => (!state.delivered || state.entry.id === operationId || state.confirmation === "unverified")
+      && (!state.engineMessageId || state.engineMessageId === user.uuid)
+      && matchesState(user, state));
+    if (matchingStates.length === 1 && matchingStates[0]?.entry.id === operationId) {
+      if (consumeCanonicalTurn) {
+        new FileClaudeDeliveryLedger().confirmDelivered(generation.id, operationId, user.uuid, "inferred");
+      }
+      return true;
+    }
     // A canonical Claude user turn has no operation key. Content and time
     // cannot distinguish competing sends or duplicate transcript turns.
   } catch {

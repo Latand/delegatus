@@ -709,6 +709,7 @@ export async function bindStructuredDeliveryQueue(
         });
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
+      bindDeliveryGeneration: (operationId, generationId) => registry.bindDeliveryOperationGeneration(operationId, generationId),
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;

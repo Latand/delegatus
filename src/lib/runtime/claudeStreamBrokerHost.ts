@@ -91,17 +91,18 @@ export interface ClaudeDeliveryState {
   delivered: boolean;
   queuedAt?: string;
   engineMessageId?: string | null;
+  confirmation?: "operation-bound" | "inferred" | "unverified";
 }
 
 export interface ClaudeDeliveryLedger {
   load(sessionId: string): ClaudeDeliveryState[];
   recordQueued(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"]): void;
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void;
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation?: "operation-bound" | "inferred"): void;
 }
 
 type ClaudeDeliveryRecord =
   | { kind: "queued"; entry: NormalizedQueueEntry; disposition: ClaudeDeliveryState["disposition"]; queuedAt: string }
-  | { kind: "delivered"; entryId: string; engineMessageId: string | null; deliveredAt: string };
+  | { kind: "delivered"; entryId: string; engineMessageId: string | null; deliveredAt: string; confirmation?: "operation-bound" | "inferred" | "unverified" };
 
 export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
   constructor(private readonly directory = statePath("claude-delivery-ledger")) {}
@@ -123,6 +124,10 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
         if (state) {
           state.delivered = true;
           state.engineMessageId = record.engineMessageId;
+          /* Before the source was persisted, direct and transcript-inferred
+             confirmations shared one shape. Revalidate legacy rows before
+             granting them operation authority or allowing a replay. */
+          state.confirmation = record.confirmation ?? "unverified";
         }
       }
     }
@@ -141,10 +146,13 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     this.append(sessionId, { kind: "queued", entry: normalized, disposition, queuedAt: new Date().toISOString() });
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): void {
     const state = this.load(sessionId).find((candidate) => candidate.entry.id === entryId);
-    if (!state || state.delivered) return;
-    this.append(sessionId, { kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString() });
+    if (!state || (state.delivered && state.confirmation !== "unverified")) return;
+    if (state.delivered && state.engineMessageId !== engineMessageId) return;
+    if (engineMessageId && this.load(sessionId).some((candidate) => candidate.delivered
+      && candidate.engineMessageId === engineMessageId && candidate.entry.id !== entryId)) return;
+    this.append(sessionId, { kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(), confirmation });
   }
 
   private readRecords(sessionId: string): ClaudeDeliveryRecord[] {
@@ -356,7 +364,8 @@ function deliveryRecord(value: unknown): ClaudeDeliveryRecord | null {
   if (candidate?.kind === "delivered"
     && typeof candidate.entryId === "string"
     && (typeof candidate.engineMessageId === "string" || candidate.engineMessageId === null)
-    && typeof candidate.deliveredAt === "string") return candidate as unknown as ClaudeDeliveryRecord;
+    && typeof candidate.deliveredAt === "string"
+    && (candidate.confirmation === undefined || candidate.confirmation === "operation-bound" || candidate.confirmation === "inferred" || candidate.confirmation === "unverified")) return candidate as unknown as ClaudeDeliveryRecord;
   return null;
 }
 
@@ -877,6 +886,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return { outcome: "rejected", reason: "stale-turn" };
     }
     if (duplicate?.delivered) {
+      if (duplicate.confirmation === "unverified") {
+        throw new Error("Claude delivery outcome is uncertain; recipient evidence is ambiguous");
+      }
       return { outcome: duplicate.disposition, turnId: duplicate.entry.id };
     }
     const existingPending = this.pendingDeliveries.get(entry.id);
@@ -1194,11 +1206,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private reconcileTranscript(users: ClaudeTranscriptUser[]): void {
-    const unmatched = [...users];
-    for (const delivery of this.deliveries) {
-      if (delivery.delivered) continue;
-      const queuedAt = delivery.queuedAt ? Date.parse(delivery.queuedAt) : Number.NEGATIVE_INFINITY;
-      const index = unmatched.findIndex((user) => {
+    const alreadyClaimed = new Set(this.deliveries.filter((delivery) => delivery.delivered
+      && delivery.confirmation !== "unverified" && delivery.engineMessageId)
+      .map((delivery) => delivery.engineMessageId));
+    const unmatched = users.filter((user) => user.uuid && !alreadyClaimed.has(user.uuid));
+    const candidatesFor = (delivery: typeof this.deliveries[number]) => unmatched.filter((user) => {
+        const queuedAt = delivery.queuedAt ? Date.parse(delivery.queuedAt) : Number.NEGATIVE_INFINITY;
         const timestamp = user.timestamp ? Date.parse(user.timestamp) : Number.POSITIVE_INFINITY;
         /* A real Claude transcript ends a tool-using turn with a `user` role
            message that carries only a `tool_result` block — no text, no image,
@@ -1214,11 +1227,20 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           imageCount: user.imageCount ?? 0,
         }) && timestamp >= queuedAt;
       });
-      if (index < 0) continue;
-      const [user] = unmatched.splice(index, 1);
-      this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null);
+    for (const delivery of this.deliveries) {
+      if (delivery.delivered) continue;
+      const candidates = candidatesFor(delivery);
+      if (candidates.length !== 1) continue;
+      const [user] = candidates;
+      const competingDeliveries = this.deliveries.filter((candidate) => (!candidate.delivered || candidate.confirmation === "unverified")
+        && candidatesFor(candidate).some((match) => match.uuid === user?.uuid));
+      if (competingDeliveries.length !== 1) continue;
+      this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null, "inferred");
       delivery.delivered = true;
       delivery.engineMessageId = user?.uuid ?? null;
+      delivery.confirmation = "inferred";
+      const index = unmatched.findIndex((candidate) => candidate.uuid === user?.uuid);
+      if (index >= 0) unmatched.splice(index, 1);
     }
   }
 
@@ -1304,18 +1326,20 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (type === "user") {
       const content = messageContent(message);
       const directUserEcho = stringField(message.message, "role") === "user" && content !== null;
-      const delivery = directUserEcho
-        ? this.deliveries.find((candidate) => !candidate.delivered && matchesClaudeUserContent(candidate.entry, {
+      const directMatches = directUserEcho
+        ? this.deliveries.filter((candidate) => (!candidate.delivered || candidate.confirmation === "unverified") && matchesClaudeUserContent(candidate.entry, {
             contentDigest: content.contentDigest,
             text: content.content.text,
             imageCount: content.content.images.length,
           }))
-        : undefined;
+        : [];
+      const delivery = directMatches.length === 1 ? directMatches[0] : undefined;
       if (delivery) {
         try {
-          this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, stringField(message, "uuid"));
+          this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, stringField(message, "uuid"), "inferred");
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
+          delivery.confirmation = "inferred";
           const pending = this.pendingDeliveries.get(delivery.entry.id);
           if (pending) {
             this.pendingDeliveries.delete(delivery.entry.id);

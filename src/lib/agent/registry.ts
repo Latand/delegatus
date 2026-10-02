@@ -9048,6 +9048,7 @@ export class AgentRegistry {
         }
         : null);
       if (!source?.requestDigest) return false;
+      const conversation = file.conversations[resolveConversationAlias(file, source.conversationId)];
       file.deliveryOperationOwners[retryOperationId] = {
         conversationId: source.conversationId,
         runtimeConversationId: source.runtimeConversationId,
@@ -9056,7 +9057,10 @@ export class AgentRegistry {
         command: { ...source.command, operationId: retryOperationId },
         requestDigest: source.requestDigest,
         contentDigest: source.contentDigest,
-        targetGenerationId: source.targetGenerationId ?? delivery?.generationId ?? null,
+        /* A retry is a new actuation. The old owner names the generation its
+           predecessor reached, while structured delivery dispatch follows the
+           conversation's currently committed generation after recovery. */
+        targetGenerationId: conversation?.generations.at(-1)?.id ?? null,
         evidenceText: source.evidenceText ?? delivery?.text ?? null,
         evidenceImageCount: source.evidenceImageCount ?? delivery?.runtimeImages.length ?? 0,
         createdAt: now(),
@@ -9066,6 +9070,19 @@ export class AgentRegistry {
         terminalReason: null,
         settledAt: null,
       };
+      return true;
+    });
+  }
+
+  /** Bind a retry owner to the host generation selected by the delivery queue,
+      immediately before it hands the operation to that host. */
+  bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
+    if (!operationId || !generationId) return false;
+    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    return this.mutate((file) => {
+      const owner = file.deliveryOperationOwners[operationId];
+      if (!owner?.retryOfOperationId) return false;
+      owner.targetGenerationId = generationId;
       return true;
     });
   }

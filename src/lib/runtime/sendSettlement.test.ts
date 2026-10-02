@@ -1655,6 +1655,72 @@ test("a canonical Claude turn with duplicate pending text stays ambiguous, while
   } finally { active.close(); }
 });
 
+test("sequential Claude sends consume each canonical UUID exactly once across registry reopen", async () => {
+  const active = fixture("claude-sequential-turns", { engine: "claude" });
+  try {
+    const text = "repeat this instruction";
+    const ledger = new FileClaudeDeliveryLedger();
+    const a = acceptSend(active, { text, operationId: "op_sequential_a", clientMessageId: "sequential-a" });
+    ledger.recordQueued(active.generationId, { id: a.operationId, text }, "turn-started");
+    const firstTime = new Date(Date.now() + 10).toISOString();
+    fs.writeFileSync(active.transcriptPath, canonicalClaudeUser("sequential-user-a", text, firstTime));
+    const first = new AgentRegistry(active.registryPath);
+    expect(await resolveSendReceipt(a.operationId, { registry: first, client: null }))
+      .toMatchObject({ state: "delivered", resend: "not-needed" });
+
+    await Bun.sleep(2);
+    const b = acceptSend(active, { text, operationId: "op_sequential_b", clientMessageId: "sequential-b" });
+    ledger.recordQueued(active.generationId, { id: b.operationId, text }, "turn-started");
+    const secondTime = new Date(Date.now() + 10).toISOString();
+    fs.appendFileSync(active.transcriptPath, canonicalClaudeUser("sequential-user-b", text, secondTime));
+    const reopened = new AgentRegistry(active.registryPath);
+    expect(await resolveSendReceipt(b.operationId, { registry: reopened, client: null }))
+      .toMatchObject({ state: "delivered", resend: "not-needed" });
+    const states = ledger.load(active.generationId);
+    expect(states.filter((state) => state.delivered).map((state) => state.engineMessageId).sort())
+      .toEqual(["sequential-user-a", "sequential-user-b"]);
+  } finally { active.close(); }
+});
+
+test("a retry records and settles against the currently committed generation", async () => {
+  const active = fixture("retry-successor-generation");
+  try {
+    const original = acceptSend(active, { text: "recover into successor", operationId: "op_retry_original", clientMessageId: "retry-original" });
+    active.journal.transitionOperation(original.operationId, "delivering");
+    active.journal.transitionOperation(original.operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+    active.registry.recordDeliveryOutcome(original.deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+
+    const snapshot = active.registry.readOnlySnapshot();
+    const conversation = snapshot.conversations[active.conversationId]!;
+    const source = conversation.generations.at(-1)!;
+    const successorId = "successor-generation-for-retry";
+    const successorPath = path.join(path.dirname(active.transcriptPath), "successor.jsonl");
+    const raw = JSON.parse(fs.readFileSync(active.registryPath, "utf8")) as typeof snapshot;
+    const storedConversation = raw.conversations[active.conversationId]!;
+    storedConversation.generations.at(-1)!.archivedAt = new Date().toISOString();
+    storedConversation.generations.push({
+      id: successorId, path: successorPath, accountId: source.accountId,
+      launchProfile: source.launchProfile, historyHash: null, host: null,
+      createdAt: new Date().toISOString(), archivedAt: null,
+    });
+    fs.writeFileSync(active.registryPath, JSON.stringify(raw));
+
+    const reopened = new AgentRegistry(active.registryPath);
+    const retryId = "op_retry_successor";
+    expect(reopened.recordDeliveryRetryAttempt(original.operationId, retryId)).toBeTrue();
+    expect(reopened.readOnlySnapshot().deliveryOperationOwners[retryId]?.targetGenerationId).toBe(successorId);
+    const wire = encodeCodexStructuredUserText("recover into successor", undefined, null,
+      { kind: "operator" }, deliveryDedupToken(retryId));
+    fs.writeFileSync(successorPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    expect(await resolveSendReceipt(retryId, { registry: reopened, client: null }))
+      .toMatchObject({ operationId: retryId, state: "delivered", resend: "not-needed" });
+  } finally { active.close(); }
+});
+
+function canonicalClaudeUser(uuid: string, text: string, timestamp: string): string {
+  return JSON.stringify({ type: "user", uuid, timestamp, message: { role: "user", content: text } }) + "\n";
+}
+
 test("Claude canonical evidence accepts transcoded image bytes and leaves a different image message uncertain", async () => {
   const active = fixture("claude-transcoded-image", { engine: "claude" });
   try {

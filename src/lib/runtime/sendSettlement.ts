@@ -610,7 +610,7 @@ export async function resolveSendReceipt(
   const mayConfirm = projected.state === "in-flight"
     || (projected.duplicateRisk && projected.reason !== SEND_DISCARDED_REASON
       && !projected.reason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
-  if (mayConfirm && await confirmedSend(snapshot, operationId)) {
+  if (mayConfirm && await confirmedSend(snapshot, operationId, true)) {
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
     }, "delivery-record");

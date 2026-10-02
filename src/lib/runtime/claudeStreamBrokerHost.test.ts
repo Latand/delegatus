@@ -97,12 +97,13 @@ class RecordingDeliveryLedger implements ClaudeDeliveryLedger {
     this.states.set(sessionId, states);
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): void {
     this.order.push(`confirmed:${entryId}`);
     const state = this.states.get(sessionId)?.find((candidate) => candidate.entry.id === entryId);
     if (state) {
       state.delivered = true;
       state.engineMessageId = engineMessageId;
+      state.confirmation = confirmation;
     }
   }
 }
@@ -1131,6 +1132,28 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(confirmedChild.inputs).toHaveLength(0);
     expect(confirmedLedger.order).toContain("confirmed:confirmed");
     await confirmed.release();
+  });
+
+  test("adoption leaves a same-text turn unassigned until one operation has bound evidence", async () => {
+    const sessionId = "ambiguous-adoption-session";
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, { id: "ambiguous-A", text: "same text" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "ambiguous-B", text: "same text" }, "turn-started");
+    ledger.confirmDelivered(sessionId, "ambiguous-B", "only-canonical-user", "operation-bound");
+    const child = new FakeClaude(ledger);
+    const adopted = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "same text", uuid: "only-canonical-user", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    expect(ledger.load(sessionId).map(({ delivered }) => delivered)).toEqual([false, true]);
+    expect(await adopted.send({ id: "ambiguous-B", text: "same text" })).toEqual({ outcome: "turn-started", turnId: "ambiguous-B" });
+    expect(child.inputs).toHaveLength(0);
+    expect(ledger.load(sessionId).find((state) => state.entry.id === "ambiguous-A")?.delivered).toBeFalse();
+    await adopted.release();
   });
 
   test("restart transcript reconciliation confirms a provider-transcoded image delivery", async () => {
