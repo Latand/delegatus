@@ -169,7 +169,7 @@ describe("automatic updates", () => {
         stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_builder" }] },
       waitingSince: AT, longWait: true, drain: { state: "scheduled", at: AT } };
     for (const [state, phrase] of [["scheduled", locale === "en" ? "From" : "Від"], ["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
-      ["overran", locale === "en" ? "Held launches for 2 h" : "Запуски стримувалися 2 год"]] as const) {
+      ["overran", locale === "en" ? "held the update for 6 h" : "оновлення вже 6 год"]] as const) {
       s.auto.drain = { state, at: AT, nextAt: AT };
       const copy = text(section(render(s), "auto"));
       expect(copy).toContain(phrase);
@@ -180,6 +180,34 @@ describe("automatic updates", () => {
       host?.remove();
     }
   });
+  test.each(["keep-waiting", "deploy-now"] as const)("the six-hour %s choice posts its identity and broadcasts the accepted snapshot", async (choice) => {
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: NEW_REV, green: { state: "green" },
+      blockers: null, waitingSince: AT, longWait: true,
+      decision: { id: "drain-current", at: AT, project: "Example", blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+        turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", stage: null, seat: false }] } } };
+    const savedFetch = globalThis.fetch;
+    const posted: unknown[] = [];
+    let accepted: unknown;
+    const observe = (event: Event) => { accepted = (event as CustomEvent).detail; };
+    window.addEventListener("llv:auto-drain-decision", observe);
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ...s, auto: { ...s.auto, decision: null } }));
+    }) as typeof fetch;
+    try {
+      const el = render(s);
+      expect(el.querySelector("[data-auto-drain-decision]")?.textContent).toContain("conversation_long_turn");
+      button(el, choice)!.click();
+      await Bun.sleep(0);
+      expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
+      expect(accepted).toMatchObject({ auto: { decision: null } });
+    } finally {
+      globalThis.fetch = savedFetch;
+      window.removeEventListener("llv:auto-drain-decision", observe);
+    }
+  });
+
   test("the switch, blockers, serving revisions and history are visible", () => {
     const s = snapshot();
     s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, green: { state: "green" },

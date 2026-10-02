@@ -44,14 +44,14 @@ test("self-update sends one wait or off signal from its durable state", () => {
   expect(selfUpdateSignals({ ...quiet, off: { at: "2026-01-02", target: "a".repeat(40), stage: "build", reason: "build failed" }, noticeAt: null, waitingSince: null })).toMatchObject([{ id: "self-update-off" }]);
 });
 
-test("drain overrun signals name the unfinished stage and the next drain", () => {
+test("drain notice names unfinished work and the operator choices", () => {
   const drain = { id: "drain", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, since: "2026-01-01T04:00:00Z", overranAt: "2026-01-01T06:00:00Z",
     blockers: { turns: 1, stages: 1, busy: false, memoryMb: null, unreadable: null, operatorActiveAt: null,
       stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_work" }] } };
   expect(selfUpdateSignals({ off: null, waitingSince: drain.since, waitingTarget: drain.target.sha, lastBlockers: null, pending: null, noticeAt: null, drain }))
     .toMatchObject([{ id: "self-update-drain-overran", label: expect.stringContaining("build · Finish the feature") }]);
   expect(selfUpdateSignals({ off: null, waitingSince: drain.since, waitingTarget: drain.target.sha, lastBlockers: null, pending: null, noticeAt: null, drain })[0]!.label)
-    .toContain("2026-01-01T10:00:00.000Z");
+    .toContain("deploy now or keep waiting");
 });
 const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
 const { projectForCwd } = await import("@/lib/scanner/describe");

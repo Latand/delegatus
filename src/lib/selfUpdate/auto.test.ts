@@ -9,7 +9,7 @@ import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { activeRestartGate, endRestartGate, restartGateFile } from "./restartGate";
-import { activeDrain, writeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS, DRAIN_LEASE_MS } from "./drain";
+import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 import { startCurrentReleaseControllers } from "../viewerInstrumentation";
 import { GreenReader } from "./green";
 import { proxy } from "../../proxy";
@@ -31,7 +31,6 @@ test("checkout drain holds through web and host restarts and releases only when 
   h.setTurn(true);
   let service = h.service();
   await service.autoTick();
-  h.advance(DRAIN_AFTER_MS);
   await service.autoTick();
   const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
   expect(lease()?.target).toBe(TARGET);
@@ -104,19 +103,119 @@ test.each(["pending-web", "between-roles"] as const)("switch-off at %s retains e
   service.stop();
 });
 
-test("the overrun cap cannot release launches between checkout restart roles", async () => {
+test("the six-hour notice retains launches between checkout restart roles", async () => {
   const h = scenario();
   h.setTurn(true);
   const service = h.service();
   await service.autoTick();
-  h.advance(DRAIN_AFTER_MS);
   await service.autoTick();
   h.record.web.revision = TARGET.slice(0, 7);
-  h.advance(DRAIN_MAX_MS);
+  h.advance(DRAIN_NOTICE_MS);
   await service.autoTick();
   expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
-  expect(readAuto(join(h.dir, "auto.json")).drain?.overranAt).toBeNull();
+  expect(readAuto(join(h.dir, "auto.json")).drain?.overranAt).not.toBeNull();
   service.stop();
+});
+
+test("a ready update immediately holds admission and a three-hour cohort still deploys", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const lease = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+    expect(lease).not.toBeNull();
+    h.advance(3 * 60 * 60_000);
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(lease!.id);
+    expect(h.pending()).toBeNull();
+    h.setTurn(false);
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    expect(h.pending()?.role).toBe("web");
+  } finally { service.stop(); }
+});
+
+test("six hours names blockers for an operator decision while admission remains held", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_long_turn", engine: "codex", host: "hosted", turn: "running" }] }) as never;
+  const service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(6 * 60 * 60_000);
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    const drain = readAuto(join(h.dir, "auto.json")).drain;
+    expect(drain?.overranAt).not.toBeNull();
+    expect(drain?.blockers?.turnList?.[0]?.conversationId).toBe("conversation_long_turn");
+    expect(h.pending()).toBeNull();
+  } finally { service.stop(); }
+});
+
+test.each(["keep-waiting", "deploy-now"] as const)("the operator's %s decision preserves custody and fences stale replies", async (choice) => {
+  const h = scenario();
+  h.setTurn(true);
+  const service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(DRAIN_NOTICE_MS);
+    await service.autoTick();
+    const drain = readAuto(join(h.dir, "auto.json")).drain!;
+    expect(await service.decideDrain("old-decision", choice)).toMatchObject({ ok: false });
+    expect(await service.decideDrain(drain.id, choice)).toEqual({ ok: true });
+    expect(await service.decideDrain(drain.id, choice)).toMatchObject({ ok: false });
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(drain.id);
+    if (choice === "deploy-now") expect(h.pending()?.role).toBe("web");
+    else {
+      expect(h.pending()).toBeNull();
+      h.advance(12 * 60 * 60_000);
+      await service.autoTick();
+      expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+      h.setTurn(false);
+      await service.autoTick();
+      h.advance(60_000);
+      await service.autoTick();
+      expect(h.pending()?.role).toBe("web");
+    }
+  } finally { service.stop(); }
+});
+
+test("host fallback holds custody across recovery until web rollback is observed", async () => {
+  const h = scenario();
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  h.record.web.revision = TARGET.slice(0, 7);
+  let service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(60_000);
+    await service.autoTick();
+    const pending = h.pending()!;
+    expect(pending.role).toBe("runtime-host");
+    rmSync(h.record.requestFile);
+    h.record.runtimeHost = { ...h.record.runtimeHost, requestId: pending.requestId,
+      error: { kind: "fell-back", revision: OLD.slice(0, 7), detail: "host candidate failed" } };
+    await service.autoTick();
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(ticks).toBe(0);
+    service.stop();
+    h.advance(DRAIN_LEASE_MS + 1);
+    service = h.service();
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(ticks).toBe(0);
+    h.record.web.revision = OLD.slice(0, 7);
+    h.record.web.state = "starting";
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    h.record.web.state = "healthy";
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(ticks).toBe(1);
+  } finally { service.stop(); }
 });
 
 function scenario() {
@@ -518,7 +617,6 @@ test("a disabled drain releases after a crash between switch persistence and lea
   h.setTurn(true);
   let service = h.service();
   await service.autoTick();
-  h.advance(DRAIN_AFTER_MS);
   await service.autoTick();
   const file = join(h.dir, "auto.json");
   expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
@@ -560,7 +658,6 @@ test("timer ticks renew the drain while an earlier observation is still waiting"
   h.setTurn(true);
   const service = h.service();
   await service.autoTick();
-  h.advance(DRAIN_AFTER_MS);
   await service.autoTick();
   const snapshot = service.snapshot.bind(service);
   let resume!: () => void;

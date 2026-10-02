@@ -8,6 +8,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { conversationTurnLiveness } from "@/lib/runtime/liveness";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -112,6 +113,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     },
     requestPipelineTick,
+    updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();

@@ -11,11 +11,12 @@ import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
-import { activeDrain, DRAIN_AFTER_MS, DRAIN_LEASE_MS } from "@/lib/selfUpdate/drain";
+import { activeDrain, DRAIN_LEASE_MS } from "@/lib/selfUpdate/drain";
 import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { initialCheck } from "@/lib/selfUpdate/checkState";
 import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "@/lib/selfUpdate/types";
+import { endRestartGate, restartGateFile } from "@/lib/selfUpdate/restartGate";
 import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
@@ -1270,6 +1271,38 @@ async function create(ports: PipelinePorts, stages = RUN_STAGES as never, reques
   return lane;
 }
 
+test("held pending cursors let the real controller idle and release one successor", async () => {
+  const { FlowPipelineController } = await import("./controller");
+  const h = harness();
+  let held = true;
+  let cycles = 0;
+  const heartbeats: import("./controller").FlowPipelineControllerHeartbeat[] = [];
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports);
+  const controller = new FlowPipelineController({
+    tickPipelines: (entries) => tickPipelines(entries, h.ports),
+    tickFlows: async () => ({ changed: false }), scan: async () => ({ files: [], complete: true }),
+    publishHeartbeat: (heartbeat) => {
+      heartbeats.push(heartbeat);
+      // Bound the old defect without leaving its microtask loop alive.
+      if (heartbeat.state === "idle" && ++cycles === 12) held = false;
+    },
+  });
+  const unregister = registerPipelineTick(() => controller.tick());
+  try {
+    await controller.tick();
+    expect(controller.idle()).toBe(true);
+    expect(cycles).toBe(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(heartbeats.at(-1)?.state).toBe("idle");
+    held = false;
+    await controller.tick();
+    await controller.poll();
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(controller.idle()).toBe(true);
+  } finally { unregister(); }
+});
+
 test("automatic-update hold keeps a pending attempt and releases exactly one launch", async () => {
   const h = harness();
   let held = true;
@@ -1384,7 +1417,7 @@ test.each(["early", "drain-switch-off"] as const)("managed %s admission holds ac
   h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
   try {
     await service.autoTick();
-    if (admission === "drain-switch-off") { now += DRAIN_AFTER_MS; await service.autoTick(); turns = 0; await service.autoTick(); }
+    if (admission === "drain-switch-off") { turns = 0; await service.autoTick(); }
     now += 60_000;
     await service.autoTick();
     expect(requests).toBe(1);
@@ -1406,7 +1439,7 @@ test.each(["early", "drain-switch-off"] as const)("managed %s admission holds ac
   } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.each(["drain", "early-switch-off"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
+test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
   const h = harness();
   const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
   const target = "a".repeat(40);
@@ -1446,7 +1479,6 @@ test.each(["drain", "early-switch-off"] as const)("a stage completes and its suc
     expect(h.spawnInputs).toHaveLength(1);
     await service.autoTick();
     if (admission === "drain") {
-      now += DRAIN_AFTER_MS;
       await service.autoTick();
       expect(h.ports.drainHold()).not.toBeNull();
     }
@@ -1463,6 +1495,7 @@ test.each(["drain", "early-switch-off"] as const)("a stage completes and its suc
     expect(JSON.parse(fs.readFileSync(record.requestFile, "utf8")).role).toBe("web");
     await tickPipelines([], h.ports);
     const identity = loadPipelines()[0]!.runs[1]!.attempts[0]!.n;
+    endRestartGate(restartGateFile(record.requestFile), JSON.parse(fs.readFileSync(record.requestFile, "utf8")).autoGateId);
     const pending = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending;
     record.web = { ...record.web, requestId: pending.requestId, revision: target.slice(0, 7) };
     fs.rmSync(record.requestFile);
@@ -1478,7 +1511,27 @@ test.each(["drain", "early-switch-off"] as const)("a stage completes and its suc
     }
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
-    record.runtimeHost.revision = target.slice(0, 7);
+    if (admission === "host-fallback") {
+      await service.autoTick();
+      now += 60_000;
+      await service.autoTick();
+      const hostRequest = JSON.parse(fs.readFileSync(record.requestFile, "utf8"));
+      expect(hostRequest.role).toBe("runtime-host");
+      endRestartGate(restartGateFile(record.requestFile), hostRequest.autoGateId);
+      fs.rmSync(record.requestFile);
+      record.runtimeHost = { ...record.runtimeHost, requestId: hostRequest.requestId,
+        error: { kind: "fell-back", revision: old.slice(0, 7), detail: "candidate host failed" } };
+      await service.autoTick();
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(1);
+      service.stop();
+      now += DRAIN_LEASE_MS + 1;
+      service = makeService();
+      await service.autoTick();
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(1);
+      record.web.revision = old.slice(0, 7);
+    } else record.runtimeHost.revision = target.slice(0, 7);
     await service.autoTick();
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);

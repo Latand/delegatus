@@ -1437,7 +1437,7 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const hold = dependencies ? activeDrain() : null;
-  if (hold && dependencies && attributionOf(dependencies).kind === "manager") {
+  if (hold && dependencies && ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind)) {
     throw new McpToolRefusal("new launches are held while the automatic update drains running work", {
       code: "launch_held_for_update", target: hold.target, since: hold.since,
       blockers: readAuto(statePath("self-update", "auto.json")).lastBlockers,
@@ -4057,6 +4057,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
     waitingSince: auto.waitingSince ?? null,
     longWait: auto.longWait === true,
     drain: auto.drain ?? null,
+    decision: objectRecord(auto.decision) ? { id: auto.decision.id, at: auto.decision.at, project: auto.decision.project } : null,
     changedAt: auto.changedAt ?? null,
     changedBy: auto.changedBy ?? null,
     recentChanges: history

@@ -16,10 +16,18 @@ test("the lease survives readers, expires, and only its owner releases it", () =
   releaseDrain(file, lease.id);
   expect(activeDrain(file, 1000)).toBeNull();
 });
-test("a torn lease holds launches for ten minutes from its mtime", () => {
+test("a torn custody record cannot reopen launches on a timer", () => {
   const file = join(root, "torn.json");
   writeFileSync(file, "{");
   utimesSync(file, new Date(1000), new Date(1000));
   expect(activeDrain(file, 2000)?.id).toBe("unreadable");
-  expect(activeDrain(file, 1000 + DRAIN_LEASE_MS)).toBeNull();
+  expect(activeDrain(file, 1000 + DRAIN_LEASE_MS)?.id).toBe("unreadable");
+});
+
+test("durable automatic custody never expires on a timer", () => {
+  const file = join(root, "persistent.json");
+  writeDrain(file, { id: "persistent", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: 1000, persistent: true });
+  expect(activeDrain(file, 12 * 60 * 60_000)?.id).toBe("persistent");
+  releaseDrain(file, "persistent");
+  expect(activeDrain(file)).toBeNull();
 });

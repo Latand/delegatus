@@ -1,5 +1,6 @@
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 import { overviewPipelineRows } from "@/components/mobile/overviewPhone";
+import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -24,7 +25,8 @@ import { buildAttentionQueue, type AttentionItem } from "../attention";
 
 export type MobileAttentionEntry =
   | { kind: "conversation"; id: string; item: AttentionItem }
-  | { kind: "pipeline"; id: string; row: MobileBoardPipelineRow };
+  | { kind: "pipeline"; id: string; row: MobileBoardPipelineRow }
+  | { kind: "update"; id: string; decision: NonNullable<AutoView["decision"]> };
 
 /** Conversations first in queue order, then the pipelines — the board's
     Needs-you order (`buildMobileBoard`), so the sheet and the section under
@@ -52,8 +54,11 @@ export function buildNeedsYouQueue(
   pipelines: readonly Pipeline[],
   now: number,
   closing: readonly string[],
+  decision?: AutoView["decision"],
 ): MobileAttentionEntry[] {
-  return buildMobileAttentionQueue(buildAttentionQueue([...files], now), overviewPipelineRows(pipelines, now, closing));
+  const queue = buildMobileAttentionQueue(buildAttentionQueue([...files], now), overviewPipelineRows(pipelines, now, closing));
+  if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
+  return queue;
 }
 
 /** The board key a lane is focused by: the card that holds the pipeline, the
@@ -64,5 +69,6 @@ export const laneFocusId = (path: string): string | null => (path.startsWith(LAN
 
 /** The project an entry belongs to. */
 export function attentionEntryProject(entry: MobileAttentionEntry): string {
+  if (entry.kind === "update") return entry.decision.project;
   return entry.kind === "conversation" ? entry.item.project : entry.row.pipeline.project;
 }

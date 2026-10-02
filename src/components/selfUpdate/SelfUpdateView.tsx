@@ -1,5 +1,6 @@
 "use client";
 
+import { AutoDrainDecision } from "./AutoDrainDecision";
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -407,6 +408,7 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
           {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
         </ul>
       ) : null}
+      {auto.decision ? <AutoDrainDecision decision={auto.decision} /> : null}
       {auto.enabled && auto.drain ? <p className="m-0 text-ui text-secondary" data-drain-state={auto.drain.state}>
         {t(`selfUpdate.auto.drain.${auto.drain.state}` as MessageKey, { time: `${day(auto.drain.at, locale)} ${clock(auto.drain.at)}`, next: auto.drain.nextAt ? `${day(auto.drain.nextAt, locale)} ${clock(auto.drain.nextAt)}` : "" })}
       </p> : auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}

@@ -1326,8 +1326,8 @@ export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "wa
     const blockers = auto.drain.blockers;
     const names = [...(blockers?.stageList ?? []).map((stage) => `${stage.stageId} · ${stage.task}`),
       ...(blockers?.turnList ?? []).map((turn) => turn.seat ? turn.project ?? turn.conversationId : `${turn.engine} · ${turn.conversationId}`)].join(", ");
-    const next = new Date(Date.parse(auto.drain.overranAt) + 4 * 60 * 60_000).toISOString();
-    return [{ id: "self-update-drain-overran", label: `self-update: released the launch hold after 2 h; still blocked by ${names || "unreadable activity"}; next drain ${next}` }];
+    if (auto.drain.acknowledgedAt) return [];
+    return [{ id: "self-update-drain-overran", label: `self-update: admission remains held after 6 h; still blocked by ${names || "unreadable activity"}; the operator can deploy now or keep waiting in Needs-you` }];
   }
   return [];
 }

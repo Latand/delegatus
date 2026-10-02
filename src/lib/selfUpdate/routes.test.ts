@@ -122,6 +122,23 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
   };
 }
 
+test("operator drain replies reach the same service and reject stale identities", async () => {
+  const dir = mkdtempSync(join(root, "drain-decision-"));
+  const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1", date: "" };
+  const at = new Date().toISOString();
+  writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled: true,
+    drain: { id: "drain-current", target, since: at, overranAt: at, blockers: null } });
+  const service = new SelfUpdateService(baseDeps(dir, {}));
+  setSelfUpdateServiceForTests(service);
+  try {
+    expect((await postAuto(post("/auto", { decisionId: "drain-stale", choice: "keep-waiting" }))).status).toBe(409);
+    expect((await postAuto(post("/auto", { decisionId: "drain-current", choice: "keep-waiting" }))).status).toBe(202);
+    const saved = JSON.parse(readFileSync(join(dir, "auto.json"), "utf8"));
+    expect(saved.drain).toMatchObject({ id: "drain-current", acknowledgedAt: expect.any(String), force: false });
+    expect((await postAuto(post("/auto", { decisionId: "drain-current", choice: "deploy-now" }))).status).toBe(409);
+  } finally { service.stop(); }
+});
+
 describe("the operator gate", () => {
   test("an agent presenting its capability is refused every mutating route, and nothing is asked of the host", async () => {
     const requests: ViewerDeploymentRequest[] = [];
@@ -134,6 +151,7 @@ describe("the operator gate", () => {
       await postUpdate(post("/update", { key: "press-1" }, agent)),
       await postRestart(post("/restart", { role: "runtime-host", confirm: true }, agent)),
       await postAuto(post("/auto", { enabled: true }, agent)),
+      await postAuto(post("/auto", { decisionId: "drain", choice: "deploy-now" }, agent)),
     ]) {
       expect(response.status).toBe(403);
     }
@@ -151,6 +169,8 @@ describe("the operator gate", () => {
     })));
     setCallerConversationResolverForTests(() => "conversation_some_worker");
     const agent = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
+    expect((await (await getSnapshot(new Request(`${BASE}?readOnly=1`, { headers: browser }))).json()).check.state).toBe("idle");
+    expect(checks).toEqual([]);
     expect((await snapshot(agent)).check.state).toBe("idle");
     expect((await snapshot({ ...browser, origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" })).check.state).toBe("idle");
     await Bun.sleep(50);

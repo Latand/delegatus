@@ -14,7 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
-import { DRAIN_AFTER_MS, DRAIN_MAX_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
+import { DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
@@ -98,6 +98,7 @@ export interface ServiceDeps {
   green?: GreenReader;
   quiet?: QuietPorts;
   requestPipelineTick?(): void;
+  updateProject?(): string;
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
 
@@ -307,7 +308,7 @@ export class SelfUpdateService {
   private autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): AutoView {
     const built = snapshot.installed.sha;
     const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
-      : auto.drain && !auto.drain.overranAt ? auto.drain.target : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
+      : auto.drain ? auto.drain.target : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
     const sha = target?.sha ?? null;
     const pending = auto.pending;
     const managedPending = auto.managedPending;
@@ -320,11 +321,12 @@ export class SelfUpdateService {
       : sha && !auto.green[sha] ? "checks" : "idle";
     return { availability: this.autoAvailability(decision), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
-      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_AFTER_MS,
+      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
+      decision: auto.enabled && phase === "waiting" && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
       drain: auto.enabled && auto.waitingSince ? auto.drain
-        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt, nextAt: new Date(Date.parse(auto.drain.overranAt) + DRAIN_AFTER_MS).toISOString() }
+        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt }
           : { state: "draining", at: auto.drain.since }
-        : { state: "scheduled", at: new Date(Date.parse(auto.waitingSince) + DRAIN_AFTER_MS).toISOString() } : null,
+        : null : null,
       changedAt: auto.changedAt, changedBy: auto.changedBy };
   }
 
@@ -355,38 +357,24 @@ export class SelfUpdateService {
     if (!this.auto.enabled && !this.hasAutoCustody()) return;
     const decision = await this.decide();
     if ((!this.auto.enabled || this.autoAvailability(decision) !== "available") && !this.hasAutoCustody()) this.endDrain();
-    else if (this.auto.drain && !this.auto.drain.overranAt) {
-      const now = this.deps.now();
-      if (now - Date.parse(this.auto.drain.since) >= DRAIN_MAX_MS && !this.hasAutoCustody() && !managedActive(this.managed)) {
-        const snapshot = await this.snapshot();
-        const target = this.auto.drain?.target.short;
-        const webServes = snapshot.serving.web?.short === target;
-        const hostServes = snapshot.serving.runtimeHost?.short === target;
-        // A cap may release a drain before succession. Once one checkout role
-        // moved, retain admission until its peer follows or rollback completes.
-        if (snapshot.mode === "checkout" && (webServes || hostServes)) {
-          this.refreshDrain();
-        } else {
-          const probe = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, now, true) : null;
-          const drain = this.auto.drain;
-          if (drain && !drain.overranAt) {
-            this.autoBlockers = probe?.blockers ?? this.auto.lastBlockers;
-            this.auto = { ...this.auto, drain: { ...drain, overranAt: new Date(now).toISOString(), blockers: probe?.blockers ?? this.auto.lastBlockers },
-              lastBlockers: probe?.blockers ?? this.auto.lastBlockers, quietSince: null };
-            this.saveAuto();
-            releaseDrain(this.drainFile, drain.id);
-            this.deps.requestPipelineTick?.();
-            return;
-          }
-        }
-      } else this.refreshDrain();
-    }
+    else if (this.auto.drain) this.refreshDrain();
     if (decision.mode === "managed") { await this.runManagedAutoTick(decision); return; }
     if (decision.mode !== "checkout" || !decision.record) return;
     const record = decision.record;
     const snapshot = await this.snapshot();
     const now = this.deps.now();
     const pending = this.auto.pending;
+    if (this.auto.rollback) {
+      const rollback = this.auto.rollback.target;
+      const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
+      const consistent = [rollback, this.auto.drain?.target.sha].some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
+      if (record.web.state === "healthy" && record.runtimeHost.state === "healthy"
+        && consistent) {
+        this.auto = { ...this.auto, rollback: null, waitingSince: null, waitingTarget: null, lastBlockers: null };
+        this.endDrain();
+      }
+      return;
+    }
     if (record.launcher.autoAdmission !== 1) {
       const entry = pending?.role === "web" ? record.web : record.runtimeHost;
       if (pending && entry.requestId !== pending.requestId) {
@@ -428,12 +416,12 @@ export class SelfUpdateService {
     }
     if ((!this.auto.enabled && !this.hasAutoCustody()) || this.autoAvailability(decision) !== "available") return;
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
-    const target = this.auto.drain && !this.auto.drain.overranAt ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
+    const target = this.auto.drain ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
     let green = await this.autoGreen(target.sha, record.checkout!, now);
     if (green.state !== "green") return;
     if (snapshot.installed.sha !== target.sha) {
-      if (this.auto.drain && !this.auto.drain.overranAt) return;
+      if (this.auto.drain) return;
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       if (green.state !== "green") return;
@@ -475,7 +463,7 @@ export class SelfUpdateService {
       const finalSnapshot = await this.snapshot();
       const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now(), this.draining());
       this.autoBlockers = finalProbe.blockers;
-      if (!finalProbe.quiet || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
+      if (!this.quietAdmits(finalProbe) || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe.blockers };
         this.saveAuto();
         return;
@@ -532,13 +520,12 @@ export class SelfUpdateService {
       this.auto = { ...this.auto, waitingTarget: target };
       this.saveAuto();
     }
-    const due = this.auto.drain?.overranAt ?? this.auto.waitingSince;
-    if (!this.draining() && due && now - Date.parse(due) >= DRAIN_AFTER_MS) {
+    if (!this.draining()) {
       const revision = snapshot.mode === "checkout" ? snapshot.installed : snapshot.available;
       if (revision?.sha === target) {
         const drain = { id: randomUUID(), target: revision, since: at, overranAt: null, blockers: null };
         // Publish the hold before the next asynchronous observation can launch work.
-        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS });
+        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS, persistent: true });
         this.auto = { ...this.auto, drain, quietSince: null };
         this.saveAuto();
       }
@@ -550,7 +537,13 @@ export class SelfUpdateService {
       this.auto = { ...this.auto, lastBlockers: probe.blockers };
       this.saveAuto();
     }
+    const drain = this.auto.drain;
+    if (drain && !drain.overranAt && !probe.quiet && now - Date.parse(drain.since) >= DRAIN_NOTICE_MS) {
+      this.auto = { ...this.auto, drain: { ...drain, overranAt: at, blockers: probe.blockers } };
+      this.saveAuto();
+    }
     this.changes.emit();
+    if (this.auto.drain?.force && this.quietAdmits(probe)) return true;
     if (!probe.quiet) {
       if (this.auto.quietSince) { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); }
       return false;
@@ -645,7 +638,7 @@ export class SelfUpdateService {
     const finalSnapshot = await this.snapshot();
     const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
     this.autoBlockers = finalProbe?.blockers ?? null;
-    if (!finalProbe?.quiet || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
+    if (!this.quietAdmits(finalProbe) || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
       || this.checking || finalSnapshot.check.state === "checking" || !this.auto.enabled) {
       this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe?.blockers ?? this.auto.lastBlockers };
       this.saveAuto();
@@ -666,7 +659,7 @@ export class SelfUpdateService {
       const admissionSnapshot = await this.snapshot();
       const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
-      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !admissionProbe?.quiet || !this.auto.enabled || this.checking
+      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.auto.enabled || this.checking
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
         || (!this.draining() && (admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha))) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
@@ -704,7 +697,7 @@ export class SelfUpdateService {
     const green = await this.refreshGreen(pending.target, record.checkout!, this.auto.green[pending.target] ?? { state: "unknown" });
     const snapshot = await this.snapshot();
     const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
-    if ((this.auto.enabled || this.hasAutoCustody()) && green.state === "green" && quiet?.quiet && snapshot.installed.sha === pending.target
+    if ((this.auto.enabled || this.hasAutoCustody()) && green.state === "green" && this.quietAdmits(quiet) && snapshot.installed.sha === pending.target
       && record.launcher.pid === pending.launcherPid && this.autoAvailability(decision) === "available") return true;
     this.autoBlockers = quiet?.blockers ?? null;
     this.auto = { ...this.auto, pending: null, quietSince: null, lastBlockers: quiet?.blockers ?? this.auto.lastBlockers };
@@ -726,14 +719,21 @@ export class SelfUpdateService {
     return `${JSON.stringify({ sha: serving, dir, checkoutHead, publishedAt: new Date(this.deps.now()).toISOString() })}\n`;
   }
 
+  /** An operator may override running turns; the transaction still needs
+      healthy processes, readable evidence and idle state controllers. */
+  private quietAdmits(probe: { quiet: boolean; blockers: QuietBlockers } | null): boolean {
+    return !!probe && (probe.quiet || this.auto.drain?.force === true
+      && !probe.blockers.busy && !probe.blockers.unreadable && probe.blockers.memoryMb === null);
+  }
+
   private get drainFile(): string { return join(this.deps.dir, "auto-drain.json"); }
 
-  private draining(): boolean { return !!this.auto.drain && !this.auto.drain.overranAt; }
+  private draining(): boolean { return !!this.auto.drain; }
 
   /** A switch controls future admission; a persisted accepted transaction owns
       the hold independently, including the gap between checkout roles. */
   private hasAutoCustody(): boolean {
-    return this.auto.drain?.admitted === true || !!this.auto.pending || !!this.auto.managedPending;
+    return !!this.auto.rollback || this.auto.drain?.admitted === true || !!this.auto.pending || !!this.auto.managedPending;
   }
 
   private beginAutoCustody(target: Revision): void {
@@ -742,14 +742,14 @@ export class SelfUpdateService {
     };
     // The short gate fences this write. Persist renewable custody before the
     // request can be accepted and outlive that gate or this service instance.
-    writeDrain(this.drainFile, { id: drain.id, target: target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS });
+    writeDrain(this.drainFile, { id: drain.id, target: target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
     this.auto = { ...this.auto, drain: { ...drain, admitted: true } };
     this.saveAuto();
   }
 
   private refreshDrain(): void {
     const drain = this.auto.drain;
-    if ((this.auto.enabled || this.hasAutoCustody()) && drain && !drain.overranAt) writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS });
+    if ((this.auto.enabled || this.hasAutoCustody()) && drain) writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
   }
 
   private endDrain(): void {
@@ -770,9 +770,24 @@ export class SelfUpdateService {
       restorePointer(record.releasePointer, pending.rollbackPointer);
       this.auto = { ...this.auto, enabled: false, pending: null, quietSince: null,
         off: { at: new Date(this.deps.now()).toISOString(), target: pending.target, stage: pending.role === "web" ? "restart-web" : "restart-host", reason: detail ?? outcome } };
-      this.endDrain();
+      // Restoring the pointer does not move the other process. Keep durable
+      // custody until a later observation proves both are healthy on rollback.
+      this.auto = { ...this.auto, rollback: { target: pending.from } };
     }
     this.saveAuto();
+  }
+
+  /** Only the operator route accepts this decision; the drain identity fences
+      an old tab from forcing a newer update. Keep waiting preserves custody. */
+  async decideDrain(id: string, choice: "deploy-now" | "keep-waiting"): Promise<ActionResult> {
+    const drain = this.auto.drain;
+    if (!this.auto.enabled || !drain || drain.id !== id || !drain.overranAt || drain.acknowledgedAt || drain.admitted) {
+      return refuse(409, "auto-switch-superseded", "This automatic update decision is no longer pending");
+    }
+    this.auto = { ...this.auto, drain: { ...drain, acknowledgedAt: new Date(this.deps.now()).toISOString(), force: choice === "deploy-now" } };
+    this.saveAuto();
+    if (choice === "deploy-now") await this.autoTick();
+    return { ok: true };
   }
 
   private readPersisted(): Persisted | null {

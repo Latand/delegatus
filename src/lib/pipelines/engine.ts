@@ -5964,6 +5964,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
       && pipeline.cursor?.state === "pending"
+      && !ports.drainHold?.()
       && !stageActivationIsWaiting(pipeline, followUpAt));
     return result;
   } catch (error) {

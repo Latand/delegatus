@@ -482,7 +482,7 @@ test("gateway spawn with no MCP selection sends the Viewer baseline explicitly",
   expect(dispatched[0]?.mcpServers).toEqual(["viewer"]);
 });
 
-test("automatic drain refuses seat spawns and permits helper and operator spawns", async () => {
+test("automatic drain refuses autonomous spawns and permits operator launches", async () => {
   const file = drainFile();
   let spawns = 0;
   const control = { post: async () => { spawns++; return { conversationId: "conversation_child", path: null, launchId: "launch_child",
@@ -493,9 +493,9 @@ test("automatic drain refuses seat spawns and permits helper and operator spawns
     const args = { cwd: "/repo", title: "Work", ["prompt"]: "Finish the work" };
     await expect(as("manager")({ ...args, clientRequestId: "held-seat" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
     expect(spawns).toBe(0);
-    await as("agent")({ ...args, clientRequestId: "allowed-helper" });
+    await expect(as("agent")({ ...args, clientRequestId: "held-helper" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
     await as("gateway")({ ...args, clientRequestId: "allowed-operator" });
-    expect(spawns).toBe(2);
+    expect(spawns).toBe(1);
   } finally { releaseDrain(file, "mcp-test"); }
 });
 

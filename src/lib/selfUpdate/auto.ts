@@ -41,7 +41,8 @@ export interface AutoState {
   lastBlockers: QuietBlockers | null;
   quietSince: string | null;
   noticeAt: string | null;
-  drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean } | null;
+  drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean; acknowledgedAt?: string; force?: boolean } | null;
+  rollback: { target: string | null } | null;
   pending: AutoPending | null;
   /** Written before asking the runtime host; replay uses the same key after a web restart. */
   managedPending: { target: Revision; clientKey: string; at: string } | null;
@@ -59,11 +60,12 @@ export interface AutoView {
   waitingSince: string | null;
   longWait: boolean;
   drain?: { state: "scheduled" | "draining" | "overran"; at: string; nextAt?: string } | null;
+  decision?: { id: string; at: string; project: string; blockers: QuietBlockers | null } | null;
   changedAt?: string | null;
   changedBy?: AutoWriter | null;
 }
 export function initialAuto(): AutoState {
-  return { version: 1, enabled: false, changedAt: null, changedBy: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, drain: null, pending: null, managedPending: null, rollbackPointer: null, rollbackCaptured: false };
+  return { version: 1, enabled: false, changedAt: null, changedBy: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, drain: null, pending: null, managedPending: null, rollbackPointer: null, rollbackCaptured: false, rollback: null };
 }
 export function readAuto(file: string): AutoState {
   try {
