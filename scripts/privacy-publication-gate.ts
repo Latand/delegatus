@@ -1857,6 +1857,7 @@ export function inspectPaths(
   requireKnownValues = false,
   inspectionRoot = repositoryRoot,
   trustedBase?: string,
+  attributionNotices: string[] = [],
 ): Map<FindingClass, number> {
   const findings = new Map<FindingClass, number>();
   if (knownValues.error || configurationError || (requireKnownValues && knownValues.fingerprints.length === 0)) {
@@ -1899,7 +1900,24 @@ export function inspectPaths(
     }
     const vendorExemptions = trustedVendorExemptions(path, inspectionRoot);
     for (const finding of vendorExemptions) pathFindings.delete(finding);
-    for (const finding of pathFindings) addFinding(findings, finding);
+    for (const finding of pathFindings) {
+      addFinding(findings, finding);
+      const repositoryPath = relative(inspectionRoot ?? resolve("."), path).split(sep).join("/");
+      if (!repositoryPath || repositoryPath.startsWith("../") || isAbsolute(repositoryPath)) continue;
+      let lines: number[] = [];
+      if (!kind) {
+        try {
+          lines = readFileSync(path, "utf8").split(/\r?\n/)
+            .flatMap((line, index) => sensitiveClasses(line).has(finding) ? [index + 1] : []);
+        } catch { /* The aggregate finding still carries a path-only notice. */ }
+      }
+      const pathDigest = createHash("sha256").update(repositoryPath).digest("hex");
+      if (lines.length) {
+        attributionNotices.push(...lines.map((line) => `file-sha256:${pathDigest}:${line} ${finding}`));
+      } else {
+        attributionNotices.push(`file-sha256:${pathDigest} ${finding}`);
+      }
+    }
   }
   return findings;
 }
@@ -1912,8 +1930,9 @@ export function formatPrivacyReport(findings: Map<FindingClass, number>, notices
   for (const [finding, count] of [...findings].sort(([left], [right]) => left.localeCompare(right))) {
     lines.push(`${finding}: ${count}`);
   }
-  /* A count says a class was found; a notice says where, for the findings
-     whose location is a commit nobody can grep for. */
+  /* File notices carry only a digest of the relative path and an optional
+     line, so neither sensitive contents nor sensitive filename components
+     reach public check logs. */
   lines.push(...notices);
   return `${lines.join("\n")}\n`;
 }
@@ -2364,14 +2383,15 @@ if (import.meta.main) {
       error: explicitPaths.length === 0,
       paths: explicitPaths.map((path) => isAbsolute(path) ? path : resolve(inspectionRoot, path)),
     };
+  const notices: string[] = [];
   const pathFindings = inspectPaths(
     selection.paths,
     selection.error || repositoryError,
     arguments_.includes("--require-known-values"),
     inspectionRoot,
     trustedBase,
+    notices,
   );
-  const notices: string[] = [];
   if (arguments_.includes("--check-commits")) {
     for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices)) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
