@@ -866,3 +866,8 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
   expect(reviewLoop).toContain('"roundLimit": 3');
   expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
 });
+
+test("the versioned mandate asks for a current status note in the operator's language", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("update_task note");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("waiting on whom/what");
+});
