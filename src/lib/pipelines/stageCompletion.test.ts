@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
    MCP call. Every port is a mock and the state directory is private to this
    file, so nothing here reaches a host, an account or the operator's registry. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-completion-"));
-const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = await import("./engine");
+const { createPipelineFromRequest, patchPipeline, reportStageCompletion, tickPipelines } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, withPipelineMutation } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
@@ -932,7 +932,7 @@ test("a stage parked before spawn replaces the preceding stage note, while newer
   const pipeline = current();
   pipeline.taskIds = ["park-note-task"];
   savePipelines([pipeline]);
-  const oldNoteAt = new Date(Date.parse(pipeline.createdAt) + 1_000).toISOString();
+  const oldNoteAt = new Date(Date.parse(pipeline.createdAt) - 1_000).toISOString();
   saveTasks([{
     id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
     createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
@@ -960,11 +960,85 @@ test("a stage parked before spawn replaces the preceding stage note, while newer
   const stillNewer = {
     text: "The operator is choosing an account now.",
     author: agent("conversation_current"),
-    updatedAt: new Date(Date.now() + 60_000).toISOString(),
+    updatedAt: new Date().toISOString(),
   };
   saveTasks([{ ...loadTasks()[0]!, note: stillNewer }]);
+  await new Promise(resolve => setTimeout(resolve, 10));
   writeParkedTaskNote(current(), "signed out", attemptsOf("verify")[0]);
   expect(loadTasks()[0]!.note).toEqual(stillNewer);
+});
+
+test.each(["agent", "orchestrator", "operator"] as const)("a current %s note survives the next stage's signed-out pre-spawn park", async writer => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const h = harness();
+  await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  saveTasks([{
+    id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
+    createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+  }]);
+  await h.report(1, { verdict: "pass", summary: "Build passed." });
+  await tickPipelines([h.endTurn(1, "Build passed.")], h.ports);
+
+  const currentNote = {
+    text: "Waiting for the operator to choose a source.",
+    author: writer === "agent"
+      ? agent("conversation_current")
+      : writer === "orchestrator"
+        ? { kind: "orchestrator" as const, conversationId: "conversation_manager" }
+        : { kind: "operator" as const },
+    updatedAt: new Date().toISOString(),
+  };
+  saveTasks([{ ...loadTasks()[0]!, note: currentNote }]);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  h.ports.engineReadiness = () => "signed-out";
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(current().state).toBe("needs_decision");
+  expect(loadTasks()[0]!.note).toEqual(currentNote);
+});
+
+test("retrying a signed-out park clears its automatic note through running and completion", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const h = harness();
+  await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  saveTasks([{
+    id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
+    createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+  }]);
+
+  await h.report(1, { verdict: "pass", summary: "Build passed." });
+  await tickPipelines([h.endTurn(1, "Build passed.")], h.ports);
+  h.ports.engineReadiness = () => "signed-out";
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(current().state).toBe("needs_decision");
+  expect(loadTasks()[0]!.note?.text).toMatch(/account is connected|під’єднано обліковий запис/i);
+
+  h.ports.engineReadiness = () => "connected";
+  const retried = await patchPipeline(current().id, { action: "retry-stage" }, h.ports);
+  expect(retried.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(current().state).toBe("running");
+  expect(attemptsOf("verify").at(-1)!.state).toBe("running");
+  expect(loadTasks()[0]!.note).toBeUndefined();
+
+  const currentNote = {
+    text: "The verify stage is running against the selected account.",
+    author: { kind: "operator" as const },
+    updatedAt: new Date().toISOString(),
+  };
+  saveTasks([{ ...loadTasks()[0]!, note: currentNote }]);
+  await h.report(2, { verdict: "pass", summary: "Verification passed." });
+  await tickPipelines([h.endTurn(2, "Verification passed.")], h.ports);
+  expect(current().state).toBe("completed");
+  expect(loadTasks()[0]!.note).toEqual(currentNote);
 });
 
 test("automatic notes explain signed-out and quota-reset parks in both languages without diagnostics", async () => {
