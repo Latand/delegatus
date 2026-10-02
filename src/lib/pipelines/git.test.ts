@@ -1404,6 +1404,53 @@ function sameHunkRebaseSandbox(initialPrefixLines = 0, rebasedPrefixLines = 1) {
   return { ...box, accepted, head, policy: (first: number, second: number) => withPrefix(first, second, rebasedPrefixLines) };
 }
 
+function siblingHunkRebaseSandbox(targetPath: string, siblingPath: string) {
+  const box = publishSandbox();
+  const comments = Array.from({ length: 4 }, () => "    # same context");
+  const spacer = Array.from({ length: 8 }, () => "    # same context");
+  const policy = (first: number, second: number) => [
+    "def policy(admin):",
+    ...comments,
+    `    value = ${first}`,
+    ...spacer,
+    `    value = ${second}`,
+    ...comments,
+    "    return value",
+    "",
+  ].join("\n");
+  const target = (first: number, second: number, prefixLines = 0) => [
+    ...Array.from({ length: prefixLines }, (_, index) => `# prefix ${index + 1}`),
+    policy(first, second),
+  ].join("\n");
+  const sibling = (lines: number) => Array.from({ length: lines }, (_, index) => `sibling ${index + 1}`).join("\n") + "\n";
+  fs.mkdirSync(path.dirname(path.join(box.repo, targetPath)), { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(box.repo, siblingPath)), { recursive: true });
+  fs.writeFileSync(path.join(box.repo, targetPath), target(1, 1));
+  fs.writeFileSync(path.join(box.repo, siblingPath), sibling(10));
+  git(box.repo, "add", targetPath, siblingPath);
+  git(box.repo, "commit", "-m", "add policy files");
+  git(box.repo, "push", "origin", "main");
+  git(box.subject.worktreeDir, "fetch", "origin");
+  git(box.subject.worktreeDir, "rebase", "origin/main");
+
+  fs.writeFileSync(path.join(box.subject.worktreeDir, targetPath), target(1, 2));
+  git(box.subject.worktreeDir, "add", targetPath);
+  git(box.subject.worktreeDir, "commit", "-m", "change second policy");
+  const accepted = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+  box.subject.lastPassedCommit = accepted;
+  savePipelines([box.subject]);
+
+  fs.writeFileSync(path.join(box.repo, targetPath), target(1, 1, 11));
+  fs.writeFileSync(path.join(box.repo, siblingPath), sibling(1));
+  git(box.repo, "add", targetPath, siblingPath);
+  git(box.repo, "commit", "-m", "advance target and sibling");
+  git(box.repo, "push", "origin", "main");
+  git(box.subject.worktreeDir, "fetch", "origin");
+  git(box.subject.worktreeDir, "rebase", "origin/main");
+  const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+  return { ...box, accepted, head, target: (first: number, second: number) => target(first, second, 11) };
+}
+
 test.each(["update", "revert"])("stage reconciliation retains accepted history followed by a builder %s", (operation) => {
   const box = rebasedStageSandbox();
   try {
@@ -1437,6 +1484,73 @@ test("stage reconciliation rejects an amended replay moved to an identical hunk 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toContain(box.accepted);
     expect(box.subject.lastPassedCommit).toBe(box.accepted);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    expect(git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0]).toBe(main);
+    expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation retains nested multi-file replay paths", () => {
+  const box = publishSandbox();
+  try {
+    fs.mkdirSync(path.join(box.subject.worktreeDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "src", "one.py"), "one = 1\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "src", "two.py"), "two = 1\n");
+    git(box.subject.worktreeDir, "add", "src/one.py", "src/two.py");
+    git(box.subject.worktreeDir, "commit", "-m", "accepted nested policy files");
+    const accepted = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    box.subject.lastPassedCommit = accepted;
+    savePipelines([box.subject]);
+
+    fs.writeFileSync(path.join(box.repo, "main.txt"), "new main\n");
+    git(box.repo, "add", "main.txt");
+    git(box.repo, "commit", "-m", "advance main");
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "rebase", "origin/main");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", `${result.sha}^{tree}`))
+      .toBe(git(box.subject.worktreeDir, "rev-parse", `${head}^{tree}`));
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation rejects a same-function hunk relocation despite sibling file deltas", () => {
+  const box = siblingHunkRebaseSandbox("src/policy.py", "src/other.py");
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "src/policy.py"), box.target(2, 1));
+    git(box.subject.worktreeDir, "add", "src/policy.py");
+    git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const main = git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0];
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(box.subject.lastPassedCommit).toBe(box.accepted);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    expect(git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0]).toBe(main);
+    expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation treats bracketed tracked filenames literally when mapping replay hunks", () => {
+  const box = siblingHunkRebaseSandbox("policy[12].py", "policy1.py");
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy[12].py"), box.target(2, 1));
+    git(box.subject.worktreeDir, "add", "policy[12].py");
+    git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const main = git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0];
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(box.accepted);
     expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
     expect(git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0]).toBe(main);
     expect(box.originHead()).toBe("");

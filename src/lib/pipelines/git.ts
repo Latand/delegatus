@@ -754,7 +754,7 @@ function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): E
   const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
     "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", commit], pipeline.worktreeDir);
   if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
-  const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--name-only", "-z", commit], pipeline.worktreeDir);
+  const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", commit], pipeline.worktreeDir);
   if (names.code !== 0) return { error: failure("reading accepted replay paths", names).error };
   const paths = names.stdout.split("\0").filter(Boolean);
   const evidence: string[] = [];
@@ -804,7 +804,7 @@ export function mapReplayPatchLocation(
   if (acceptedParent.code !== 0) return { error: failure("reading accepted patch parent", acceptedParent).error };
   const replayParent = exec("git", ["rev-parse", `${replayCommit}^`], pipeline.worktreeDir);
   if (replayParent.code !== 0) return { error: failure("reading replay patch parent", replayParent).error };
-  const diff = exec("git", ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
+  const diff = exec("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
     acceptedParent.stdout.trim(), replayParent.stdout.trim(), "--", location.path], pipeline.worktreeDir);
   if (diff.code !== 0) return { error: failure("mapping replay hunk location", diff).error };
   let delta = 0;
