@@ -1,15 +1,10 @@
 name: Docker image
 
 on:
-  # A pull request builds the image only when something the Dockerfile copies,
-  # installs from or compiles changes. The build runs next build, whose type
-  # check covers every TypeScript file in the checkout (tsconfig.json include),
-  # and resolveJsonModule lets any of them import JSON, so those globs sit
-  # beside the directory paths. Tailwind scans every non-ignored file under the
-  # root for class names, not only src/, and .gitignore decides which files it
-  # skips. Tailwind scans text sources across extensions, so every repository
-  # path is an input; the broad glob also covers new source formats.
-  # Pushes to main and v* tags always build.
+  # Keep the broad trigger shared with the local-hooks lane. The cheap scope
+  # job checks the complete PR diff before admitting an image build; GitHub's
+  # trigger path filter only inspects the first 300 files. Tailwind's source
+  # root is now src/, so prose and unrelated workflows can skip the build.
   pull_request:
     paths:
       - Dockerfile
@@ -51,9 +46,29 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}
 
 jobs:
-  build:
+  scope:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 360 }}
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.inputs.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check image inputs in the complete PR diff
+        id: inputs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/docker-image-scope.cjs "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+  build:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 360 }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -92,3 +107,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+    # One image build across all refs leaves runners for required checks.
+    # Workflow-level concurrency still cancels superseded pushes on one ref.
+    # queue:max retains other PRs instead of replacing the single pending job.
+    concurrency:
+      group: docker-image-build
+      cancel-in-progress: false
+      queue: max
