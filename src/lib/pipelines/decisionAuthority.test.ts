@@ -76,3 +76,38 @@ test("unreadable server seat records fail closed for agents", () => {
   expect(continueReviewActorRefusal(pipeline, agent("conversation_creator"))?.status).toBe(403);
   expect(decisionAnswerActorRefusal(pipeline, { kind: "operator" }, "answer")).toBeNull();
 });
+
+test("a creator seat revoked in its project stays refused after taking another project's seat", async () => {
+  designate("project-a", "conversation-x");
+  designate("project-a", "conversation-y");
+  designate("project-b", "conversation-x");
+  const pipeline = buildPipeline({ id: "lane-a", task: "Decision", project: "project-a", repoDir: "/repo", state: "draft", stages: [], srcPath: null, now: AT, srcConversationId: "conversation-x" });
+  savePipelines([pipeline]);
+  const before = loadPipelines();
+
+  for (const action of ["resolve-decision", "continue-review", "accept-head"] as const) {
+    expect(await patchPipeline(pipeline.id, { action }, { now: () => AT } as PipelinePorts, agent("conversation-x")).then(result => result.status)).toBe(403);
+    expect(loadPipelines()).toEqual(before);
+  }
+});
+
+test("an alias preserves seat creator lineage after independent project designations", async () => {
+  designate("project-legacy", "conversation-x");
+  designate("project-current", "conversation-y");
+  const pipeline = buildPipeline({ id: "lane-legacy", task: "Decision", project: "project-legacy", repoDir: "/repo", state: "draft", stages: [], srcPath: null, now: AT, srcConversationId: "conversation-x" });
+  savePipelines([pipeline]);
+
+  persistProjectAliases([{ source: "project-legacy", target: "project-current", displayName: "Project" }]);
+  // A later seat write normalizes the aliased rows on disk; the creator proof
+  // must survive that write instead of depending on the old source key.
+  designate("project-unrelated", "conversation-unrelated");
+  const storedSeats = JSON.parse(fs.readFileSync(path.join(sandbox, "orchestrator-seats.json"), "utf8")) as { seatLineage?: { project: string; conversationId: string }[] };
+  expect(storedSeats.seatLineage).toContainEqual(expect.objectContaining({ project: "project-current", conversationId: "conversation-x", seatEpoch: expect.any(Number) }));
+  const before = loadPipelines();
+  for (const action of ["resolve-decision", "continue-review", "accept-head"] as const) {
+    const current = agent("conversation-y");
+    expect(await patchPipeline(pipeline.id, { action }, { now: () => AT } as PipelinePorts, current).then(result => result.status)).toBe(400);
+    expect(await patchPipeline(pipeline.id, { action }, { now: () => AT } as PipelinePorts, agent("conversation-worker")).then(result => result.status)).toBe(403);
+    expect(loadPipelines()).toEqual(before);
+  }
+});

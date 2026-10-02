@@ -7627,22 +7627,28 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
 
 /** Decision authority follows a project's designated seat across rotations.
     Read one server-side seat snapshot for both lineage and current authority;
-    caller-supplied roles confer no authority. Revocation also fences a creator. */
+    caller-supplied roles confer no authority. Revocation is project-scoped. */
 function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null): actor is PauseResumeActor {
   if (!actor) return false;
   if (actor.kind === "operator") return true;
   if (!actor.conversationId) return false;
   const file = readOrchestratorSeatFileOrNull();
   if (!file) return false;
-  const activeEpoch = Math.max(0, ...Object.values(file.seats)
-    .filter((seat) => seat.conversationId === actor.conversationId).map((seat) => seat.seatEpoch));
-  if (file.revocations.some((entry) => entry.conversationId === actor.conversationId && entry.seatEpoch >= activeEpoch)) return false;
-  if (actor.conversationId === pipeline.srcConversationId) return true;
   const project = canonicalOrchestratorProject(pipeline.project);
-  const current = orchestratorSeatIn(file, project).active;
-  if (current?.conversationId !== actor.conversationId || !pipeline.srcConversationId) return false;
-  return file.revocations.some((entry) =>
-    entry.project === project && entry.conversationId === pipeline.srcConversationId);
+  const creator = pipeline.srcConversationId;
+  const creatorIsSeat = Boolean(creator && (
+    (file.seatLineage ?? []).some((seat) => seat.project === project && seat.conversationId === creator)
+    || file.revocations.some((entry) => entry.project === project && entry.conversationId === creator)
+  ));
+  const seatEpochs = (file.seatLineage ?? []).filter((seat) => seat.project === project && seat.conversationId === actor.conversationId).map((seat) => seat.seatEpoch);
+  const activeSeat = orchestratorSeatIn(file, project).active;
+  if (activeSeat?.conversationId === actor.conversationId) seatEpochs.push(activeSeat.seatEpoch);
+  const actorEpoch = Math.max(0, ...seatEpochs);
+  const revokedInProject = file.revocations.some((entry) =>
+    entry.project === project && entry.conversationId === actor.conversationId && entry.seatEpoch >= actorEpoch);
+  if (actor.conversationId === creator) return !creatorIsSeat || !revokedInProject;
+  if (revokedInProject || !creatorIsSeat) return false;
+  return activeSeat?.conversationId === actor.conversationId;
 }
 
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
