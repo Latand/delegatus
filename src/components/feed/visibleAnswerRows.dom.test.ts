@@ -135,3 +135,40 @@ test("without IntersectionObserver every row is still measured, as before", () =
   expect(rectReads).toBe(6);
   tracked.disconnect();
 });
+
+test("an element whose box is outside the screen is not read; one inside it still is", () => {
+  const prose = proseRow(7);
+  const body = prose.querySelector("[data-tts-body]")!;
+  const place = (top: number) => {
+    const span = document.createElement("span");
+    span.append(document.createTextNode(`at ${top}`));
+    span.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 60, width: 60, height: 20 }) as DOMRect;
+    body.append(span);
+  };
+  place(-400);
+  place(10);
+  place(900);
+  viewport.append(prose);
+  const tracked = trackVisibleAnswerRows(viewport, () => undefined);
+  FakeIntersectionObserver.current!.report([prose], true);
+  rectReads = 0;
+  const [fragment] = measureVisibleAnswerRows(tracked, CLIP);
+  /* The body's own "Answer 7" text and the span on screen; the two spans
+     above and below the screen are never measured. */
+  expect(rectReads).toBe(2);
+  expect(fragment!.area).toBe(2 * 50 * 20);
+  tracked.disconnect();
+});
+
+test("one answer of thousands of text nodes costs a bounded number of reads", () => {
+  const prose = proseRow(8);
+  const body = prose.querySelector("[data-tts-body]")!;
+  for (let index = 0; index < 5_000; index += 1) body.append(document.createTextNode(`token ${index} `));
+  viewport.append(prose);
+  const tracked = trackVisibleAnswerRows(viewport, () => undefined);
+  FakeIntersectionObserver.current!.report([prose], true);
+  rectReads = 0;
+  expect(measureVisibleAnswerRows(tracked, CLIP)[0]!.area).toBeGreaterThan(0);
+  expect(rectReads).toBeLessThanOrEqual(400);
+  tracked.disconnect();
+});

@@ -36,8 +36,9 @@ let tail: LogTailState;
 let file: FileEntry;
 let finish: (count: number) => void;
 let calls: number;
+let compactPane = false;
 const render = () => flushSync(() => root!.render(<LogFeed file={file} showSvc={false} lineFilter=""
-  onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} />));
+  onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} compact={compactPane} />));
 const wait = () => new Promise((resolve) => setTimeout(resolve, 50));
 let serial = 0;
 async function mount(fixture = lines) {
@@ -105,6 +106,35 @@ test("an older page keeps the DOM node of every row that was already on screen",
   /* A re-parse of the window must not hand the rows new React keys: a new key
      unmounts the row and mounts another, for every row, on every page. */
   for (const key of before.keys()) expect(after.get(key)).toBe(before.get(key)!);
+});
+
+test("the phone reader keeps every row laid out; the desktop reader lets off-screen rows skip layout", async () => {
+  /* A skipped row is a 44 px estimate until first reached, so older history
+     prepended above a resting phone reader would grow under it with no scroll
+     compensation (see `rowsSkipOffscreen` in LogFeed). */
+  const skipping = () => [...host.querySelectorAll("[data-feed-key]")].filter((row) => row.classList.contains("feed-cv")).length;
+  const target = dom as unknown as { matchMedia: (query: string) => unknown };
+  const original = target.matchMedia;
+  /* The conversation window is a compact pane on the phone too. */
+  compactPane = true;
+  const layout = (phone: boolean) => {
+    target.matchMedia = (query: string) => ({ matches: phone, media: query, addEventListener() {}, removeEventListener() {} });
+  };
+  try {
+    layout(true);
+    await mount();
+    expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThan(0);
+    expect(skipping()).toBe(0);
+    flushSync(() => root!.unmount()); root = undefined; host.remove(); restoreGeometry();
+    layout(false);
+    await mount();
+    const rows = host.querySelectorAll("[data-feed-key]").length;
+    expect(rows).toBeGreaterThan(0);
+    expect(skipping()).toBe(rows);
+  } finally {
+    compactPane = false;
+    target.matchMedia = original;
+  }
 });
 
 test("interleaved tail growth and media below the reader do not enter prepend compensation", async () => {

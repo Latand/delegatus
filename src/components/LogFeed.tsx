@@ -103,6 +103,8 @@ type SeatResume = { ask: string | null };
 /* How many screens from the top the reader is when the next page of history
    starts loading, so the page is usually there before the top is. */
 const PREFETCH_SCREENS = 2;
+/* The fewest ms between two reads of which answer is on screen. */
+const SPEECH_MEASURE_GAP_MS = 120;
 /* Rows an older-history reveal mounts per animation frame. A step is
    RENDER_STEP rows; mounting them in one commit is a frame of 300 ms or more,
    and the reader scrolling up is looking at the rows the first few frames add. */
@@ -299,6 +301,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      «back to live» control is NOT part of that: it only exists once the
      operator has scrolled away, and without it a phone cannot get back. */
   const phone = useIsMobile();
+  /* Off-screen rows skip layout and paint (`.feed-cv`) everywhere but the
+     phone. The conversation window is `compact` on the phone too, so the
+     phone is told apart by the layout, not the prop. A skipped row is a 44 px
+     estimate until it is first reached, so older history above a reader who
+     flicks up grows under them as the rows come into range, 50-70 px at a
+     time, with the scroll offset unchanged: a visible jump. Neutralizing
+     `.feed-cv` removed every one of them in the 390 px walk. */
+  const rowsSkipOffscreen = !phone;
   const { locale, t } = useLocale();
   const memoryKey = file ? conversationIdentity(file) : null;
   /* The conversation's own outbox (issue #561): submitted drafts render as
@@ -756,10 +766,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const viewportOwner = Symbol("speech-viewport");
     speech.setRoots(viewportOwner, (id) => Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-id]")).filter((node) => node.getAttribute("data-tts-answer-id") === id).flatMap((node) => Array.from(node.querySelectorAll<HTMLElement>("[data-tts-body]"))));
     let frame = 0;
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    let lastMeasured = -Infinity;
+    let wait = 0;
+    /* The speak button only has to name the answer in view, not follow it
+       frame by frame: while the reader flicks through history the measure
+       runs at most every SPEECH_MEASURE_GAP_MS, the first one at once and the
+       last one after the scroll rests, so a dense screen costs a frame in
+       eight instead of every one. */
+    const schedule = () => {
+      if (frame || wait) return;
+      const due = lastMeasured + SPEECH_MEASURE_GAP_MS - performance.now();
+      if (due > 0) wait = window.setTimeout(() => { wait = 0; frame = requestAnimationFrame(measure); }, due);
+      else frame = requestAnimationFrame(measure);
+    };
     const rows = trackVisibleAnswerRows(viewport, schedule);
     const measure = () => {
       frame = 0;
+      lastMeasured = performance.now();
       const box = viewport.getBoundingClientRect();
       const clip = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(window.innerWidth, box.right), bottom: Math.min(window.innerHeight, box.bottom) };
       if (clip.right <= clip.left || clip.bottom <= clip.top) { speech.selectFor(viewportOwner, null); return; }
@@ -774,7 +797,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     window.addEventListener("scroll", schedule, true);
     const resize = new ResizeObserver(schedule); resize.observe(viewport);
     schedule();
-    return () => { speechMeasureRef.current = null; cancelAnimationFrame(frame); rows.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
+    return () => { speechMeasureRef.current = null; cancelAnimationFrame(frame); window.clearTimeout(wait); rows.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
   }, [speechScope]);
   useEffect(() => { speechMeasureRef.current?.(); }, [feed.items, answerFor]);
 
@@ -1784,7 +1807,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
-                    className="feed-cv"
+                    className={rowsSkipOffscreen ? "feed-cv" : undefined}
                   >
                     <FeedMessageRow
                       entry={row.entry}
@@ -1806,8 +1829,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 /* Session-stable keys: a row keeps its DOM node while the
                    window slides, and an older page prepended to it. Off-screen
                    rows skip layout/paint via content-visibility, on the
-                   zoomable canvas and in the focused reader alike; the text
-                   they skip stays findable and copyable. */
+                   zoomable canvas and in the desktop reader (see
+                   rowsSkipOffscreen); the text they skip stays findable and
+                   copyable. */
                 <div
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
@@ -1818,7 +1842,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
                     : item.kind === "tool" ? String(item.srcCall) : undefined}
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
-                  className="feed-cv"
+                  className={rowsSkipOffscreen ? "feed-cv" : undefined}
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>
