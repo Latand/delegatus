@@ -331,6 +331,9 @@ export interface StructuredHostTerminationDependencies {
   ppidMap?(): Map<number, number>;
   processGroupId?(pid: number): number | null;
   signal?(pid: number, signal: NodeJS.Signals): void;
+  /** Persist every verified identity in the captured tree before any runtime
+      release or process signal can make a child disappear from observation. */
+  persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): void;
   /** Previously captured descendants whose root may have exited between retries. */
@@ -511,6 +514,22 @@ export async function terminateStructuredHostTree(
         survivors: [],
       };
     }
+  }
+  /* A partial termination can outlive this caller. Keep the complete captured
+     identity set durable before the first effect, so a restart can finish the
+     same kill without trying to rediscover reparented children. */
+  const capturedIdentities = [...identities.values()];
+  if (dependencies.persistCapturedTree && !dependencies.persistCapturedTree(capturedIdentities)) {
+    return {
+      ok: false,
+      status: 409,
+      error: "structured termination evidence could not be persisted",
+      remaining: tree.filter(candidate => alive(candidate)),
+      survivors: capturedIdentities.filter(identity => {
+        try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
+        catch { return true; }
+      }),
+    };
   }
   let terminationStarted = false;
   const partialEvidence = () => {

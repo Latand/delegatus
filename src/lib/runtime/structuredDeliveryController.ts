@@ -878,6 +878,7 @@ export async function bindStructuredDeliveryQueue(
         const outcome = await terminateStructuredHostTree(ref, {
           retainedSurvivors,
           authorize,
+          persistCapturedTree: identities => registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities),
           retireRegistryEntry: (key, expected, confirmed) => { registry.terminateStructuredHost(key, expected, confirmed); },
         });
         if (!outcome.ok) {

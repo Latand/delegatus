@@ -10,7 +10,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
@@ -4815,7 +4815,12 @@ test("a partial structured kill retains child identity across a root-dead retry"
   await client.command({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey: key });
   const originalKill = process.kill.bind(process);
   let refuseChildSignals = true;
+  let evidenceAtFirstSignal: ProcessIdentity[] | null = null;
+  let failedRecoveryHost: RoundTripHost | null = null;
   const killSpy = spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    if (evidenceAtFirstSignal === null && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      evidenceAtFirstSignal = registry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors ?? [];
+    }
     if (pid === childPid && refuseChildSignals && (signal === "SIGTERM" || signal === "SIGKILL")) {
       throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
     }
@@ -4833,9 +4838,57 @@ test("a partial structured kill retains child identity across a root-dead retry"
     expect((await client.operationStatus(operationId))?.receipt.status).toBe("queued");
     expect(procBackend.pidAlive(root.pid!)).toBeFalse();
     expect(procBackend.pidAlive(childPid!)).toBeTrue();
+    expect((evidenceAtFirstSignal ?? []) as ProcessIdentity[]).toContainEqual(rootIdentity);
+    expect((evidenceAtFirstSignal ?? []) as ProcessIdentity[]).toContainEqual(childIdentity);
     expect(registry.readOnlySnapshot().entries[`codex:${id}`]).toMatchObject({ status: "live", structuredHost: { process: rootIdentity } });
     expect(captureProcessIdentity(childPid!)).toEqual(childIdentity);
     const reopenedRegistry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors).toContainEqual(childIdentity);
+    expect(reopenedRegistry.claimStructuredHost(key, rootIdentity, { allowUnhosted: true })).toBeNull();
+
+    let starts = 0;
+    const recoveryHost = failedRecoveryHost = new RoundTripHost("codex", artifactPath, id);
+    const recovered = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+      registry: reopenedRegistry,
+      client,
+      transport: () => "structured",
+      resolveAccount: () => ({
+        engine: "codex",
+        accountId: "codex-subscription",
+        kind: "managed",
+        home: cwd,
+        transcriptRoot: cwd,
+        env: { NODE_ENV: "test" },
+      }),
+      spawn: input => spawnStructuredConversation(input, {
+        startHost: async () => { starts += 1; return recoveryHost; },
+        bindHost: async (targetRegistry, targetKey, runningHost, claimOwner, claimEpoch) => {
+          const state = await runningHost.health();
+          targetRegistry.setStructuredHostClaimed(targetKey, {
+            kind: "codex-app-server",
+            endpoint: state.endpoint,
+            process: rootIdentity,
+            eventCursor: state.eventCursor,
+            protocolVersion: state.protocolVersion,
+            writerClaimEpoch: claimEpoch,
+            activeTurnRef: state.activeTurnRef,
+            pendingAttention: state.pendingAttention,
+            activeFlags: state.activeFlags,
+          }, "idle", claimOwner, claimEpoch);
+          return () => {};
+        },
+        publishHost: async (targetKey, runningHost) => {
+          await bindStructuredDeliveryQueue([{ key: targetKey, host: runningHost }], { registry: reopenedRegistry, client });
+          return async () => {};
+        },
+        processIdentity: () => rootIdentity,
+      }),
+      processIdentity: () => rootIdentity,
+      requestDeliveryDrain: () => {},
+    });
+    expect(recovered).toBeNull();
+    expect(starts).toBe(0);
+    expect(procBackend.pidAlive(childPid!)).toBeTrue();
     expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors).toContainEqual(childIdentity);
 
     refuseChildSignals = false;
@@ -4853,6 +4906,7 @@ test("a partial structured kill retains child identity across a root-dead retry"
     if (procBackend.pidAlive(root.pid!)) originalKill(root.pid!, "SIGKILL");
     await rootExited;
     await bindStructuredDeliveryQueue([], { registry, client: null });
+    await failedRecoveryHost?.release();
     journal.close();
   }
 }, 20_000);

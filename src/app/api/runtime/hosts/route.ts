@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { agentRegistry } from "@/lib/agent/registry";
 import { allowedStructuredHostTarget, consumeKillTarget } from "@/lib/resources";
 import {
   structuredHostKillRefusal,
@@ -69,7 +70,13 @@ export async function POST(req: NextRequest): Promise<NextResponse<KillResponse 
   const refusal = structuredHostKillRefusal(ref, intent, body.includeSeat === true);
   if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
 
-  const outcome = await terminateStructuredHostTree(ref);
+  const outcome = await terminateStructuredHostTree(ref, {
+    persistCapturedTree: identities => ref.sessionId === null || agentRegistry().recordStructuredTerminationSurvivors(
+      { engine: ref.engine, sessionId: ref.sessionId },
+      { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+      identities,
+    ),
+  });
   if (!outcome.ok) {
     /* A stale target names a pid the kernel has moved on from: its authority
        is spent. A partial kill keeps its authority so the operator can retry

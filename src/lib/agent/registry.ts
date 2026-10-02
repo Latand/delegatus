@@ -5971,6 +5971,7 @@ export class AgentRegistry {
     const receipt = file.receipts[launchId];
     if (!receipt) throw new Error("unknown spawn receipt");
     const prior = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+    const existingTarget = file.entries[sessionKeyId(entry.key)];
     const conflict = (code: "spawn_artifact_conflict" | "spawn_pane_conflict" | "spawn_identity_conflict"): SpawnSettlement => {
       if (receipt.state !== "completed") {
         receipt.state = "conflicted";
@@ -5978,6 +5979,9 @@ export class AgentRegistry {
       }
       return { kind: "conflict", receipt: clone(receipt), code };
     };
+    if ([prior, existingTarget].some(candidate => (candidate?.structuredTerminationSurvivors?.length ?? 0) > 0)) {
+      return conflict("spawn_identity_conflict");
+    }
     if (completionMode === "observed-completed" && entry.host?.kind === "tmux") {
       /* Live process evidence can enrich a binding whose birth identity was
          unavailable during launch verification. */
@@ -6656,7 +6660,7 @@ export class AgentRegistry {
     });
   }
 
-  /** Retains exact child identities after a partial kill, bound to its root row. */
+  /** Retains exact captured tree identities, bound to their root row. */
   recordStructuredTerminationSurvivors(
     key: SessionKey,
     expectedRoot: Readonly<ProcessIdentity>,
@@ -6884,6 +6888,7 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry?.structuredHost) return null;
+      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so

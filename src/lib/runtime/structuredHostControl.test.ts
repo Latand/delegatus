@@ -502,6 +502,29 @@ test("a refused signal is a failure, not a success, and the registry row stays",
   expect(retired).toEqual([]);
 });
 
+test("termination refuses to act when the captured tree was not durably recorded", async () => {
+  const effects: string[] = [];
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 6_050, startIdentity: "6050:start", sessionId: CLAUDE_SESSION }),
+    {
+      processIdentity: pid => `${pid}:start`,
+      pidAlive: () => true,
+      ppidMap: () => new Map([[6_051, 6_050]]),
+      processGroupId: () => 6_050,
+      protectedPids: () => new Set(),
+      persistCapturedTree: identities => {
+        effects.push(`persist:${identities.map(identity => identity.pid).join(",")}`);
+        return false;
+      },
+      terminateOwnedHost: async () => { effects.push("runtime-release"); return true; },
+      signal: pid => { effects.push(`signal:${pid}`); },
+    },
+  );
+
+  expect(outcome).toMatchObject({ ok: false, status: 409, error: expect.stringContaining("could not be persisted") });
+  expect(effects).toEqual(["persist:6050,6051"]);
+});
+
 test("a refused signal reports each survivor with the identity it carried (#1501)", async () => {
   const outcome = await terminateStructuredHostTree(
     ref({ pid: 6_100, startIdentity: "6100:start", sessionId: CLAUDE_SESSION }),
