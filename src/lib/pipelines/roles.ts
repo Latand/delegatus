@@ -17,6 +17,7 @@ export const PIPELINE_ROLE_IDS: readonly PipelineRoleId[] = [
   "cleaner",
   "prod-auditor",
   "deployer",
+  "merger",
 ];
 
 export type PipelineRoleDefaults = {

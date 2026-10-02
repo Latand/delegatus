@@ -22,6 +22,12 @@
           "effort": "xhigh",
           "cost": "very-heavy",
           "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
         }
       ],
       "overflow": false,
@@ -47,6 +53,12 @@
           "id": "prod-auditor",
           "effort": "xhigh",
           "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
           "nudge": false
         }
       ],
@@ -74,6 +86,12 @@
           "effort": "xhigh",
           "cost": "very-heavy",
           "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
         }
       ],
       "overflow": false,
@@ -99,6 +117,12 @@
           "id": "prod-auditor",
           "effort": "xhigh",
           "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
           "nudge": false
         }
       ],

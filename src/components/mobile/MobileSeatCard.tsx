@@ -30,7 +30,7 @@ import {
 import { onOrchestratorDraftRequest, takePendingSeatOpen } from "../orchestrator/draftPrefill";
 import { useOrchestratorIncumbent, type OrchestratorIncumbentRead } from "../orchestrator/useOrchestratorIncumbent";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "../orchestrator/useOrchestratorSeat";
-import { useSeatConfirm } from "../orchestrator/useSeatConfirm";
+import { seatMandateDelivery, useSeatConfirm } from "../orchestrator/useSeatConfirm";
 import { incumbentHostLive } from "../orchestrator/incumbent";
 import { useSeatBindingFeedback } from "../orchestrator/useSeatBindingFeedback";
 import { useSeatSurface } from "../orchestrator/useSeatSurface";
@@ -342,6 +342,9 @@ export function MobileSeatCard({
             }),
             outcome,
             project,
+            /* The prompt is the seat's mandate: the window draws it as the
+               mandate card and seeds no operator bubble beside it (#2006). */
+            seatMandateDelivery(text === ORCHESTRATOR_SYSTEM_PROMPT.trim() ? ORCHESTRATOR_PROMPT_VERSION : undefined),
           );
           if (provisional) applySpawnedConversationSnapshot(provisional);
         }

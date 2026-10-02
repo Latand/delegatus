@@ -3,11 +3,12 @@ import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { bridgeReportLogSignature } from "@/lib/bridge/store";
-import { statePath } from "@/lib/configDir";
+import { stateDir, statePath } from "@/lib/configDir";
+import { isDiskFullError, noteStateCommit, noteStateDiskFull, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES, type StateWriteHealth } from "@/lib/state/diskFull";
 import { FILES_BUILT_HEADER, formatFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
 import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } from "@/lib/filesDelta";
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
-import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
+import { readStateCollectionRevision, readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { markBoardViewed } from "@/lib/links/boardPresence";
 import { buildFilesResponse } from "./response";
@@ -30,6 +31,9 @@ type ProjectionRepresentation = {
   contentType: string;
   etag: string;
   timing: string;
+  stateWrites?: StateWriteHealth;
+  /** State-data health before this process overlays worker transport health. */
+  stateDataWrites?: StateWriteHealth;
   delta?: { base: string; body: string };
   /** The state this body was built from, sent with it whenever it is served,
       a stale answer included (#2072). */
@@ -84,6 +88,8 @@ const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
   __llvFilesProjectionSequence?: number;
+  __llvFilesWriteRecovery?: { directory: string; since: string; revisions: Map<string, number | null> };
+  __llvFilesWorkerWriteFailedSince?: string | null;
 };
 
 /** The next build in this process's order, taken when a build reads the
@@ -171,6 +177,42 @@ function stateFileSignature(filename: string): string {
   }
 }
 
+/** Collection revisions advance only with committed data, including writes by
+ * MCP/controller processes. Lease bookkeeping cannot clear a failed-write alert. */
+function currentWriteHealth(observed?: StateWriteHealth): StateWriteHealth {
+  const directory = stateDir();
+  const dataHealth = stateWriteHealth(directory, observed);
+  const transportSince = projectionCacheStore.__llvFilesWorkerWriteFailedSince;
+  const health: StateWriteHealth = !dataHealth.since && transportSince
+    ? { ...dataHealth, state: "disk-full", since: transportSince }
+    : dataHealth;
+  if (!health.since) {
+    projectionCacheStore.__llvFilesWriteRecovery = undefined;
+    return health;
+  }
+  try {
+    const revisions = readStateCollectionRevisions(statePath("state.sqlite"),
+      ["tasks", "flows", "pipelines", "workflows", "attention_dismissals", "reply_suggestions"]);
+    const previous = projectionCacheStore.__llvFilesWriteRecovery;
+    if (previous?.directory === directory && previous.since === health.since
+      && [...revisions].some(([collection, revision]) => revision !== null && revision > (previous.revisions.get(collection) ?? 0))) {
+      noteStateCommit();
+      projectionCacheStore.__llvFilesWriteRecovery = undefined;
+      projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
+      return stateWriteHealth(directory);
+    }
+    projectionCacheStore.__llvFilesWriteRecovery = { directory, since: health.since, revisions };
+  } catch {
+    // A refused read proves no recovery. Retain the alert and cached fallback.
+  }
+  return health;
+}
+
+function filesystemExhausted(): boolean {
+  const health = currentWriteHealth();
+  return health.freeBytes !== null && health.freeBytes < STATE_DISK_FULL_FLOOR_BYTES;
+}
+
 function hotStateSignature(collection: string, legacyFilename: string): string {
   const revision = readStateCollectionRevision(statePath("state.sqlite"), collection);
   return revision === null ? stateFileSignature(legacyFilename) : `${collection}:sqlite:${revision}`;
@@ -182,6 +224,13 @@ function projectionBaseKey(
 ): string {
   return createHash("sha1").update(JSON.stringify({
     pinnedPath: pinnedPath ?? null,
+    // A full disk can change with no successful state write or scan revision.
+    // Healthy free-byte fluctuations do not warrant rebuilding the projection.
+    writes: (() => {
+      const health = currentWriteHealth();
+      return { state: health.state, since: health.since,
+        freeMiB: health.state === "disk-full" && health.freeBytes !== null ? Math.floor(health.freeBytes / 1024 / 1024) : null };
+    })(),
     /* `generation` is the immutable identity of the published snapshot.
        Re-stringifying every file row on every poll burns the request thread
        precisely while a new scan is being published. */
@@ -343,7 +392,7 @@ async function projectionFor(
   summary: boolean,
 ): Promise<ProjectionResult> {
   const cached = projectionCache().get(scopeKey);
-  if (cached?.key === key) return { representation: cached.representation, cacheStatus: "hit" };
+  if (cached?.key === key && !projectionCacheStore.__llvFilesWorkerWriteFailedSince) return { representation: cached.representation, cacheStatus: "hit" };
 
   const current = projectionInflight().get(scopeKey);
   if (current) {
@@ -360,55 +409,76 @@ async function projectionFor(
     const snapshot = { ...scan.snapshot, pinOverlayPaths: scan.pinOverlayPaths };
     const persistedSnapshot = statePath("files-scan-snapshot.json");
     const epoch = scan.epoch ?? "0";
-    let representation: ProjectionRepresentation;
-    if (filesResponseWorkerEnabled()) {
-      representation = await queueProjectionWorker(async () => {
-        /* The build order is taken as the build starts, where it reads the
-           stores. The persisted snapshot is read by the worker when its turn
-           comes, and a later scan may have replaced it by then: the file
-           names its own generation and the worker reports it back, so the
-           rows are dated by the scan they came from. A file this process
-           never wrote holds the snapshot it warm-started from, which it
-           counts as generation 0. */
-        const sequence = nextProjectionSequence();
-        const fromFile = !scan.pinOverlayPaths?.length && fs.existsSync(persistedSnapshot);
-        const { snapshotRead, ...projected } = await buildFilesResponseInWorker({
-          type: "project",
-          url: request.url,
-          headers: [...headers.entries()],
-          ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
-          ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
-        });
-        const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
-        return { ...projected, built: { epoch, generation, sequence } };
-      });
-    } else {
-      /* Stamped as the build starts, where it reads the stores. */
+    const inlineProjection = async (): Promise<ProjectionRepresentation> => {
       const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => snapshot,
       });
-      representation = {
+      return {
         body: await response.text(),
         contentType: response.headers.get("content-type") ?? "application/json",
         etag: response.headers.get("etag") ?? "",
         timing: response.headers.get("server-timing") ?? "",
         built,
       };
-      if (summary && previous && previous.etag !== representation.etag) {
-        representation.delta = {
-          base: previous.etag,
-          body: diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag),
-        };
+    };
+    let representation: ProjectionRepresentation;
+    let cacheKey = key;
+    if (filesResponseWorkerEnabled() && !filesystemExhausted()) {
+      try {
+        representation = await queueProjectionWorker(async () => {
+          /* The build order is taken as the build starts, where it reads the
+             stores. The persisted snapshot is read by the worker when its turn
+             comes, and a later scan may have replaced it by then: the file
+             names its own generation and the worker reports it back, so the
+             rows are dated by the scan they came from. A file this process
+             never wrote holds the snapshot it warm-started from, which it
+             counts as generation 0. */
+          const sequence = nextProjectionSequence();
+          const fromFile = !scan.pinOverlayPaths?.length && fs.existsSync(persistedSnapshot);
+          const { snapshotRead, ...projected } = await buildFilesResponseInWorker({
+            type: "project",
+            url: request.url,
+            headers: [...headers.entries()],
+            ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
+            ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
+          });
+          // Result-file transport recovers independently of state-data writes.
+          // The body may itself report a state write failure from the worker.
+          projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
+          const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
+          return { ...projected, built: { epoch, generation, sequence } };
+        });
+      } catch (error) {
+        if (!isDiskFullError(error)) throw error;
+        // Classified state-store failures belong to state-data health. A raw
+        // ENOSPC from result-file transport has its own recovery signal.
+        if (/disk full, state writes failing|SQLITE_FULL|database or disk is full/i.test(String(error))) {
+          noteStateDiskFull("files response worker state write");
+        }
+        projectionCacheStore.__llvFilesWorkerWriteFailedSince ??= new Date().toISOString();
+        currentWriteHealth();
+        // A full state filesystem cannot carry the worker result file. Use
+        // the retained body, or compute it inline when this is a cold request.
+        representation = cached?.representation ?? await inlineProjection();
+        // A retained body still represents the input that built it.
+        cacheKey = cached?.key ?? key;
       }
+    } else {
+      representation = await inlineProjection();
     }
+    representation = withCurrentWriteHealth(representation);
+    if (summary && previous && previous.etag !== representation.etag) representation.delta = {
+      base: previous.etag,
+      body: diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag),
+    };
     if (representation.delta) {
       recordDeltaLink(scopeKey, representation.delta.base, representation.etag, representation.delta.body);
       /* The link holds the delta; the cached representation need not. */
       representation = { ...representation, delta: undefined };
     }
-    rememberProjection(scopeKey, key, representation);
-    if (scopeKey === projectionScopeKey(undefined)) {
+    rememberProjection(scopeKey, cacheKey, representation);
+    if (scopeKey === projectionScopeKey(undefined) && currentWriteHealth().state === "ok") {
       schedulePersistProjection(representation);
     }
     return representation;
@@ -436,6 +506,28 @@ async function projectionFor(
   }
 }
 
+/** Health is an in-memory overlay, including cached/stale representations.
+ * A worker result file is never a prerequisite for showing a full disk. */
+function withCurrentWriteHealth(representation: ProjectionRepresentation): ProjectionRepresentation {
+  let parsed: Record<string, unknown> | undefined;
+  if (!representation.stateWrites) {
+    parsed = JSON.parse(representation.body);
+    const system = parsed!.systemHealth as { storage?: { writes?: StateWriteHealth } } | undefined;
+    representation.stateWrites = system?.storage?.writes ?? { state: "ok", since: null, freeBytes: null };
+    representation.stateDataWrites = representation.stateWrites;
+  }
+  const previous = representation.stateWrites;
+  const writes = currentWriteHealth(representation.stateDataWrites);
+  if (previous.state === writes.state && previous.since === writes.since
+    && (writes.state === "ok" || previous.freeBytes === writes.freeBytes)) return representation;
+  parsed ??= JSON.parse(representation.body);
+  const system = parsed!.systemHealth as { storage?: { incidents?: unknown[] } } | undefined;
+  parsed!.systemHealth = { ...system, storage: { incidents: [], ...system?.storage, writes } };
+  const body = JSON.stringify(parsed);
+  return { ...representation, body, stateWrites: writes,
+    etag: `"${createHash("sha1").update(body).digest("hex")}"`, delta: undefined };
+}
+
 function applyScanHeaders(response: Response, scan: CachedScan, projectionTiming?: string | null): void {
   response.headers.set("x-llv-files-generation", String(scan.generation));
   response.headers.set("x-llv-files-target-generation", String(scan.targetGeneration));
@@ -460,6 +552,11 @@ export async function GET(request: Request): Promise<Response> {
   const requiredRevision = generationHeader(request, "x-llv-files-revision");
   const requiredGeneration = generationHeader(request, "x-llv-files-generation");
   const url = new URL(request.url);
+  // This live health poll must work while writes and durable events are refused.
+  // Return before presence, scans, migrations and projection-worker transport.
+  if (url.searchParams.get("view") === "storage-health") {
+    return Response.json(currentWriteHealth(), { headers: { "Cache-Control": "no-store" } });
+  }
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;
@@ -479,13 +576,17 @@ export async function GET(request: Request): Promise<Response> {
      carries — and only the scan can answer that. A partial scan is not an
      answer: it would report a conversation as gone because it had not been
      reached yet, so an incomplete one defers to the next request. */
-  if (scan.snapshot.complete) ensureEmptyTaskBoardVisibilityMigration(scan.snapshot.files);
+  if (scan.snapshot.complete && currentWriteHealth().state === "ok") ensureEmptyTaskBoardVisibilityMigration(scan.snapshot.files);
 
   /* Completion retries already hold the last successful representation. While
      its requested scan is still running, rebuilding the multi-store projection
      only delays that scan and can form a self-sustaining retry storm. */
   const previousEtag = request.headers.get("if-none-match");
-  if (requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag) {
+  const summary = url.searchParams.get("view") === "summary";
+  const scopeKey = projectionScopeKey(pinnedPath, summary);
+  const waiting = projectionCache().get(scopeKey)?.representation;
+  if (requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag
+    && currentWriteHealth().state === "ok" && waiting && withCurrentWriteHealth(waiting).etag === previousEtag) {
     const response = new Response(null, {
       status: 304,
       headers: {
@@ -499,10 +600,16 @@ export async function GET(request: Request): Promise<Response> {
 
   const baseKey = projectionBaseKey(scan, pinnedPath);
   const key = projectionKey(baseKey);
-  const summary = url.searchParams.get("view") === "summary";
-  const scopeKey = projectionScopeKey(pinnedPath, summary);
   if (!summary) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
-  const projected = await projectionFor(scopeKey, key, request, scan, summary);
+  const cached = projectionCache().get(scopeKey)?.representation;
+  const projected: ProjectionResult = filesystemExhausted() && cached
+    ? { representation: cached, cacheStatus: "stale" }
+    : await projectionFor(scopeKey, key, request, scan, summary);
+  const refreshed = withCurrentWriteHealth(projected.representation);
+  if (refreshed.etag !== projected.representation.etag && summary) recordDeltaLink(scopeKey,
+    projected.representation.etag, refreshed.etag,
+    diffFilesBodies(projected.representation.body, refreshed.body, projected.representation.etag, refreshed.etag));
+  projected.representation = refreshed;
   const notModified = request.headers.get("if-none-match") === projected.representation.etag;
   const projectionTiming = [
     projected.representation.timing,

@@ -482,6 +482,20 @@ describe("receipt-keyed instant attach (issue #919)", () => {
     expect(matchSpawnedFile({ ...baseAttempt, conversationId: "conversation_919", path: null }, [provisional!])).toBe(provisional);
   });
 
+  test("a mandate rides the provisional card so the window never seeds it as the operator's bubble", () => {
+    const attempt = { ...baseAttempt, prompt: "Own this project." };
+    const plain = provisionalSpawnFile(attempt, launched(), "proj");
+    expect(plain?.spawn?.prompt).toBe("Own this project.");
+    expect(plain?.spawn && "mandate" in plain.spawn).toBe(false);
+    /* Without the argument the card is exactly what it was. */
+    expect(provisionalSpawnFile(attempt, launched(), "proj", undefined)).toEqual(plain);
+
+    const versioned = provisionalSpawnFile(attempt, launched(), "proj", { kind: "version", version: 3 });
+    expect(versioned?.spawn?.mandate).toEqual({ kind: "version", version: 3 });
+    expect(versioned?.spawn?.prompt).toBe("Own this project.");
+    expect({ ...versioned, spawn: { ...versioned!.spawn!, mandate: undefined } }).toEqual({ ...plain, spawn: { ...plain!.spawn!, mandate: undefined } });
+  });
+
   test("the provisional window already names the chosen runtime, so the pill never reads a default first", () => {
     const provisional = provisionalSpawnFile(baseAttempt, launched(), "proj")!;
     expect(provisional).toMatchObject({ model: "gpt-5.6", launchModel: "gpt-5.6", effort: "high", fast: false });

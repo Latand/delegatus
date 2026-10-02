@@ -434,3 +434,13 @@ test("the browser opener never puts a URL through a shell", () => {
   // open a browser" degrade.
   expect(browserOpenCommand("http://127.0.0.1:8899/", "freebsd")).toBeNull();
 });
+
+// A killed Viewer must make Restart=on-failure restart the install.
+test("Viewer crash signals fail the launcher while operator stops are clean", async () => {
+  const { viewerExitStatus } = await import("./server-runtime.mjs");
+  expect(viewerExitStatus(null, "SIGKILL")).toBe(137);
+  expect(viewerExitStatus(null, "SIGSEGV")).toBe(139);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) expect(viewerExitStatus(null, signal)).toBe(0);
+  expect(viewerExitStatus(2, null)).toBe(2);
+  expect(viewerExitStatus(null, null)).toBe(1);
+});

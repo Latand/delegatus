@@ -58,6 +58,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
+    ...(state.memory ? { memory: state.memory } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -74,6 +75,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     pendingAttention: state.pendingAttention,
     ...(state.pendingPermissions?.length ? { pendingPermissions: state.pendingPermissions } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
+    ...(state.memory ? { memory: state.memory } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -88,6 +90,7 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
+    ...(state.memory ? { memory: state.memory } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -137,6 +140,8 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && left.activeTurnRef === right.activeTurnRef
     && sameStrings(left.pendingAttention, right.pendingAttention)
     && (left.providerRetry?.at ?? null) === (right.providerRetry?.at ?? null)
+    && (left.memory?.kills ?? 0) === (right.memory?.kills ?? 0)
+    && (left.memory?.lastKill?.fatal ?? false) === (right.memory?.lastKill?.fatal ?? false)
     && sameStrings(left.activeFlags, right.activeFlags);
 }
 
