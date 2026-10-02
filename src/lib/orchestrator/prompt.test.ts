@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 37, and a v36 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(37);
+test("the default mandate is at version 38, and a v37 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(38);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -113,7 +113,8 @@ test("the default mandate is at version 37, and a v36 seat reads as stale", () =
   expect(orchestratorMandateStale(34)).toBe(true);
   expect(orchestratorMandateStale(35)).toBe(true);
   expect(orchestratorMandateStale(36)).toBe(true);
-  expect(orchestratorMandateStale(37)).toBe(false);
+  expect(orchestratorMandateStale(37)).toBe(true);
+  expect(orchestratorMandateStale(38)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -154,9 +155,10 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
   33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
   34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
-  35: "65dbc413dbf6ee522833fc239d384dee3b483761a8ad045d1d39c32995a14cd4",
-  36: "aac16d23d456acc35ad3e3b148ddb45e91178c0f9a2bb000314ab6e59d9b4806",
+  35: "3a35d3334e259e60d3388454068ab6ce1836fbcf8f87b05c7207e8caf626929b",
+  36: "851761d46924e3c16328ea1e31f1c768ae15d1aecb48b6ab9ee1b25c2aac9749",
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
+  38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -170,7 +172,10 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never merge red");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("needs-review → independent git show --remerge-diff review, then next batch");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("culprit → lane finding");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
@@ -651,7 +656,7 @@ test("the delivered mandate renders the role table from the registry it is hande
 test("the role table carries the runtime guidance beside it", () => {
   const delivered = orchestratorMandateForDelivery("Bespoke mandate");
   const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
-  expect(section).toContain("omits engine, model and effort");
+  expect(section).toContain("Omitting engine, model and effort");
   expect(section).toContain("on the stage");
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
@@ -755,9 +760,9 @@ test("the role table tells the seat to size lanes, lists every variant and names
   /* Fixers repair discoveries within the spec; reviewers grade the result. */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
-  expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.");
-  expect(table).toContain("quote it with the size you chose and why");
+  expect(table).toContain("runtimeLine (spawn_agent: runtime)");
+  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.");
+  expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
   expect(table).not.toContain("\n\n");

@@ -7,6 +7,18 @@ import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
 import { APPLY_FIXES_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
 
+test("merger resolves a required reviewed-PR list with a read-write, non-nesting profile", () => {
+  expect(resolveRole("merger", {})).toMatchObject({ ok: false, error: "missing required role parameter: prs" });
+  const resolved = resolveSpawnRole({ role: "merger", roleParams: { prs: "12@abcdef1,13@1234567" } });
+  expect(resolved).toMatchObject({ ok: true });
+  const role = resolveRole("merger", { prs: "12@abcdef1,13@1234567" });
+  if (!role.ok) throw new Error(role.error);
+  expect(role.value.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  expect(role.value.definition.capabilities).toEqual([]);
+  expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
+  expect(role.value.prompt).toContain("Never judge your own resolution");
+});
+
 test("maintainer preserves review and release ownership and treats retired seats as history", () => {
   const resolved = resolveRole("maintainer");
   if (!resolved.ok) throw new Error(resolved.error);
@@ -18,7 +30,7 @@ test("maintainer preserves review and release ownership and treats retired seats
   expect(resolved.value.prompt).toContain("Hide only a confirmed retired orchestrator seat card");
 });
 
-test("role registry exposes the nine role ids and campaign-ready orchestrator config", () => {
+test("role registry exposes the ten role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
 
   expect(roles.map((role) => role.id)).toEqual([
@@ -30,6 +42,7 @@ test("role registry exposes the nine role ids and campaign-ready orchestrator co
     "cleaner",
     "prod-auditor",
     "deployer",
+    "merger",
     "maintainer",
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
@@ -41,6 +54,7 @@ test("role registry exposes the nine role ids and campaign-ready orchestrator co
     cleaner: { engine: "codex", model: "gpt-6-luna", effort: "medium" },
     "prod-auditor": { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
     maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
+    merger: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     deployer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
   });
 
@@ -110,7 +124,7 @@ test("role registry rejects unknown and missing required parameters with bounded
   });
   expect(resolveRole("no-such-role", {})).toEqual({
     ok: false,
-    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, maintainer)",
+    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer)",
   });
 });
 
@@ -146,7 +160,7 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
    only if every registry role renders it, so assert the whole registry. */
 test("every registry role scaffold carries the process-cleanup rule", () => {
   const roles = listRoles();
-  expect(roles.length).toBe(9);
+  expect(roles.length).toBe(10);
   for (const definition of roles) {
     /* The renderer both the spawn path and the pipeline stage lookup call, so
        a role whose required params are unset (a stage resolves them to registry

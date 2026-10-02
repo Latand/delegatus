@@ -77,6 +77,7 @@
 [data-role="cleaner"] { --role: var(--rf-cleaner); --role-2: var(--rf-cleaner-2); --role-ink: var(--rf-cleaner-ink); --role-fill: var(--rf-cleaner-fill); }
 [data-role="builder"] { --role: var(--rf-builder); --role-2: var(--rf-builder-2); --role-ink: var(--rf-builder-ink); --role-fill: var(--rf-builder-fill); }
 [data-role="prod-auditor"] { --role: var(--rf-prod-auditor); --role-2: var(--rf-prod-auditor-2); --role-ink: var(--rf-prod-auditor-ink); --role-fill: var(--rf-prod-auditor-fill); }
+[data-role="merger"],
 [data-role="deployer"] { --role: var(--rf-deployer); --role-2: var(--rf-deployer-2); --role-ink: var(--rf-deployer-ink); --role-fill: var(--rf-deployer-fill); }
 [data-role="neutral"] { --role: var(--rf-neutral); --role-2: var(--rf-neutral-2); --role-ink: var(--rf-neutral-ink); --role-fill: var(--rf-neutral-fill); }
 
