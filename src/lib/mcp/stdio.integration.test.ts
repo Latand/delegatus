@@ -910,8 +910,7 @@ test("spoofing and concurrency: another caller, a changed payload, and two proce
     expect(await call(owner, "send_message", sendArguments(fixture, "send-owned-1", { recoveryOnly: true })))
       .toMatchObject({ ok: true, outcome: "in-flight", operationId: accepted.operationId, state: "in-flight", nextAction: "original-key-lookup" });
 
-    /* Two processes race each fresh key. `replayed` records receipt reuse.
-       A peer can save terminal recovery before the original HTTP response
+    /* A peer can save terminal recovery before the original HTTP response
        reaches its MCP caller, so exercise both response orders deterministically. */
     for (const settlementOrder of ["original-first", "peer-first"] as const) {
       const requestId = `send-race-${settlementOrder}`;
