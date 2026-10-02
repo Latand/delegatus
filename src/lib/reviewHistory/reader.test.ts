@@ -113,7 +113,7 @@ test("missing and pruned artifacts stay explicit, with no fabricated provenance"
   put(settled as unknown as ReturnType<typeof row>);
   const body = await (await detail(request(), context())).json();
   expect(body.artifacts[0].artifacts.findings.status).toBe("available");
-  expect(body.relayOccurrences).toEqual([{ textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, findings)), deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer", clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round) }]);
+  expect(body.relayOccurrences).toEqual([{ textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, findings)), deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer", senderProject: "demo", clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round) }]);
   fs.unlinkSync(flow.rounds[0]!.findingsPath);
   const pruned = await (await detail(request(), context())).json();
   expect(pruned.artifacts[0].artifacts.findings.status).toBe("missing"); expect(pruned.relayOccurrences).toEqual([]);
@@ -191,7 +191,7 @@ test.each([
   expect(body.recorded.reviewHeadSha).toBe(flow.rounds[0]!.reviewHeadSha);
   expect(body.relayOccurrences).toEqual([{
     textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, artifactTexts.findings)),
-    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer",
+    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer", senderProject: "demo",
     clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
   }]);
   expect(snapshot()).toBe(before);
@@ -218,7 +218,7 @@ function installExportArtifacts(texts: Record<"findings" | "output" | "stdout" |
   const before = snapshot();
   const occurrences = [{
     textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, texts.findings)),
-    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent" as const, senderRole: "reviewer" as const,
+    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent" as const, senderRole: "reviewer" as const, senderProject: "demo",
     clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
   }];
   return async () => {
