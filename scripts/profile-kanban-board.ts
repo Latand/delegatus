@@ -211,7 +211,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.port}/?scenario=pipelines&streaming=1${process.env.PROFILE_RENDERS ? "&renders=1" : ""}`);
   try {
-    await page.waitForSelector("[data-kanban-board] .card[data-id]", { timeout: 60_000 });
+    await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 60_000 });
   } catch (error) {
     throw new Error(`the board never rendered a card: ${pageErrors.join(" | ") || "no page error"}`, { cause: error });
   }
