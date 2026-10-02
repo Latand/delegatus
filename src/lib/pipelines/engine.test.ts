@@ -668,6 +668,180 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test.each(["Another issue noticed", "Users cannot save", "rejected publication", "historical red tests"])("a fixer self-fail with a committed head goes to review with its findings as notes: %s", async (finding) => {
+  const fixture = await realWorktreeLane("fixer-self-fail", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ], "remote-branch");
+  try {
+    const { h, git, worktree, origin } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "fix handed findings");
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    const hook = path.join(origin, "hooks", "pre-receive");
+    if (finding === "rejected publication") fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    h.setConversationActive(false);
+    const summary = finding === "historical red tests" ? "Regression tests failed on base and passed on head. No blockers." : "Handed findings fixed; checks passed.";
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: [`P2 — ${finding} in fix.txt:1`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    await tickPipelines([], h.ports);
+    if (finding === "rejected publication") {
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      fs.unlinkSync(hook);
+      expect((await patchPipeline(fixture.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+      await tickPipelines([], h.ports);
+      await tickPipelines([], h.ports);
+    }
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(fixed);
+    expect(current.runs[0]!.attempts[0]!.verdict?.status).toBe("fail");
+    expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
+    expect(current.cursor?.input).toContain(`${finding} in fix.txt:1`);
+    expect(git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs.at(-1)?.prompt).toContain(`${finding} in fix.txt:1`);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { label: "unchanged head", commit: false, mode: "apply-fixes", summary: "Could not finish handed work", verdict: "fail" },
+  { label: "blocked build after commit", commit: true, mode: "apply-fixes", summary: "Blocked: cannot build because a dependency is unavailable", verdict: "fail" },
+  { label: "blocked checks after commit", commit: true, mode: "apply-fixes", summary: "Cannot run required checks because the service is unavailable", verdict: "fail" },
+  { label: "impossible handed finding", commit: true, mode: "apply-fixes", summary: "A handed finding is impossible within the specification", verdict: "fail" },
+  { label: "plain builder", commit: true, mode: "plain", summary: "Checks passed", verdict: "fail" },
+  { label: "operator decision", commit: true, mode: "apply-fixes", summary: "Operator must choose the scope", verdict: "needs_decision" },
+  { label: "report prose blocked", commit: true, mode: "apply-fixes", summary: "Blocked: cannot run required checks because the service is unavailable.", verdict: "fail" },
+])("fixer safety net parks $label with its reason", async ({ label, commit, mode, summary, verdict }) => {
+  const fixture = await realWorktreeLane("fixer-blocked", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    if (commit) {
+      fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "partial fix\n");
+      fixture.git(fixture.worktree, "add", "fix.txt");
+      fixture.git(fixture.worktree, "commit", "-m", "partial fix");
+    }
+    fixture.h.setConversationActive(false);
+    const shortSummary = "Committed partial fixes; remaining discovery listed";
+    const blocked = ["blocked build after commit", "blocked checks after commit", "impossible handed finding", "report prose blocked"].includes(label);
+    const blockFields = blocked ? { blocked: true, blockedReason: label } : {};
+    if (label === "report prose blocked") {
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1, at: fixture.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", ...blockFields, findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
+        provenance: { head: fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    fixture.h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: verdict, ...blockFields, findings: [`P1 — ${label}`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    if (label === "report prose blocked") {
+      const message = fixture.h.messages.get("/codex/stage-1.jsonl")!;
+      fixture.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
+    await tickPipelines([entry("/codex/stage-1.jsonl")], fixture.h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.lastPassedCommit).toBe(fixture.base);
+    expect(current.stateDetail).toContain(label);
+    expect(current.runs[0]!.attempts[0]!.output).toContain(label === "report prose blocked" ? shortSummary : summary);
+    expect(fixture.h.spawnInputs).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { label: "structured blocker", commit: true, blocked: true, summary: "Partial repairs committed.", findings: ["P2 — discovery in fix.txt:1"], review: false },
+  { label: "plain fail", commit: true, blocked: undefined, summary: "Handed findings fixed.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+  { label: "fail without findings", commit: true, blocked: false, summary: "Handed findings fixed.", findings: [], review: true },
+  { label: "no new head", commit: false, blocked: undefined, summary: "Could not finish handed work.", findings: ["P1 — remaining finding"], review: false },
+  { label: "prose never classifies", commit: true, blocked: false, summary: "Blocked: tests failed; cannot build. Quoted historical evidence.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+  { label: "long output blocked", commit: true, blocked: true, summary: "Evidence.\n".repeat(5_000) + "Blocked: dependency unavailable.", findings: ["P2 — discovery in fix.txt:1"], review: false },
+  { label: "long output plain fail", commit: true, blocked: undefined, summary: "Evidence.\n".repeat(5_000) + "Blocked: quoted historical evidence.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+].flatMap((scenario) => ["fenced verdict", "recorded report", "reported plus fenced completion"].map((settlement) => ({ ...scenario, settlement }))))("a fixer routes $label through $settlement using structured state", async ({ label, commit, blocked, summary, findings, review, settlement }) => {
+  const fixture = await realWorktreeLane("fixer-structured-blocker", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ]);
+  try {
+    const { h, git, worktree } = fixture;
+    if (commit) {
+      fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+      git(worktree, "add", "fix.txt");
+      git(worktree, "commit", "-m", "fix handed findings");
+    }
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    const blockedReason = "Required check service is unavailable";
+    const verdict = { status: "fail" as const, findings,
+      ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}) };
+    if (settlement !== "fenced verdict") {
+      // Exercise the real report normalizer and the durable store. The report
+      // owns structured state even when the final fenced verdict disagrees.
+      const result = await engineModule.reportStageCompletion({
+        verdict: "fail", findings: findings.map((text) => ({ severity: "P2", text: text.slice(5) })),
+        summary: "Short relay summary", ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}),
+      }, { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports);
+      expect(result.error).toBeUndefined();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report?.verdict).toMatchObject({
+        ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}),
+      });
+    }
+    h.setConversationActive(false);
+    const fencedVerdict = settlement === "reported plus fenced completion"
+      ? { status: "fail", findings, blocked: !blocked, ...(!blocked ? { blockedReason: "Fenced state is superseded by report" } : {}) }
+      : verdict;
+    const transcriptVerdict = settlement !== "recorded report"
+      ? `\n\`\`\`json\n${JSON.stringify(fencedVerdict)}\n\`\`\`` : "";
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${transcriptVerdict}`, ts: Date.now() + 100_000_000 });
+    if (settlement !== "fenced verdict") {
+      const message = h.messages.get("/codex/stage-1.jsonl")!;
+      h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    await tickPipelines([], h.ports);
+    const current = loadPipelines()[0]!;
+    const attempt = current.runs[0]!.attempts[0]!;
+    expect(attempt.verdict?.status).toBe("fail");
+    if (blocked !== undefined) expect(attempt.verdict?.blocked).toBe(blocked);
+    if (!review) {
+      expect(current.state).toBe("needs_decision");
+      expect(current.cursor?.stageId).toBe("fix");
+      expect(current.lastPassedCommit).toBe(fixture.base);
+      expect(attempt.acceptedForReview).toBeUndefined();
+      if (blocked) {
+        expect(current.stateDetail).toContain(blockedReason);
+        expect(attempt.verdict?.blockedReason).toBe(blockedReason);
+      }
+      expect(h.spawnInputs).toHaveLength(1);
+      if (label === "long output blocked" && settlement === "fenced verdict") {
+        expect(attempt.output?.length).toBe(32_000);
+        expect(attempt.output).not.toContain("Blocked:");
+      }
+      return;
+    }
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(fixed);
+    expect(attempt.acceptedForReview).toBe(true);
+    expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
+    for (const finding of findings) expect(current.cursor?.input).toContain(finding.slice(5));
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("a read-only successor settles and advances when its handoff is in a clean Git worktree", async () => {
   const fixture = await realWorktreeLane("readonly-stage-input-handoff", [
     { id: "design", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Design", next: "review" },
@@ -753,6 +927,79 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     expect(h.spawnInputs).toHaveLength(3);
     await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
     expect(loadPipelines().find((item) => item.id === id)!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preserves an explicit current blocker when another check passed on head (%s)", async (settlement) => {
+  const fixture = await realWorktreeLane("fixer-current-blocker", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    const { h, git, worktree, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "committed partial fix");
+    const lane = loadPipelines()[0]!;
+    if (settlement === "reported plus fenced completion") {
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1,
+        at: h.ports.now(),
+        actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] },
+        summary: "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.",
+        provenance: { head: git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+        calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    h.setConversationActive(false);
+    const summary = "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.";
+    const verdict = `\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``;
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${verdict}`, ts: Date.now() + 100_000_000 });
+    if (settlement === "reported plus fenced completion") {
+      const message = h.messages.get("/codex/stage-1.jsonl")!;
+      h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.cursor?.stageId).toBe("fix");
+    expect(current.lastPassedCommit).toBe(base);
+    expect(current.runs[0]!.attempts[0]!.output).toContain("Blocked: required integration tests");
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a fenced fixer verdict keeps a blocker after the bounded relay output", async () => {
+  const fixture = await realWorktreeLane("fixer-blocker-after-relay-limit", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ]);
+  try {
+    const { h, git, worktree, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "committed partial fix");
+    const summary = `${"Verification details recorded. ".repeat(1200)}Blocked: cannot run required integration checks.`;
+    h.setConversationActive(false);
+    h.messages.set("/codex/stage-1.jsonl", {
+      text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``,
+      ts: Date.now() + 100_000_000,
+    });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.cursor?.stageId).toBe("fix");
+    expect(current.lastPassedCommit).toBe(base);
+    expect(current.cursor?.stageId).not.toBe("review");
+    expect(h.spawnInputs).toHaveLength(1);
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -9377,8 +9624,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
     const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
     fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
-      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
-    fs.chmodSync(sourcePath, 0o600);
+      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n", { mode: 0o600 });
     const fork = forkClaudeHistory({
       sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
       sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
