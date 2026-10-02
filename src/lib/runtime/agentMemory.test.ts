@@ -182,7 +182,7 @@ test("a per-agent watchdog kill satisfies the shared budget without killing a he
   finally { for (const cell of cells) cell.close(); }
 });
 
-test("the shared budget drops a native subtree that vanished during per-agent cleanup", () => {
+for (const change of ["vanished", "reused"] as const) test(`the shared budget drops a native subtree ${change} during per-agent cleanup`, () => {
   const signals: number[] = [];
   const identities = new Map([[123, "123:wrapper"], [124, "124:native"], [125, "125:tool"], [200, "200:healthy"]]);
   const alive = new Set(identities.keys());
@@ -197,8 +197,11 @@ test("the shared budget drops a native subtree that vanished during per-agent cl
     ],
     kill: (pid) => {
       signals.push(pid);
-      if (pid === 125) { alive.delete(125); alive.delete(124); }
-      else alive.delete(pid);
+      alive.delete(pid);
+      if (pid === 125) {
+        if (change === "vanished") alive.delete(124);
+        else identities.set(124, "124:replacement");
+      }
     },
   });
   const healthy = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null,
@@ -215,8 +218,93 @@ test("the shared budget drops a native subtree that vanished during per-agent cl
     expect(alive.has(200)).toBeTrue();
     expect(runaway.snapshot().lastKill?.limit).toBe("agent");
     expect(runaway.snapshot().kills).toBe(1);
+    expect(healthy.snapshot().kills).toBe(0);
   } finally { runaway.close(); healthy.close(); }
 });
+
+test.skipIf(process.platform !== "linux")("the shared budget drops a real native process reaped by its living wrapper", async () => {
+  // Both real processes exit cooperatively. Every watchdog signal is injected.
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-reap-"));
+  const marker = path.join(directory, "exit");
+  const code = `
+    const { spawn } = require("node:child_process");
+    const fs = require("node:fs");
+    const marker = ${JSON.stringify(marker)};
+    const nativeCode = 'const fs = require("node:fs"); setInterval(() => { if (fs.existsSync(' + JSON.stringify(marker) + ')) process.exit(0); }, 5); process.stdout.write("ready");';
+    const native = spawn(process.execPath, ["-e", nativeCode], { stdio: ["pipe", "pipe", "pipe"] });
+    let gone = false;
+    native.stdout.once("data", () => process.stdout.write(String(native.pid) + "\\n"));
+    native.once("close", () => { gone = true; if (process.stdin.readableEnded) process.exit(0); });
+    process.stdin.resume();
+    process.stdin.once("end", () => { if (gone) process.exit(0); else fs.writeFileSync(marker, "exit"); });
+  `;
+  const wrapper = childProcess.spawn(process.execPath, ["-e", code], { stdio: ["pipe", "pipe", "pipe"] });
+  const closed = new Promise<void>((resolve, reject) => {
+    wrapper.once("close", () => resolve());
+    wrapper.once("error", reject);
+  });
+  let runaway: AgentMemoryCell | undefined, healthy: AgentMemoryCell | undefined;
+  try {
+    const native = await new Promise<number>((resolve, reject) => {
+      let output = "";
+      wrapper.stdout.on("data", (data) => {
+        output += String(data);
+        if (output.includes("\n")) resolve(Number(output.trim()));
+      });
+      wrapper.once("error", reject);
+      wrapper.once("close", () => reject(new Error("wrapper exited before native readiness")));
+    });
+    const root = wrapper.pid!;
+    const rootIdentity = procBackend.processIdentity(root)!;
+    const nativeIdentity = procBackend.processIdentity(native)!;
+    expect(rootIdentity).toBeTruthy();
+    expect(nativeIdentity).toBeTruthy();
+    const signals: number[] = [];
+    let toolAlive = true, healthyAlive = true, nativeGone = false;
+    const plan = { ...basePlan, mechanism: "watchdog" as const, unit: null, limitBytes: 100, budgetBytes: 151 };
+    runaway = new AgentMemoryCell(plan, {
+      identity: (pid) => pid === 125 ? toolAlive ? "125:tool" : null : procBackend.processIdentity(pid),
+      readPpid: (pid) => pid === 125 ? native : procBackend.readPpid(pid),
+      sample: () => [
+        { pid: root, identity: rootIdentity, rss: 1, name: "wrapper" },
+        { pid: native, identity: nativeIdentity, rss: 60, name: "native-agent" },
+        { pid: 125, identity: "125:tool", rss: 50, name: "tool" },
+      ],
+      kill: (pid) => {
+        signals.push(pid);
+        if (pid !== 125) return;
+        toolAlive = false;
+        fs.writeFileSync(marker, "exit");
+        // The independent wrapper reaps its child while the synchronous tick waits.
+        const deadline = Date.now() + 2_000;
+        while (fs.existsSync(`/proc/${native}`) && Date.now() < deadline) { /* Wait for reaping. */ }
+        nativeGone = !fs.existsSync(`/proc/${native}`);
+      },
+    });
+    healthy = new AgentMemoryCell(plan, {
+      identity: (pid) => pid === 200 && healthyAlive ? "200:healthy" : null,
+      sample: () => [{ pid: 200, identity: "200:healthy", rss: 100, name: "healthy-agent" }],
+      kill: (pid) => { signals.push(pid); healthyAlive = false; },
+    });
+    runaway.attach(root, wrapper);
+    healthy.attach(200);
+    tickAgentMemoryWatchdogs([runaway, healthy]);
+    expect(nativeGone).toBeTrue();
+    expect(procBackend.processIdentity(root)).toBe(rootIdentity);
+    expect(signals).toEqual([125]);
+    expect(healthyAlive).toBeTrue();
+    expect(healthy.snapshot().kills).toBe(0);
+    expect(runaway.snapshot().kills).toBe(1);
+    expect(runaway.snapshot().lastKill).toMatchObject({ limit: "agent", fatal: false, process: "native-agent" });
+  } finally {
+    runaway?.close();
+    healthy?.close();
+    fs.writeFileSync(marker, "exit");
+    wrapper.stdin.end();
+    await closed;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 10_000);
 
 test("separate OOM and kill notifications retain the agent limit witness", () => {
   const fixture = fakeCell();
