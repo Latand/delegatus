@@ -70,8 +70,8 @@ runs returned by `gh run list --workflow docker-image.yml --event pull_request
 The files were read with `git diff --name-only --no-renames <merge-base> <head>`.
 
 Result: **30 build, 0 skip**. These were code PRs; the new filter continues to
-validate them. The shared queue reduces their possible simultaneous image jobs
-from 30 to one. This is a dry evaluation. Hosted execution of the new workflow remains
+validate them. The shared queue bounds image builds to one running job across
+their different refs. This is a dry evaluation. Hosted execution of the new workflow remains
 unverified. Re-evaluate the saved diffs with:
 
 ```sh
