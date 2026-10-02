@@ -34,7 +34,7 @@ const stateDatabaseFile = () => statePath("state.sqlite");
 const artifactsRoot = () => statePath("pipelines");
 
 type PipelineFile = { schemaVersion: number; pipelines: Pipeline[] };
-const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer"] as const;
+const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger"] as const;
 
 export class PipelineStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -147,6 +147,46 @@ function isVerdictRecovery(value: unknown): boolean {
   );
 }
 
+function isProviderCondition(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  return ["usage_limit", "transient", "auth_required", "other", "host_death", "turn_cut"].includes(String(condition.kind))
+    && isNullableString(condition.scope) && (condition.scope === null || String(condition.scope).length <= 64)
+    && isNullableString(condition.resetLabel) && (condition.resetLabel === null || String(condition.resetLabel).length <= 160)
+    && typeof condition.label === "string" && condition.label.length > 0 && condition.label.length <= 100;
+}
+
+/** Transcript evidence may use the filesystem's fractional millisecond mtime. */
+function isEvidenceTimestamp(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function isProviderWait(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
+  return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
+    && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
+    && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
+    && dated(wait.startedAt) && dated(wait.resumeAt)
+    && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
+    && (wait.actionAt === undefined || dated(wait.actionAt))
+    && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
+    && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
+    && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
+}
+
+function isProviderRecoveries(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.length <= 8 && value.every((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    return typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
+      && ["wait", "continue", "switch", "relaunch", "park"].includes(String(entry.action))
+      && isProviderCondition(entry.condition) && typeof entry.summary === "string" && entry.summary.length <= 2000;
+  });
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -173,11 +213,21 @@ function isAttempt(value: unknown, index: number): boolean {
         && limited.accountId.length > 0
         && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
-        && (limited.limitedAt === undefined || limited.limitedAt === null || (Number.isSafeInteger(limited.limitedAt) && limited.limitedAt >= 0))
+        && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
+    (attempt.providerRecoveryBudget === undefined || (
+      attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
+      && !Array.isArray(attempt.providerRecoveryBudget)
+      && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
+      && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
+      && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
+      && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
+    )) &&
+    isProviderWait(attempt.providerWait) &&
+    isProviderRecoveries(attempt.providerRecoveries) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
@@ -699,6 +749,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.branch === "string" &&
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
+    (pipeline.baseRefPinned === undefined || typeof pipeline.baseRefPinned === "boolean") &&
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
@@ -982,6 +1033,10 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
+            providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
+              ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,
+            providerRecoveries: attempt.providerRecoveries?.map((recovery) => ({ ...recovery, condition: { ...recovery.condition } })),
             flowId: attempt.flowId ?? null,
             expectedReviewHeadSha: attempt.expectedReviewHeadSha ?? null,
             reviewHeadSha: attempt.reviewHeadSha ?? null,
@@ -1163,8 +1218,9 @@ export function pipelineLockWaitMs(): number {
  * A refusal raised before `mutate` runs is a {@link StoreBusyBeforeAdmissionError}
  * (#1766): the lease was never taken, so nothing was read, written or reserved
  * and the same request may run again under the same idempotency key. A busy
- * error from anywhere after that keeps its ordinary ambiguous meaning — the
- * lease release raises the same message after the row is committed. */
+ * error from inside the callback keeps its ordinary ambiguous meaning: an
+ * earlier persist may have committed. Lease release never throws; failed
+ * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;
@@ -1455,6 +1511,7 @@ export function buildPipeline(input: {
     ...identity,
     baseBranch: "",
     baseRef: "",
+    baseRefPinned: false,
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,

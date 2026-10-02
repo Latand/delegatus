@@ -23,7 +23,11 @@ export type WireStub = { id: string; project: string; withheld: string };
 export type WireRow = WireTask | WireGone | WireStub;
 
 /** v3 adds the optional board arrival preference; v2 peers reject unknown row fields. */
-export const TASK_WIRE_VERSION = 3;
+export const TASK_BOARD_WIRE_VERSION = 3;
+/** v4 keeps the v3 row shape and asks already-consumed v3 initiators to replay
+ * both directions once. Their existing capability-upgrade path persists the
+ * confirmation, including when only the accepting install has upgraded. */
+export const TASK_WIRE_VERSION = 4;
 
 export const isWireGone = (row: WireRow): row is WireGone => "gone" in row;
 export const isWireStub = (row: WireRow): row is WireStub => "withheld" in row;

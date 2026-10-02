@@ -7,13 +7,28 @@ import { spawn, spawnSync } from "node:child_process";
 
 import { seatMcpHealth } from "../src/lib/monitor/seatMcpHealth";
 import { appDirIn } from "./appDir.mjs";
+import { headlessCodexThreadConfig } from "../src/lib/codexHeadlessConfig";
 
 const sandboxes: string[] = [];
+
+/** Result fields consumed by these fixture-specific RPC assertions. */
+interface TestRpcResponse {
+  id?: number | string;
+  error?: unknown;
+  result: {
+    serverInfo: { name: string };
+    tools: { name: string }[];
+    content: { text: string }[];
+    isError?: boolean;
+    thread: { id: string };
+    data: { name: string; tools: Record<string, unknown> }[];
+  };
+}
 
 function stdioSession(command: string, launcher: string, root: string, env: Record<string, string>) {
   const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
   let buffer = "";
-  const messages: Record<string, any>[] = [];
+  const messages: TestRpcResponse[] = [];
   const waiting = new Set<() => void>();
   process.stdout.setEncoding("utf8");
   process.stdout.on("data", (chunk: string) => {
@@ -25,7 +40,7 @@ function stdioSession(command: string, launcher: string, root: string, env: Reco
     }
     for (const wake of waiting) wake();
   });
-  async function responseFor(id: number, timeoutMs = 5_000): Promise<Record<string, any>> {
+  async function responseFor(id: number, timeoutMs = 5_000): Promise<TestRpcResponse> {
     const until = Date.now() + timeoutMs;
     while (Date.now() < until) {
       const at = messages.findIndex((message) => message.id === id);
@@ -124,6 +139,51 @@ function mcpBundle(label: string) {
     });
   `;
 }
+
+test.skipIf(process.env.LLV_CODEX_MCP_ENV_TEST !== "1")("native Codex forwards the seat capability to its Viewer launcher", async () => {
+  const { root, launcher } = installedPackage(mcpBundle("seat-tools-available"));
+  const stateDir = path.join(root, "state");
+  const capability = "S".repeat(43);
+  fs.mkdirSync(path.join(root, ".codex"));
+  const digest = createHash("sha256").update(capability).digest("hex");
+  const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(Date.now() - 30 * 60_000).toISOString() };
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: {
+    viewer: { command: process.execPath, args: [launcher], env: { LLV_STATE_DIR: stateDir } },
+  } } });
+  const session = stdioSession(process.env.LLV_CODEX_BINARY ?? "codex", "app-server", root, {
+    HOME: root, CODEX_HOME: path.join(root, ".codex"), XDG_CONFIG_HOME: path.join(root, "config"),
+    LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,
+    LLV_VIEWER_DEPLOY_TARGET: path.join(stateDir, "viewer-release.json"), OPENAI_API_KEY: "",
+  });
+  let diagnostics = "";
+  session.process.stderr.on("data", (chunk) => { diagnostics += String(chunk); });
+  try {
+    expect((await session.call(1, "initialize", { clientInfo: { name: "seat-mcp-test", version: "1" } })).error).toBeUndefined();
+    session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "initialized" }) + "\n");
+    const thread = await session.call(2, "thread/start", { cwd: root, config });
+    expect(thread.error).toBeUndefined();
+    let available = false;
+    for (let id = 3; id < 23; id++) {
+      const status = await session.call(id, "mcpServerStatus/list", { threadId: thread.result.thread.id, serverName: "viewer" });
+      available = status.result?.data?.some((server: { name: string; tools: Record<string, unknown> }) =>
+        server.name === "viewer" && Object.keys(server.tools).length > 0) ?? false;
+      if (available) break;
+      await Bun.sleep(100);
+    }
+    expect(available).toBe(true);
+    const call = await session.call(23, "mcpServer/tool/call", {
+      threadId: thread.result.thread.id, server: "viewer", tool: "release", arguments: {},
+    });
+    expect(call.error).toBeUndefined();
+    expect(call.result.content[0].text).toBe("seat-tools-available");
+    expect(seatMcpHealth(receipt, null, stateDir, Date.now())).toMatchObject({ status: "healthy" });
+  } catch (error) {
+    throw new Error(`${String(error)}\n${diagnostics}`);
+  } finally {
+    session.process.stdin.end();
+    if (session.process.exitCode === null) await new Promise<void>((resolve) => session.process.once("close", () => resolve()));
+  }
+}, 30_000);
 
 test("self-update pointer selects the installed MCP bundle and falls back only as installedRelease decides", async () => {
   const fixture = selfUpdateFixture("process.stdout.write('checkout:' + (process.env.LLV_HOT_STATE_RELEASE_REVISION || 'none') + '\\n');");
@@ -782,7 +842,7 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
     stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const reader = session.stdout.getReader();
   let buffered = "";
-  async function responseFor(id: number): Promise<Record<string, any>> {
+  async function responseFor(id: number): Promise<TestRpcResponse> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
       const at = buffered.indexOf("\n");

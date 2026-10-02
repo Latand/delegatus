@@ -1,15 +1,20 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { DelegatusMark } from "../../brand/BrandMark";
 import { ChevronRight, RotateCw } from "../../icons";
 import { hhmm } from "../../utils";
+import { mandateSectionOpen, mandateSectionText, setMandateSectionOpen, type MandateSection } from "../../conversation/heldMandate";
 import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
 import { mandateMessage } from "../mandateMessage";
 import { mdBlocks, mdImages } from "../markdown";
 import { tr, type MandateItem } from "../parse";
+
+/** Conversation-scoped delivery identity, shared by the held card and its
+ * transcript replacement. Later deliveries have their own row identity. */
+export const MandateConversationContext = createContext<string | null>(null);
 
 /**
  * The orchestrator seat's mandate, as the feed's own card (#1166).
@@ -28,6 +33,7 @@ import { tr, type MandateItem } from "../parse";
  * and the board's conversation pane name the same mandate the same way.
  */
 export function MandateCard({ item }: { item: MandateItem }) {
+  const identity = useContext(MandateConversationContext);
   const message = mandateMessage(item.text);
   const title = tr("mandateCard.title");
   const qualifier = item.mandate.kind === "version"
@@ -52,9 +58,11 @@ export function MandateCard({ item }: { item: MandateItem }) {
         </span>
       </div>
       <div className="px-3.5 pb-2.5 pt-1">
-        <Section label={tr("mandateCard.readMandate")} text={message.mandate} />
+        <Section key={`${identity}\0mandate`} section="mandate" label={tr("mandateCard.readMandate")} text={message.mandate} />
         {message.handoff ? (
           <Section
+            key={`${identity}\0handoff`}
+            section="handoff"
             label={tr("mandateCard.handoff")}
             text={message.handoff}
             first={mdImages(message.mandate).length}
@@ -68,12 +76,14 @@ export function MandateCard({ item }: { item: MandateItem }) {
 }
 
 function Section({
+  section,
   label,
   text,
   first = 0,
   icon,
   className = "",
 }: {
+  section: MandateSection;
   label: string;
   text: string;
   /** The pictures the card drew before this section's. */
@@ -81,12 +91,23 @@ function Section({
   icon?: ReactNode;
   className?: string;
 }) {
-  const [mounted, setMounted] = useState(false);
+  const conversationKey = useContext(MandateConversationContext);
+  const [open, setOpen] = useState(() => mandateSectionOpen(conversationKey, section));
+  const [mounted, setMounted] = useState(open);
+  const [displayedText, setDisplayedText] = useState(() => mandateSectionText(conversationKey, section) ?? text);
   return (
     <details
+      open={open}
       className={`group/section text-[13px] ${className}`}
       onToggle={(event) => {
-        if (event.currentTarget.open) setMounted(true);
+        const nowOpen = event.currentTarget.open;
+        setOpen(nowOpen);
+        // The server may have completed the provisional text while it was open.
+        // Refresh on the next expansion; a hand-over preserves what was opened.
+        const shownText = nowOpen && !open ? text : displayedText;
+        if (nowOpen && !open) setDisplayedText(text);
+        setMandateSectionOpen(conversationKey, section, nowOpen, shownText);
+        if (nowOpen) setMounted(true);
       }}
     >
       <summary className="flex cursor-pointer list-none items-center gap-1 rounded-control py-0.5 text-[12.5px] font-semibold text-secondary hover:text-accent [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
@@ -95,7 +116,7 @@ function Section({
         <span>{label}</span>
       </summary>
       {mounted ? (
-        <div className="mt-1 whitespace-pre-wrap break-words border-t border-border pt-1.5">{mdBlocks(text, first)}</div>
+        <div className="mt-1 whitespace-pre-wrap break-words border-t border-border pt-1.5">{mdBlocks(displayedText, first)}</div>
       ) : null}
     </details>
   );

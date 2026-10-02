@@ -1,3 +1,5 @@
+import { memoryKillText } from "./agentMemoryState";
+import type { AgentMemoryCell } from "./agentMemory";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import crypto from "node:crypto";
@@ -232,6 +234,7 @@ export interface ClaudeStreamBrokerHostOptions {
   shutdownGraceMs?: number;
   initialEventCursor?: number;
   onEventCursorRecovery?: RuntimeEventCursorRecoveryReporter;
+  memoryCell?: AgentMemoryCell | null;
   spawnProcess?: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
   signalProcess?: ProcessSignal;
   processIdentity?: (pid: number) => string | null;
@@ -619,6 +622,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private activeTurnId: string | null = null;
   private protocolVersion: string | null;
   private account: HostState["account"];
+  private readonly memoryCell: AgentMemoryCell | null;
   private releasing = false;
   private released = false;
   private dead = false;
@@ -641,6 +645,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     options: ClaudeStreamBrokerHostOptions,
   ) {
     this.child = child;
+    this.memoryCell = options.memoryCell ?? null;
+    this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
     this.deliveryLedger = options.deliveryLedger ?? new FileClaudeDeliveryLedger();
@@ -680,7 +686,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (!this.releasing && !this.released) this.fail(new Error(`Claude stream stdin failed: ${safeError(error)}`));
     });
     child.on("error", (error) => this.fail(new Error(`Claude child failed: ${safeError(error)}`)));
+    // Exit arrives before inherited pipes close; reap OOM survivors immediately.
+    child.on("exit", () => {
+      const kill = this.memoryCell?.settleExit({ expected: this.releasing || this.released });
+      if (kill?.fatal && !this.releasing && !this.released) this.fail(new Error(memoryKillText(kill)));
+    });
     child.on("close", () => {
+      this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       this.reaped = true;
       if (this.terminationTimer) {
         clearTimeout(this.terminationTimer);
@@ -689,7 +701,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.resolveReaped();
       if (this.releasing) this.finishRelease();
       else if (this.dead) this.notifyStateListeners();
-      else if (!this.releasing && !this.released) this.fail(new Error("Claude child exited"));
+      else if (!this.releasing && !this.released) this.fail(new Error(this.memoryCell?.launchFailure() ?? "Claude child exited"));
     });
   }
 
@@ -793,7 +805,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (options.effort) args.push("--effort", options.effort);
     if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
     if (options.tools) args.push("--tools", options.tools.join(","));
-    const spawnProcess = options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
+    const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
       spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -1143,6 +1155,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
+      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
       activeFlags: [...this.launchFlags],
       account: this.account,
     };
@@ -1492,6 +1505,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.emit({ kind: "session-status", status: "unhosted" });
     if (this.ledgerFailed) this.notifyStateListeners();
     this.closeSubscribers();
+    this.memoryCell?.close();
     const cleanup = this.releaseCleanup;
     this.releaseCleanup = null;
     cleanup?.();
@@ -1542,6 +1556,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private signalReleaseGroup(signal: NodeJS.Signals): boolean {
+    // The memory cell owns fatal OOM cleanup through its unit or verified tree.
+    if (this.memoryCell?.fatalMemoryExit) return true;
     const expected = this.releaseFence;
     if (expected) {
       const pid = this.child.pid;
@@ -1554,6 +1570,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private startTermination(): boolean {
+    if (this.memoryCell?.fatalMemoryExit) {
+      if (this.terminationTimer) clearTimeout(this.terminationTimer);
+      this.terminationTimer = null;
+      for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) stream.destroy();
+      this.reaped = true;
+      this.resolveReaped();
+      this.terminationStarted = true;
+      return true;
+    }
     if (this.terminationStarted || this.reaped) return true;
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;

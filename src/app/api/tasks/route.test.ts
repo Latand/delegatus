@@ -65,3 +65,21 @@ test("GET derives pipelineIds including closed history and filters stale task id
   expect((loadTasks()[0] as BoardTask & { pipelineIds?: string[] }).pipelineIds).toBeUndefined();
   expect((loadPipelines()[0] as Pipeline).taskIds).toEqual([task.id, "deleted-task"]);
 });
+
+test("REST replaces and clears the status note, deriving the operator author", async () => {
+  const { PATCH } = await import("./[id]/route");
+  const now = "2026-10-02T10:00:00.000Z";
+  const task: BoardTask = { id: "note-rest", project: "viewer", text: "Review the card", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now };
+  saveTasks([task]);
+  const patch = (body: unknown) => PATCH(new NextRequest("http://localhost/api/tasks/note-rest", { method: "PATCH", body: JSON.stringify(body), headers: { "content-type": "application/json", origin: "http://localhost", host: "localhost" } }), { params: Promise.resolve({ id: task.id }) });
+  const response = await patch({ note: "Waiting for review.", author: { kind: "agent" }, updatedAt: "spoof" });
+  expect(response.status).toBe(200);
+  const written = await response.json();
+  expect(written.task.note).toMatchObject({ text: "Waiting for review.", author: { kind: "operator" } });
+  expect(written.task.note.updatedAt).not.toBe("spoof");
+  const read = await route.GET(new NextRequest("http://localhost/api/tasks"));
+  expect((await read.json()).tasks[0].note).toEqual(written.task.note);
+  expect((await patch({ note: "x".repeat(281) })).status).toBe(400);
+  expect((await patch({ note: null })).status).toBe(200);
+  expect(loadTasks()[0]!.note).toBeUndefined();
+});

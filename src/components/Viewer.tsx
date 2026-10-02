@@ -60,6 +60,7 @@ import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import { overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { dropPendingSeatConfirmOutside, onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
+import { onOrchestratorFocusRequest } from "./orchestrator/taskChips";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
@@ -67,6 +68,7 @@ import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
+import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
 import { activityDot, cleanTitle } from "./utils";
@@ -216,7 +218,7 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { systemHealth, files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.path ?? null));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -660,6 +662,15 @@ function ViewerApp() {
     setOrchestratorOpenProject(request.project);
     setOrchestratorOpen(true);
   }), [isMobile, selectProject]);
+  /* A card's «Ask» button attached a task to this project's orchestrator
+     composer: show that composer. The kanban seat expands itself; here the
+     dock opens for a board that has no seat on it. The shell stays on the
+     project it is on, so the board does not move away from the card. */
+  useEffect(() => onOrchestratorFocusRequest((requested) => {
+    if (isMobile || requested !== project) return;
+    rememberDockOpen(project, true);
+    setOrchestratorOpen(true);
+  }), [isMobile, project]);
   /* A confirm the guide asked for belongs to the project it named: moving to
      another one drops it, so a later visit designates nothing by itself. */
   useEffect(() => dropPendingSeatConfirmOutside(project), [project]);
@@ -1722,6 +1733,7 @@ function ViewerApp() {
         )}
         </BarIslandProvider>
         </BoardPaneProvider>
+        <StateWritesAlert storage={systemHealth.storage} />
       </main>
       {panelDocked ? panel("docked") : null}
       {/* Runtime connection pill — mounts the tab-wide bus and shows live /

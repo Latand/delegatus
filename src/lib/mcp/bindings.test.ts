@@ -800,7 +800,7 @@ test("conversation_messages resolves id, path, and selectedContext through one p
   } as never);
 
   const byId = await bindings.conversation_messages({
-    clientRequestId: "messages-by-id",
+    clientRequestId: "messages-by-id", includeMetadata: true,
     conversationId: "conversation_fixture",
     roles: ["user", "assistant"],
   });
@@ -815,8 +815,13 @@ test("conversation_messages resolves id, path, and selectedContext through one p
   });
   expect((byId.records as Array<{ author?: unknown }>)[2]?.author).toBeUndefined();
 
+  const compact = await bindings.conversation_messages({ conversationId: "conversation_fixture", roles: ["user", "assistant"] });
+  expect(compact.records).toEqual(byId.records);
+  expect(compact.cursor).toEqual(byId.cursor);
+  for (const field of ["transcriptPath", "engine", "lastRecordAt", "scanned"]) expect(compact).not.toHaveProperty(field);
+
   const byPath = await bindings.conversation_messages({
-    clientRequestId: "messages-by-path",
+    clientRequestId: "messages-by-path", includeMetadata: true,
     transcriptPath,
   });
   expect(byPath).toMatchObject({ conversationId: null, transcriptPath, engine: "codex",
@@ -1755,7 +1760,7 @@ test("deployment_status uses Viewer HTTP while resources keeps its resource read
     count: 1,
     deployments: [{ deploymentId: "deployment_recent", phase: "running", revision: "b".repeat(40) }],
   });
-  expect(await bindings.resources({ clientRequestId: "resources-read", fresh: true })).toMatchObject({ system: { ramAvailable: 5 }, sessions: [] });
+  expect(await bindings.resources({ clientRequestId: "resources-read", fresh: true, full: true })).toMatchObject({ system: { ramAvailable: 5 }, sessions: [] });
   expect(calls).toEqual([
     "/api/runtime/deployments/deployment_608",
     "/api/runtime/operations/operation_608",
@@ -2477,7 +2482,7 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   pipeline.closeReport = close as import("@/lib/pipelines/types").PipelineCloseReport;
   pipeline.closeTeardown = { id: "close-fixture", phase: "settled", waitingForActivation: false, acknowledgeHosts: false, flow: null };
   savePipelines([pipeline]);
-  const read = await bindings.get_pipeline({ clientRequestId: "close-read-final", pipelineId: pipeline.id });
+  const read = await bindings.get_pipeline({ clientRequestId: "close-read-final", full: true, pipelineId: pipeline.id });
   expect(read).toMatchObject({ pipeline: { closeReport: { status: "settled", pending: [], stopped: [target] } } });
 });
 
@@ -3632,8 +3637,14 @@ test("the single dispatch classifies every transport outcome by what it can prov
     await viewer.stop(true);
   }
   /* A refused connection never carried the request: proven not executed. */
-  expect(await classify(send)).toMatchObject({ kind: "not-executed", value: expect.stringContaining("connection was refused") });
+  expect(await classify(send)).toMatchObject({
+    kind: "refusal", value: { message: expect.stringContaining("connection was refused"),
+      details: { outcome: "not-executed", nextAction: "retry-same-key", endpoint: viewer.url.origin } },
+  });
   expect(tracker.attempted).toBe(true);
+  // Spawn keeps its permanent single-attempt refusal contract.
+  expect(await classify(() => dispatch("/api/spawn", {}, {}, { deadlineAt: Date.now() + 2_000 })))
+    .toMatchObject({ kind: "not-executed" });
 });
 
 test("send and spawn bindings dispatch through the single-attempt seam with the persisted downstream key", async () => {
@@ -4348,4 +4359,24 @@ test("spawn_agent applies the sizing rules on the service's bound first dispatch
 
 test("spawn dispatch body retains an explicit Codex service tier", () => {
   expect(spawnDispatchBody({ clientRequestId: "tier-dispatch", engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast", fast: true }, "tier-attempt")).toMatchObject({ serviceTier: "ultrafast", fast: true, clientAttemptId: "tier-attempt" });
+});
+
+test("MCP note authors follow authenticated attribution and round-trip through reads", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-task-note-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const { saveTasks, loadTasks } = await import("@/lib/tasks/store");
+  const now = "2026-10-02T10:00:00.000Z";
+  saveTasks([{ id: "note-mcp", project: "viewer", text: "Review the card", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
+  for (const kind of ["agent", "manager"] as const) {
+    const bindings = viewerMcpBindings(undefined, undefined, { loadTasks, listPipelineRecords: () => [], callerAttribution: () => ({ kind, conversationId: "conversation_fixture", role: "builder" }) } as never);
+    const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+    const result = await service.callTool("update_task", { clientRequestId: `note-${kind}`, taskId: "note-mcp", note: "Waiting for review.", conversationId: "spoof", full: true });
+    expect(result).toMatchObject({ ok: true, changedFields: expect.arrayContaining(["note"]), task: { note: { author: kind === "manager" ? { kind: "orchestrator" } : { kind: "agent", conversationId: "conversation_fixture" } } } });
+    const read = await service.callTool("get_task", { clientRequestId: `read-note-${kind}`, taskId: "note-mcp" });
+    expect(read).toMatchObject({ ok: true, task: { note: { text: "Waiting for review." } } });
+    const clear = await service.callTool("update_task", { clientRequestId: `clear-note-${kind}`, taskId: "note-mcp", note: null });
+    expect(clear.ok).toBe(true);
+    expect(loadTasks()[0]!.note).toBeUndefined();
+  }
 });

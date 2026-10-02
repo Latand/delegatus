@@ -37,7 +37,8 @@ export type PipelineRoleId =
   | "architect"
   | "cleaner"
   | "prod-auditor"
-  | "deployer";
+  | "deployer"
+  | "merger";
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
@@ -366,6 +367,28 @@ export type PipelineStageAttempt = {
       the engine the limit was hit on; account ids are unique only within an
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
+  /** Recovery expenditure survives condition changes and host relaunches. */
+  providerRecoveryBudget?: { tries: number; startedAt: string };
+  providerWait?: {
+    condition: import("./providerConditions").ProviderCondition;
+    text: string;
+    accountId: string | null;
+    turnTs: number;
+    tries: number;
+    startedAt: string;
+    resumeAt: string;
+    resetsAt: number | null;
+    actionAt?: string;
+    switchedAccountId?: string;
+    failedAccounts?: string[];
+    capacityProbes?: number;
+  };
+  providerRecoveries?: Array<{
+    at: string;
+    action: "wait" | "continue" | "switch" | "relaunch" | "park";
+    condition: import("./providerConditions").ProviderCondition;
+    summary: string;
+  }>;
   flowId: string | null;
   /** Clean pipeline SHA expected when the first reviewer launches. */
   expectedReviewHeadSha?: string | null;
@@ -400,6 +423,8 @@ export type PipelineStageAttempt = {
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
   controllerWait?: PipelineBoundedWait;
+  outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
+  memoryWait?: PipelineBoundedWait;
   /** Bounded wait for the remote pipeline branch after an approved review
       whose final remote read the network failed (#1692). Same shape and
       arithmetic as `controllerWait`, kept apart because that wait ends the
@@ -778,6 +803,8 @@ export type Pipeline = {
   branch: string;
   baseBranch: string;
   baseRef: string;
+  /** The caller explicitly pinned baseRef; automatically fetched bases are not pins. */
+  baseRefPinned?: boolean;
   lastPassedCommit: string;
   /** Absent reads as `internal`. See {@link PipelinePublication}. */
   publication?: PipelinePublication;

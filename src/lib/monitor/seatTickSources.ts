@@ -47,6 +47,7 @@ import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/l
 import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
+  lookupOriginalSend,
   resolveOriginalSend,
   resolveSendReceipt,
   sendReceiptFor,
@@ -223,6 +224,8 @@ export interface SeatTickWakeEvidence {
       alone. The wake raised in a released attempt's place is a new message
       to both layers either way (#1672). Absent when nothing was written. */
   recorded?: "delivered" | "lost" | "refused";
+  /** A late canonical Claude echo, bound to the original operation and payload. */
+  confirmation?: "claude-ledger";
 }
 
 /** A holder's answer with the evidence it rests on. A bare
@@ -291,8 +294,12 @@ export interface WakeRecordPorts {
   /** The runtime journal's receipt under an operation id, or null when it
       holds none. May throw when the host cannot be asked. */
   journal: (operationId: string) => Promise<SeatTickJournalReceipt | null>;
-  /** Writes the journal's own terminal verdict onto a record the settlement
-      ended without one, and answers with the record as it then reads — or
+  /** Reads canonical engine confirmation when the journal cannot settle the send.
+      Missing or unreadable evidence never proves non-delivery. */
+  confirmed?: (wake: SeatTickOutstandingWake, operationId: string) => Promise<boolean>;
+  /** Writes an authoritative terminal verdict (journal or confirmed engine
+      arrival) onto a record the settlement ended without one, and answers
+      with the record as it then reads — or
       null when nothing could be written. Absent, the read is inert and the
       journal's verdict is reported as what it proves. */
   settleFromJournal?: (target: WakeRecordTarget, receipt: SeatTickJournalReceipt) => Promise<SendReceipt | null>;
@@ -321,7 +328,9 @@ export interface WakeRecordPorts {
  * ({@link journalWakeState}): `delivered` credits the wake, `rejected` and a
  * genuine `failed` release it, and everything else — `uncertain`, an open
  * status, no record, an unreachable host — leaves the record's answer
- * standing. Absence and silence are never read as non-execution.
+ * standing. A late canonical Claude confirmation can also prove arrival when
+ * the journal no longer has an answer. Absence and silence are never read as
+ * non-execution.
  *
  * Absence under the key is not a loss either. A wake the record never held
  * but the runtime queued (a legacy row, a mirror that was compacted) is asked
@@ -363,8 +372,21 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
      alone can license raising the wake again on. */
   if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
   const journal = await asked(evidence.operationId);
+  const proven = typeof journal === "string" ? "unknown" : journalWakeState(journal);
+  if (proven !== "landed" && proven !== "dropped" && ports.confirmed) {
+    let confirmed = false;
+    try { confirmed = await ports.confirmed(wake, evidence.operationId); }
+    catch { /* A failed confirmation read leaves the original uncertainty standing. */ }
+    if (confirmed) {
+      const written = await ports.settleFromJournal?.(
+        { conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId },
+        { status: "delivered", reason: null },
+      );
+      return { state: "landed", evidence: { ...withRecord(written ?? current, journal), confirmation: "claude-ledger",
+        ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+    }
+  }
   if (typeof journal === "string") return { state: "uncertain", evidence: withRecord(current, journal) };
-  const proven = journalWakeState(journal);
   if (proven !== "landed" && proven !== "dropped") {
     return { state: proven === "unknown" ? "uncertain" : proven, evidence: withRecord(current, journal) };
   }
@@ -511,6 +533,7 @@ export interface SeatTickSources {
 export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
   return {
     lookup: (binding) => resolveOriginalSend(binding),
+    confirmed: confirmedClaudeWakeDelivery,
     ...(options.end ? { settle: (operationId: string) => resolveSendReceipt(operationId), settleFromJournal: (target, receipt) => settleRecordFromJournal(agentRegistry(), target, receipt) } : {}),
     journal: async (operationId) => {
       const client = runtimeHostClient();
@@ -518,6 +541,36 @@ export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
       return journalReceipt(operationId, client);
     },
   };
+}
+
+/**
+ * Claude keeps a late replay echo after its send promise has timed out. The
+ * runtime journal may already have forgotten that operation, so consult the
+ * broker's durable confirmation under the operation the ORIGINAL key owns.
+ * Text equality alone grants nothing: key, recipient, operation, generation
+ * and content digest must all bind the confirmation to this wake. The read
+ * never dispatches and a queued entry never proves that the input arrived.
+ */
+export async function confirmedClaudeWakeDelivery(wake: SeatTickOutstandingWake, operationId: string): Promise<boolean> {
+  const file = agentRegistry().readOnlySnapshot();
+  const found = lookupOriginalSend(file, { conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
+  if (found.kind !== "found" || found.operationId !== operationId) return false;
+  const conversation = readOnlyConversationLookupFromSnapshot(file).conversation(wake.conversationId as ViewerConversationId);
+  if (!conversation || conversation.engine !== "claude") return false;
+  const delivery = found.deliveryId ? file.heldDeliveries[found.deliveryId] : null;
+  const owner = file.deliveryOperationOwners[operationId];
+  const digest = delivery?.contentDigest ?? owner?.contentDigest;
+  if (!digest || (delivery?.command ?? owner?.command)?.kind !== "send") return false;
+  const generations = delivery?.generationId
+    ? conversation.generations.filter(generation => generation.id === delivery.generationId)
+    : conversation.generations;
+  const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+  const ledger = new FileClaudeDeliveryLedger();
+  for (const generation of generations) {
+    const entry = ledger.load(generation.id).find(candidate => candidate.entry.id === operationId);
+    if (entry?.delivered && entry.entry.contentDigest === digest) return true;
+  }
+  return false;
 }
 
 /**
