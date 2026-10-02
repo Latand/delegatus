@@ -1188,10 +1188,10 @@ function publishSandbox(withOrigin = true): PublishSandbox {
   };
 }
 
-function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void) {
+function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void, acceptedBody = "accepted work\n") {
   const box = publishSandbox();
   prepare?.(box);
-  const accepted = box.commit("accepted.txt", "accepted work\n");
+  const accepted = box.commit("accepted.txt", acceptedBody);
   box.subject.lastPassedCommit = accepted;
   savePipelines([box.subject]);
   fs.writeFileSync(path.join(box.repo, "main.txt"), "new main\n");
@@ -1276,6 +1276,25 @@ test.each([
     const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
     expect(git(box.subject.worktreeDir, "cherry", head, box.accepted)).toBe(`- ${box.accepted}`);
 
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation parks when an amended replay drops a plus-prefixed code line", () => {
+  const acceptedBody = "++counter; console.log('a b');\n";
+  const box = rebasedStageSandbox(undefined, acceptedBody);
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "++counter; console.log('ab');\n");
+    git(box.subject.worktreeDir, "add", "accepted.txt");
+    git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+
+    expect(git(box.subject.worktreeDir, "cherry", head, box.accepted)).toBe(`- ${box.accepted}`);
     const result = reconcilePipelineStageHead(box.subject, head, realExec);
 
     expect(result.ok).toBe(false);

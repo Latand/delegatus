@@ -693,13 +693,21 @@ function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): s
   if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
   const evidence: string[] = [];
   let binary = false;
+  let inHunk = false;
   for (const line of patch.stdout.split("\n")) {
-    if (line.startsWith("diff --git ") || /^(?:old mode|new mode|new file mode|deleted file mode|GIT binary patch|literal |delta )/.test(line)) {
+    if (line.startsWith("diff --git ")) {
+      evidence.push(line);
+      binary = false;
+      inHunk = false;
+    } else if (binary) {
+      evidence.push(line);
+    } else if (/^(?:old mode|new mode|new file mode|deleted file mode|GIT binary patch|literal |delta )/.test(line)) {
       evidence.push(line);
       binary = line === "GIT binary patch";
-    } else if (binary) evidence.push(line);
-    else if ((line.startsWith("+") && !line.startsWith("+++")) || (line.startsWith("-") && !line.startsWith("---"))
-      || line.startsWith(" ") || line.startsWith("\\ No newline")) {
+    } else if (line.startsWith("@@")) {
+      inHunk = true;
+    } else if (inHunk && ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
+      || line.startsWith("\\ No newline"))) {
       evidence.push(line);
     }
   }
