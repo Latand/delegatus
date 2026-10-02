@@ -9,6 +9,7 @@ export type MessageKey = keyof typeof en;
 export type TFunction = (key: MessageKey, params?: Record<string, string | number>) => string;
 
 const DICTS: Record<Locale, Dictionary> = { en, uk };
+const PLURAL_RULES: Partial<Record<Locale, Intl.PluralRules>> = {};
 
 function interpolate(text: string, params?: Record<string, string | number>): string {
   if (!params) return text;
@@ -29,7 +30,8 @@ export function translate(
     text = entry;
   } else {
     const count = typeof params?.count === "number" ? params.count : 0;
-    const form = new Intl.PluralRules(locale === "uk" ? "uk-UA" : "en-US").select(count);
+    const rules = PLURAL_RULES[locale] ??= new Intl.PluralRules(locale === "uk" ? "uk-UA" : "en-US");
+    const form = rules.select(count);
     text = entry[form] ?? entry.other ?? entry.one ?? "";
   }
   return interpolate(text, params);
