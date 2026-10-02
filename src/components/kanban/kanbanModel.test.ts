@@ -8,7 +8,8 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
-import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
+import { conversationIdentity } from "@/lib/accounts/identity";
+import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -365,6 +366,8 @@ test("a placeholder no agent will name borrows its conversation's cleaned title 
     pending("young", [fresh.path], { createdAt: iso(NOW - 60) }),
     /* Young, but its conversation already stopped: nothing will name it. */
     pending("stopped", [settled.path], { createdAt: iso(NOW - 60) }),
+    /* Young and working, but admitted with its first prompt: that prompt names the card at once. */
+    pending("prompted", [fresh.path], { createdAt: iso(NOW - 60), text: "Add a retry budget to the uploader", origin: { kind: "launch", key: "launch-p", refinement: "pending" } }),
     /* A launch that never produced a transcript: its own admission title. */
     pending("launch", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-x", refinement: "pending" } }),
   ];
@@ -374,6 +377,7 @@ test("a placeholder no agent will name borrows its conversation's cleaned title 
   expect(shown("ended")).toEqual({ title: "Fix the upload retries after a timeout", pending: false });
   expect(shown("slow")).toEqual({ title: "Rebuild the search index", pending: false });
   expect(shown("young")).toEqual({ title: null, pending: true });
+  expect(shown("prompted")).toEqual({ title: "Add a retry budget to the uploader", pending: false });
   expect(shown("stopped")).toEqual({ title: "Answer the API question", pending: false });
   expect(shown("launch")).toEqual({ title: "Exercise legacy spawn fixture", pending: false });
   /* A task somebody named keeps its own title, whatever its conversation says. */
@@ -665,6 +669,53 @@ test("an agent draft is the card's own: a band-local draft on its task, any othe
   expect(alone.origin).toBe("draft");
   expect(alone.otherSurfaces).toBe(0);
   expect(alone.idle).toBe(false);
+  /* A draft no task holds stands in Assigned, where its launch will land, and nothing else does. */
+  expect(alone.status).toBe("assigned");
+  expect(holdsOnlyDrafts(alone)).toBe(true);
+  expect(holdsOnlyDrafts(onTask)).toBe(false);
+});
+
+test("a draft stands in Assigned, unless a reader is open in a card there: then it stays in Inbox beside it", () => {
+  const live = file(1);
+  const tasks = [task("t1", "assigned", [live.path])];
+  const base = layout([live]);
+  (base as unknown as { drafts: unknown[] }).drafts = [{ key: "draft::draft-alone", id: "draft-alone", x: 648, y: 0, w: 600, h: 400 }];
+  const projection = projectTaskWorkflows([...tasks], [], [], [live]);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled task" });
+  const draftCard = (openReaders?: ReadonlySet<string>) => buildKanbanModel({ bands, tasks, pipelines: [], projection, files: [live], openReaders, now: NOW })
+    .unlinked.find((card) => card.drafts.includes("draft-alone"))!;
+  /* No reader open (or an unrelated one): the launched card will take the draft's place at the top of Assigned. */
+  expect(draftCard().status).toBe("assigned");
+  expect(draftCard(new Set(["conversation_fixture_9"])).status).toBe("assigned");
+  /* The agent in Assigned is open to read: a draft above it would push it out of the window. */
+  expect(draftCard(new Set([conversationIdentity(live)])).status).toBe("inbox");
+});
+
+
+test("a launched card with its reader open lands under the agent being read, where its draft stood, instead of above it", () => {
+  const read = file(1, { mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1 });
+  const other = file(3, { mtime: NOW - 2_000 });
+  const tasks = [task("read", "assigned", [read.path]), task("launched", "assigned", [launchedFile.path]), task("other", "assigned", [other.path])];
+  const files = [read, launchedFile, other];
+  const base = layout(files);
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const reading = new Set([conversationIdentity(read)]);
+  const both = new Set([conversationIdentity(read), conversationIdentity(launchedFile)]);
+  /* The newest agent work sorts first: without the rule the launched card stands above the card being read. */
+  expect(order(both)).toEqual(["launched", "other", "read"]);
+  expect(order(both, isLaunched)).toEqual(["other", "read", "launched"]);
+  /* Its reader not open yet, or no reader open on another card: it sorts as any card does. */
+  expect(order(reading, isLaunched)[0]).toBe("launched");
+  expect(order(new Set([conversationIdentity(launchedFile)]), isLaunched)[0]).toBe("launched");
+  /* A reader on a card the page did not launch is never moved. */
+  const otherBoth = new Set([conversationIdentity(read), conversationIdentity(other)]);
+  expect(order(otherBoth, isLaunched)).toEqual(order(otherBoth));
 });
 
 

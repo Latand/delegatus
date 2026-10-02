@@ -65,7 +65,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
+import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
@@ -94,7 +94,7 @@ import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -2551,11 +2551,11 @@ function advancePipeline(
   accepted = false,
 ): void {
   const successor = passSuccessor(pipeline, stage, attempt);
-  const detail = successor.handoff ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
+  const detail = successor.handoff && !successor.recheck ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
      new head leaves a head nobody reviewed. Under the default `advance` the
-     lane still completes or takes the reviewer's pass edge, and the record and
-     the next stage's input say the findings went unreviewed. Only an edge that
+     terminal gate re-checks the fix once, while a nonterminal gate takes its
+     pass edge and relays the findings as unreviewed. Only an edge that
      asked for `stop-after-fix` stops in needs_review for the operator; a fix
      that wrote nothing new moves on under either. */
   if (
@@ -2584,29 +2584,29 @@ function advancePipeline(
   pipeline.cursor = {
     stageId: successor.next,
     state: "pending",
-    input: successor.handoff ? budgetSpentInput(attempt?.output ?? null, successor.handoff) : attempt?.output ?? null,
-    activatedBy: attempt ? { stageId: stage.id, attempt: attempt.n, edge: "pass" } : null,
+    input: successor.handoff && !successor.recheck ? budgetSpentInput(attempt?.output ?? null, successor.handoff) : attempt?.output ?? null,
+    activatedBy: attempt ? { stageId: stage.id, attempt: attempt.n, edge: "pass", ...(successor.recheck ? { budgetRecheck: true as const } : {}) } : null,
   };
   pipeline.state = "running";
   pipeline.stateDetail = detail;
   pipeline.pausedState = null;
 }
 
-/** Where a pass of this attempt goes. A fix that ran on a spent fail edge's
-    last handoff (#1868) follows the reviewer's own pass edge: the budget said
-    how much review the lane gets, so the reviewer is not asked again. */
+/** A spent advance fix returns to its terminal gate for one final re-check
+    (#2247). Nonterminal handoffs continue along the source's pass edge. */
 function passSuccessor(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt?: PipelineStageAttempt | null,
-): { next: string | null; handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null } | null } {
+): { next: string | null; handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null } | null; recheck?: boolean } {
   const activation = attempt?.activatedBy;
   const source = activation?.edge === "fail" && activation.budgetSpent
     ? pipeline.stages.find((candidate) => candidate.id === activation.stageId) ?? null
     : null;
   if (!source || !activation) return { next: stage.next, handoff: null };
   const sourceAttempt = pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null;
-  return { next: source.next, handoff: { source, attempt: sourceAttempt } };
+  const recheck = source.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance";
+  return { next: recheck ? source.id : source.next, handoff: { source, attempt: sourceAttempt }, recheck: !!recheck };
 }
 
 /** Stop a lane whose spent review budget left an unreviewed head (#1938). The
@@ -2694,6 +2694,16 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
 }
 
+function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  const detail = pipeline.stateDetail;
+  // Older engines passed the accepted attempt to park() on HEAD verification
+  // failure, so its pass verdict survived with a needs_decision state.
+  return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
+    && (detail?.startsWith("publishing the passed stage:") === true
+      || ((attempt.state === "passed" || attempt.state === "needs_decision") && (detail?.startsWith("the worktree moved to ") === true
+        || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
+}
+
 function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2702,9 +2712,12 @@ function retryTerminalStagePublication(
 ): void {
   const current = currentPipelineBranchHead(pipeline, ports.exec);
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
-    park(pipeline, current.ok
+    const detail = current.ok
       ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
-      : `the accepted head cannot be verified before completion: ${current.error}`, attempt);
+      : `the accepted head cannot be verified before completion: ${current.error}`;
+    // Head verification can be retried without discarding the accepted pass.
+    attempt.error = detail;
+    park(pipeline, detail);
     return;
   }
   if (!publishesRemoteBranch(pipeline)) {
@@ -2762,7 +2775,13 @@ function routeFailedAttempt(
   reviewed = true,
 ): boolean {
   if (!stage.onFail) return false;
+  if (attempt.activatedBy?.budgetRecheck) {
+    park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
+    return true;
+  }
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
+  const spent = failEdgeExhaustion(stage.onFail) === "advance"
+    ? advanceFailEdgeBudgetSpent(pipeline, stage, attempt) : failEdgeBudgetSpent(pipeline, stage);
   const used = failEdgeRoundsUsed(pipeline, stage);
   /* Under the default `advance` (#1868) `maxRounds` is also how many reviews
      the source gets: the fail of its last one is the handoff below, so the
@@ -2788,8 +2807,9 @@ function routeFailedAttempt(
      findings go to the fix stage one more time, and that fix's pass follows
      this stage's pass edge (or, under `stop-after-fix` with a new head, stops
      in needs_review); `park` keeps the stop for the operator. The handoff
-     happens once per stage, so a later fail of the same stage parks. */
-  if (targetStage && advancesWhenSpent && !failEdgeBudgetSpent(pipeline, stage)) {
+     is scoped to a gate entry under advance: another gate's fail loop may
+     bring it back, while a terminal re-check cannot hand off again. */
+  if (targetStage && advancesWhenSpent && !spent) {
     attempt.budgetSpent = true;
     /* #1938: the head this review judged, so the fix's pass can tell whether
        it wrote one nobody reviewed. */
@@ -3033,8 +3053,8 @@ function settleStageVerdict(
        A spent budget (#1868) hands the findings to the target once more under
        the edge's default `onExhausted: "advance"` and under `stop-after-fix`,
        and parks under `park`. After that last fix `advance` moves on or
-       completes, and `stop-after-fix` waits in needs_review when the fix wrote
-       a new head (#2187). */
+       re-checks a terminal gate before completion (#2247); `stop-after-fix`
+       waits in needs_review when the fix wrote a new head (#2187). */
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -4597,15 +4617,16 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; createdAt: string; lastPassedCommit: string; owner: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
-  base: { baseBranch: string; baseRef: string } | null;
+  base: { baseBranch: string; baseRef: string; baseRefPinned: boolean } | null;
   /** The checked-out head can already contain commits on an existing delivery branch. */
   head: string | null;
   /** What stopped the lane, or null when it is provisioned. */
   error: string | null;
+  preservedLocalRef?: import("./git").PreservedProvisionRef;
 }
 
 function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
@@ -4618,22 +4639,27 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     baseRef: pipeline.baseRef,
+    baseRefPinned: pipeline.baseRefPinned ?? null,
   };
 }
 
 async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
-  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef };
+  // Legacy non-draft records did not retain caller pin provenance. Preserve
+  // their published-head default; new records carry the explicit marker.
+  const baseRefPinned = pipeline.baseRefPinned ?? false;
+  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef, baseRefPinned };
   if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
     /* The lane's OWN base branch, never a hardcoded default: the create path
        records what the caller asked for and resolves nothing, so this is the
        only place that reads it (#1799). */
     const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
-    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
+    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef, baseRefPinned };
   }
   const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
-  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error };
+  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
+    ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
 
 /**
@@ -4733,7 +4759,16 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
   if (outcome.base) {
     pipeline.baseBranch = outcome.base.baseBranch;
     pipeline.baseRef = outcome.base.baseRef;
+    pipeline.baseRefPinned = outcome.base.baseRefPinned;
     pipeline.lastPassedCommit = outcome.base.baseRef;
+  }
+  const preserved = outcome.preservedLocalRef;
+  const preservationDetail = preserved
+    ? `${preserved.unpublishedCommits} unpublished commit(s) preserved at ${preserved.ref}; checkout excludes this local tip`
+    : null;
+  if (preservationDetail && pipeline.delivery
+    && !pipeline.delivery.journal.some((entry) => entry.reason === preservationDetail)) {
+    deliveryJournal(pipeline, "recovery", preservationDetail);
   }
   if (outcome.error) {
     deferOrParkProvisioning(pipeline, outcome.error, ports);
@@ -4742,7 +4777,7 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
   delete pipeline.provisioningWait;
   if (outcome.head) pipeline.lastPassedCommit = outcome.head;
   pipeline.state = "running";
-  pipeline.stateDetail = null;
+  pipeline.stateDetail = preservationDetail;
   return true;
 }
 
@@ -5794,15 +5829,23 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const persistPipeline = () => persist([pipeline]);
         const operation = pipeline.delivery?.operation;
         const passed = pipeline.cursor?.state === "committing" ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
-        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
-          && operation?.sha === pipeline.lastPassedCommit
+        const deliveryRefusalCleared = pipeline.delivery
+          && pipeline.stateDetail?.startsWith("publishing the passed stage: Viewer publication denied:")
+          && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
+        const publicationSucceeded = operation?.sha === pipeline.lastPassedCommit
+          && operation.state === "settled" && operation.result?.ok && operation.result.remote === "published"
+          && passedStagePublicationPark(pipeline, passed);
+        const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
-            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)))) {
+            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
+        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
+          && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
           passed.error = null;
           pipeline.state = "running";
           pipeline.stateDetail = null;
           persistPipeline();
+          changed = true;
         }
         // A quiescent interrupted writer that did not land can safely reserve
         // publication again. Its passed stage and accepted revision stay put.
@@ -6769,6 +6812,7 @@ export async function createPipelineFromRequest(
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
+    pipeline.baseRefPinned = true;
     pipeline.lastPassedCommit = base.baseRef;
   } else if (pipeline.state === "provisioning") {
     /* The branch the controller must fetch travels on the record: without it
@@ -7785,7 +7829,9 @@ export async function patchPipeline(
     const conversationId = actor?.kind === "agent" ? actor.conversationId : null;
     const recoveryError = await reconcilePipelinePublication(req.expectedOwner, req.expectedEpoch!, ports.exec, conversationId);
     if (recoveryError) return { error: recoveryError, status: 409 };
-    return takeoverPipelineDelivery(id, req.expectedOwner, req.expectedEpoch!, req.reason, conversationId);
+    const taken = await takeoverPipelineDelivery(id, req.expectedOwner, req.expectedEpoch!, req.reason, conversationId);
+    if (taken.pipeline) requestPipelineTick();
+    return taken;
   }
   if (req.action === "preview-legacy-review") {
     /* A read: no lease and no write, from either store. An archived draft
@@ -7803,6 +7849,7 @@ export async function patchPipeline(
     }
     const published = await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: req.acceptedSha ?? pipeline.lastPassedCommit });
     if (published.ok && published.remote === "unreachable") return { error: `${published.detail}; reconcile through takeover with expectedOwner ${pipeline.delivery?.ownerId ?? pipeline.id} and expectedEpoch ${pipeline.delivery?.epoch ?? 0}`, status: 409 };
+    if (published.ok) requestPipelineTick();
     return published.ok ? { pipeline: findPipelineRecord(id)! } : { error: published.error, status: 409 };
   }
   let linkRepositories: string[] = [];
@@ -7849,10 +7896,6 @@ export async function patchPipeline(
       if (refused) return refused;
       persist();
       return { pipeline };
-    }
-    if (req.action === "retry-stage" && pipeline.delivery?.operation?.state === "settled") {
-      delete pipeline.delivery.operation;
-      pipeline.publishedCommit = null;
     }
     const guardShape = stageGuardShapeError(req);
     if (guardShape) return guardShape;
@@ -7929,6 +7972,8 @@ export async function patchPipeline(
          every other writer waits on. The controller resolves it instead, the
          same way it does for a lane created without `baseRef`. */
       const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
+      // Before the pin marker existed, only an explicit base resolved a draft.
+      if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
       pipeline.state = "provisioning";
       pipeline.stateDetail = unresolved ? PIPELINE_BASE_UNRESOLVED_DETAIL : null;
     } else if (req.action === "update-draft") {
@@ -7975,6 +8020,7 @@ export async function patchPipeline(
       if (repoChanged) {
         pipeline.baseBranch = "";
         pipeline.baseRef = "";
+        delete pipeline.baseRefPinned;
         pipeline.lastPassedCommit = "";
       }
     } else if (req.action === "set-position") {
@@ -7991,21 +8037,32 @@ export async function patchPipeline(
       const inputs = draftStageInputs(pipeline.stages);
       const index = req.index === undefined ? inputs.length : req.index;
       if (!Number.isInteger(index) || index < 0 || index > inputs.length) return { error: "stage index is out of range", status: 400 };
-      /* Splice the new stage into the chain at its own seam only: it inherits the
-         predecessor's former pass target and the predecessor now points at it, so
-         every OTHER stage's intentional edge is untouched (#353). Inserting at the
-         front makes the new stage the head, pointing at the old head. */
-      const predecessor = index > 0 ? inputs[index - 1] : null;
-      /* On a started pipeline the seam rewires the predecessor's pass edge,
-         which is evidence once that stage has taken it. */
-      if (predecessor && passEdgeTaken(pipeline, predecessor.id)) {
-        return { error: `stage ${predecessor.id} has already passed along its pass edge, which is frozen evidence; insert the stage at another index, or add it where its predecessor has not passed yet and wire it with set-edge`, status: 409 };
+      /* Draft records require their entry at position zero. Adding before it
+         would silently replace the execution entry even with unchanged edges. */
+      if (pipeline.state === "draft" && inputs.length && index === 0) {
+        return { error: `cannot insert before draft entry ${inputs[0]!.id}; use index 1 or later to preserve the execution entry`, status: 409 };
       }
-      const seamNext = predecessor ? predecessor.next ?? null : inputs[index]?.id ?? null;
-      const inserted: PipelineStageInput = { ...req.stage, next: seamNext };
+      /* Array order is presentation. Only an explicit after selects a pass
+         edge to splice; otherwise every supplied edge is preserved (#2247). */
+      if (req.after !== undefined && (typeof req.after !== "string" || !req.after.trim())) {
+        return { error: "after requires a stage id", status: 400 };
+      }
+      const predecessor = req.after === undefined ? null : inputs.find((stage) => stage.id === req.after);
+      if (req.after !== undefined && !predecessor) return { error: `after stage ${req.after} does not exist`, status: 400 };
+      if (predecessor && passEdgeTaken(pipeline, predecessor.id)) {
+        return { error: `stage ${predecessor.id} has already passed along its pass edge, which is frozen evidence; add the stage without after and wire an untaken edge with set-edge`, status: 409 };
+      }
+      const inserted: PipelineStageInput = predecessor ? { ...req.stage, next: predecessor.next ?? null } : { ...req.stage };
       inputs.splice(index, 0, inserted);
-      /* An insert before a started stage shifts it, and one at the front
-         makes a head nothing routes to once the pipeline has left it. */
+      /* Structural-edit cleanup may prune deleted targets. A newly supplied
+         edge must be admitted as written or refused, never silently cleared. */
+      const ids = new Set(inputs.map((stage) => stage.id));
+      if (inserted.next != null && (inserted.next === inserted.id || !ids.has(inserted.next))) {
+        return { error: `stage ${inserted.id} has an invalid pass target`, status: 400 };
+      }
+      if (inserted.onFail && !ids.has(inserted.onFail.to)) {
+        return { error: `stage ${inserted.id} has an invalid fail target`, status: 400 };
+      }
       const displaced = startedStagePositionRefusal(pipeline, inputs);
       if (displaced) return displaced;
       if (predecessor) predecessor.next = inserted.id;
@@ -8031,7 +8088,7 @@ export async function patchPipeline(
         stageId: inserted.id,
         effect: "applied",
         appliesFromAttempt: 1,
-        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${seamNext ? `, before ${seamNext}` : ""}${fixer ? `, as a reviewer with fix stage ${fixer}` : ""}`,
+        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${predecessor && inserted.next ? `, before ${inserted.next}` : ""}${fixer ? `, as a reviewer with fix stage ${fixer}` : ""}`,
       });
     } else if (req.action === "remove-stage") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
@@ -8214,6 +8271,21 @@ export async function patchPipeline(
       if (explicitReceiptRetry && attempt?.launchId !== retryLaunchId) {
         return { error: "the clicked launch is no longer the current failed attempt", status: 409 };
       }
+      // The accepted work is already committed. Retry its publication from
+      // this cursor without claiming a new launch or closing its stage flow.
+      if (stage && attempt && passedStagePublicationPark(pipeline, attempt)) {
+        if (pipeline.delivery?.operation?.state === "settled" && !pipeline.delivery.operation.result?.ok) {
+          delete pipeline.delivery.operation;
+          pipeline.publishedCommit = null;
+        }
+        attempt.state = "passed";
+        pipeline.state = "running";
+        pipeline.pausedState = null;
+        pipeline.stateDetail = null;
+        retryTerminalStagePublication(pipeline, stage, attempt, ports);
+        persist();
+        return { pipeline };
+      }
       const validateRetryReceipt = (settlementWasPending = false): { conflict: { error: string; status: number } | null; claimRequired: boolean } => {
         if (!receiptRetry) return { conflict: null, claimRequired: false };
         const receipt = ports.spawnReceipt(retryLaunchId);
@@ -8282,6 +8354,10 @@ export async function patchPipeline(
       }
       /* An internal review retries on the clean local head it holds; only a
          `remote-branch` pipeline takes a remote repair or republishes. */
+      if (pipeline.delivery?.operation?.state === "settled") {
+        delete pipeline.delivery.operation;
+        pipeline.publishedCommit = null;
+      }
       const retryReviewHead = stage?.kind !== "review-loop"
         ? null
         : publishesRemoteBranch(pipeline)
@@ -8603,6 +8679,7 @@ export async function patchPipeline(
     && patched.pipeline?.delivery?.operation?.state === "pending") {
     const published = await publishPipelineBranch(patched.pipeline, ports.exec, { acceptedSha: patched.pipeline.delivery.operation.sha });
     if (!published.ok) return { error: published.error, status: 409 };
+    requestPipelineTick();
     return { ...patched, pipeline: findPipelineRecord(id)! };
   }
   if (req.action === "close" && patched.close?.status === "pending") ports.scheduleTick?.(0);

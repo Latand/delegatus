@@ -106,6 +106,13 @@ test("a card names a Claude model by its CLI display name and leaves other ids a
   expect(modelDisplayName("codex", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
 });
 
+test("a live conversation's launch alias reads like the resolved id its transcript records later", () => {
+  expect(modelDisplayName("claude", "haiku")).toBe(modelDisplayName("claude", "haiku-4-5"));
+  expect(modelDisplayName("claude", "haiku")).toBe("Haiku 4.5");
+  expect(modelDisplayName("claude", "opus")).toBe("Opus 5.5");
+  expect(modelDisplayName("codex", "haiku")).toBe("haiku");
+});
+
 test("unknown or unsafe Claude transcript model ids omit the launch override", () => {
   expect(normalizeClaudeLaunchModel("mythos-1")).toBeNull();
   expect(normalizeClaudeLaunchModel("claude-opus\n--dangerously-skip-permissions")).toBeNull();
