@@ -1,4 +1,6 @@
-@import "tailwindcss";
+/* Keep image CSS inputs within src/. Repository prose, hooks and evidence
+   must not add utilities to the application or require a Docker rebuild. */
+@import "tailwindcss" source("..");
 
 /* The design system's token set (issue #155 §1): type, spacing, radius,
    surfaces, color roles, motion, and the dark palette. Slice 3 removed the
