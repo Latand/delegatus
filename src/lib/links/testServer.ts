@@ -16,6 +16,9 @@ import * as peers from "@/app/api/links/peers/route";
 import * as peerOne from "@/app/api/links/peers/[id]/route";
 import * as grants from "@/app/api/links/grants/route";
 import * as shared from "@/app/api/links/shared/route";
+import * as filesRoute from "@/app/api/files/route";
+import { boardOpen } from "./boardPresence";
+import { LinkedBoardSchedule, productionSchedulePorts } from "./schedule";
 import * as agentsRoute from "@/app/api/links/agents/route";
 import * as tasksRoute from "@/app/api/tasks/route";
 import * as taskOne from "@/app/api/tasks/[id]/route";
@@ -44,12 +47,30 @@ process.env.XDG_CONFIG_HOME = `${dir}/config`;
 process.env.LLV_STATE_OWNER = "viewer";
 process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
+const schedule = new LinkedBoardSchedule({ ...productionSchedulePorts, now: () => Date.now() });
 let syncCalls = 0;
 let restartAgentFeedAfterPage: string | null = null;
 let padSync = 0;
 let maxSyncBody = 0;
 let failSync: number | null = null;
 let legacyTaskWire = false;
+// Rehearse the historical sender exactly: unchosen text became a placeholder
+// under its unchanged real stamp. Applies to both pushes and pull answers.
+const originalEnd = http.ClientRequest.prototype.end;
+http.ClientRequest.prototype.end = function (this: http.ClientRequest, chunk: unknown, ...args: unknown[]) {
+  if (legacyTaskWire && this.path === "/api/peer/v1/boards/sync" && Buffer.isBuffer(chunk)) {
+    const body = JSON.parse(chunk.toString("utf8")) as { taskWireVersion?: number; push?: { rows?: Record<string, unknown>[] } };
+    delete body.taskWireVersion;
+    for (const row of body.push?.rows ?? []) legacyRow(row);
+    chunk = Buffer.from(JSON.stringify(body));
+    this.setHeader("content-length", String((chunk as Buffer).length));
+  }
+  return Reflect.apply(originalEnd, this, [chunk, ...args]);
+} as typeof originalEnd;
+function legacyRow(row: Record<string, unknown>): void {
+  delete row.board;
+  if (typeof row.text === "string" && row.s && !loadTasks().find((task) => task.id === row.id)?.chosen) row.text = "Untitled task";
+}
 let badInfo = false;
 let grantDeleteStatus: number | null = null;
 let holdNextSync: "request" | "response" | "task-response" | null = null;
@@ -135,6 +156,7 @@ const server = http.createServer(async (request, response) => {
       json(response, { heapUsed: memory.heapUsed, rss: memory.rss });
       return;
     }
+    if (path === "/test/schedule") { await schedule.tick(); json(response, { open: boardOpen([query.get("project")!]), delay: schedule.nextDelay() }); return; }
     if (path === "/test/clock") { clockOffset = Number(query.get("offset") ?? 0); json(response, { clockOffset }); return; }
     if (path === "/test/legacy-task-wire") { legacyTaskWire = query.get("on") === "1"; json(response, { legacyTaskWire }); return; }
     if (path === "/test/capture") { capturing = query.get("on") !== "0"; captured = []; json(response, { capturing }); return; }
@@ -142,12 +164,12 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/captured") { json(response, captured); if (query.get("reset") === "1") captured = []; return; }
     if (path === "/test/tasks") { json(response, loadTasks()); return; }
     if (path === "/test/legacy-cursor") {
-      const input = body() as { id: string; pull: number[]; pushed: number[]; projects: string[] };
-      const opened = new SqliteStateCollection<{ key: string; store: string; shared: unknown[]; cursor?: unknown }>(statePath("state.sqlite"), {
+      const input = body() as { id: string; pull: number[]; pushed: number[]; projects: string[]; wireVersion?: number };
+      const opened = new SqliteStateCollection<{ key: string; store: string; shared: unknown[]; cursor?: unknown; taskWireVersion?: number }>(statePath("state.sqlite"), {
         collection: "board_links", schemaVersion: 1, busyMessage: "test board links busy", key: (row) => row.key,
         decode: (value) => value as never, clone: structuredClone,
       });
-      opened.boundedPatch(2, (tx) => tx.put({ key: `tasks:${input.id}`, store: remoteStore(input.id)!, shared: [], cursor: { pull: input.pull, pushed: input.pushed, pullCovered: input.projects, pushCovered: input.projects } }));
+      opened.boundedPatch(2, (tx) => tx.put({ key: `tasks:${input.id}`, store: remoteStore(input.id)!, shared: [], cursor: { pull: input.pull, pushed: input.pushed, pullCovered: input.projects, pushCovered: input.projects }, taskWireVersion: Number(input.wireVersion ?? 0) }));
       forgetTaskExchange(input.id);
       json(response, { cursor: readTaskCursor(input.id, remoteStore(input.id)!) });
       return;
@@ -161,9 +183,10 @@ const server = http.createServer(async (request, response) => {
     if (path === "/test/scan") { const scan = await currentFileScan({ fresh: true }); json(response, { files: scan.snapshot.files.map((file) => ({ project: file.project, engine: file.engine, conversationId: file.conversationId, proc: file.proc })), generation: scan.generation }); return; }
     if (path === "/test/agent-state") {
       const state = query.get("state");
-      setFileScanRunnerForTests(state === "running" || state === "done"
+      setFileScanRunnerForTests(state === "running" || state === "done" || state === "waiting"
         ? (...args) => runFileCatalogScan(...args).then((snapshot) => ({ ...snapshot, files: snapshot.files.map((file) => ({ ...file,
-          proc: state, activity: state === "running" ? "live" as const : "idle" as const })) }))
+          proc: state === "done" ? "done" as const : "running" as const, activity: state === "running" ? "live" as const : "idle" as const,
+          ...(state === "waiting" ? { waitingInput: { since: Number(query.get("since")), screenTail: "Fixture decision", target: "fixture", menu: null } } : {}) })) }))
         : null);
       json(response, { state }); return;
     }
@@ -386,6 +409,7 @@ const server = http.createServer(async (request, response) => {
     } else if (path === "/api/links/grants") result = method === "GET" ? grants.GET(req) : grants.DELETE(req);
     else if (path === "/api/links/agents") result = agentsRoute.GET(req);
     else if (path === "/api/links/shared") result = method === "GET" ? shared.GET(req) : method === "PATCH" ? await shared.PATCH(req) : await shared.POST(req);
+    else if (path === "/api/files") result = method === "HEAD" ? filesRoute.HEAD(req) : await filesRoute.GET(req);
     else if (path === "/api/tasks") result = method === "GET" ? await tasksRoute.GET(req) : await tasksRoute.POST(req);
     else if (path.startsWith("/api/tasks/")) {
       const context = { params: Promise.resolve({ id: path.slice("/api/tasks/".length) }) };
@@ -397,8 +421,7 @@ const server = http.createServer(async (request, response) => {
       const legacy = JSON.parse(resultBody.toString("utf8")) as { taskWireVersion?: number; tasks?: { rows?: Record<string, unknown>[] } };
       delete legacy.taskWireVersion;
       for (const row of legacy.tasks?.rows ?? []) {
-        delete row.board;
-        if (typeof row.text === "string" && row.s) row.text = "Untitled task";
+        legacyRow(row);
       }
       resultBody = Buffer.from(JSON.stringify(legacy));
     }

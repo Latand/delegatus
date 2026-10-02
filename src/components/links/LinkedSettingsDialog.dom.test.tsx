@@ -345,3 +345,88 @@ test("everything that worked before still calls the same routes", async () => {
   await click(byText(en("links.cancelCode"))!);
   expect(posted("DELETE", "/api/links/codes?id=ABCDEF").length).toBe(1);
 });
+
+
+test.each(["revoked", "failing"])("a %s peer with a recent success has a danger sync line", async (state) => {
+  serve({ status: 200, body: {} }, { peers: [peer({ state, lastCall: Date.now() - 60_000 })] });
+  await mount();
+  const line = document.querySelector("[data-linked-sync]")!;
+  expect(line.getAttribute("data-linked-sync")).toBe("failing");
+  expect(line.classList.contains("text-danger")).toBe(true);
+  expect(line.textContent).toBe(en("links.syncFailing", { ago: "1 minute ago" }));
+});
+
+test("sync state is visible for outgoing and incoming links, including waiting and errors", async () => {
+  const minutes = (count: number) => Date.now() - count * 60_000;
+  serve({ status: 200, body: {} }, { peers: [peer({ lastCall: minutes(30), state: "failing", error: "unreachable" })], grants: [grant({ lastCall: minutes(2) }), grant({ id: "pending", lastCall: null }), grant({ id: "failed", lastCall: null, error: "malformed" }), grant({ id: "old", lastCall: minutes(40) })] });
+  await mount();
+  const lines = [...document.querySelectorAll("[data-linked-sync]")];
+  expect(lines.map((node) => node.getAttribute("data-linked-sync"))).toEqual(["failing", "synced", "waiting", "failing", "stale"]);
+  expect(lines.map((node) => node.textContent)).toEqual([
+    en("links.syncFailing", { ago: "30 minutes ago" }),
+    en("links.syncedAgo", { ago: "2 minutes ago" }),
+    en("links.syncWaiting"),
+    en("links.syncFailingNever"),
+    en("links.syncStale", { ago: "40 minutes ago" }),
+  ]);
+  expect(lines.map((node) => ["text-danger", "text-success", "text-muted", "text-warning"].find((tone) => node.classList.contains(tone)))).toEqual(["text-danger", "text-success", "text-muted", "text-danger", "text-warning"]);
+  expect(document.querySelector('[data-linked-grant-error="malformed"]')!.textContent).toBe(en("links.peerError.version", { name: "home-pc" }));
+});
+
+test("the connected machines come before the pairing steps once a link exists, and after them when none does", async () => {
+  const position = () => {
+    const machines = document.querySelector(`section[aria-label="${en("links.connectedMachines")}"]`)!;
+    return machines.compareDocumentPosition(document.querySelector('[role="radiogroup"]')!);
+  };
+  serve({ status: 200, body: {} }, { peers: [peer({ lastCall: Date.now() })] });
+  await mount();
+  expect(position() & 4).toBe(4);
+  act(() => root?.unmount()); root = null; document.body.innerHTML = "";
+  serve({ status: 200, body: {} });
+  await mount();
+  expect(position() & 2).toBe(2);
+});
+
+test("successful link polling cannot hide an initial settings read failure", async () => {
+  serve({ status: 200, body: {} });
+  const read = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => String(input) === "/api/links" ? Promise.resolve(Response.json({ error: "unavailable" }, { status: 503 })) : read(input, init)) as typeof fetch;
+  await mount();
+  expect(document.querySelector('[data-linked-state="unavailable"]')!.textContent).toBe(en("links.state.unavailable"));
+});
+
+test("failed link metadata reads keep an honest error beside the settings", async () => {
+  serve({ status: 200, body: {} });
+  const read = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => String(input) === "/api/links/peers" ? Promise.resolve(Response.json({ error: "unavailable" }, { status: 503 })) : read(input, init)) as typeof fetch;
+  await mount();
+  expect(document.querySelector('[data-linked-state="unavailable"]')!.textContent).toBe(en("links.state.unavailable"));
+});
+
+test("cached successful sync ages to stale while metadata reads fail", async () => {
+  const realNow = Date.now;
+  const realInterval = globalThis.setInterval;
+  const realWindowInterval = window.setInterval;
+  const ticks: Array<() => void> = [];
+  let now = realNow();
+  Date.now = () => now;
+  globalThis.setInterval = ((callback: () => void, ms: number) => { ticks.push(callback); return realInterval(callback, ms); }) as typeof setInterval;
+  window.setInterval = ((callback: () => void, ms: number) => { ticks.push(callback); return realWindowInterval.call(window, callback, ms); }) as typeof window.setInterval;
+  try {
+    serve({ status: 200, body: {} }, { peers: [peer({ lastCall: now - 60_000 })], grants: [grant({ lastCall: now - 60_000 })] });
+    await mount();
+    expect(document.querySelectorAll('[data-linked-sync="synced"]')).toHaveLength(2);
+    globalThis.fetch = (async () => Response.json({ error: "unavailable" }, { status: 503 })) as unknown as typeof fetch;
+    now += 20 * 60_000;
+    await act(async () => { for (const tick of ticks) tick(); });
+    await settle();
+    expect(document.querySelector('[data-linked-state="unavailable"]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-linked-sync="stale"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-linked-sync="synced"]')).toHaveLength(0);
+  } finally {
+    act(() => root?.unmount()); root = null;
+    Date.now = realNow;
+    globalThis.setInterval = realInterval;
+    window.setInterval = realWindowInterval;
+  }
+});

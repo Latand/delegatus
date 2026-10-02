@@ -13,6 +13,8 @@ export function markBoardViewed(project: string | undefined, now = Date.now()): 
 export function boardOpen(projects: Iterable<string>, now = Date.now(), withinMs = 30_000): boolean {
   const seen = presence.__llvBoardViewedAt;
   if (!seen?.size) return false;
-  for (const project of projects) if (now - (seen.get(project) ?? 0) <= withinMs) return true;
+  const recent = (project: string) => seen.has(project) && now - seen.get(project)! <= withinMs;
+  if (recent("__overview__")) return true;
+  for (const project of projects) if (recent(project)) return true;
   return false;
 }

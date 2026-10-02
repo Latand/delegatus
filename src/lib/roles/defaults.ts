@@ -29,7 +29,7 @@ const REVIEW_FRAME_RULES =
 // and stages kept re-solving what an earlier one had already solved. Pipeline
 // stages inherit the scaffold, so the sentence lives here once.
 const SEARCH_PRIOR_CONVERSATIONS =
-  "Before deciding, and whenever a problem or unknown appears, ask whether it was solved before: run a few search_transcripts queries in different phrasings (project-scoped, then unscoped), read any hit through conversation_messages at its transcript path, cite what you found or say nothing relevant existed, and check an old answer against the code as it is now before building on it.";
+  "Before deciding, and whenever a problem or unknown appears, ask whether it was solved before: run a few search_transcripts and search_memory queries in different phrasings (project-scoped, then unscoped), read transcript hits through conversation_messages at their transcript paths and memory hits through search_memory by id, cite what you found or say nothing relevant existed, and check an old answer against the code as it is now before building on it.";
 
 // #1843 — a builder whose live probes hit HTTP 429 finished the feature on an
 // invented response key and noted the gap in the PR; the reviewer passed it.

@@ -94,7 +94,7 @@ import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -4625,15 +4625,16 @@ export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and 
 interface PipelineProvisionOutcome {
   id: string;
   /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; createdAt: string; lastPassedCommit: string; owner: string };
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string };
   /** The commit the fetch resolved, recorded even when the worktree then
       failed: a retry of a parked provisioning provisions the SAME commit the
       lane was parked on rather than whatever the base has moved to since. */
-  base: { baseBranch: string; baseRef: string } | null;
+  base: { baseBranch: string; baseRef: string; baseRefPinned: boolean } | null;
   /** The checked-out head can already contain commits on an existing delivery branch. */
   head: string | null;
   /** What stopped the lane, or null when it is provisioned. */
   error: string | null;
+  preservedLocalRef?: import("./git").PreservedProvisionRef;
 }
 
 function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
@@ -4646,22 +4647,27 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     baseRef: pipeline.baseRef,
+    baseRefPinned: pipeline.baseRefPinned ?? null,
   };
 }
 
 async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
-  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef };
+  // Legacy non-draft records did not retain caller pin provenance. Preserve
+  // their published-head default; new records carry the explicit marker.
+  const baseRefPinned = pipeline.baseRefPinned ?? false;
+  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef, baseRefPinned };
   if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
     /* The lane's OWN base branch, never a hardcoded default: the create path
        records what the caller asked for and resolves nothing, so this is the
        only place that reads it (#1799). */
     const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
-    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
+    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef, baseRefPinned };
   }
   const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
-  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error };
+  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
+    ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
 
 /**
@@ -4761,7 +4767,16 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
   if (outcome.base) {
     pipeline.baseBranch = outcome.base.baseBranch;
     pipeline.baseRef = outcome.base.baseRef;
+    pipeline.baseRefPinned = outcome.base.baseRefPinned;
     pipeline.lastPassedCommit = outcome.base.baseRef;
+  }
+  const preserved = outcome.preservedLocalRef;
+  const preservationDetail = preserved
+    ? `${preserved.unpublishedCommits} unpublished commit(s) preserved at ${preserved.ref}; checkout excludes this local tip`
+    : null;
+  if (preservationDetail && pipeline.delivery
+    && !pipeline.delivery.journal.some((entry) => entry.reason === preservationDetail)) {
+    deliveryJournal(pipeline, "recovery", preservationDetail);
   }
   if (outcome.error) {
     deferOrParkProvisioning(pipeline, outcome.error, ports);
@@ -4770,7 +4785,7 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
   delete pipeline.provisioningWait;
   if (outcome.head) pipeline.lastPassedCommit = outcome.head;
   pipeline.state = "running";
-  pipeline.stateDetail = null;
+  pipeline.stateDetail = preservationDetail;
   return true;
 }
 
@@ -6805,6 +6820,7 @@ export async function createPipelineFromRequest(
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
+    pipeline.baseRefPinned = true;
     pipeline.lastPassedCommit = base.baseRef;
   } else if (pipeline.state === "provisioning") {
     /* The branch the controller must fetch travels on the record: without it
@@ -7964,6 +7980,8 @@ export async function patchPipeline(
          every other writer waits on. The controller resolves it instead, the
          same way it does for a lane created without `baseRef`. */
       const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
+      // Before the pin marker existed, only an explicit base resolved a draft.
+      if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
       pipeline.state = "provisioning";
       pipeline.stateDetail = unresolved ? PIPELINE_BASE_UNRESOLVED_DETAIL : null;
     } else if (req.action === "update-draft") {
@@ -8010,6 +8028,7 @@ export async function patchPipeline(
       if (repoChanged) {
         pipeline.baseBranch = "";
         pipeline.baseRef = "";
+        delete pipeline.baseRefPinned;
         pipeline.lastPassedCommit = "";
       }
     } else if (req.action === "set-position") {
