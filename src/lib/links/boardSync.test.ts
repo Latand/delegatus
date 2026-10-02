@@ -5,17 +5,20 @@
  * TCP counting proxy between the two (`wireMeter.ts`); body figures are
  * `Buffer.byteLength` of what the test server received and answered.
  */
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { randomUUID } from "node:crypto";
-import { installPrefix } from "./stamp";
+import { boardPresenceUrl } from "@/hooks/useFiles";
+import { derivedStamp, installPrefix } from "./stamp";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
+import { DONE_TASK_BOARD_RETENTION_MS } from "@/lib/tasks/boardVisibility";
 import { meter, WIRE_BUDGET, type Meter } from "./wireMeter";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 
@@ -26,6 +29,11 @@ const processes: ChildProcessWithoutNullStreams[] = [];
 const installProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const installPorts = new Map<string, number>();
 const meters: Meter[] = [];
+// Completed cases must not retain dozens of Bun installs inside the gate's
+// memory scope while later cases measure per-process CPU.
+afterEach(async () => {
+  for (const url of [...installProcesses.keys()]) await stopInstall(url);
+});
 afterAll(() => {
   for (const counts of meters) counts.close();
   for (const child of processes) if (child.pid && !child.killed) child.kill("SIGTERM");
@@ -118,11 +126,11 @@ function oldSource(): string {
 }
 
 /** Merge-base processes used to seed state as it existed before this fix. */
-function mergeBaseSource(): string {
-  const source = path.join(root, "source-merge-base");
+function mergeBaseSource(revision = "4baabbec88d86b5a9a69d178e2be9881d12fa7fe"): string {
+  const source = path.join(root, `source-merge-base-${revision}`);
   if (fs.existsSync(source)) return source;
   fs.mkdirSync(source);
-  const archive = spawnSync("git", ["archive", "4baabbec88d86b5a9a69d178e2be9881d12fa7fe", "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
+  const archive = spawnSync("git", ["archive", revision, "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
   if (archive.status !== 0) throw new Error(`merge-base source archive failed: ${archive.stderr.toString()}`);
   const unpack = spawnSync("tar", ["-x", "-C", source], { input: archive.stdout });
   if (unpack.status !== 0) throw new Error(`merge-base source extraction failed: ${unpack.stderr.toString()}`);
@@ -171,6 +179,178 @@ function seedTranscript(name: string, prompt: string, origin = remote, sessionId
   ];
   fs.writeFileSync(path.join(projects, `${sessionId}.jsonl`), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
 }
+
+test("done expiry stops owner exports both ways without deleting replicas; reopen and new admissions resume", async () => {
+  const names = ["done-export-A", "done-export-B"];
+  const installs = [await install(names[0]!), await install(names[1]!)];
+  const peerId = await link(installs[0]!, installs[1]!, undefined, installs[1]!, false);
+  const at = Date.now();
+  const matrices = [];
+  for (const [index, owner] of installs.entries()) {
+    const rows = [];
+    for (const title of ["Recent done", "Soon expired", "Already expired", "Seat task"]) {
+      const task = await createOn(owner, `${title} ${index}`);
+      expect((await patchOn(owner, task.id, { status: "done" })).status).toBe(200);
+      rows.push((await taskOn(owner, task.id))!);
+    }
+    const [recent, expiring, old, seat] = rows as [BoardTask, BoardTask, BoardTask, BoardTask];
+    recent.doneAt = new Date(at - 3_600_000).toISOString();
+    expiring.doneAt = new Date(at - DONE_TASK_BOARD_RETENTION_MS + 60_000).toISOString();
+    for (const task of [old, seat]) task.doneAt = new Date(at - DONE_TASK_BOARD_RETENTION_MS - 60_000).toISOString();
+    seat.assignments = [{ conversationId: `seat-${index}`, path: null, panePid: null, state: "linked", error: null, at: seat.doneAt! }];
+    seat.doneAdmissions = [`seat-${index}`];
+    fs.writeFileSync(path.join(root, names[index]!, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 2,
+      seats: { [key]: { project: key, seatEpoch: 1, conversationId: `seat-${index}`, path: null, mandate: "Fixture seat", state: "active",
+        promptVersion: null, predecessorConversationId: null, designatedAt: seat.doneAt, activatedAt: seat.doneAt,
+        intent: { clientRequestId: `seat-${index}`, mode: "existing", launchId: null, error: null } } }, pending: {}, revocations: [] }));
+    expect((await request(owner, "/test/import-tasks", "POST", { tasks: rows })).status).toBe(200);
+    matrices.push({ owner, receiver: installs[1 - index]!, recent, expiring, old, seat });
+  }
+  await sync(installs[0]!, peerId);
+  let pages = await captured(installs[1]!);
+  const rowIds = (calls: Captured[], owner?: string) => calls.flatMap((call) => [
+    ...(owner === installs[1] ? [] : JSON.parse(call.request).push?.rows ?? []),
+    ...(owner === installs[0] ? [] : JSON.parse(call.response).tasks?.rows ?? []),
+  ]).map((row) => row.id as string);
+  for (const { receiver, recent, expiring, old, seat } of matrices) {
+    for (const task of [recent, expiring, seat]) expect((await taskOn(receiver, task.id))?.text).toBe(task.text);
+    expect(await taskOn(receiver, old.id)).toBeUndefined();
+    expect(rowIds(pages)).not.toContain(old.id);
+    expect(rowIds(pages)).toContain(seat.id);
+  }
+  const beforeGraves = await Promise.all(installs.map(async (side) => (await request(side, "/test/store")).body));
+  // Both fixture clocks move together; wire stamps stay within the clock fence.
+  for (const side of installs) await request(side, "/test/clock?offset=120000");
+  for (const { owner, expiring, old, seat } of matrices) {
+    for (const task of [expiring, old, seat]) expect((await patchOn(owner, task.id, { text: `${task.text} changed` })).status).toBe(200);
+  }
+  await sync(installs[0]!, peerId);
+  pages = await captured(installs[1]!);
+  for (const { owner, receiver, expiring, old, seat } of matrices) {
+    expect(rowIds(pages)).not.toContain(expiring.id);
+    expect(rowIds(pages)).not.toContain(old.id);
+    expect((await taskOn(owner, expiring.id))?.text).toBe(`${expiring.text} changed`);
+    expect((await taskOn(receiver, expiring.id))?.text).toBe(expiring.text);
+    expect((await taskOn(receiver, seat.id))?.text).toBe(`${seat.text} changed`);
+  }
+  // A fresh full scan also omits aged tasks and leaves existing copies intact.
+  await request(installs[0]!, "/test/legacy-cursor", "POST", { id: peerId, pull: [0], pushed: [0], projects: [], wireVersion: 3 });
+  await sync(installs[0]!, peerId);
+  pages = await captured(installs[1]!);
+  for (const { owner, receiver, expiring, old } of matrices) {
+    expect(rowIds(pages, owner)).not.toContain(expiring.id);
+    expect(rowIds(pages, owner)).not.toContain(old.id);
+    expect((await taskOn(receiver, expiring.id))?.text).toBe(expiring.text);
+  }
+  for (const [index, { owner, old, expiring }] of matrices.entries()) {
+    expect((await patchOn(owner, old.id, { status: "inbox" })).status).toBe(200);
+    const rows = await tasksOf(owner);
+    const task = rows.find((row) => row.id === expiring.id)!;
+    task.assignments.push({ conversationId: `new-worker-${index}`, path: null, panePid: null, state: "linked", error: null, at: new Date(at + 120_000).toISOString() });
+    task.updatedAt = new Date(at + 120_000).toISOString();
+    expect((await request(owner, "/test/import-tasks", "POST", { tasks: rows })).status).toBe(200);
+  }
+  await sync(installs[0]!, peerId);
+  pages = await captured(installs[1]!);
+  for (const { owner, receiver, old, expiring } of matrices) {
+    expect(rowIds(pages)).toContain(old.id);
+    expect(rowIds(pages)).toContain(expiring.id);
+    expect((await taskOn(receiver, old.id))?.status).toBe("inbox");
+    expect((await taskOn(owner, old.id))?.doneAt).toBeUndefined();
+    expect((await taskOn(receiver, expiring.id))?.text).toBe(`${expiring.text} changed`);
+    expect(await tasksOf(owner)).toHaveLength(8);
+  }
+  await sync(installs[0]!, peerId);
+  for (const [index, side] of installs.entries()) {
+    const after = (await request(side, "/test/store")).body;
+    expect((after.bytes as Record<string, { rows: number }>).task_tombstones.rows).toBe((beforeGraves[index]!.bytes as Record<string, { rows: number }>).task_tombstones.rows);
+  }
+}, 30_000);
+
+test.each([false, true])("a new decision after done expiry resumes exports both ways without a task edit (restart=%s); an older decision does not", async (restart) => {
+  const names = [`done-decision-A-${restart}`, `done-decision-B-${restart}`];
+  const installs = [await install(names[0]!), await install(names[1]!)];
+  const peerId = await link(installs[0]!, installs[1]!, undefined, installs[1]!, false);
+  const at = Date.now();
+  const tasks: BoardTask[] = [];
+  for (const [index, owner] of installs.entries()) {
+    const name = names[index]!;
+    seedTranscript(name, "Fixture decision request");
+    const checkout = path.join(root, name, "checkout", "widget");
+    const transcript = path.join(root, name, "home", ".claude", "projects", checkout.replace(/[/.]/g, "-"), "session-canary.jsonl");
+    const task = await createOn(owner, `Decision task ${index}`);
+    expect((await patchOn(owner, task.id, { status: "done" })).status).toBe(200);
+    const done = (await taskOn(owner, task.id))!;
+    done.doneAt = new Date(at - DONE_TASK_BOARD_RETENTION_MS - 60_000).toISOString();
+    done.assignments = [{ path: transcript, panePid: null, state: "linked", error: null, at: done.doneAt }];
+    done.doneAdmissions = [transcript];
+    await request(owner, "/test/import-tasks", "POST", { tasks: [done] });
+    await request(owner, `/test/agent-state?state=waiting&since=${(at - 120_000) / 1000}`);
+    await request(owner, "/test/scan");
+    tasks.push(done);
+  }
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of tasks.entries()) expect(await taskOn(installs[1 - index]!, task.id)).toBeUndefined();
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of tasks.entries()) expect(await taskOn(installs[1 - index]!, task.id)).toBeUndefined();
+  const originals = await Promise.all(installs.map((owner, index) => taskOn(owner, tasks[index]!.id)));
+  if (restart) {
+    await Promise.all(installs.map(stopInstall));
+    for (const [index, name] of names.entries()) installs[index] = await install(name);
+  }
+  for (const [index, owner] of installs.entries()) {
+    await request(owner, `/test/agent-state?state=waiting&since=${at / 1000}`);
+    await request(owner, "/test/scan");
+    expect(await taskOn(owner, tasks[index]!.id)).toEqual(originals[index]);
+  }
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of tasks.entries()) {
+    expect((await taskOn(installs[1 - index]!, task.id))?.text).toBe(task.text);
+    expect(await taskOn(installs[index]!, task.id)).toEqual(originals[index]);
+    expect(await tasksOf(installs[index]!)).toHaveLength(2);
+    const figures = (await request(installs[index]!, "/test/store")).body;
+    expect((figures.bytes as Record<string, { rows: number }>).task_tombstones.rows).toBe(0);
+  }
+  await captured(installs[1]!);
+  await sync(installs[0]!, peerId);
+  expect((await captured(installs[1]!)).every((page) =>
+    !(JSON.parse(page.request).push?.rows?.length) && !(JSON.parse(page.response).tasks?.rows?.length))).toBe(true);
+}, 30_000);
+
+test.each(["seat", "pipeline"] as const)("a changed %s resumes omitted Done tasks without owner edits in both directions", async (kind) => {
+  const names = [`done-${kind}-A`, `done-${kind}-B`];
+  const installs = [await install(names[0]!), await install(names[1]!)];
+  const peerId = await link(installs[0]!, installs[1]!, undefined, installs[1]!, false);
+  const originals: BoardTask[] = [];
+  for (const [index, owner] of installs.entries()) {
+    const task = await createOn(owner, `Expired ${kind} task ${index}`);
+    expect((await patchOn(owner, task.id, { status: "done" })).status).toBe(200);
+    const done = (await taskOn(owner, task.id))!;
+    done.doneAt = new Date(Date.now() - DONE_TASK_BOARD_RETENTION_MS - 60_000).toISOString();
+    done.assignments = [{ conversationId: `seat-${index}`, path: null, panePid: null, state: "linked", error: null, at: done.doneAt }];
+    done.doneAdmissions = [`seat-${index}`];
+    expect((await request(owner, "/test/import-tasks", "POST", { tasks: [done] })).status).toBe(200);
+    originals.push((await taskOn(owner, done.id))!);
+  }
+  await sync(installs[0]!, peerId);
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of originals.entries()) expect(await taskOn(installs[1 - index]!, task.id)).toBeUndefined();
+  for (const [index, owner] of installs.entries()) {
+    if (kind === "pipeline") {
+      expect((await laneOn(owner, { id: "a1b2c3d4", taskIds: [originals[index]!.id], state: "needs_decision", current: "review", stages: threeStages("review") })).status).toBe(200);
+    } else {
+      fs.writeFileSync(path.join(root, names[index]!, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 2,
+        seats: { [key]: { project: key, seatEpoch: 1, conversationId: `seat-${index}`, path: null, mandate: "Fixture seat", state: "active",
+          promptVersion: null, predecessorConversationId: null, designatedAt: originals[index]!.doneAt, activatedAt: originals[index]!.doneAt,
+          intent: { clientRequestId: `seat-${index}`, mode: "existing", launchId: null, error: null } } }, pending: {}, revocations: [] }));
+    }
+  }
+  await sync(installs[0]!, peerId);
+  for (const [index, task] of originals.entries()) {
+    expect((await taskOn(installs[1 - index]!, task.id))?.text).toBe(task.text);
+    expect(await taskOn(installs[index]!, task.id)).toEqual(task);
+  }
+}, 30_000);
 
 test("remote agents travel both ways as prompt-free summaries and stay in their linked project", async () => {
   const secondRemote = "code.example.test/acme/other";
@@ -828,6 +1008,52 @@ const figures = async (base: string, reset = false) => (await request(base, `/te
 const otherRemote = "code.example.test/acme/unlinked";
 const otherKey = projectIdentityFromRemote(`https://${otherRemote}`, "/")!.project;
 
+test("2 000 expired Done omissions per install keep unchanged idle syncs within the zero-read and 2 ms CPU budgets", async () => {
+  const installs = [await install("expired-idle-A"), await install("expired-idle-B")];
+  const doneAt = new Date(Date.now() - DONE_TASK_BOARD_RETENTION_MS - 60_000).toISOString();
+  for (const side of installs) {
+    await request(side, "/test/capture?on=0");
+    await request(side, "/test/bulk", "POST", { project: key, count: 2_000 });
+    const completed = (await tasksOf(side)).map((task) => ({ ...task, status: "done" }));
+    expect((await request(side, "/test/import-tasks", "POST", { tasks: completed })).status).toBe(200);
+    // The transition stamps completion; backdate the already-Done fixture.
+    const expired = (await tasksOf(side)).map((task) => ({ ...task, doneAt, doneAdmissions: [] }));
+    expect((await request(side, "/test/import-tasks", "POST", { tasks: expired })).status).toBe(200);
+    expect((await tasksOf(side)).every((task) => task.doneAt === doneAt)).toBe(true);
+  }
+  const peerId = await link(installs[0]!, installs[1]!);
+  for (let i = 0; i < 100; i++) await sync(installs[0]!, peerId);
+  const before = await Promise.all(installs.map((side) => figures(side, true)));
+  const cpu = () => Promise.all(installs.map(async (side) => (await request(side, "/test/cpu")).body.ms as number));
+  const cpuBefore = await cpu();
+  for (let i = 0; i < 100; i++) await sync(installs[0]!, peerId);
+  const cpuAfter = await cpu();
+  const idle = await Promise.all(installs.map((side) => figures(side)));
+  console.info("Expired Done idle CPU per 100 syncs (ms):", cpuAfter.map((after, side) => after - cpuBefore[side]!));
+  for (const side of [0, 1]) {
+    expect({ side, rowReads: idle[side]!.rowReads, writes: idle[side]!.writes }).toEqual({ side, rowReads: 0, writes: 0 });
+    expect(idle[side]!.revisions).toEqual(before[side]!.revisions);
+    expect(cpuAfter[side]! - cpuBefore[side]!).toBeLessThanOrEqual(200);
+    expect(await tasksOf(installs[side]!)).toHaveLength(2_000);
+  }
+  // A changed scanner snapshot starts bounded work even when no task row
+  // changed. Four calls cover all 2 000 omissions, then idle reads stop again.
+  for (const side of installs) await request(side, "/test/scan");
+  for (let i = 0; i < 4; i++) {
+    await Promise.all(installs.map((side) => figures(side, true)));
+    await sync(installs[0]!, peerId);
+    for (const side of installs) {
+      const work = await figures(side);
+      expect(work.rowReads).toBeGreaterThan(0);
+      expect(work.rowReads).toBeLessThanOrEqual(513);
+      expect(work.writes).toBe(0);
+    }
+  }
+  await Promise.all(installs.map((side) => figures(side, true)));
+  await sync(installs[0]!, peerId);
+  for (const side of installs) expect((await figures(side)).rowReads).toBe(0);
+}, 60_000);
+
 test("idle calls read no task row and write nothing on either side; 100 calls while an unlinked project takes writes cost at most one board_links write", async () => {
   const a = await install("work-A", { [otherKey]: otherRemote });
   const b = await install("work-B", { [otherKey]: otherRemote });
@@ -1047,7 +1273,7 @@ test("shared text crosses and already-synced placeholders recover on the next sy
   // upgraded exchange must cover old rows even though its log was consumed.
   const revisionA = Number((await request(a, "/test/revision")).body.revision);
   const revisionB = Number((await request(b, "/test/revision")).body.revision);
-  await request(a, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionB], pushed: [revisionA], projects: [key] });
+  await request(a, "/test/legacy-cursor", "POST", { id: peerId, pull: [revisionB], pushed: [revisionA], projects: [key], wireVersion: 3 });
   await sync(a, peerId);
   expect((await taskOn(b, fromA.id))?.text).toBe(fromA.text);
   expect((await taskOn(a, fromB.id))?.text).toBe(fromB.text);
@@ -1062,6 +1288,14 @@ test("shared text crosses and already-synced placeholders recover on the next sy
   await sync(a, peerId);
   expect(await tasksOf(a)).toEqual(beforeA);
   expect(await tasksOf(b)).toEqual(beforeB);
+  await stopInstall(a);
+  const restarted = await install("title-repair-A");
+  await captured(b);
+  await sync(restarted, peerId);
+  expect(await tasksOf(restarted)).toEqual(beforeA);
+  expect(await tasksOf(b)).toEqual(beforeB);
+  const idlePages = await captured(b);
+  expect(idlePages.every((page) => !(JSON.parse(page.request).push?.rows?.length) && !(JSON.parse(page.response).tasks?.rows?.length))).toBe(true);
 }, 30_000);
 
 test("an in-flight placeholder repair keeps the source's concurrent title and details through resync and restart", async () => {
@@ -1193,6 +1427,65 @@ test("a receiver upgraded after its sender replays title recovery from its consu
   expect(await taskOn(upgradedReceiver, task.id)).toMatchObject({ text: "Sender-first automatic title", details: "Preserve these details", status: "blocked" });
 }, 60_000);
 
+for (const upgradeInitiator of [false, true]) {
+  test(`consumed v3 title recovery survives an ${upgradeInitiator ? "initiating" : "accepting"}-only upgrade and restart`, async () => {
+    const legacy = mergeBaseSource("7b5cc5fe");
+    const names = [`title-v3-A-${upgradeInitiator}`, `title-v3-B-${upgradeInitiator}`];
+    let a = await install(names[0]!, {}, legacy), b = await install(names[1]!, {}, legacy);
+    const fromA = await createOn(a, "Authoritative initiating title");
+    const fromB = await createOn(b, "Authoritative accepting title");
+    const edited = await createOn(a, "Older owner title");
+    const peerId = await link(a, b);
+    await sync(a, peerId);
+    const saved = await Promise.all([tasksOf(a), tasksOf(b)]);
+    await stopInstall(a);
+    await stopInstall(b);
+    const bInstallId = JSON.parse(fs.readFileSync(path.join(root, names[1]!, "links/self.json"), "utf8")).installId as string;
+    const newerTextStamp = `${String(Date.now()).padStart(13, "0")}.999.${installPrefix(bInstallId)}`;
+    // Reproduce the persisted equal-stamp loss without advancing the log or
+    // resetting cursors. Both directions have already consumed real v3 feeds.
+    for (const [side, name] of names.entries()) {
+      const db = new Database(path.join(root, name, "state.sqlite"));
+      try {
+        if (side === 0) {
+          const cursor = db.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection = 'board_links' AND row_key = ?").get(`tasks:${peerId}`)!;
+          expect(JSON.parse(cursor.value_json)).toMatchObject({ taskWireVersion: 3, cursor: { boardReplayVersion: 1 } });
+        }
+        const lostId = side === 0 ? fromB.id : fromA.id;
+        for (const task of saved[side]!) {
+          if (task.id === lostId) task.text = "Untitled task";
+          else if (side === 1 && task.id === edited.id) {
+            task.text = "Newer local title";
+            task.sync!.s.text = newerTextStamp;
+          } else continue;
+          db.query("UPDATE state_rows SET value_json = ? WHERE collection = 'tasks' AND row_key = ?").run(JSON.stringify(task), `t:${task.id}`);
+        }
+      } finally { db.close(); }
+    }
+    a = await install(names[0]!, {}, upgradeInitiator ? process.cwd() : legacy);
+    b = await install(names[1]!, {}, upgradeInitiator ? legacy : process.cwd());
+    expect((await taskOn(b, fromA.id))?.text).toBe("Untitled task");
+    expect((await taskOn(a, fromB.id))?.text).toBe("Untitled task");
+    await sync(a, peerId);
+    await sync(a, peerId);
+    expect(await taskOn(b, fromA.id)).toMatchObject({ text: fromA.text, sync: { s: { text: saved[1]!.find((task) => task.id === fromA.id)!.sync!.s.text } } });
+    expect(await taskOn(a, fromB.id)).toMatchObject({ text: fromB.text, sync: { s: { text: saved[0]!.find((task) => task.id === fromB.id)!.sync!.s.text } } });
+    expect(await taskOn(b, edited.id)).toMatchObject({ text: "Newer local title", sync: { s: { text: newerTextStamp } } });
+    await stopInstall(a);
+    await stopInstall(b);
+    a = await install(names[0]!, {}, upgradeInitiator ? process.cwd() : legacy);
+    b = await install(names[1]!, {}, upgradeInitiator ? legacy : process.cwd());
+    const before = await Promise.all([tasksOf(a), tasksOf(b)]);
+    await request(b, "/test/capture?on=1");
+    for (let i = 0; i < 3; i++) await sync(a, peerId);
+    expect(await Promise.all([tasksOf(a), tasksOf(b)])).toEqual(before);
+    for (const call of await captured(b)) {
+      expect(JSON.parse(call.request).push?.rows ?? []).toEqual([]);
+      expect(JSON.parse(call.response).tasks?.rows ?? []).toEqual([]);
+    }
+  }, 60_000);
+}
+
 test("task wire v3 keeps board sync compatible with a strict v2 peer in both upgrade orders", async () => {
   let current = await install("rolling-board-current");
   const legacy = await install("rolling-board-legacy");
@@ -1217,6 +1510,7 @@ test("task wire v3 keeps board sync compatible with a strict v2 peer in both upg
   await link(legacy, current, { projects: [key] }, current, false);
   const calls = await captured(current);
   const template = JSON.parse(calls.at(-1)!.request) as Record<string, unknown>;
+  template.taskWireVersion = 3;
   template.tasks = { after: null, scan: { p: [key], after: "" } };
   const legacyPeer = (JSON.parse(fs.readFileSync(path.join(root, "rolling-board-legacy", "links/peers.json"), "utf8")) as { peers: { url: string; grantId: string; token: string }[] }).peers
     .find((peer) => peer.url === current)!;
@@ -1459,6 +1753,93 @@ test("automatic membership recovery respects admission and retries when a band b
   expect(await tasksOf(b)).toHaveLength(301);
 }, 60_000);
 
+test("visible board HEAD requests sustain short sync cadence after idle and expire on close", async () => {
+  const a = await install("cadence-A"), b = await install("cadence-B");
+  await link(a, b);
+  const tick = async (offset: number, visible = false) => {
+    await request(a, `/test/clock?offset=${offset}`);
+    if (visible) expect((await fetch(a + boardPresenceUrl(key), { method: "HEAD" })).status).toBe(204);
+    return request(a, `/test/schedule?project=${key}`);
+  };
+  for (let at = 0; at <= 600_000; at += 10_000) await tick(at);
+  const count = async () => Number((await request(b, "/test/metrics")).body.syncCalls);
+  const idle = await count();
+  // Presence shortens an existing five-minute idle deadline on the next tick.
+  expect((await tick(610_000, true)).body.open).toBe(true);
+  expect(await count()).toBe(idle + 1);
+  for (let at = 625_000; at <= 700_000; at += 15_000) await tick(at, true);
+  expect(await count()).toBe(idle + 7);
+  expect((await tick(745_000)).body.open).toBe(false);
+  const closed = await count();
+  for (let at = 755_000; at < 1_045_000; at += 10_000) await tick(at);
+  expect(await count()).toBe(closed);
+  // Overview displays all linked boards, with the same bodyless request path.
+  expect((await fetch(a + boardPresenceUrl("__overview__"), { method: "HEAD" })).status).toBe(204);
+  expect((await request(a, `/test/schedule?project=${key}`)).body.open).toBe(true);
+}, 30_000);
+
+test("both link sides show successful sync time, retain it on failure and recover honestly", async () => {
+  let a = await install("status-A"), b = await install("status-B");
+  const peerId = await link(a, b);
+  const peer = async () => ((await request(a, "/api/links/peers")).body.peers as { lastCall: number; state: string; error: string | null }[])[0]!;
+  const grant = async () => ((await request(b, "/api/links/grants")).body.grants as { lastCall: number; state: string; error: string | null }[])[0]!;
+  const successA = await peer(), successB = await grant();
+  expect(successA.lastCall).toBeGreaterThan(0);
+  expect(successB.lastCall).toBeGreaterThan(0);
+  await request(b, "/test/fail-sync?on=1");
+  expect((await request(a, `/api/links/peers/${peerId}`, "POST")).status).toBe(409);
+  expect(await peer()).toMatchObject({ lastCall: successA.lastCall, state: "failing", error: "not-delegatus" });
+  await request(b, "/test/fail-sync?on=0");
+  const stored = JSON.parse(fs.readFileSync(path.join(root, "status-A/links/peers.json"), "utf8")).peers[0] as { token: string; grantId: string };
+  expect((await fetch(b + "/api/peer/v1/boards/sync", { method: "POST", body: "{}", headers: { "content-type": "application/json", "x-delegatus-peer": `${stored.grantId}.${stored.token}` } })).status).toBe(400);
+  expect(await grant()).toMatchObject({ lastCall: successB.lastCall, state: "failing", error: "malformed" });
+  await sync(a, peerId);
+  expect(await peer()).toMatchObject({ state: "active", error: null });
+  expect(await grant()).toMatchObject({ state: "active", error: null });
+  await Promise.all([stopInstall(a), stopInstall(b)]);
+  a = await install("status-A");
+  b = await install("status-B");
+  expect((await peer()).lastCall).toBeGreaterThan(0);
+  expect((await grant()).lastCall).toBeGreaterThan(0);
+}, 30_000);
+
+
+test("historical unchosen-title sender reproduces placeholder arrivals both ways; current sender and repair preserve titles", async () => {
+  const a = await install("wire-title-A"), b = await install("wire-title-B");
+  const automatic = async (base: string, text: string) => {
+    const ids = (await request(base, "/test/bulk", "POST", { project: key, count: 1, text, explicit: false })).body.ids as string[];
+    await patchOn(base, ids[0]!, { details: "Shared details survive" });
+    return (await taskOn(base, ids[0]!))!;
+  };
+  const fromA = await automatic(a, "Automatic owner title A"), fromB = await automatic(b, "Automatic owner title B");
+  const aId = JSON.parse(fs.readFileSync(path.join(root, "wire-title-A/links/self.json"), "utf8")).installId as string;
+  const bId = JSON.parse(fs.readFileSync(path.join(root, "wire-title-B/links/self.json"), "utf8")).installId as string;
+  expect(fromA.chosen).toBeUndefined();
+  expect(fromB.chosen).toBeUndefined();
+  const peerId = await link(a, b, { projects: [key] }, b, false);
+  await request(a, "/test/legacy-task-wire?on=1");
+  await request(b, "/test/legacy-task-wire?on=1");
+  await sync(a, peerId);
+  expect(await taskOn(b, fromA.id)).toMatchObject({ text: "Untitled task", details: fromA.details, assignments: [], machine: aId });
+  expect(await taskOn(a, fromB.id)).toMatchObject({ text: "Untitled task", details: fromB.details, assignments: [], machine: bId });
+  const pages = await captured(b);
+  const pushed = pages.flatMap((page) => JSON.parse(page.request).push?.rows ?? []).find((row) => row.id === fromA.id);
+  const pulled = pages.flatMap((page) => JSON.parse(page.response).tasks?.rows ?? []).find((row) => row.id === fromB.id);
+  expect([pushed.text, pulled.text]).toEqual(["Untitled task", "Untitled task"]);
+  expect(pushed.s.text).toBe(derivedStamp(fromA.updatedAt, installPrefix(aId)));
+  expect(pulled.s.text).toBe(derivedStamp(fromB.updatedAt, installPrefix(bId)));
+  // The authoritative store kept its real title while the wire lost it.
+  expect((await taskOn(a, fromA.id))!.text).toBe(fromA.text);
+  expect((await taskOn(b, fromB.id))!.text).toBe(fromB.text);
+  await request(a, "/test/legacy-task-wire?on=0");
+  await request(b, "/test/legacy-task-wire?on=0");
+  await sync(a, peerId);
+  expect((await taskOn(b, fromA.id))!.text).toBe(fromA.text);
+  expect((await taskOn(a, fromB.id))!.text).toBe(fromB.text);
+  const before = await Promise.all([tasksOf(a), tasksOf(b)]);
+  await sync(a, peerId);
+  expect(await Promise.all([tasksOf(a), tasksOf(b)])).toEqual(before);
+}, 30_000);
 /* Synced task card (docs/design/synced-task-card.md): the owner's lanes ride in the agents part. */
 type LaneSpec = { id: string; taskIds: string[]; state: string; current?: string; sentinel?: string; stages: Array<Record<string, unknown>> };
 const threeStages = (running: "review" | "fix" | "done", extra: Record<string, unknown> = {}) => [
