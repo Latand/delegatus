@@ -13,6 +13,7 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import {
@@ -44,6 +45,10 @@ function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
   return {
+    GIT_AUTHOR_NAME: "Delegatus",
+    GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
+    GIT_COMMITTER_NAME: "Delegatus",
+    GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
     XDG_CONFIG_HOME: config,
     LLV_STATE_DIR: path.join(config, "agent-log-viewer", "state"),
     GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
@@ -519,6 +524,48 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test("invalid Claude publication settings release the owned stage scratch before rejecting", async () => {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-scratch-"));
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    let cleanups = 0;
+    try {
+      await expect(ClaudeStreamBrokerHost.start({
+        cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_EMAIL: "invalid" },
+        releaseCleanup: () => { cleanups++; fs.rmSync(scratch, { recursive: true, force: true }); },
+        eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+        spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+      })).rejects.toThrow("Invalid agent publication identity");
+      expect(captured.options).toBeUndefined();
+      expect(cleanups).toBe(1);
+      expect(fs.existsSync(scratch)).toBe(false);
+    } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+  });
+
+  test.each([false, true])("Claude launches carry publication settings through the child allowlist (account settings: %s)", async (accountSettings) => {
+    const captured: { options?: SpawnOptionsWithoutStdio; args?: string[] } = {};
+    const email = ["no-reply", "build.example.invalid"].join("@");
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-settings-"));
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email },
+      claudeConfigDir: accountSettings ? configDir : undefined,
+      eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    });
+    try {
+      expect(captured.options?.env).toMatchObject({
+        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+      });
+      const settingsArg = captured.args![captured.args!.indexOf("--settings") + 1]!;
+      const settings = JSON.parse(accountSettings ? fs.readFileSync(settingsArg, "utf8") : settingsArg);
+      expect(settings.env).toEqual({
+        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+      });
+    } finally { await host.release(); fs.rmSync(configDir, { recursive: true, force: true }); }
+  });
+
   test("forwards GitHub config only for read-only scratch hosts", async () => {
     for (const forwardGitHubConfig of [false, true]) {
       const child = new FakeClaude(new RecordingDeliveryLedger());
@@ -866,7 +913,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcpPath = adoptedCapture.args![adoptedCapture.args!.indexOf("--mcp-config") + 1]!;
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
-    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept" });
+    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...controllerCommitIdentityEnv() });
     expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     expect(adoptedSettings).toEqual(freshSettings);
     expect(freshCapture.args).toContain("--strict-mcp-config");

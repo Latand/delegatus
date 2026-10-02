@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { withSpawnCapability, type ResumeSpec } from "@/lib/agent/cli";
+import { prepareAgentPublicationSpec, withSpawnCapability, type ResumeSpec } from "@/lib/agent/cli";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
 import {
   agentRegistry,
@@ -1433,11 +1434,21 @@ export function legacyClaudeTmuxSpawnRefusal(
 /** Every visible legacy launch receives a durable receipt before tmux creates
     its window. Callers may later attach the engine-native transcript identity. */
 export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, existingReceipt?: SpawnReceipt): Promise<SpawnedPane> {
+  // Refuse invalid installation settings before allocating a receipt or pane.
+  try {
+    agentPublicationIdentityEnv(process.env);
+  } catch (error) {
+    if (existingReceipt?.state === "starting") {
+      agentRegistry().failSpawn(existingReceipt.launchId, error instanceof Error ? error.message : String(error));
+    }
+    throw error;
+  }
   const receipt = existingReceipt ?? agentRegistry().beginSpawn(spec.engine, spec.cwd, spec.launchProfile);
   try {
     const refusal = legacyClaudeTmuxSpawnRefusal(spec);
     if (refusal) throw new Error(refusal);
-    return { ...(await spawnAgentWithPromptUnchecked(spec, text, receipt)), receipt };
+    const prepared = await prepareAgentPublicationSpec(spec);
+    return { ...(await spawnAgentWithPromptUnchecked(prepared, text, receipt)), receipt };
   } catch (error) {
     agentRegistry().failSpawn(receipt.launchId, error instanceof Error ? error.message : String(error));
     throw error;

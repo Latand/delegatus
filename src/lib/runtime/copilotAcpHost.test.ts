@@ -150,6 +150,21 @@ async function until(predicate: () => boolean | Promise<boolean>, what: string):
   throw new Error(`timed out waiting for ${what}`);
 }
 
+test("invalid Copilot publication settings release the owned stage scratch before rejecting", async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-scratch-"));
+  let cleanups = 0;
+  const setup = options(new FakeCopilot(), {
+    env: { NODE_ENV: "test", LLV_PUBLICATION_EMAIL: "invalid" },
+    releaseCleanup: () => { cleanups++; fs.rmSync(scratch, { recursive: true, force: true }); },
+  });
+  try {
+    await expect(CopilotAcpHost.start(setup)).rejects.toThrow("Invalid agent publication identity");
+    expect(setup.captured.options).toBeUndefined();
+    expect(cleanups).toBe(1);
+    expect(fs.existsSync(scratch)).toBe(false);
+  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+});
+
 function kinds(events: RuntimeEvent[] | undefined): string[] {
   return (events ?? []).map((event) => event.kind === "session-status" ? `status:${event.status}`
     : event.kind === "turn-ended" ? `turn-ended:${event.status}`
