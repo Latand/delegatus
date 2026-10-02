@@ -1166,9 +1166,9 @@ test("a terminal failing verdict releases ownership and explicit takeover acknow
     #2187 converted new ones at creation: that lane still reviews through its
     embedded flow, which is what those tests exercise, so it is stored as the
     older engine stored it. */
-async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
+async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch"; repoDir?: string } = {}) {
   savePipelines([]);
-  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
+  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: request.repoDir ?? "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
   if (!result.convertedStages?.length) return result.pipeline;
   const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);
@@ -1193,7 +1193,8 @@ test.each([
     assertStructuredTextEnvelope(input.prompt);
     return spawnAgent(input, reserved);
   };
-  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1], prompt, access, sandbox }] as never);
+  await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1], prompt, access, sandbox }] as never,
+    { repoDir: path.join(process.env.LLV_STATE_DIR!, "repo") });
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const design = "Design head\n" + "d".repeat(45_000);
@@ -1202,7 +1203,7 @@ test.each([
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", design)], h.ports);
   await tickPipelines([], h.ports);
 
-  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.state, loadPipelines()[0]!.stateDetail ?? "no pipeline state detail").toBe("running");
   expect(loadPipelines()[0]!.cursor?.state).toBe("running");
   expect(h.spawnInputs).toHaveLength(2);
   expect(h.spawnInputs[1]!.runtimeProfile).toMatchObject({ access, sandbox });
