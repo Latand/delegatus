@@ -8484,6 +8484,28 @@ export async function patchPipeline(
           persist();
           return { error: "the stalled attempt host has not confirmed termination", status: 409 };
         }
+        // The host can finish or make transcript progress while termination is
+        // being confirmed. Preserve the original attempt in either case; a
+        // retry must never overwrite work that became durable during the stop.
+        if (attempt.report) {
+          persist();
+          return { error: "the running attempt recorded a stage report while its host was stopping", status: 409 };
+        }
+        const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+        if (latest?.turn === "terminal" && latest.message && latest.message.ts > unixMs(attempt.startedAt)) {
+          const fenced = parsePipelineStageVerdict(latest.message.text);
+          const parsed = reportedStageVerdict(attempt, fenced, latest.message.text, latest.backgroundReportedAt, latest.reportProse) ?? fenced;
+          if (parsed) {
+            markVerdictRecoverySucceeded(attempt, ports.now(), latest.message.ts);
+            settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
+            return { pipeline };
+          }
+        }
+        if (attempt.report || latest?.turn !== "busy" || latest.launchOnly
+          || (latest.lastRecordAt ?? null) !== (durable.lastRecordAt ?? null)) {
+          persist();
+          return { error: "the stalled attempt made progress while its host was stopping; retry was cancelled", status: 409 };
+        }
         park(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
         persist();
       }

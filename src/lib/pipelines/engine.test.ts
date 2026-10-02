@@ -16177,6 +16177,50 @@ test("restart retry-stage accepts only a confirmed stalled running attempt under
   expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.n).toBe(attempt.n + 1);
 });
 
+test.each(["terminal", "progress"] as const)("running retry-stage preserves %s evidence written during host stop", async (race) => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  const initialRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: initialRecordAt });
+  const stopping: PipelinePorts = { ...h.ports,
+    conversationTurnInterrupted: async () => "stalled",
+    stopInterruptedStageAgent: async () => {
+      if (race === "terminal") {
+        h.finish(attempt.agentPath!, "pass", "Finished as stop was confirmed");
+        const message = h.messages.get(attempt.agentPath!)!;
+        h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message, lastRecordAt: message.ts });
+      } else {
+        h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: initialRecordAt + 1 });
+      }
+      return { outcome: "stopped" };
+    },
+  };
+
+  const result = await patchPipeline(lane.id, {
+    action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n,
+  }, stopping);
+  const after = loadPipelines()[0]!;
+  expect(after.runs[0]!.attempts).toHaveLength(1);
+  expect(after.runs[0]!.attempts[0]!.n).toBe(attempt.n);
+  if (race === "terminal") {
+    expect(result.error).toBeUndefined();
+    expect(after.runs[0]!.attempts[0]!.verdict).toEqual({ status: "pass" });
+    expect(["passed", "committing"]).toContain(after.runs[0]!.attempts[0]!.state);
+  } else {
+    expect(result.status).toBe(409);
+    expect(result.error).toContain("made progress while its host was stopping");
+    expect(after.state).toBe("running");
+    expect(after.runs[0]!.attempts[0]!.state).toBe("running");
+  }
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
 
 test("restart recovery reads restored idle and dead turns from the runtime snapshot", async () => {
   await withRuntimeSnapshot((requestNumber) => ({ runtime: { hostEpoch: 7 }, sessions: [
