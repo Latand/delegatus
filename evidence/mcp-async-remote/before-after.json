@@ -27,9 +27,9 @@
         "key": "pipeline_action/retry-remote1200",
         "n": 2,
         "ok": 2,
-        "p50ms": 9.89,
-        "p95ms": 10.79,
-        "maxMs": 10.79,
+        "p50ms": 11.42,
+        "p95ms": 13.25,
+        "maxMs": 13.25,
         "inTokP50": 19.5,
         "outTokP50": 168.75
       }
@@ -50,9 +50,9 @@
         "key": "stage_report/forge-delay1200",
         "n": 3,
         "ok": 3,
-        "p50ms": 22.41,
-        "p95ms": 24.62,
-        "maxMs": 24.62,
+        "p50ms": 24.82,
+        "p95ms": 26.91,
+        "maxMs": 26.91,
         "inTokP50": 18.5,
         "outTokP50": 116
       }
@@ -73,9 +73,9 @@
         "key": "get_pipeline/concurrent-forge1200",
         "n": 3,
         "ok": 3,
-        "p50ms": 27.06,
-        "p95ms": 31.52,
-        "maxMs": 31.52,
+        "p50ms": 24.44,
+        "p95ms": 26.5,
+        "maxMs": 26.5,
         "inTokP50": 10.75,
         "outTokP50": 202.75
       }
@@ -96,9 +96,9 @@
         "key": "request_attention/browser-arrival1200",
         "n": 2,
         "ok": 2,
-        "p50ms": 1257.27,
-        "p95ms": 1257.83,
-        "maxMs": 1257.83,
+        "p50ms": 1257.06,
+        "p95ms": 1257.29,
+        "maxMs": 1257.29,
         "inTokP50": 30,
         "outTokP50": 326.5
       }
@@ -110,14 +110,18 @@
         "key": "request_attention/accepted-only",
         "n": 2,
         "ok": 2,
-        "p50ms": 1.36,
-        "p95ms": 1.72,
-        "maxMs": 1.72,
+        "p50ms": 1.85,
+        "p95ms": 2.83,
+        "maxMs": 2.83,
         "inTokP50": 35.5,
         "outTokP50": 263.75
       }
     }
   ],
-  "candidate": "2144fa9be8e1b69d32ca71d2fd431968742ed2cf",
-  "candidateTranscriptBytes": 1232559
+  "candidate": "ae949f5ea4532fe272d750c013834ad3b1a1d746",
+  "candidateTranscriptBytes": 1232565,
+  "candidateCalls": {
+    "total": 305,
+    "successful": 305
+  }
 }
