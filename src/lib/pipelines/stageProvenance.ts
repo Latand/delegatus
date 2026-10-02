@@ -81,11 +81,13 @@ export function collectStageProvenance(
   exec: ExecPort,
 ): PipelineStageProvenance {
   const changes = pipelineWorktreeChanges(pipeline, exec, MAX_UNCOMMITTED_PATHS);
+  const checkedOut = exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
+  const branch = checkedOut.code === 0 && checkedOut.stdout.trim() ? checkedOut.stdout.trim() : pipeline.branch;
   return {
     head: headOf(pipeline.worktreeDir, exec),
-    branch: pipeline.branch,
+    branch,
     uncommitted: changes.ok ? changes.paths : null,
-    pullRequest: pullRequestOf(pipeline.worktreeDir, pipeline.branch, exec),
+    pullRequest: pullRequestOf(pipeline.worktreeDir, branch, exec),
     outputs: declaredOutputPresence(pipeline.worktreeDir, declaredOutputs, exec),
   };
 }

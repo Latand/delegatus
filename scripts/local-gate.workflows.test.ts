@@ -9,15 +9,15 @@ function read(name: string) {
     concurrency: { "cancel-in-progress": boolean | string };
   };
 }
-test("Docker publishing stays on main and tags; PRs preserve complete image inputs including Tailwind sources", () => {
+test("Docker publishing stays on main and tags; PRs match image inputs and reject unrelated paths", () => {
   const docker = read("docker-image.yml");
   expect(docker.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
   const patterns = docker.on.pull_request!.paths!;
   const matches = (file: string) => patterns.some(pattern => new Bun.Glob(pattern).match(file));
   for (const file of ["Dockerfile", ".dockerignore", "package.json", "bun.lock", "patches/dependency.patch", "src/runtime-host/main.ts", "src/app/page.tsx", "public/icon.svg", "bin/cli.mjs", "scripts/published-image-entrypoint.sh", "scripts/build-mcp.ts", "vendor/connector/index.js"]) expect(matches(file)).toBeTrue();
-  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/local-gate.ts", "scripts/audit-with-retry.sh", ".github/workflows/docker-image.yml"]) expect(matches(file)).toBeTrue();
+  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/local-gate.ts", "scripts/audit-with-retry.sh", ".github/workflows/docker-image.yml"]) expect(matches(file)).toBeFalse();
   expect(docker.jobs.build!["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
-  expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}");
+  expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
   const build = docker.jobs.build!.steps!.find(step => step.name === "Build both architectures")!;
   expect(build.with!.push).toBe("${{ github.event_name != 'pull_request' }}");
   expect(build.with!.platforms).toBe("linux/amd64,linux/arm64");

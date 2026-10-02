@@ -668,6 +668,180 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test.each(["Another issue noticed", "Users cannot save", "rejected publication", "historical red tests"])("a fixer self-fail with a committed head goes to review with its findings as notes: %s", async (finding) => {
+  const fixture = await realWorktreeLane("fixer-self-fail", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ], "remote-branch");
+  try {
+    const { h, git, worktree, origin } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "fix handed findings");
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    const hook = path.join(origin, "hooks", "pre-receive");
+    if (finding === "rejected publication") fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    h.setConversationActive(false);
+    const summary = finding === "historical red tests" ? "Regression tests failed on base and passed on head. No blockers." : "Handed findings fixed; checks passed.";
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: [`P2 — ${finding} in fix.txt:1`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    await tickPipelines([], h.ports);
+    if (finding === "rejected publication") {
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      fs.unlinkSync(hook);
+      expect((await patchPipeline(fixture.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+      await tickPipelines([], h.ports);
+      await tickPipelines([], h.ports);
+    }
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(fixed);
+    expect(current.runs[0]!.attempts[0]!.verdict?.status).toBe("fail");
+    expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
+    expect(current.cursor?.input).toContain(`${finding} in fix.txt:1`);
+    expect(git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs.at(-1)?.prompt).toContain(`${finding} in fix.txt:1`);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { label: "unchanged head", commit: false, mode: "apply-fixes", summary: "Could not finish handed work", verdict: "fail" },
+  { label: "blocked build after commit", commit: true, mode: "apply-fixes", summary: "Blocked: cannot build because a dependency is unavailable", verdict: "fail" },
+  { label: "blocked checks after commit", commit: true, mode: "apply-fixes", summary: "Cannot run required checks because the service is unavailable", verdict: "fail" },
+  { label: "impossible handed finding", commit: true, mode: "apply-fixes", summary: "A handed finding is impossible within the specification", verdict: "fail" },
+  { label: "plain builder", commit: true, mode: "plain", summary: "Checks passed", verdict: "fail" },
+  { label: "operator decision", commit: true, mode: "apply-fixes", summary: "Operator must choose the scope", verdict: "needs_decision" },
+  { label: "report prose blocked", commit: true, mode: "apply-fixes", summary: "Blocked: cannot run required checks because the service is unavailable.", verdict: "fail" },
+])("fixer safety net parks $label with its reason", async ({ label, commit, mode, summary, verdict }) => {
+  const fixture = await realWorktreeLane("fixer-blocked", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    if (commit) {
+      fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "partial fix\n");
+      fixture.git(fixture.worktree, "add", "fix.txt");
+      fixture.git(fixture.worktree, "commit", "-m", "partial fix");
+    }
+    fixture.h.setConversationActive(false);
+    const shortSummary = "Committed partial fixes; remaining discovery listed";
+    const blocked = ["blocked build after commit", "blocked checks after commit", "impossible handed finding", "report prose blocked"].includes(label);
+    const blockFields = blocked ? { blocked: true, blockedReason: label } : {};
+    if (label === "report prose blocked") {
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1, at: fixture.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", ...blockFields, findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
+        provenance: { head: fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    fixture.h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: verdict, ...blockFields, findings: [`P1 — ${label}`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    if (label === "report prose blocked") {
+      const message = fixture.h.messages.get("/codex/stage-1.jsonl")!;
+      fixture.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
+    await tickPipelines([entry("/codex/stage-1.jsonl")], fixture.h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.lastPassedCommit).toBe(fixture.base);
+    expect(current.stateDetail).toContain(label);
+    expect(current.runs[0]!.attempts[0]!.output).toContain(label === "report prose blocked" ? shortSummary : summary);
+    expect(fixture.h.spawnInputs).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { label: "structured blocker", commit: true, blocked: true, summary: "Partial repairs committed.", findings: ["P2 — discovery in fix.txt:1"], review: false },
+  { label: "plain fail", commit: true, blocked: undefined, summary: "Handed findings fixed.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+  { label: "fail without findings", commit: true, blocked: false, summary: "Handed findings fixed.", findings: [], review: true },
+  { label: "no new head", commit: false, blocked: undefined, summary: "Could not finish handed work.", findings: ["P1 — remaining finding"], review: false },
+  { label: "prose never classifies", commit: true, blocked: false, summary: "Blocked: tests failed; cannot build. Quoted historical evidence.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+  { label: "long output blocked", commit: true, blocked: true, summary: "Evidence.\n".repeat(5_000) + "Blocked: dependency unavailable.", findings: ["P2 — discovery in fix.txt:1"], review: false },
+  { label: "long output plain fail", commit: true, blocked: undefined, summary: "Evidence.\n".repeat(5_000) + "Blocked: quoted historical evidence.", findings: ["P2 — discovery in fix.txt:1"], review: true },
+].flatMap((scenario) => ["fenced verdict", "recorded report", "reported plus fenced completion"].map((settlement) => ({ ...scenario, settlement }))))("a fixer routes $label through $settlement using structured state", async ({ label, commit, blocked, summary, findings, review, settlement }) => {
+  const fixture = await realWorktreeLane("fixer-structured-blocker", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ]);
+  try {
+    const { h, git, worktree } = fixture;
+    if (commit) {
+      fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+      git(worktree, "add", "fix.txt");
+      git(worktree, "commit", "-m", "fix handed findings");
+    }
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    const blockedReason = "Required check service is unavailable";
+    const verdict = { status: "fail" as const, findings,
+      ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}) };
+    if (settlement !== "fenced verdict") {
+      // Exercise the real report normalizer and the durable store. The report
+      // owns structured state even when the final fenced verdict disagrees.
+      const result = await engineModule.reportStageCompletion({
+        verdict: "fail", findings: findings.map((text) => ({ severity: "P2", text: text.slice(5) })),
+        summary: "Short relay summary", ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}),
+      }, { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports);
+      expect(result.error).toBeUndefined();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report?.verdict).toMatchObject({
+        ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}),
+      });
+    }
+    h.setConversationActive(false);
+    const fencedVerdict = settlement === "reported plus fenced completion"
+      ? { status: "fail", findings, blocked: !blocked, ...(!blocked ? { blockedReason: "Fenced state is superseded by report" } : {}) }
+      : verdict;
+    const transcriptVerdict = settlement !== "recorded report"
+      ? `\n\`\`\`json\n${JSON.stringify(fencedVerdict)}\n\`\`\`` : "";
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${transcriptVerdict}`, ts: Date.now() + 100_000_000 });
+    if (settlement !== "fenced verdict") {
+      const message = h.messages.get("/codex/stage-1.jsonl")!;
+      h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    await tickPipelines([], h.ports);
+    const current = loadPipelines()[0]!;
+    const attempt = current.runs[0]!.attempts[0]!;
+    expect(attempt.verdict?.status).toBe("fail");
+    if (blocked !== undefined) expect(attempt.verdict?.blocked).toBe(blocked);
+    if (!review) {
+      expect(current.state).toBe("needs_decision");
+      expect(current.cursor?.stageId).toBe("fix");
+      expect(current.lastPassedCommit).toBe(fixture.base);
+      expect(attempt.acceptedForReview).toBeUndefined();
+      if (blocked) {
+        expect(current.stateDetail).toContain(blockedReason);
+        expect(attempt.verdict?.blockedReason).toBe(blockedReason);
+      }
+      expect(h.spawnInputs).toHaveLength(1);
+      if (label === "long output blocked" && settlement === "fenced verdict") {
+        expect(attempt.output?.length).toBe(32_000);
+        expect(attempt.output).not.toContain("Blocked:");
+      }
+      return;
+    }
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(fixed);
+    expect(attempt.acceptedForReview).toBe(true);
+    expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
+    for (const finding of findings) expect(current.cursor?.input).toContain(finding.slice(5));
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("a read-only successor settles and advances when its handoff is in a clean Git worktree", async () => {
   const fixture = await realWorktreeLane("readonly-stage-input-handoff", [
     { id: "design", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Design", next: "review" },
@@ -707,6 +881,340 @@ test("a read-only successor settles and advances when its handoff is in a clean 
     if (fs.existsSync(fixture.root)) fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+test("a stage's fresh pushed branch and PR are adopted before the next stage", async () => {
+  const fixture = await realWorktreeLane("stage-branch-adoption", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const stageBranch = "fix/stage-created";
+    git(worktree, "switch", "-c", stageBranch);
+    fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "stage work");
+    git(worktree, "push", "origin", stageBranch);
+    const head = git(worktree, "rev-parse", "HEAD");
+    const exec = h.ports.exec;
+    h.ports.exec = (command, args, ...rest) => command === "timeout" && args.includes("gh")
+      ? { code: 0, stdout: JSON.stringify([{ url: "https://forge.example/repo/pull/7", number: 7, state: "OPEN" }]), stderr: "" }
+      : exec(command, args, ...rest);
+    h.setConversationActive(false);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "Built")], h.ports);
+    const adopted = loadPipelines().find((item) => item.id === id)!;
+    expect(adopted.state).toBe("running");
+    expect(adopted.cursor?.stageId).toBe("review");
+    expect(adopted.lastPassedCommit).toBe(head);
+    expect(git(worktree, "branch", "--show-current")).toBe(lane.branch);
+    expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(head);
+    expect(git(origin, "rev-parse", `refs/heads/${stageBranch}`)).toBe(head);
+    expect(adopted.runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ head, branch: stageBranch, pullRequest: { number: 7 } });
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination", "protected", "forge-protected-alias", "forge-protected-url", "read-only"] as const) {
+  test(`a stage on a ${shape} branch still parks without changing either tip`, async () => {
+    const fixture = await realWorktreeLane(`stage-branch-${shape}`, [
+      { id: "build", kind: "run", role: { roleId: shape === "read-only" ? "reviewer" : "builder" }, access: shape === "read-only" ? "read-only" : "read-write", prompt: "Build", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    ], "remote-branch");
+    try {
+      const { git, h, id, repo, worktree } = fixture;
+      const lane = loadPipelines().find((item) => item.id === id)!;
+      const branch = shape === "protected" ? "master" : "fix/other-stage";
+      if (shape === "unrelated") git(worktree, "switch", "--orphan", branch);
+      else git(worktree, "switch", "-c", branch);
+      fs.writeFileSync(path.join(worktree, "build.txt"), "keep stage work\n");
+      git(worktree, "add", "build.txt");
+      git(worktree, "commit", "-m", "stage work");
+      const tip = git(worktree, "rev-parse", "HEAD");
+      if (shape.startsWith("forge-protected")) {
+        const forgeUrl = "https://github.com/fixture/repo.git";
+        const exec = h.ports.exec;
+        h.ports.exec = (command, args, ...rest) => command === "git" && args[0] === "remote" && args[1] === "get-url" && args[2] === "origin"
+          ? { code: 0, stdout: forgeUrl, stderr: "" } : exec(command, args, ...rest);
+        lane.delivery!.target.remote = shape === "forge-protected-url" ? forgeUrl : "origin";
+        savePipelines([lane]);
+        const remoteExec = h.ports.provisionExec!;
+        h.ports.provisionExec = async (command, args, ...rest) => {
+          if (command === "timeout" && args.includes("ls-remote")) return { code: 0, stdout: `${tip}\trefs/heads/${branch}\n`, stderr: "" };
+          if (command === "timeout" && args.includes("gh")) {
+            expect(args).toContain(`repos/fixture/repo/branches/${encodeURIComponent(branch)}`);
+            // The forge check must hold no registry mutation lease.
+            const { withPipelineMutation } = await import("./store");
+            await withPipelineMutation(() => {});
+            return { code: 0, stdout: "true\n", stderr: "" };
+          }
+          return remoteExec(command, args, ...rest);
+        };
+      }
+      if (shape === "owned" || shape === "owned-checkout" || shape === "owned-destination") {
+        const owner = structuredClone(lane);
+        owner.id = "87654321";
+        Object.assign(owner, pipelineIdentity(owner.id, owner.task, owner.repoDir));
+        owner.delivery!.target.branch = `refs/heads/${branch}`;
+        owner.delivery!.ownerId = owner.id;
+        owner.state = "needs_decision";
+        if (shape === "owned-checkout") {
+          lane.delivery!.target.branch = `refs/heads/${branch}`;
+          lane.delivery!.active = false;
+          lane.delivery!.publish = "disabled";
+          fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep uncommitted stage work\n");
+        }
+        if (shape === "owned-destination") {
+          const destination = "delivery/shared";
+          git(worktree, "branch", "-m", lane.branch, destination);
+          lane.delivery!.target.branch = `refs/heads/${destination}`;
+          lane.delivery!.active = false;
+          lane.delivery!.publish = "disabled";
+          owner.delivery!.target.branch = `refs/heads/${destination}`;
+        }
+        savePipelines([lane, owner]);
+      }
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const parked = loadPipelines().find((item) => item.id === id)!;
+      expect(parked.state).toBe("needs_decision");
+      expect(parked.cursor?.stageId).toBe("build");
+      expect(parked.lastPassedCommit).toBe(lane.lastPassedCommit);
+      expect(git(repo, "rev-parse", shape === "owned-destination" ? "refs/heads/delivery/shared" : `refs/heads/${lane.branch}`)).toBe(lane.lastPassedCommit);
+      expect(git(worktree, "rev-parse", `refs/heads/${branch}`)).toBe(tip);
+      if (shape === "unrelated") expect(parked.stateDetail).toContain("does not descend");
+      if (shape === "owned" || shape === "owned-checkout") expect(parked.stateDetail).toContain("another pipeline owns");
+      if (shape === "owned-destination") expect(parked.stateDetail).toContain("adoption destination");
+      if (shape === "protected") expect(parked.stateDetail).toContain("protected base branch");
+      if (shape.startsWith("forge-protected")) expect(parked.stateDetail).toContain("protected forge branch");
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const interruptedAfterMerge of [false, true]) {
+  test(`a restarted controller finishes its recorded branch adoption (after merge: ${interruptedAfterMerge})`, async () => {
+    const fixture = await realWorktreeLane("stage-branch-restart", [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+    ], "remote-branch");
+    try {
+      const { git, h, id, origin, worktree } = fixture;
+      const lane = loadPipelines().find((item) => item.id === id)!;
+      const source = "fix/interrupted-stage";
+      git(worktree, "switch", "-c", source);
+      fs.writeFileSync(path.join(worktree, "build.txt"), "recover stage work\n");
+      git(worktree, "add", "build.txt");
+      git(worktree, "commit", "-m", "stage work");
+      const head = git(worktree, "rev-parse", "HEAD");
+      const exec = h.ports.exec;
+      h.ports.exec = (command, args, ...rest) => {
+        if (command === "git" && args[0] === "merge" && args.includes("--ff-only")) {
+          if (interruptedAfterMerge) exec(command, args, ...rest);
+          throw new Error("fixture controller interruption");
+        }
+        return exec(command, args, ...rest);
+      };
+      await expect(tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports)).rejects.toThrow("fixture controller interruption");
+      const interrupted = loadPipelines().find((item) => item.id === id)!;
+      expect(interrupted.lastPassedCommit).toBe(lane.lastPassedCommit);
+      expect(interrupted.runs[0]!.attempts[0]!.branchAdoption).toEqual({ branch: source, head, target: lane.branch });
+      expect(git(worktree, "branch", "--show-current")).toBe(lane.branch);
+      h.ports.exec = exec;
+      await tickPipelines([], h.ports);
+      const recovered = loadPipelines().find((item) => item.id === id)!;
+      expect(recovered.state).toBe("running");
+      expect(recovered.cursor?.stageId).toBe("review");
+      expect(recovered.lastPassedCommit).toBe(head);
+      expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(head);
+      expect(git(worktree, "show", "HEAD:build.txt")).toBe("recover stage work");
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a stage branch is adopted onto an owned delivery branch when the lane ref is absent", async () => {
+  const fixture = await realWorktreeLane("stage-branch-delivery-only", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, origin, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const delivery = "fix/existing-pr";
+    git(worktree, "branch", "-m", delivery);
+    lane.delivery!.target.branch = `refs/heads/${delivery}`;
+    savePipelines([lane]);
+    git(worktree, "switch", "-c", "fix/new-stage");
+    fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "stage work");
+    const head = git(worktree, "rev-parse", "HEAD");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const adopted = loadPipelines().find((item) => item.id === id)!;
+    expect(adopted.state).toBe("running");
+    expect(adopted.cursor?.stageId).toBe("review");
+    expect(adopted.lastPassedCommit).toBe(head);
+    expect(git(worktree, "branch", "--show-current")).toBe(delivery);
+    expect(git(origin, "rev-parse", `refs/heads/${delivery}`)).toBe(head);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const removeOwnerSeed of [false, true]) {
+test(`linked-worktree pipeline ownership refuses a foreign stage branch before committing (removed seed: ${removeOwnerSeed})`, async () => {
+  const fixture = await realWorktreeLane(`stage-branch-linked-owner-${removeOwnerSeed}`, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    const { git, h, id, root, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const source = "fix/other-lane-owned";
+    git(worktree, "switch", "-c", source);
+    fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep this work\n");
+    const sourceTip = git(worktree, "rev-parse", `refs/heads/${source}`);
+    const laneTip = git(worktree, "rev-parse", `refs/heads/${lane.branch}`);
+    const seed = path.join(root, "owner-seed");
+    git(worktree, "worktree", "add", "-b", "owner-seed", seed, lane.branch);
+    const linked = path.join(root, "linked");
+    git(seed, "worktree", "add", "-b", "other-lane-current", linked);
+    if (removeOwnerSeed) git(worktree, "worktree", "remove", seed);
+    const other = structuredClone(lane);
+    other.id = "other-pipeline";
+    other.repoDir = removeOwnerSeed ? seed : linked;
+    other.worktreeDir = linked;
+    other.branch = source;
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+
+    const result = commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, other], undefined, () => {}, null);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+    expect(git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(sourceTip);
+    expect(git(worktree, "rev-parse", `refs/heads/${lane.branch}`)).toBe(laneTip);
+    expect(git(worktree, "status", "--porcelain")).toContain("uncommitted.txt");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+}
+
+test("a busy-to-terminal stage retries settlement after collecting fresh branch protection", async () => {
+  const fixture = await realWorktreeLane("stage-branch-busy", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, worktree } = fixture;
+    git(worktree, "switch", "-c", "fix/busy-stage");
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+    const finished = h.finish("/codex/stage-1.jsonl", "pass");
+    h.durableTurns.set(finished.path, { turn: "busy", message: h.messages.get(finished.path)! });
+    let activeReads = 0;
+    h.ports.conversationAgentActive = async () => {
+      if (activeReads++ === 0) {
+        // The protection pre-pass already read `busy`; terminal evidence lands
+        // while it checks liveness, before settlement reads the turn again.
+        h.durableTurns.set(finished.path, { turn: "terminal", message: h.messages.get(finished.path)! });
+        return true;
+      }
+      return false;
+    };
+    await tickPipelines([finished], h.ports);
+    const deferred = loadPipelines().find((item) => item.id === id)!;
+    expect(deferred).toMatchObject({ state: "running", cursor: { stageId: "build", state: "committing" } });
+    expect(deferred.runs[0]!.attempts[0]!.state).toBe("committing");
+    const stageTip = git(worktree, "rev-parse", "refs/heads/fix/busy-stage");
+    h.ports.conversationAgentActive = async () => false;
+    await tickPipelines([], h.ports);
+    const adopted = loadPipelines().find((item) => item.id === id)!;
+    expect(adopted).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" } });
+    expect(adopted.lastPassedCommit).toBe(stageTip);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a stage branch is adopted from durable terminal evidence before the scanner projects it", async () => {
+  const fixture = await realWorktreeLane("stage-branch-durable-fallback", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { git, h, id, worktree } = fixture;
+    git(worktree, "switch", "-c", "fix/durable-stage");
+    fs.writeFileSync(path.join(worktree, "build.txt"), "durable stage work\n");
+    git(worktree, "add", "build.txt");
+    git(worktree, "commit", "-m", "stage work");
+    const head = git(worktree, "rev-parse", "HEAD");
+    finishReported(h, "/codex/stage-1.jsonl", "pass", "Built");
+    await tickPipelines([], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)).toMatchObject({ state: "running", lastPassedCommit: head, cursor: { stageId: "review" } });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const interruption of [null, "before-ref", "after-ref"] as const) {
+  test(`a divergent stage branch retaining accepted content is adopted without moving its source (${interruption ?? "uninterrupted"})`, async () => {
+    const fixture = await realWorktreeLane("stage-branch-divergent", [
+      { id: "brief", kind: "run", role: { roleId: "builder" }, prompt: "Brief", next: "build" },
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+    ], "remote-branch");
+    try {
+      const { git, h, id, base, origin, worktree } = fixture;
+      fs.writeFileSync(path.join(worktree, "accepted.txt"), "accepted work\n");
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const lane = loadPipelines().find((item) => item.id === id)!;
+      await tickPipelines([], h.ports);
+      const source = "fix/divergent-stage";
+      git(worktree, "switch", "-c", source, base);
+      fs.writeFileSync(path.join(worktree, "accepted.txt"), "accepted work\n");
+      git(worktree, "add", "accepted.txt");
+      git(worktree, "commit", "-m", "retain accepted work with fresh history");
+      fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
+      git(worktree, "add", "build.txt");
+      git(worktree, "commit", "-m", "stage work");
+      git(worktree, "push", "origin", source);
+      const head = git(worktree, "rev-parse", "HEAD");
+      const exec = h.ports.exec;
+      if (interruption) h.ports.exec = (command, args, ...rest) => {
+        if (command === "git" && args[0] === "update-ref" && args.includes("pipeline: reconcile rebased stage")) {
+          if (interruption === "after-ref") exec(command, args, ...rest);
+          throw new Error("fixture reconciliation interruption");
+        }
+        return exec(command, args, ...rest);
+      };
+      const finish = tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+      if (interruption) {
+        await expect(finish).rejects.toThrow("fixture reconciliation interruption");
+        expect(loadPipelines().find((item) => item.id === id)!.runs[1]!.attempts[0]!.branchAdoption).toMatchObject({ branch: source, head });
+        h.ports.exec = exec;
+        await tickPipelines([], h.ports);
+      } else await finish;
+      const adopted = loadPipelines().find((item) => item.id === id)!;
+      expect(adopted.state).toBe("running");
+      expect(adopted.cursor?.stageId).toBe("review");
+      expect(git(worktree, "rev-parse", "HEAD")).toBe(adopted.lastPassedCommit);
+      expect(git(worktree, "merge-base", lane.lastPassedCommit, adopted.lastPassedCommit)).toBe(lane.lastPassedCommit);
+      expect(git(worktree, "merge-base", head, adopted.lastPassedCommit)).toBe(head);
+      expect(git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(head);
+      expect(git(origin, "rev-parse", `refs/heads/${source}`)).toBe(head);
+      expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(adopted.lastPassedCommit);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("a rebased builder reconciles accepted content and continues with fast-forward delivery", async () => {
   const fixture = await realWorktreeLane("rebase-reconcile", [
@@ -753,6 +1261,79 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     expect(h.spawnInputs).toHaveLength(3);
     await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
     expect(loadPipelines().find((item) => item.id === id)!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preserves an explicit current blocker when another check passed on head (%s)", async (settlement) => {
+  const fixture = await realWorktreeLane("fixer-current-blocker", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    const { h, git, worktree, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "committed partial fix");
+    const lane = loadPipelines()[0]!;
+    if (settlement === "reported plus fenced completion") {
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1,
+        at: h.ports.now(),
+        actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] },
+        summary: "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.",
+        provenance: { head: git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+        calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    h.setConversationActive(false);
+    const summary = "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.";
+    const verdict = `\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``;
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${verdict}`, ts: Date.now() + 100_000_000 });
+    if (settlement === "reported plus fenced completion") {
+      const message = h.messages.get("/codex/stage-1.jsonl")!;
+      h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: message.ts, message });
+    }
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.cursor?.stageId).toBe("fix");
+    expect(current.lastPassedCommit).toBe(base);
+    expect(current.runs[0]!.attempts[0]!.output).toContain("Blocked: required integration tests");
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a fenced fixer verdict keeps a blocker after the bounded relay output", async () => {
+  const fixture = await realWorktreeLane("fixer-blocker-after-relay-limit", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ]);
+  try {
+    const { h, git, worktree, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "committed partial fix");
+    const summary = `${"Verification details recorded. ".repeat(1200)}Blocked: cannot run required integration checks.`;
+    h.setConversationActive(false);
+    h.messages.set("/codex/stage-1.jsonl", {
+      text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``,
+      ts: Date.now() + 100_000_000,
+    });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.cursor?.stageId).toBe("fix");
+    expect(current.lastPassedCommit).toBe(base);
+    expect(current.cursor?.stageId).not.toBe("review");
+    expect(h.spawnInputs).toHaveLength(1);
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -9377,8 +9958,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
     const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
     fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
-      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
-    fs.chmodSync(sourcePath, 0o600);
+      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n", { mode: 0o600 });
     const fork = forkClaudeHistory({
       sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
       sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
