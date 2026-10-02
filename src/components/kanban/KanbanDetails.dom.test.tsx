@@ -234,3 +234,18 @@ test("clearing the details in the editor takes the whole row away", async () => 
   expect(cardEl(view.host, "a")?.querySelector("[data-details]")).toBeNull();
   expect(cardEl(view.host, "a")?.querySelector(".desc")?.textContent).toBe("The card reads for a human first.");
 });
+
+test("the card shows a passive current note under its title, with time and full text below the description", () => {
+  const note = { text: "Waiting for the review. The agent is checking the changed routes.", author: { kind: "orchestrator" as const }, updatedAt: new Date((NOW - 120) * 1000).toISOString() };
+  const view = mount([task("note", "assigned", "Check the routes\nPreserve the description.", { note })]);
+  const card = cardEl(view.host, "note")!;
+  const line = card.querySelector("[data-task-note=compact]");
+  expect(line).not.toBeNull();
+  expect(line!.textContent).toContain(note.text);
+  expect(line!.querySelector("time")?.getAttribute("datetime")).toBe(note.updatedAt);
+  expect(line!.querySelectorAll("button,input,textarea")).toHaveLength(0);
+  expect(card.querySelector("[data-task-note=full]")?.textContent).toContain(note.text);
+  expect(card.querySelector(".desc")?.textContent).toBe("Preserve the description.");
+  view.render([task("note", "assigned", "Check the routes\nPreserve the description.")]);
+  expect(cardEl(view.host, "note")!.querySelector("[data-task-note]")).toBeNull();
+});

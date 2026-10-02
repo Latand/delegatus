@@ -1371,6 +1371,10 @@ function task(id: string, status: TaskStatus, title: string, description: string
 }
 
 const tasks: BoardTask[] = [
+  ...(SCENARIO === "status-note" ? [task("t-note", "inbox", L("Review the route changes", "Перевірити зміни маршрутів"), L("Preserve the route contracts.", "Зберегти контракти маршрутів."), 2 * MIN, [], { note: {
+    text: L("Waiting for the independent review of the changed routes and their persistence checks. The agent is verifying how updates survive concurrent writes, reloads and a restarted server before moving this task to the next stage.", "Очікує незалежного рев’ю змінених маршрутів і перевірок збереження даних. Агент перевіряє, як оновлення переживають одночасні записи, перезавантаження сторінки та перезапуск сервера, перш ніж перевести задачу до наступного етапу."),
+    author: { kind: "orchestrator" }, updatedAt: iso(2 * MIN),
+  } })] : []),
   /* The one task carrying agent-facing details (#1834): the long context an
      agent needs, which the card folds behind its Details row instead of
      printing where the human description belongs. */

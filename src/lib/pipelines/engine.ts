@@ -62,6 +62,7 @@ import { killTmuxHostIfMatches, paneInfo } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
+import { writeParkedTaskNote } from "./taskStatusNote";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
@@ -1669,6 +1670,7 @@ async function unregisteredStageHostDeathEvidence(
 }
 
 function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null): void {
+  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeParkedTaskNote(pipeline, detail, attempt);
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt) attempt.error = detail;
   pipeline.state = "needs_decision";
@@ -2637,6 +2639,7 @@ function parkForReview(
   pipeline.state = "needs_review";
   pipeline.pausedState = null;
   pipeline.stateDetail = reviewPendingDetail(pipeline.reviewPending);
+  writeParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
@@ -2667,6 +2670,10 @@ function keepPassedStageUnpublished(
   detail: string,
 ): void {
   const message = `passed but unpublished: ${detail}`;
+  // The initial durable reservation is in flight, not a blocked publication.
+  if (pipeline.stateDetail !== message && !/reserved for execution|awaiting durable delivery admission/.test(detail)) {
+    writeParkedTaskNote(pipeline, message, attempt);
+  }
   attempt.error = message;
   pipeline.state = "running";
   pipeline.stateDetail = message;

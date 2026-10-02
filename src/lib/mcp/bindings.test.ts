@@ -4349,3 +4349,23 @@ test("spawn_agent applies the sizing rules on the service's bound first dispatch
 test("spawn dispatch body retains an explicit Codex service tier", () => {
   expect(spawnDispatchBody({ clientRequestId: "tier-dispatch", engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast", fast: true }, "tier-attempt")).toMatchObject({ serviceTier: "ultrafast", fast: true, clientAttemptId: "tier-attempt" });
 });
+
+test("MCP note authors follow authenticated attribution and round-trip through reads", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-task-note-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const { saveTasks, loadTasks } = await import("@/lib/tasks/store");
+  const now = "2026-10-02T10:00:00.000Z";
+  saveTasks([{ id: "note-mcp", project: "viewer", text: "Review the card", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
+  for (const kind of ["agent", "manager"] as const) {
+    const bindings = viewerMcpBindings(undefined, undefined, { loadTasks, listPipelineRecords: () => [], callerAttribution: () => ({ kind, conversationId: "conversation_fixture", role: "builder" }) } as never);
+    const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+    const result = await service.callTool("update_task", { clientRequestId: `note-${kind}`, taskId: "note-mcp", note: "Waiting for review.", conversationId: "spoof", full: true });
+    expect(result).toMatchObject({ ok: true, changedFields: expect.arrayContaining(["note"]), task: { note: { author: kind === "manager" ? { kind: "orchestrator" } : { kind: "agent", conversationId: "conversation_fixture" } } } });
+    const read = await service.callTool("get_task", { clientRequestId: `read-note-${kind}`, taskId: "note-mcp" });
+    expect(read).toMatchObject({ ok: true, task: { note: { text: "Waiting for review." } } });
+    const clear = await service.callTool("update_task", { clientRequestId: `clear-note-${kind}`, taskId: "note-mcp", note: null });
+    expect(clear.ok).toBe(true);
+    expect(loadTasks()[0]!.note).toBeUndefined();
+  }
+});

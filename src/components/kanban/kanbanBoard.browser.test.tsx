@@ -14706,3 +14706,57 @@ describe("launch layout shift rendered evidence", () => {
     }
   }, 240_000);
 });
+
+describe("passive task status note", () => {
+  browserTest("notes stay within two lines on desktop and phone, with full text in the task", async () => {
+    const out = path.resolve(".artifacts/card-status-note");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const surface = page.locator(width === 390 ? '[data-phone-card="task:t-note"]' : card("t-note"));
+          await surface.waitFor();
+          await surface.scrollIntoViewIfNeeded();
+          const line = surface.locator('[data-task-note="compact"]');
+          const text = await line.locator("[data-task-note-text]").textContent();
+          const geometry = await line.locator("[data-task-note-text]").evaluate(element => {
+            const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+            return { height: rect.height, lineHeight: parseFloat(style.lineHeight), clamp: style.webkitLineClamp, fullHeight: element.scrollHeight };
+          });
+          expect(geometry.clamp).toBe("2");
+          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight * 2 + 1);
+          expect(geometry.fullHeight).toBeGreaterThan(geometry.height);
+          expect(await line.locator("button,input,textarea").count()).toBe(0);
+          expect(await line.locator("time").textContent()).toBeTruthy();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-card.png`) });
+          if (width === 390) await surface.click();
+          else await surface.focus();
+          const full = page.locator('[data-task-note="full"]').filter({ hasText: text! }).first();
+          await full.waitFor();
+          expect(await full.locator("[data-task-note-text]").textContent()).toBe(text);
+          expect(await full.locator("[data-task-note-text]").evaluate(element => getComputedStyle(element).webkitLineClamp)).toBe("none");
+          await full.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-task.png`) });
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          if (width === 1440) {
+            // A folded task retains its compact note even with a reader open.
+            await surface.locator("button.fold").click();
+            await surface.evaluate(element => element.classList.add("has-reader"));
+            expect(await line.isVisible()).toBe(true);
+            expect(await surface.locator('[data-task-note="full"]').count()).toBe(0);
+          }
+          cases.push({ locale, width, geometry, overflow, passive: true, fullText: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/card-status-note", { recursive: true });
+      fs.writeFileSync("evidence/card-status-note/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

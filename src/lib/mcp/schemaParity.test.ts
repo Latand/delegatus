@@ -697,11 +697,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    expect(onFail?.properties?.onExhausted?.description).toContain("without asking this stage again");
-    /* #2187: the default completes after the last fix; stopping there is asked for. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("the fix stage takes the last findings and the lane continues or completes");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after that fix the lane waits for the operator in needs_review");
-    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the fix");
+    /* A terminal gate rechecks its final fix before completing. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("it re-checks the fix once more");
+    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review if the head changed");
+    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
     expect(tool?.description).toContain("onExhausted");
     expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
     expect(stage?.kind?.description).toContain("convertedStages");
@@ -1111,4 +1111,16 @@ test("MCP pipeline tools describe default 3 and accept an explicit higher budget
     }
   });
   expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
+});
+
+test("the published update_task schema advertises replaceable notes without author inputs", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
+    const properties = tool.inputSchema.properties!;
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(properties.author).toBeUndefined();
+    expect(properties.noteAuthor).toBeUndefined();
+    expect(tool.description).toContain("Orchestrators and stage agents: set note whenever the situation changes");
+    expect(tool.description).toContain("operator's language");
+  });
 });
