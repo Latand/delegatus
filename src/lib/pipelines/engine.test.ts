@@ -1573,6 +1573,54 @@ test("reserved activation rechecks update admission after waiting for the mutati
   }
 });
 
+test("legacy pipeline account admission defers without parking or consuming its launch key", async () => {
+  const h = harness();
+  const drain = await import("@/lib/selfUpdate/drain");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "legacy-held-admission.json"));
+  setAgentRegistryForTests(registry);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockResolvedValue({ path: null } as never);
+  const ports = defaultPipelinePorts();
+  const keys: string[] = [];
+  h.ports.drainHold = ports.drainHold;
+  h.ports.spawnAgent = (input, reserve) => { keys.push(input.clientAttemptId); return ports.spawnAgent(input, reserve); };
+  let resume!: () => void, entered!: () => void, queued!: () => void;
+  const acquired = new Promise<void>(r => { entered = r; });
+  const gate = new Promise<void>(r => { resume = r; });
+  const waiting = new Promise<void>(r => { queued = r; });
+  const nativeLock = mutation.withAccountMutationLockAsync;
+  let locking: Promise<void> | undefined;
+  let ticking: ReturnType<typeof tickPipelines> | undefined;
+  let lock: ReturnType<typeof spyOn<typeof mutation, "withAccountMutationLockAsync">> | undefined;
+  try {
+    await create(h.ports); await tickPipelines([], h.ports);
+    locking = nativeLock(async () => { entered(); await gate; }); await acquired;
+    lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+    ticking = tickPipelines([], h.ports); await waiting;
+    drain.writeDrain(drain.drainFile(), { id: "legacy-admission", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    resume(); await locking; await ticking;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    expect(loadPipelines()[0]!).toMatchObject({ state: "running", cursor: { state: "pending" } });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ state: "pending", spawnCalls: 0 });
+    drain.releaseDrain(drain.drainFile(), "legacy-admission");
+    await tickPipelines([], h.ports);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    resume?.(); await locking; await ticking;
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    drain.releaseDrain(drain.drainFile(), "legacy-admission"); setAgentRegistryForTests(null);
+  }
+});
+
 test.each(["early", "drain-switch-off"] as const)("managed %s admission holds actual pipeline launches across recovery until terminal status", async (admission) => {
   const h = harness();
   savePipelines([]);
@@ -15673,10 +15721,10 @@ async function reserveActivationOnly() {
   return h;
 }
 
-test("activation drain recovers the original registry launch after a process exits before binding", async () => {
+test.each([false, true])("activation drain recovers the original registry launch after a process exits before binding under hold=%s", async (held) => {
   const h = await reserveActivationOnly();
-  const registryPath = path.join(process.env.LLV_STATE_DIR!, "activation-crash-registry.json");
-  const marker = path.join(process.env.LLV_STATE_DIR!, "activation-crash-launch");
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `activation-crash-registry-${held}.json`);
+  const marker = path.join(process.env.LLV_STATE_DIR!, `activation-crash-launch-${held}`);
   const child = Bun.spawn([process.execPath, "-e", `
     import fs from "node:fs";
     const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
@@ -15709,13 +15757,105 @@ test("activation drain recovers the original registry launch after a process exi
     engine, accountId: "test", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" },
   }}));
   try {
+    const drain = await import("@/lib/selfUpdate/drain");
+    if (held) drain.writeDrain(drain.drainFile(), { id: "submitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
     const ports = defaultPipelinePorts();
-    await engineModule.drainStageActivations({ ...h.ports, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
+    await engineModule.drainStageActivations({ ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
     const recovered = loadPipelines()[0]!.runs[0]!.attempts[0]!;
     expect(recovered).toMatchObject({ n: 1, launchId: launch, spawnCalls: 1, state: "needs_decision" });
     expect(recovered.activation).toBeUndefined();
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
-  } finally { resolve.mockRestore(); setAgentRegistryForTests(null); }
+  } finally {
+    const drain = await import("@/lib/selfUpdate/drain");
+    drain.releaseDrain(drain.drainFile(), "submitted-recovery");
+    resolve.mockRestore(); setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitted reserving activation stays held at %s", async (seam) => {
+  const h = await reserveActivationOnly();
+  const drain = await import("@/lib/selfUpdate/drain");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `unsubmitted-${seam}.json`);
+  // Exit the actual executor after its reserving checkpoint, before any receipt.
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+    const { accountManager } = await import("./src/lib/accounts/manager.ts");
+    const { drainStageActivations, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    const registry = new AgentRegistry(process.env.LLV_TEST_REGISTRY);
+    setAgentRegistryForTests(registry);
+    accountManager.resolveProjectSpawn = (engine) => ({ kind: "available", account: {
+      engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR,
+      transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+    }});
+    registry.beginSpawnRequestAsync = async () => { process.exit(0); };
+    await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready" });
+    process.exit(2);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+  expect(before).toMatchObject({ launchId: null, spawnCalls: 1, activation: { phase: "reserving", owner: { pid: child.pid } } });
+  const registry = new AgentRegistry(registryPath);
+  setAgentRegistryForTests(registry);
+  expect(registry.spawnReceiptForClientAttempt(before.activation!.clientAttemptId)).toBeNull();
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const dispatches: string[] = [];
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    dispatches.push(input.receipt.launchId);
+    return { path: null } as never;
+  });
+  const hold = () => drain.writeDrain(drain.drainFile(), { id: "unsubmitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  let resume!: () => void;
+  let locking: Promise<void> | undefined;
+  let recovering: Promise<void> | undefined;
+  let lock: ReturnType<typeof spyOn<typeof mutation, "withAccountMutationLockAsync">> | undefined;
+  try {
+    const ports = defaultPipelinePorts();
+    const recoveryPorts = { ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt };
+    if (seam === "before-recovery") hold();
+    else {
+      let entered!: () => void, queued!: () => void;
+      const acquired = new Promise<void>(r => { entered = r; });
+      const gate = new Promise<void>(r => { resume = r; });
+      const waiting = new Promise<void>(r => { queued = r; });
+      const nativeLock = mutation.withAccountMutationLockAsync;
+      locking = nativeLock(async () => { entered(); await gate; });
+      await acquired;
+      lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+      recovering = engineModule.drainStageActivations(recoveryPorts);
+      await waiting;
+      hold(); resume(); await locking;
+    }
+    await (recovering ?? engineModule.drainStageActivations(recoveryPorts));
+    await engineModule.drainStageActivations(recoveryPorts);
+    expect(dispatches).toHaveLength(0);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    const held = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(held).toMatchObject({ n: before.n, launchId: null, spawnCalls: 1, activation: {
+      id: before.activation!.id, clientAttemptId: before.activation!.clientAttemptId, phase: "reserved", replay: true,
+    } });
+    expect(held.activation!.owner).toBeUndefined();
+    const { probeQuiet } = await import("@/lib/selfUpdate/quiet");
+    expect((await probeQuiet({ busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot,
+      { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] }, Date.now(), true)).quiet).toBe(true);
+    drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery");
+    await engineModule.drainStageActivations(recoveryPorts);
+    await engineModule.drainStageActivations(recoveryPorts);
+    expect(dispatches).toHaveLength(1);
+    const receipts = Object.values(registry.readOnlySnapshot().receipts);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(1);
+  } finally {
+    resume?.(); await locking; await recovering;
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
+  }
 });
 
 test("activation drain preserves uncertain read-write delivery and the staged recovery budget", async () => {

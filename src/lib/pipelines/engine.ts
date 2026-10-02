@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
@@ -614,33 +615,39 @@ async function spawnPipelineAgent(
   const creatorConversationId = input.creatorConversationId?.startsWith("conversation_")
     ? registry.canonicalConversationId(input.creatorConversationId as ViewerConversationId)
     : null;
-  const begun = await registry.beginSpawnRequestAsync({
-    engine: input.role.engine,
-    cwd: input.cwd,
-    transport: "structured",
-    accountId: account.accountId,
-    accountPin: input.role.engine !== "claude" || Boolean(input.requestedAccountId),
-    parentConversationId: parent.conversationId,
-    parentSessionKey: parent.sessionKey,
-    parentArtifactPath: parent.conversationId ? input.parentPath : null,
-    role: input.role.roleId,
-    /* Container origin (#393): admission keys on the pipeline creator, so a
-       reviewer-lineage-parent stage stays admissible while a reviewer-created
-       pipeline is terminally rejected. Retries reuse the same origin, so
-       delegation depth is stable across rounds. */
-    origin: {
-      kind: "container",
-      container: "pipeline",
-      containerId: input.membership.containerId,
-      creatorConversationId,
-    },
-    memberships: [{ ...input.membership, parentConversationId: parent.conversationId }],
-    launchProfile,
-    clientAttemptId: input.clientAttemptId,
-    requestDigest: digest,
-    supersedes,
-    supersedesReason: "stage-retry",
-  });
+  const begun = await withAccountMutationLockAsync(() => {
+    // Recovery can reach this adapter with a reserving checkpoint but no
+    // receipt. Recheck fresh admission after the downstream account wait;
+    // an existing receipt keeps its original custody through the drain.
+    if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
+    return registry.beginSpawnRequestAsync({
+      engine: input.role.engine,
+      cwd: input.cwd,
+      transport: "structured",
+      accountId: account.accountId,
+      accountPin: input.role.engine !== "claude" || Boolean(input.requestedAccountId),
+      parentConversationId: parent.conversationId,
+      parentSessionKey: parent.sessionKey,
+      parentArtifactPath: parent.conversationId ? input.parentPath : null,
+      role: input.role.roleId,
+      /* Container origin (#393): admission keys on the pipeline creator, so a
+         reviewer-lineage-parent stage stays admissible while a reviewer-created
+         pipeline is terminally rejected. Retries reuse the same origin, so
+         delegation depth is stable across rounds. */
+      origin: {
+        kind: "container",
+        container: "pipeline",
+        containerId: input.membership.containerId,
+        creatorConversationId,
+      },
+      memberships: [{ ...input.membership, parentConversationId: parent.conversationId }],
+      launchProfile,
+      clientAttemptId: input.clientAttemptId,
+      requestDigest: digest,
+      supersedes,
+      supersedesReason: "stage-retry",
+    });
+  }, { holder: "pipeline spawn admission", caller: "spawn" });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
   try {
     await onReserved({
@@ -3589,6 +3596,27 @@ class ActivationSuperseded extends Error {
   constructor() { super("stage activation changed before dispatch or settlement"); }
 }
 
+class PipelineAdmissionHeld extends Error {
+  constructor() { super("pipeline admission held for the automatic update"); }
+}
+
+function activationAwaitingAdmission(attempt: PipelineStageAttempt): boolean {
+  return attempt.activation?.phase === "reserved"
+    || attempt.activation?.phase === "reserving" && !attempt.launchId
+      && !agentRegistry().spawnReceiptForClientAttempt(attempt.activation.clientAttemptId);
+}
+
+/** Proven-unsubmitted custody is quiet while held. Preserve the counted
+ * downstream key when moving back to the reserved checkpoint. */
+function holdActivationAdmission(attempt: PipelineStageAttempt): void {
+  if (!attempt.activation) return;
+  delete attempt.activation.owner;
+  if (attempt.activation.phase === "reserving") {
+    attempt.activation.phase = "reserved";
+    attempt.activation.replay = true;
+  }
+}
+
 /** Controls and graph edits fence actuation, including a pause followed by resume. */
 function activationFence(pipeline: Pipeline): string {
   return JSON.stringify([pipeline.state, pipeline.cursor?.stageId, pipeline.stages,
@@ -3607,14 +3635,14 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
     for (const run of snapshot.runs) for (const original of run.attempts) {
       const reservation = original.activation;
       if (!reservation || activeActivations.has(reservation.id)) continue;
-      // A reserved activation has admitted no host yet; keep its launch identity.
-      if (reservation.phase === "reserved" && ports.drainHold?.()) {
-        if (reservation.owner && processIdentityStatus(reservation.owner) === "dead") {
+      // Both checkpoints can precede registry admission; keep their identity.
+      if (ports.drainHold?.() && activationAwaitingAdmission(original)) {
+        if (!reservation.owner || processIdentityStatus(reservation.owner) === "dead") {
           await withPipelineMutation((pipelines, persist) => {
             const live = pipelines.find((item) => item.id === snapshot.id);
             const attempt = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === original.n);
             if (attempt?.activation && JSON.stringify(attempt.activation) === JSON.stringify(reservation)) {
-              delete attempt.activation.owner;
+              holdActivationAdmission(attempt);
               persist([live!]);
             }
           });
@@ -3631,7 +3659,11 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
           if (!pipeline || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
           // The mutation lease may have waited while update admission closed.
-          if (reservation.phase === "reserved" && ports.drainHold?.()) return null;
+          if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
+            holdActivationAdmission(attempt);
+            persist([pipeline]);
+            return null;
+          }
           attempt.activation.owner = owner;
           if (reservation.phase !== "reserved") attempt.activation.replay = true;
           persist([pipeline]);
@@ -3662,6 +3694,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           });
         };
         let finished = false;
+        let admissionHeld = false;
         try {
           if (activation.phase === "settled") {
             finished = true;
@@ -3681,6 +3714,9 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             finished = true;
           }
         } catch (error) {
+          // No receipt was admitted. Retain the checkpoint and its original
+          // downstream key so release can recover it without another attempt.
+          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; continue; }
           if (!(error instanceof ActivationSuperseded)) throw error;
           // The callback has not granted a permit when its fresh-state CAS fails.
           finished = true;
@@ -3692,7 +3728,8 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             if (!live || current?.activation?.id !== activation.id) return;
             if (!finished) {
               // Leave uncertain dispatch in custody, readable by every generation.
-              delete current.activation.owner;
+              if (admissionHeld) holdActivationAdmission(current);
+              else delete current.activation.owner;
               persist([live]);
               return;
             }
@@ -3900,6 +3937,17 @@ async function spawnRunStage(
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
+    if (error instanceof PipelineAdmissionHeld) {
+      if (attempt.activation) throw error;
+      // The legacy executor also waits at account admission. Its last call
+      // created no receipt, so release may reuse that call's counted key.
+      attempt.spawnCalls = Math.max(0, (attempt.spawnCalls ?? 1) - 1);
+      attempt.state = "pending";
+      setCursorState(pipeline, stage.id, "pending");
+      holdStageLaunch(pipeline, ports, () => {});
+      await persist();
+      return;
+    }
     park(pipeline, error instanceof Error ? error.message : String(error), attempt);
   } finally {
     /* The key only means "this spawn is in flight in this process". */
