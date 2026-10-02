@@ -477,7 +477,7 @@ export interface FilesResponse {
       "mirrorAgeMs" | "writerRatePerSecond"
     >;
     /** State database fallbacks and refused backups of the last week (#1870). */
-    storage?: { incidents: import("@/lib/state/durability").StorageIncident[] };
+    storage?: { incidents: import("@/lib/state/durability").StorageIncident[]; writes?: import("@/lib/state/diskFull").StateWriteHealth };
   };
   /** Durable conversation-id aliases (old id → canonical id), so a deep link
       copied before provisional-id adoption still resolves its card. */

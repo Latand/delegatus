@@ -294,7 +294,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
     lastMoved.set(id, exchange?.movedRows ?? 0);
     const live = stillLinked();
     const current = { ...live, state: "active" as const, lastCall: Date.now(), error: null };
-    if (live.state !== "active" || live.error !== null) putPeer(current);
+    if (live.state !== "active" || live.error !== null || live.lastCall === null) putPeer(current);
     // Last-call freshness is only needed in memory; do not rewrite peers.json on idle calls.
     markPeerCall(id, current.lastCall);
     return { peer: current, remote };

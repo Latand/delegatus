@@ -1,4 +1,4 @@
-import type { Pipeline, PipelineEdgeKind, PipelineFailEdge, PipelineFailEdgeExhaustion, PipelineStage, StageVerdictStatus } from "./types";
+import type { Pipeline, PipelineEdgeKind, PipelineFailEdge, PipelineFailEdgeExhaustion, PipelineStage, PipelineStageAttempt, StageVerdictStatus } from "./types";
 
 /** What the record says when a spent fail edge handed its last findings on
     without asking the source again (#1868). */
@@ -63,6 +63,33 @@ export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): b
   const handoffs = run?.attempts.filter((attempt) => !attempt.historical && attempt.budgetSpent).length ?? 0;
   const grants = (pipeline.reviewGrants ?? []).filter((grant) => grant.stageId === stage.id).length;
   return handoffs > grants;
+}
+
+/** A spent advance handoff is scoped to the current gate entry. A fix from
+    another gate may return through this gate and needs its own handoff (#2247).
+    The round count remains cumulative, so the terminal gate still reaches its
+    final re-check. Old records without this boundary keep their existing rule. */
+export function advanceFailEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
+  let firstAttempt = attempt.n;
+  let activation = attempt.activatedBy;
+  const visited = new Set<string>();
+  while (activation) {
+    const current = activation;
+    const key = `${current.stageId}:${current.attempt}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    if (current.edge === "fail" && current.stageId !== stage.id) {
+      const spent = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts
+        .some((source) => !source.historical && source.n >= firstAttempt && source.budgetSpent) ?? false;
+      return spent;
+    }
+    const source = pipeline.runs.find((run) => run.stageId === current.stageId)?.attempts
+      .find((candidate) => candidate.n === current.attempt && !candidate.historical);
+    if (!source) break;
+    if (current.stageId === stage.id) firstAttempt = Math.min(firstAttempt, source.n);
+    activation = source.activatedBy;
+  }
+  return failEdgeBudgetSpent(pipeline, stage);
 }
 
 /** What `needs_review` names on every surface (#1938): the review stage, the

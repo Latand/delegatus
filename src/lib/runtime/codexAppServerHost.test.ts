@@ -169,6 +169,7 @@ class FakeAppServer extends EventEmitter {
   /* Rejects full-history thread/resume the way paginated threads do; a resume
      with excludeTurns succeeds and omits thread.turns. */
   paginatedResume = false;
+  shellPolicy: Record<string, unknown> = {};
   mcpServers: Record<string, unknown> = {
     playwright: { command: "npx", enabled: true },
     "telegram-readonly": { command: "uv", enabled: true },
@@ -276,6 +277,7 @@ class FakeAppServer extends EventEmitter {
     if (method === "config/read") return this.respond(message.id, {
       config: {
         mcp_servers: this.mcpServers,
+        shell_environment_policy: this.shellPolicy,
       },
     });
     if (method === "thread/start" || method === "thread/resume") {
@@ -1524,6 +1526,32 @@ describe("CodexAppServerHost", () => {
     await textOnlyHost.release();
   });
 
+  test.each([false, true])("Codex launches carry publication settings through the child allowlist (keyed filters: %s)", async (keyedFilters) => {
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    const email = ["no-reply", "build.example.invalid"].join("@");
+    const server = new FakeAppServer();
+    server.shellPolicy = {
+      inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
+      ...(keyedFilters ? { filters: { PATH: "include", HOME: "include", "PRIVATE_*": "exclude" } } : { include_only: ["PATH", "HOME"] }),
+    };
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
+    });
+    try {
+      expect(captured.options?.env).toMatchObject({
+        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+      });
+      const git = { GIT_AUTHOR_NAME: "Build Agent", GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: "Build Agent", GIT_COMMITTER_EMAIL: email };
+      expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
+        shell_environment_policy: { set: git, ...(keyedFilters
+          ? { filters: Object.fromEntries(Object.keys(git).map((key) => [key, "include"])) }
+          : { include_only: ["PATH", "HOME", ...Object.keys(git)] }) },
+      } });
+    } finally { await host.release(); }
+  });
+
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
@@ -1553,6 +1581,10 @@ describe("CodexAppServerHost", () => {
       NODE_ENV: "test",
       PATH: process.env.PATH,
       CODEX_HOME: "/codex-home",
+      GIT_AUTHOR_NAME: "Delegatus",
+      GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
+      GIT_COMMITTER_NAME: "Delegatus",
+      GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),

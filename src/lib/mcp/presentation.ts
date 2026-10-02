@@ -212,7 +212,7 @@ export function describeMcpCall(
 
   if (toolName === "search_transcripts") {
     const query = compact(string(args.query));
-    const total = typeof result.total === "number" ? `${result.total} matches` : "";
+    const total = typeof result.total === "number" ? `${result.total} ${result.order === "relevance" ? "conversations" : "matches"}` : "";
     return {
       icon: "conversation",
       verb: "Searching",

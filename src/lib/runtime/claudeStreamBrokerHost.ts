@@ -11,6 +11,7 @@ import { statePath } from "@/lib/configDir";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
@@ -719,14 +720,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     options: ClaudeStreamBrokerHostOptions,
   ): Promise<ClaudeStreamBrokerHost> {
     const binary = options.binary ?? process.env.LLV_CLAUDE_BINARY ?? "claude";
-    const env = subscriptionEnv(
-      options.env ?? process.env,
-      options.claudeConfigDir,
-      options.forwardGitHubConfig === true,
-      options.providerAccount === true,
-    );
+    let env: NodeJS.ProcessEnv;
     let auth: ClaudeAuthStatus;
     try {
+      env = subscriptionEnv(
+        options.env ?? process.env,
+        options.claudeConfigDir,
+        options.forwardGitHubConfig === true,
+        options.providerAccount === true,
+      );
       auth = options.providerAccount
         ? { loggedIn: true, authMethod: "provider", subscriptionType: null }
         : await (options.readAuthStatus?.() ?? claudeCliAuthStatus(binary, env, options.cwd));
@@ -783,6 +785,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           allowSubagents: options.allowSubagents,
           baseSettingsPath: options.spawnPolicyBaseSettingsPath,
           providerAccount: options.providerAccount,
+          publicationEnv: options.env ?? process.env,
           profileId,
           cwd: options.cwd,
           mcpServers: options.mcpServers,
@@ -794,7 +797,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         "--settings", settings.settingsPath,
         "--strict-mcp-config", "--mcp-config", settings.mcpConfigPath,
       );
-    } else args.push("--strict-mcp-config");
+    } else args.push("--settings", JSON.stringify({ env: agentPublicationIdentityEnv(options.env ?? process.env) }), "--strict-mcp-config");
     if (options.providerAccount) args.push("--setting-sources", "");
     if (resume) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);

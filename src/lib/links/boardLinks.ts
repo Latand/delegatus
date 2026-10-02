@@ -8,7 +8,7 @@ import type { SharedProject } from "./state";
     and pushed to the peer store named by `store`, and the linked projects
     whose rows have fully crossed each way. */
 export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[]; boardReplayVersion?: number };
-type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number };
+type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number; titleRepair?: 1 };
 const seed = { collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: BoardLink) => row.key, loadRecords: (): BoardLink[] => [] };
 const cache = new Map<string, SqliteStateCollection<BoardLink>>();
 
@@ -85,7 +85,10 @@ export function dropRemoteProjects(id: string): void {
 
 export function readTaskCursor(id: string, store: string): TaskCursor | null {
   const row = readRow(`tasks:${id}`);
-  return row?.cursor && row.store === store ? row.cursor : null;
+  // Replay once even when both peers already advertised v3: a consumed log
+  // cannot revisit a placeholder left by an older sender. Saved repaired
+  // cursors make this bounded and idempotent, including across restarts.
+  return row?.cursor && row.store === store && row.titleRepair === 1 ? row.cursor : null;
 }
 
 /** The peer's task encoding is known only after it advertises it in a reply. */
@@ -97,7 +100,7 @@ export function readPeerTaskWireVersion(id: string, store: string): number {
 /** Writes only a changed cursor. */
 export function writeTaskCursor(id: string, store: string, cursor: TaskCursor, peerTaskWireVersion: number): void {
   const key = `tasks:${id}`;
-  const next: BoardLink = { key, store, shared: [], cursor, taskWireVersion: peerTaskWireVersion };
+  const next: BoardLink = { key, store, shared: [], cursor, taskWireVersion: peerTaskWireVersion, titleRepair: 1 };
   const held = readRow(key);
   if (held && JSON.stringify(held) === JSON.stringify(next)) return;
   collection(true)!.boundedPatch(2, (tx) => {

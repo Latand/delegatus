@@ -1,6 +1,8 @@
 import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
 import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
+import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -68,6 +70,7 @@ export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: s
   delete env[STATE_OWNER_ENV];
   for (const key of omitKeys) delete env[key];
   if (spawnCapability) env.LLV_SPAWN_CAPABILITY = spawnCapability;
+  Object.assign(env, agentPublicationIdentityEnv(base));
   return env;
 }
 
@@ -287,6 +290,13 @@ export interface BuiltHeadlessCommand {
   outputPath: string | null;
   sessionId: string | null;
   reviewerPath: string | null;
+  codexPublication?: true;
+}
+
+export async function prepareHeadlessPublication(built: BuiltHeadlessCommand, cwd: string): Promise<BuiltHeadlessCommand> {
+  if (!built.codexPublication) return built;
+  const policy = await readCodexShellPolicy(built.command, cwd, built.env, [], { ignoreUserConfig: true });
+  return { ...built, args: [...built.args, ...agentCodexPublicationArgs(policy, built.env)] };
 }
 
 export function reviewerCommand(
@@ -325,7 +335,7 @@ export function reviewerCommand(
         profileId: `headless-${sessionId}`,
       }).settingsPath
       : null;
-    if (settings) args.push("--settings", settings);
+    args.push("--settings", settings ?? JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }));
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
     return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
       env: reviewerEnvironment(baseEnv, spawnCapability), stdin: null, outputPath: null, sessionId,
@@ -336,19 +346,18 @@ export function reviewerCommand(
      human banner. The verdict itself still arrives via --output-last-message. */
   const args = ["--disable", "multi_agent", "exec", "--ignore-user-config", "-", "--json", "--output-last-message", outputPath,
     ...(options.sandbox === "read-only" ? ["-s", "read-only", "--skip-git-repo-check"] : ["--dangerously-bypass-approvals-and-sandbox"])];
+  const baseEnv = codexAccount?.home
+    ? { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: codexAccount.home } : process.env;
+  args.push(...agentCodexPublicationArgs({}, baseEnv));
   if (codexAccount?.managed) args.unshift("-c", "cli_auth_credentials_store=file");
   if (role.model) args.push("-m", role.model);
   if (role.effort) args.push("-c", `model_reasoning_effort=${role.effort}`);
   if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
   return {
     command: resolveBinary("codex"),
+    codexPublication: true,
     args,
-    env: reviewerEnvironment(
-      codexAccount?.home
-        ? { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: codexAccount.home }
-        : process.env,
-      spawnCapability,
-    ),
+    env: reviewerEnvironment(baseEnv, spawnCapability),
     stdin: fenceViewerSpawnPrompt("codex", reviewRequest),
     outputPath,
     sessionId: null,
@@ -464,7 +473,7 @@ export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Pr
   fs.mkdirSync(request.artifactDir, { recursive: true });
   fs.mkdirSync(request.cwd, { recursive: true });
   for (const artifact of [outputPath, stdoutPath, stderrPath]) fs.rmSync(artifact, { force: true });
-  const built = reviewerCommand(
+  const built = await prepareHeadlessPublication(reviewerCommand(
     { engine: "codex", model: request.model, effort: request.effort },
     request["prompt"],
     outputPath,
@@ -473,7 +482,7 @@ export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Pr
     null,
     undefined,
     { sandbox: request.sandbox },
-  );
+  ), request.cwd);
   let timedOut = false;
   return await new Promise<HeadlessRunResult>((resolve) => {
     const settle = (run: LiveRun): void => {

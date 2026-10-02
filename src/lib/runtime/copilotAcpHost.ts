@@ -410,13 +410,13 @@ export class CopilotAcpHost implements EngineHost {
 
   private static async open(resumeSessionId: string | null, options: CopilotAcpHostOptions): Promise<CopilotAcpHost> {
     const binary = options.binary ?? process.env.LLV_COPILOT_BIN ?? "copilot";
-    const env = copilotChildEnv(options.env ?? process.env, options.copilotHome, options.providerEnv);
     let mcpConfigPath: string | null = null;
     const cleanups: Array<() => void> = [];
     if (options.releaseCleanup) cleanups.push(options.releaseCleanup);
     const releaseCleanup = () => { for (const cleanup of cleanups.splice(0)) { try { cleanup(); } catch { /* best effort */ } } };
     let child: ChildProcessWithoutNullStreams;
     try {
+      const env = copilotChildEnv(options.env ?? process.env, options.copilotHome, options.providerEnv);
       const viewer = options.viewerMcpServer === undefined
         ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? copilotViewerMcpServer(options.env ?? {}) : null
         : options.viewerMcpServer;
