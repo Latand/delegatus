@@ -32,6 +32,7 @@ export function createRuntimeFilesStatusProjection() {
   const settlements = new Map<string, Settlement>();
   const observedTurns = new Set<string>();
   const activeTurnIds = new Map<string, string>();
+  const terminalGenerations = new Map<string, { turnId: string; keys: Set<string> }>();
   let live = false;
   const identity = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">) =>
     JSON.stringify([session.conversationId, session.artifactPath]);
@@ -75,7 +76,12 @@ export function createRuntimeFilesStatusProjection() {
         }
       }
     }
-    const statuses = sessions.filter((session) => session.turn === "idle").map((session) => ({
+    // Subscriber notifications coalesce lifecycle frames. The retained end is
+    // authoritative even if idle was replaced by recovery or a late same-turn
+    // status before the projection's first render.
+    const statuses = sessions.filter((session) => session.turn === "idle"
+      || (session.settledTurnId && (!session.activeTurnId || session.activeTurnId === session.settledTurnId)))
+      .map((session) => ({
       conversationId: session.conversationId, sessionKey: session.sessionKey, artifactPath: session.artifactPath,
       turn: session.turn, activeTurnId: session.activeTurnId, settledTurnId: session.settledTurnId,
       hasAttention: session.attentionIds.length > 0,
@@ -84,7 +90,7 @@ export function createRuntimeFilesStatusProjection() {
     }));
     // Keep running and unknown transitions in the signature too. In
     // particular, unknown -> running can retire a settlement without ever
-    // changing the idle-only status list.
+    // changing the projected status list.
     const lifecycle = sessions.map((session) => [identity(session), session.turn, session.activeTurnId]);
     const nextSignature = JSON.stringify([statuses, lifecycle]);
     if (nextSignature !== signature || settlementChanged || !live) {
@@ -109,8 +115,33 @@ export function createRuntimeFilesStatusProjection() {
     const cached = projected.get(data);
     if (cached) return cached;
     const generationKey = (file: FileEntry) => JSON.stringify([
-      file.path, file.engine, file.lastTurn?.startedAt ?? null,
+      // A bounded tail can lose its opening prompt. In that case transcript
+      // bytes identify the generation; label-only replacements still match.
+      file.path, file.engine, file.lastTurn?.startedAt ?? [file.mtime, file.size],
     ]);
+    const currentStatus = (file: FileEntry) => {
+      const status = file.conversationId ? byConversation.get(file.conversationId) : byPath.get(file.path);
+      const initialMessage = (file.spawn ?? file.launch)?.initialMessage;
+      return status && status.sessionKey.engine === file.engine
+        && (!(initialMessage === "queued" || initialMessage === "pending") || status.observedTurn)
+        && (file.path.startsWith("spawn:") || status.artifactPath === file.path) ? status : undefined;
+    };
+    // Bind each retained end once to the catalog generations present when it
+    // first reaches the projection. Reusing that end cannot settle a newer
+    // scanner turn, even when runtime recovery still reports the old turn id.
+    if (live) {
+      const firstSeen = new Set<string>();
+      for (const file of data.files) {
+        const status = currentStatus(file);
+        if (!status?.settledTurnId) continue;
+        const key = identity(status);
+        if (terminalGenerations.get(key)?.turnId !== status.settledTurnId) {
+          terminalGenerations.set(key, { turnId: status.settledTurnId, keys: new Set() });
+          firstSeen.add(key);
+        }
+        if (firstSeen.has(key)) terminalGenerations.get(key)!.keys.add(generationKey(file));
+      }
+    }
     const settlementFor = (file: FileEntry) => {
       const settlement = settlements.get(generationKey(file));
       return settlement && (!file.conversationId || settlement.conversationId === file.conversationId)
@@ -140,14 +171,11 @@ export function createRuntimeFilesStatusProjection() {
         changed ||= cachedRow !== file;
         return cachedRow;
       }
-      const status = file.conversationId ? byConversation.get(file.conversationId) : byPath.get(file.path);
-      const provisional = file.path.startsWith("spawn:");
-      const initialMessage = (file.spawn ?? file.launch)?.initialMessage;
-      const pendingLaunch = initialMessage === "queued" || initialMessage === "pending";
+      const status = currentStatus(file);
       // Only the current generation gets the runtime's authority. Historical
       // paths and a launch still waiting to deliver its prompt keep their facts.
-      if (!status || status.sessionKey.engine !== file.engine || (pendingLaunch && !status.observedTurn)
-        || (!provisional && status.artifactPath !== file.path)) {
+      if (!status || (status.settledTurnId
+        && !terminalGenerations.get(identity(status))?.keys.has(generationKey(file)))) {
         const settlement = settlementFor(file);
         if (settlement) {
           const retained = applySettlement(file, settlement);
@@ -157,6 +185,14 @@ export function createRuntimeFilesStatusProjection() {
         }
         rows.set(file, file);
         return file;
+      }
+      const priorSettlement = settlementFor(file);
+      if (status.settledTurnId && priorSettlement?.settledTurnId === status.settledTurnId
+        && priorSettlement.clearAttention === !status.hasAttention) {
+        const retained = applySettlement(file, priorSettlement);
+        rows.set(file, retained);
+        changed = true;
+        return retained;
       }
       // The runtime's running axis stays open across silent tools and can lag
       // a terminal transcript flush. Only settlement overlays the inventory:

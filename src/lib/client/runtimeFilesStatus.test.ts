@@ -189,6 +189,52 @@ test("retained terminal identity in unknown or late running status cannot settle
   } finally { cache.dispose(); }
 });
 
+for (const engine of ["claude", "codex"] as const) {
+  for (const turn of ["idle", "unknown", "running", "interrupt_requested"] as const) {
+    test(`${engine}: retained end first observed in ${turn} settles only its scanner generation`, async () => {
+      const cache = await catalog({ ...file, engine, fmt: engine });
+      try {
+        const raw = cache.read();
+        const project = createRuntimeFilesStatusProjection();
+        const ended = runtime({
+          sessionKey: { engine, sessionId: "current" }, turn, settledTurnId: "t1",
+          activeTurnId: turn === "unknown" ? null : "t1",
+        });
+        const settled = project(raw, ended);
+        expect(settled.files[0]).toMatchObject({ activity: "idle", authoritativeTurn: { state: "idle" } });
+        expect(raw.files[0]?.activity).toBe("live");
+        const newer = { ...raw, files: [{ ...raw.files[0]!, lastTurn: { startedAt: 100_000, endedAt: null } }] };
+        expect(project(newer, ended)).toBe(newer);
+        expect(project(raw, ended).files[0]).toBe(settled.files[0]);
+        const successor = runtime({ sessionKey: { engine, sessionId: "current" }, turn: "running", activeTurnId: "t2" });
+        expect(project.updateRuntime(successor)).toBe(true);
+        expect(project(raw, successor)).toBe(raw);
+        expect(project(newer, successor)).toBe(newer);
+      } finally { cache.dispose(); }
+    });
+  }
+}
+
+test("a bounded tail without its opening prompt binds settlement to unchanged transcript bytes", async () => {
+  const cache = await catalog({ ...file, lastTurn: null });
+  try {
+    const raw = cache.read();
+    const project = createRuntimeFilesStatusProjection();
+    const ended = runtime({ turn: "unknown", settledTurnId: "t1" });
+    expect(project(raw, ended).files[0]?.activity).toBe("idle");
+    const relabeled = { ...raw, files: [{ ...raw.files[0]!, title: "Updated label" }] };
+    expect(project(relabeled, ended).files[0]).toMatchObject({ title: "Updated label", activity: "idle" });
+    const waitingInput = { since: 200, screenTail: "Choose", target: "%1", menu: null };
+    for (const changedBytes of [{ size: file.size + 1 }, { mtime: file.mtime + 1 }]) {
+      const newer = { ...raw, files: [{ ...raw.files[0]!, ...changedBytes, waitingInput,
+        authoritativeTurn: { state: "busy", source: "assistant", terminalAt: null } as NonNullable<FileEntry["authoritativeTurn"]> }] };
+      expect(project(newer, ended)).toBe(newer);
+      expect(project(newer, { ...ended, connection: "offline" })).toBe(newer);
+      expect(newer.files[0]?.waitingInput).toEqual(waitingInput);
+    }
+  } finally { cache.dispose(); }
+});
+
 test("a different turn retires a provisional settlement by its conversation and engine", async () => {
   const cache = await catalog({ ...file, path: "spawn:launch-one",
     launch: { initialMessage: "queued" } as NonNullable<FileEntry["launch"]> });
