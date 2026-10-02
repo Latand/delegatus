@@ -2770,7 +2770,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           ) : null}
         </header>
       ) : (
-        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
+        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar ? "" : undefined}>
           {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
           <span className="summary" data-bar-group="status">
             {reachStatus ?? (

@@ -119,6 +119,10 @@
 .kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 144px; min-width: 144px; }
 .kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
+/* The attention island is fixed over the bar's 236 px reserve. Under 1168 px of bar the controls
+   crowd it, and the uk label is wider than the reserve leaves: the chip keeps its dot and count
+   (the button keeps its aria-label and title) so it stays clear of the panel toggles and ⋯. */
+.kb .bar[data-bar="project"][data-bar-compact] [data-attention-chip-label] { display: none; }
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
    reserve in one row; there, and only there, they wrap. The bar's own width decides, since it
    spans the Tasks panel: a board narrowed by the panel keeps its one-row bar. */

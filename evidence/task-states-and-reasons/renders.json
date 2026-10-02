@@ -5,6 +5,9 @@
       "height": 844,
       "locale": "en",
       "topbar": {
+        "chipLeft": 1271.625,
+        "taskToggleRight": 1189.765625,
+        "moreRight": 1237.765625,
         "top": 0,
         "bottom": 48,
         "height": 48,
@@ -159,7 +162,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Postponed 2 Oct, 14:28: After green checks · now due · 2h ago",
+          "text": "Postponed 2 Oct, 18:25: After green checks · now due · 2h ago",
           "left": 1074,
           "right": 1302,
           "top": 808.40625,
@@ -179,6 +182,9 @@
       "height": 844,
       "locale": "en",
       "topbar": {
+        "chipLeft": 1178.3125,
+        "taskToggleRight": 996,
+        "moreRight": 1044,
         "top": 0,
         "bottom": 48,
         "height": 48,
@@ -208,6 +214,9 @@
       "height": 844,
       "locale": "en",
       "topbar": {
+        "chipLeft": 922.3125,
+        "taskToggleRight": 853.40625,
+        "moreRight": 901.40625,
         "top": 0,
         "bottom": 48,
         "height": 48,
@@ -344,7 +353,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Postponed 2 Oct, 14:28: After green checks · now due · 2h ago",
+          "text": "Postponed 2 Oct, 18:25: After green checks · now due · 2h ago",
           "left": 24,
           "right": 366,
           "top": 726.625,
@@ -364,6 +373,9 @@
       "height": 844,
       "locale": "uk",
       "topbar": {
+        "chipLeft": 1264.03125,
+        "taskToggleRight": 1219.125,
+        "moreRight": 1267.125,
         "top": 0,
         "bottom": 48,
         "height": 48,
@@ -518,7 +530,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Відкладено 2 жовт., 14:28: Після успішних перевірок · час настав · 2 год тому",
+          "text": "Відкладено 2 жовт., 18:25: Після успішних перевірок · час настав · 2 год тому",
           "left": 1074,
           "right": 1302,
           "top": 808.96875,
@@ -538,6 +550,9 @@
       "height": 844,
       "locale": "uk",
       "topbar": {
+        "chipLeft": 1178.3125,
+        "taskToggleRight": 996,
+        "moreRight": 1044,
         "top": 0,
         "bottom": 48,
         "height": 48,
@@ -567,6 +582,9 @@
       "height": 844,
       "locale": "uk",
       "topbar": {
+        "chipLeft": 922.3125,
+        "taskToggleRight": 868.265625,
+        "moreRight": 916.265625,
         "top": 0,
         "bottom": 48,
         "height": 48,
@@ -703,7 +721,7 @@
         },
         {
           "motion": "stopped",
-          "text": "Відкладено 2 жовт., 14:29: Після успішних перевірок · час настав · 2 год тому",
+          "text": "Відкладено 2 жовт., 18:25: Після успішних перевірок · час настав · 2 год тому",
           "left": 24,
           "right": 366,
           "top": 711.75,

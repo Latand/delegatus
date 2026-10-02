@@ -14846,7 +14846,11 @@ describe("task motion and waiting reasons", () => {
             input.value = originalValue;
             const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
             const filterRect = filters.getBoundingClientRect();
+            const chip = bar.querySelector<HTMLElement>('[data-attention-count]')!.getBoundingClientRect();
+            const taskToggle = bar.querySelector<HTMLElement>('[data-task-panel-toggle]')!.getBoundingClientRect();
+            const moreMenu = bar.querySelector<HTMLElement>('[data-bar-group="more"]')!.getBoundingClientRect();
             return {
+              chipLeft: chip.left, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
               top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
               belowBar: !bar.contains(filters),
               barRight: rect.right,
@@ -14876,6 +14880,11 @@ describe("task motion and waiting reasons", () => {
               expect(topbar.belowBar).toBeTrue();
               expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.bottom);
             }
+            // The attention chip is drawn over the bar's right reserve and must
+            // leave the task-panel toggle whole, so «13» never reads as «1»; in the compact
+            // bar (filters below it) it leaves ⋯ whole as well.
+            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
+            if (topbar.belowBar) expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
             expect(topbar.documentOverflow).toBeFalse();
             expect(topbar.filtersRight).toBeLessThanOrEqual(topbar.barRight);
             expect(topbar.filterCount).toBe(5);
