@@ -37,6 +37,8 @@ class TestResizeObserver {
 Object.assign(globalThis, {
   ResizeObserver: TestResizeObserver,
   window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   document: dom.document,
   navigator: dom.navigator,
   Node: dom.Node,
