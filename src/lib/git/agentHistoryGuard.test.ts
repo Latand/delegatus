@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { agentPublicationIdentityEnv } from "./agentPublicationIdentity";
+import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { withAgentConfigSandbox } from "@/lib/runtime/agentConfigSandbox";
+import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
 
 test("hooks stay in the shared home across a container-to-host launch and sandbox reapplication", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-shared-home-"));
@@ -24,12 +25,22 @@ test("hooks stay in the shared home across a container-to-host launch and sandbo
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-function fixture() {
+function fixture(engine?: "claude" | "codex", worktree = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "history-guard-test-"));
+  let cwd = root;
   const source = { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent") };
   const machine = { ...source, ...controllerCommitIdentityEnv() };
   const env = { ...source, ...agentPublicationIdentityEnv(source) };
-  const run = (args: string[], child = env) => Bun.spawnSync(["git", ...args], { cwd: root, env: child, stdout: "pipe", stderr: "pipe" });
+  if (engine) {
+    Object.assign(env, withAgentConfigSandbox({ ...source }, source));
+    if (engine === "claude") {
+      const home = path.join(root, "claude");
+      fs.mkdirSync(home);
+      const policy = applyClaudeSpawnPolicy(home, { publicationEnv: source });
+      Object.assign(env, JSON.parse(fs.readFileSync(policy.settingsPath, "utf8")).env);
+    } else Object.assign(env, agentCodexPublicationPolicy({ include_only: ["PATH", "HOME"] }, source).set);
+  }
+  const run = (args: string[], child = env) => Bun.spawnSync(["git", ...args], { cwd, env: child, stdout: "pipe", stderr: "pipe" });
   const ok = (args: string[], child = env) => {
     const result = run(args, child);
     expect(result.exitCode, result.stderr.toString()).toBe(0);
@@ -37,7 +48,12 @@ function fixture() {
   };
   ok(["init", "-q", "-b", "main"]);
   ok(["commit", "--allow-empty", "-m", "base"]);
-  return { root, source, machine, env, run, ok, close: () => fs.rmSync(root, { recursive: true, force: true }) };
+  if (worktree) {
+    const linked = path.join(root, "linked");
+    ok(["worktree", "add", "-q", "-b", "agent", linked]);
+    cwd = linked;
+  }
+  return { root: cwd, source, machine, env, run, ok, close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test.each(["default", "relative", "absolute", "environment"])("forwards %s repository hooks, including transaction input and rejection", (kind) => {
@@ -120,7 +136,7 @@ test("signed machine commits remain amendable when Git displays signatures", () 
   } finally { f.close(); }
 });
 
-test.each(["cherry-pick", "reuse", "am"])("refuses %s that would create a commit with an inherited author", (operation) => {
+test.each(["cherry-pick", "reuse", "am", "am-no-verify", "am-n"])("refuses %s that would create a commit with an inherited author", (operation) => {
   const f = fixture();
   try {
     f.ok(["checkout", "-q", "-b", "foreign"]);
@@ -133,10 +149,124 @@ test.each(["cherry-pick", "reuse", "am"])("refuses %s that would create a commit
     f.ok(["checkout", "-q", "main"]);
     const before = f.ok(["rev-parse", "HEAD"]);
     const result = f.run(operation === "cherry-pick" ? ["cherry-pick", "foreign"]
-      : operation === "am" ? ["am", patch] : ["commit", "--allow-empty", "--no-verify", "-C", "foreign"]);
+      : operation.startsWith("am") ? ["am", ...(operation === "am-no-verify" ? ["--no-verify"] : operation === "am-n" ? ["-n"] : []), patch]
+        : ["commit", "--allow-empty", "--no-verify", "-C", "foreign"]);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.toString()).toContain("add a new commit on top");
     expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+  } finally { f.close(); }
+});
+
+const amCases = (["claude", "codex"] as const).flatMap((engine) =>
+  [false, true].flatMap((worktree) => [false, true].flatMap((detached) =>
+    (["direct", "continue", "skip"] as const).flatMap((resume) =>
+      ["-n", "--no-verify"].flatMap((flag) => [false, true].map((machine) =>
+        ({ engine, worktree, detached, resume, flag, machine })))))));
+
+test.each(amCases)("am publication boundary %j", ({ engine, worktree, detached, resume, flag, machine }) => {
+  const f = fixture(engine, worktree);
+  try {
+    const target = f.ok(["branch", "--show-current"]);
+    f.ok(["checkout", "-q", "-b", "patch-source"]);
+    if (resume === "skip") {
+      fs.writeFileSync(path.join(f.root, "conflict.txt"), "mailbox change\n");
+      f.ok(["add", "conflict.txt"]);
+      f.ok(["commit", "-m", "patch to skip"]);
+    }
+    fs.writeFileSync(path.join(f.root, "patch.txt"), "mailbox change\n");
+    f.ok(["add", "patch.txt"]);
+    f.ok(["commit", "-m", "mailbox work"], machine ? f.env : { ...f.machine,
+      GIT_AUTHOR_NAME: "Fixture Author", GIT_AUTHOR_EMAIL: ["fixture", "example.invalid"].join("@") });
+    const patch = path.join(f.root, "mailbox.patch");
+    fs.writeFileSync(patch, f.ok(["format-patch", resume === "skip" ? "-2" : "-1", "--stdout"]) + "\n");
+    f.ok(["checkout", "-q", target]);
+    if (resume !== "direct") {
+      const file = resume === "skip" ? "conflict.txt" : "patch.txt";
+      fs.writeFileSync(path.join(f.root, file), "local conflict\n");
+      f.ok(["add", file]);
+      f.ok(["commit", "-m", "local work"]);
+    }
+    if (detached) f.ok(["checkout", "--detach", "-q"]);
+    const before = f.ok(["rev-parse", "HEAD"]);
+    const branchBefore = f.ok(["rev-parse", `refs/heads/${target}`]);
+    const hooks = path.join(f.root, "repo-hooks");
+    fs.mkdirSync(hooks);
+    f.ok(["config", "core.hooksPath", "repo-hooks"]);
+    fs.writeFileSync(path.join(hooks, "reference-transaction"),
+      '#!/bin/sh\nprintf "%s\\n" "$1" >> hook-events\ncat >> hook-events\n', { mode: 0o700 });
+    let result = f.run(["am", flag, patch]);
+    if (resume !== "direct") {
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout.toString()).toContain("Patch failed");
+      expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+      if (resume === "continue") {
+        fs.writeFileSync(path.join(f.root, "patch.txt"), "resolved mailbox change\n");
+        f.ok(["add", "patch.txt"]);
+      }
+      result = f.run(["am", flag, `--${resume}`]);
+    }
+    if (machine) {
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      const after = f.ok(["rev-parse", "HEAD"]);
+      expect(after).not.toBe(before);
+      expect(f.ok(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(Object.values(controllerCommitIdentityEnv()).join("\n"));
+      expect(fs.readFileSync(path.join(f.root, "hook-events"), "utf8")).toContain(`prepared\n${before} ${after} `);
+      expect(fs.readFileSync(path.join(f.root, "patch.txt"), "utf8")).toBe(
+        resume === "continue" ? "resolved mailbox change\n" : "mailbox change\n");
+    } else {
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("add a new commit on top");
+      expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+      expect(f.ok(["rev-parse", `refs/heads/${target}`])).toBe(branchBefore);
+      f.ok(["am", "--abort"]);
+      expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+    }
+  } finally { f.close(); }
+});
+
+test("am can abort a partially applied machine mailbox back to an inherited author", () => {
+  const f = fixture();
+  try {
+    f.ok(["commit", "--allow-empty", "-m", "inherited base"], { ...f.machine,
+      GIT_AUTHOR_NAME: "Fixture Author", GIT_AUTHOR_EMAIL: ["fixture", "example.invalid"].join("@") });
+    const before = f.ok(["rev-parse", "HEAD"]);
+    f.ok(["checkout", "-q", "-b", "patch-source"]);
+    fs.writeFileSync(path.join(f.root, "patch.txt"), "machine work\n");
+    f.ok(["add", "patch.txt"]);
+    f.ok(["commit", "-m", "machine patch"]);
+    const patch = path.join(f.root, "mailbox.patch");
+    const mail = f.ok(["format-patch", "-1", "--stdout"]) + "\n";
+    fs.writeFileSync(patch, mail + mail);
+    f.ok(["checkout", "-q", "main"]);
+    expect(f.run(["am", "--no-verify", patch]).exitCode).not.toBe(0);
+    expect(f.ok(["rev-parse", "HEAD"])).not.toBe(before);
+    f.ok(["am", "--abort"]);
+    expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+  } finally { f.close(); }
+});
+
+test.each([false, true])("am guards an unborn branch (machine patch: %s)", (machine) => {
+  const f = fixture();
+  try {
+    f.ok(["checkout", "--orphan", "patch-source", "-q"]);
+    fs.writeFileSync(path.join(f.root, "patch.txt"), "root patch\n");
+    f.ok(["add", "patch.txt"]);
+    f.ok(["commit", "-m", "root patch"], machine ? f.env : { ...f.machine,
+      GIT_AUTHOR_NAME: "Fixture Author", GIT_AUTHOR_EMAIL: ["fixture", "example.invalid"].join("@") });
+    const patch = path.join(f.root, "root.patch");
+    fs.writeFileSync(patch, f.ok(["format-patch", "--root", "-1", "--stdout"]) + "\n");
+    f.ok(["checkout", "--orphan", "destination", "-q"]);
+    f.ok(["rm", "-f", "patch.txt"]);
+    const result = f.run(["am", "--no-verify", patch]);
+    if (machine) {
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(f.ok(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(Object.values(controllerCommitIdentityEnv()).join("\n"));
+    } else {
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("add a new commit on top");
+      expect(f.run(["rev-parse", "--verify", "HEAD"]).exitCode).not.toBe(0);
+      expect(f.run(["rev-parse", "--verify", "refs/heads/destination"]).exitCode).not.toBe(0);
+    }
   } finally { f.close(); }
 });
 

@@ -65,9 +65,21 @@ if [ "$hook" = reference-transaction ]; then
         HEAD) git symbolic-ref -q HEAD >/dev/null && continue ;;
         *) continue ;;
       esac
-      case "$old" in *[!0]*) ;; *) continue ;; esac
       # A deletion or rename moves names without creating a replacement commit.
       case "$new" in *[!0]*) ;; *) continue ;; esac
+      # am skips pre-applypatch with -n/--no-verify, including on continuation.
+      # Validate the actual commit before publishing it. Resolve state through
+      # Git so linked worktrees use their own sequencer. An abort restores an
+      # older tip rather than appending a patch, and must remain available.
+      applying=$(git rev-parse --git-path rebase-apply/applying) || refuse
+      if [ -f "$applying" ]; then
+        parents=$(git show -s --no-show-signature --no-color --no-notes --format=%P "$new") || refuse
+        case "$old" in
+          *[!0]*) [ "$parents" != "$old" ] || check_author "$new" ;;
+          *) check_author "$new" ;;
+        esac
+      fi
+      case "$old" in *[!0]*) ;; *) continue ;; esac
       git cat-file -e "$old^{commit}" || refuse
       removed=$(git rev-list "$new..$old") || refuse
       for commit in $removed; do
