@@ -167,6 +167,7 @@ function isProviderWait(value: unknown): boolean {
     && dated(wait.startedAt) && dated(wait.resumeAt)
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
     && (wait.actionAt === undefined || dated(wait.actionAt))
+    && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
     && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
     && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
 }
@@ -211,6 +212,14 @@ function isAttempt(value: unknown, index: number): boolean {
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
+    )) &&
+    (attempt.providerRecoveryBudget === undefined || (
+      attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
+      && !Array.isArray(attempt.providerRecoveryBudget)
+      && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
+      && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
+      && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
+      && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
     )) &&
     isProviderWait(attempt.providerWait) &&
     isProviderRecoveries(attempt.providerRecoveries) &&
@@ -1018,6 +1027,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
             providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
               ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,
             providerRecoveries: attempt.providerRecoveries?.map((recovery) => ({ ...recovery, condition: { ...recovery.condition } })),

@@ -15537,7 +15537,7 @@ for (const engine of ["claude", "codex"] as const) {
     pipeline.runs[0]!.attempts[0]!.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
     savePipelines([pipeline]);
     const sends: string[] = [];
-    h.ports.resumeSeveredTurn = async (input) => { sends.push(input.clientMessageId); return true; };
+    h.ports.resumeSeveredTurn = async (input) => { sends.push(input.clientMessageId); h.setConversationActive(true); return true; };
     h.durableTurns.set("/codex/stage-1.jsonl", {
       turn: "terminal", message: { text: "provider failure", ts: now },
       terminalProviderMessage: { text: "Failed to refresh OAuth token: retry in a minute", ts: now, errorClass: "server_error" },
@@ -15577,7 +15577,7 @@ async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: s
   h.ports.accountLabel = () => "account A";
   h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
   const sends: string[] = [];
-  h.ports.resumeSeveredTurn = async (input) => { sends.push(input.clientMessageId); return true; };
+  h.ports.resumeSeveredTurn = async (input) => { sends.push(input.clientMessageId); h.setConversationActive(true); return true; };
   const cut = () => h.durableTurns.set("/codex/stage-1.jsonl", {
     turn: "terminal", message: { text, ts: now },
     terminalProviderMessage: { text, ts: now, errorClass,
@@ -15806,13 +15806,14 @@ test("four limit-cut lanes wait without parking and continue independently once 
   expect(new Set(f.sends).size).toBe(4);
 });
 
-test("a resumed provider-cut host that dies before new output relaunches with WIP", async () => {
+test.each([false, true])("a resumed provider-cut host that dies before new output relaunches with WIP, timestamp=%s", async (timestamp) => {
   const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
   await tickPipelines([], f.h.ports);
   f.advance(60_000);
   await tickPipelines([], f.h.ports);
   expect(f.sends).toHaveLength(1);
-  f.h.ports.conversationHostUnavailableSince = async () => new Date(f.now() - 5 * 60_000).toISOString();
+  if (timestamp) f.h.ports.conversationHostUnavailableSince = async () => new Date(f.now() - 5 * 60_000).toISOString();
+  else f.h.setConversationActive(false);
   await tickPipelines([], f.h.ports);
   f.advance(30_000);
   await tickPipelines([], f.h.ports);
@@ -15820,6 +15821,70 @@ test("a resumed provider-cut host that dies before new output relaunches with WI
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+});
+
+test.each([false, true])("accepted provider continuations fence relaunch until delivery, delivered=%s", async (delivered) => {
+  const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
+  let settled = false;
+  const keys: string[] = [];
+  f.h.ports.conversationDeliveryOutstanding = () => !settled;
+  f.h.ports.conversationDeliveryCompleted = (_id, key) => { keys.push(key); return settled; };
+  f.h.ports.resumeSeveredTurn = async (input) => { f.sends.push(input.clientMessageId); return true; };
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  const key = f.sends[0]!;
+  for (let tick = 0; tick < 3; tick += 1) {
+    f.advance(60_000);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(f.sends).toEqual([key]);
+  }
+  if (delivered) {
+    settled = true;
+    f.advance(60_000);
+    await tickPipelines([], f.h.ports);
+    f.advance(30_000);
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(keys.every(candidate => candidate === key)).toBe(true);
+  } else {
+    f.advance(10 * 60_000);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.stateDetail).toContain("accepted continuation delivery is still pending");
+    expect(f.h.spawnInputs).toHaveLength(1);
+  }
+  expect(f.sends).toEqual([key]);
+});
+
+test("a relaunched stage observes its next provider cut before checking continuation delivery", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  const lane = loadPipelines()[0]!;
+  const retry = lane.runs[0]!.attempts[1]!;
+  retry.paneId = null;
+  savePipelines([lane]);
+  f.advance(1_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  const queriedKeys: string[] = [];
+  // The fresh host has no provider continuation delivery at all yet.
+  f.h.ports.conversationDeliveryCompleted = (_id, key) => { queriedKeys.push(key); return false; };
+  f.h.durableTurns.set(retry.agentPath!, { turn: "terminal", message: null,
+    terminalProviderMessage: { text: "You've hit your usage limit", ts: f.now(), errorClass: "usage_limit_exceeded", usageLimit: { resetsAt: f.resetsAt } } });
+  await tickPipelines([], f.h.ports);
+  const waiting = loadPipelines()[0]!.runs[0]!.attempts[1]!;
+  expect(waiting.providerWait!.turnTs).toBe(f.now());
+  expect(waiting.providerWait!.actionAt).toBeUndefined();
+  expect(waiting.providerWait!.tries).toBe(1);
+  expect(queriedKeys).toEqual([]);
+  expect(loadPipelines()[0]!.stateDetail).toContain("usage limit");
+  expect(f.h.spawnInputs).toHaveLength(2);
 });
 
 test("a newer completed verdict wins over host loss after a provider continuation", async () => {
@@ -15919,6 +15984,61 @@ test("a pending provider capacity wait does not spin the pipelines controller", 
   } finally {
     unregister();
   }
+});
+
+test.each([120_000, 24 * 60 * 60_000, null])("pending capacity recovery exhausts due probes after reset=%s", async (resetDelay) => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", resetDelay);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  await tickPipelines([], f.h.ports);
+  if (resetDelay !== null) {
+    f.advance(resetDelay - 1);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    f.advance(60_001);
+  } else f.advance(6 * 60 * 60_000);
+  for (let probe = 0; probe < 4; probe += 1) {
+    await tickPipelines([], f.h.ports);
+    f.advance(30 * 60_000);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toMatch(/usage limit.*capacity/);
+  for (let tick = 0; tick < 32; tick += 1) {
+    f.advance(30 * 60_000);
+    await tickPipelines([], f.h.ports);
+  }
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
+});
+
+test("mixed provider cuts retain recovery expenditure until stage progress", async () => {
+  const f = await providerRecoveryHarness("codex", "stream_disconnected", "stream disconnected");
+  for (let cut = 0; cut < 12; cut += 1) {
+    const errorClass = cut % 2 === 0 ? "stream_disconnected" : "turn_aborted";
+    f.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", message: null,
+      terminalProviderMessage: { text: errorClass, errorClass, ts: f.now() } });
+    await tickPipelines([], f.h.ports);
+    const lane = loadPipelines()[0]!;
+    if (lane.state === "needs_decision") break;
+    const wait = lane.runs[0]!.attempts[0]!.providerWait!;
+    f.advance(Math.max(0, Date.parse(wait.resumeAt) - f.now()));
+    await tickPipelines([], f.h.ports);
+    f.advance(1_000);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toMatch(/stage cut by (transient provider error|aborted stage turn).*tries/);
+  expect(f.sends.length).toBeLessThanOrEqual(3);
+  const spent = f.sends.length;
+  f.advance(24 * 60 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(spent);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
 });
 
 test("a legacy parked hostless failover returns to pending capacity recovery", async () => {

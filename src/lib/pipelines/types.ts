@@ -363,6 +363,8 @@ export type PipelineStageAttempt = {
       the engine the limit was hit on; account ids are unique only within an
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
+  /** Recovery expenditure survives condition changes and host relaunches. */
+  providerRecoveryBudget?: { tries: number; startedAt: string };
   providerWait?: {
     condition: import("./providerConditions").ProviderCondition;
     text: string;
@@ -375,6 +377,7 @@ export type PipelineStageAttempt = {
     actionAt?: string;
     switchedAccountId?: string;
     failedAccounts?: string[];
+    capacityProbes?: number;
   };
   providerRecoveries?: Array<{
     at: string;

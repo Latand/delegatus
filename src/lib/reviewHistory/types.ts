@@ -105,6 +105,8 @@ export type Round = {
   autoRetryCount?: number;
   providerRetryCount?: number;
   launchNotBefore?: string | null;
+  /** Capacity recovery of the same round after a native provider limit cut. */
+  providerLimitWait?: { resetsAt: number | null; startedAt: string; capacityProbes: number };
   /** Reviewer session/thread id, persisted as soon as it is known: claude
       pre-chooses it at spawn, codex reports it in the first `--json` event.
       Survives viewer restarts so the transcript claim stays deterministic. */

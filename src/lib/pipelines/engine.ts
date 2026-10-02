@@ -1771,13 +1771,14 @@ async function recoverProviderCut(
     const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
     const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
     const same = wait?.condition.kind === notice.condition.kind;
-    const tries = same ? wait!.tries : 0;
+    const budget = attempt.providerRecoveryBudget ??= { tries: wait?.tries ?? 0, startedAt: wait?.startedAt ?? now };
+    const tries = budget.tries;
     const resetsAt = knownReset(notice.resetsAt, engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
     const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
       : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
       : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
     wait = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
-      turnTs: notice.ts, tries, startedAt: same ? wait!.startedAt : now,
+      turnTs: notice.ts, tries, startedAt: budget.startedAt,
       resumeAt: new Date(time + delay).toISOString(), resetsAt,
       ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
     if (accountId && notice.condition.kind === "usage_limit") {
@@ -1874,6 +1875,7 @@ async function recoverProviderCut(
     delete attempt.controllerWait;
     wait.actionAt = now;
     wait.tries += 1;
+    attempt.providerRecoveryBudget = { tries: wait.tries, startedAt: wait.startedAt };
     recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     persist();
@@ -1921,6 +1923,8 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   if (retry) {
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
+    retry.providerRecoveryBudget = { tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
+      startedAt: attempt.providerRecoveryBudget?.startedAt ?? attempt.providerWait?.startedAt ?? now };
     if (attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
@@ -3835,11 +3839,15 @@ async function tickRunStage(
         attempt.providerWait ??= { condition, text: "no allowed account has capacity", accountId: latestLimited.accountId,
           turnTs: unixMs(activationNow), tries: 0, startedAt: activationNow,
           resumeAt: new Date(resetsAt ? resetsAt * 1_000 + 60_000 : unixMs(activationNow) + 30 * 60_000).toISOString(), resetsAt };
-        if (!resetsAt && unixMs(activationNow) - unixMs(attempt.providerWait.startedAt) >= 6 * 60 * 60_000) {
-          park(pipeline, `stage cut by ${condition.label}: no account capacity returned after 6 hours`, attempt);
+        const wait = attempt.providerWait;
+        const untilReset = resetsAt ? resetsAt * 1_000 + 60_000 - unixMs(activationNow) : 0;
+        // Waiting for a future provider reset spends no capacity probes.
+        if (untilReset <= 0) wait.capacityProbes = (wait.capacityProbes ?? 0) + 1;
+        if ((wait.capacityProbes ?? 0) >= 3
+          || !resetsAt && unixMs(activationNow) - unixMs(wait.startedAt) >= 6 * 60 * 60_000) {
+          park(pipeline, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, attempt);
           return;
         }
-        const untilReset = resetsAt ? resetsAt * 1_000 + 60_000 - unixMs(activationNow) : 0;
         const delay = untilReset > 0 ? Math.min(15 * 60_000, untilReset) : 15 * 60_000;
         attempt.providerWait.resumeAt = new Date(unixMs(activationNow) + delay).toISOString();
         pipeline.stateDetail = `waiting for ${condition.label} on account ${accountLabel}; next try at ${attempt.providerWait.resumeAt}`;
@@ -4094,10 +4102,20 @@ async function tickRunStage(
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
     const newerOutputBeforeHostLoss = !notice && hostUnavailablePastGrace && attempt.providerWait && durable?.message
       && durable.message.ts > attempt.providerWait.turnTs;
-    const providerHostLost = hostUnavailablePastGrace && attempt.providerWait?.actionAt
+    const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
       && (!notice || notice.ts <= attempt.providerWait.turnTs);
     if (newerNormalTurn || newerOutputBeforeHostLoss) {
+      if (durable?.message && durable.message.ts > attempt.providerWait!.turnTs) delete attempt.providerRecoveryBudget;
       delete attempt.providerWait;
+    } else if (attempt.providerWait?.actionAt && attempt.providerWait.turnTs > 0 && attempt.conversationId
+      && (!notice || notice.ts <= attempt.providerWait.turnTs)
+      && (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true
+        || ports.conversationDeliveryCompleted?.(attempt.conversationId,
+          `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${attempt.providerWait.turnTs}`) === false)) {
+      // Admission can be held or queued while the recorded host is re-seated.
+      // Keep that exact delivery owed before interpreting host loss again.
+      waitForProviderTransport(pipeline, attempt, attempt.providerWait.condition, "accepted continuation delivery is still pending", ports, persist);
+      return;
     } else if (providerHostLost) {
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
         text: "stage host died before producing output after its continuation", ts: Math.max(unixMs(ports.now()), attempt.providerWait!.turnTs + 1), resetsAt: null }, ports, persist);

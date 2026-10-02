@@ -131,6 +131,7 @@ function cloneFlows(flows: Flow[]): Flow[] {
     rounds: flow.rounds.map((round) => ({
       ...round,
       reviewerRole: round.reviewerRole ? { ...round.reviewerRole } : null,
+      providerLimitWait: round.providerLimitWait ? { ...round.providerLimitWait } : undefined,
       attemptedAccounts: [...(round.attemptedAccounts ?? [])],
     })),
   }));
@@ -749,7 +750,7 @@ function withoutPreferredReviewerTier(role: RoleConfig): RoleConfig {
 
 /* Freeze the role actually admitted on the selected account for this round. */
 function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch {
-  let role = round.accountId ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
+  let role = round.accountId || round.providerRetryCount ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
   const required = role.serviceTierSource !== "role-default";
   let lacking: string[] = [];
   if (role.serviceTier) {
@@ -763,7 +764,7 @@ function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch
       role = withoutPreferredReviewerTier(role);
     } else lacking = offers.lacking;
   }
-  if (flow.reviewerMode === "pane" || round.accountId) {
+  if (flow.reviewerMode === "pane" || round.accountId || round.providerLimitWait) {
     /* #1279: the flow's project fences this pick too. A round with no account
        yet draws one from the project's pool, capacity-aware, exactly as the
        headless path below does. A round that already has one is carrying the
@@ -783,6 +784,7 @@ function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch
       resolution = accountManager.resolveProjectSpawn(role.engine, { ...request, unavailableIds: [] });
     }
     if (resolution.kind !== "available") {
+      if (round.providerLimitWait) throw new ReviewerAccountsExhaustedError(resolution.kind === "exhausted" ? resolution.resetsAt : null);
       throw new Error(projectAccountRefusalDetail(resolution, role.engine, flow.project));
     }
     const account = resolution.account;
@@ -803,10 +805,10 @@ function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch
       engine === primary.engine ? unavailableIds : []),
   );
   // Tier eligibility removes candidates; attempted accounts only order them.
-  let decision = choose(role, lacking, role.serviceTier ? null : flow.reviewerFallback);
+  let decision = choose(role, lacking, role.serviceTier || round.providerRetryCount ? null : flow.reviewerFallback);
   if (decision.kind !== "available" && role.serviceTier && !required) {
     role = withoutPreferredReviewerTier(role);
-    decision = choose(role, [], flow.reviewerFallback);
+    decision = choose(role, [], round.providerRetryCount ? null : flow.reviewerFallback);
   }
   if (decision.kind === "exhausted") throw new ReviewerAccountsExhaustedError(decision.resetsAt);
   if (decision.kind === "unavailable") throw new Error("no authenticated reviewer account is available");
@@ -943,7 +945,7 @@ function headlessReviewerMayRun(flows: readonly Flow[], launchId: string): boole
   return false;
 }
 
-function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null): void {
+function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null, resumeAt?: number): void {
   const provider = providerLabel !== null;
   forgetHeadlessReview(flow.id, round.n, round);
   endHeadlessReviewerMarker(round);
@@ -964,7 +966,7 @@ function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | nu
     reviewHeadSha: null,
     autoRetryCount: (round.autoRetryCount ?? 0) + (provider ? 0 : 1),
     providerRetryCount: (round.providerRetryCount ?? 0) + (provider ? 1 : 0),
-    launchNotBefore: provider ? new Date(Date.now() + 60_000 * 2 ** (round.providerRetryCount ?? 0)).toISOString() : null,
+    launchNotBefore: provider ? new Date(resumeAt ?? Date.now() + 60_000 * 2 ** (round.providerRetryCount ?? 0)).toISOString() : null,
     startedAt: isoNow(),
     spawnStartedAt: null,
     launchId: null,
@@ -1341,7 +1343,21 @@ export async function tickFlow(
     } catch (error) {
       if (error instanceof ReviewerAccountsExhaustedError) {
         round.error = null;
-        markNeedsDecision(flow, rateLimitStateDetail(error.resetsAt));
+        if (round.providerLimitWait) {
+          const wait = round.providerLimitWait;
+          const label = `${reviewerRoleFor(flow, round).engine} usage limit`;
+          if (error.resetsAt !== null && Number.isSafeInteger(error.resetsAt) && error.resetsAt > 0) wait.resetsAt = error.resetsAt;
+          const resetAt = wait.resetsAt === null ? 0 : wait.resetsAt * 1_000 + 60_000;
+          if (resetAt > Date.now()) {
+            round.launchNotBefore = new Date(resetAt).toISOString();
+            flow.stateDetail = `waiting for reviewer ${label} to reset at ${new Date(wait.resetsAt! * 1_000).toISOString()}; next try at ${round.launchNotBefore}`;
+          } else if (++wait.capacityProbes >= 3 || wait.resetsAt === null && Date.now() - unixMs(wait.startedAt) >= 6 * 60 * 60_000) {
+            markNeedsDecision(flow, markRoundError(round, `reviewer cut by ${label}; account capacity recovery exhausted after ${wait.capacityProbes} probes`));
+          } else {
+            round.launchNotBefore = new Date(Date.now() + 15 * 60_000).toISOString();
+            flow.stateDetail = `waiting for reviewer account capacity after ${label}; next try at ${round.launchNotBefore}`;
+          }
+        } else markNeedsDecision(flow, rateLimitStateDetail(error.resetsAt));
       } else {
         markNeedsDecision(flow, markRoundError(round, error instanceof Error ? error.message : String(error)));
       }
@@ -1396,12 +1412,24 @@ export async function tickFlow(
             : null;
           // A standalone CLI failure is admissible; ordinary reviewer prose is not.
           const standaloneRace = [status.stderr, status.finalOutput, status.stdout].find((output) =>
-            /^(?:Failed to refresh OAuth token[^\n]*|[^\n]*retry in a minute[^\n]*)$/i.test(output.trim()));
+            /^Failed to refresh OAuth token[^\n]*$/i.test(output.trim()));
           const condition = terminal
             ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, terminal.errorClass, terminal.text)
             : standaloneRace ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, "server_error", standaloneRace) : null;
-          if (condition?.kind === "transient") {
-            if ((round.providerRetryCount ?? 0) < 3) retryHeadlessRound(flow, round, condition.label);
+          if (condition?.kind === "transient" || condition?.kind === "usage_limit") {
+            if ((round.providerRetryCount ?? 0) < 3) {
+              const role = reviewerRoleFor(flow, round);
+              const resetsAt = terminal?.usageLimit?.resetsAt ?? null;
+              const resumeAt = condition.kind === "usage_limit"
+                ? resetsAt === null ? Date.now() + 30 * 60_000 : Math.max(Date.now(), resetsAt * 1_000 + 60_000)
+                : undefined;
+              if (condition.kind === "usage_limit") round.providerLimitWait = {
+                resetsAt, startedAt: round.providerLimitWait?.startedAt ?? isoNow(), capacityProbes: round.providerLimitWait?.capacityProbes ?? 0,
+              };
+              retryHeadlessRound(flow, round, condition.label, resumeAt);
+              // Provider recovery stays on the engine that was cut.
+              round.reviewerRole = { ...role };
+            }
             else markNeedsDecision(flow, markRoundError(round, `reviewer cut by ${condition.label} after 3 retries`));
           } else if ((round.autoRetryCount ?? 0) < MAX_HEADLESS_NO_VERDICT_RETRIES) {
             retryHeadlessRound(flow, round);
