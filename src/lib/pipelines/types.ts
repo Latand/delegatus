@@ -165,8 +165,11 @@ export type PipelineEdgeActivation = {
   edge: PipelineEdgeKind;
   /** On a fail activation: the source's budget was spent, so this is the
       one handoff past it (#1868). It spends no reviewed round, and the
-      target's pass follows the source's pass edge instead of re-running it. */
+      target's pass follows the source's pass edge, except a terminal advance
+      gate gets one final re-check (#2247). */
   budgetSpent?: true;
+  /** The terminal gate must judge the spent fix once more; a fail parks. */
+  budgetRecheck?: true;
 };
 
 export type PipelineVerdictRecovery = {
@@ -478,8 +481,8 @@ export type PipelineStageAttempt = {
       the lane kept going instead of parking on it. */
   decisionRequested?: boolean;
   /** Set on the failed attempt whose findings were handed along a spent fail
-      edge (#1868): they went to the fix stage and the source was not asked
-      again. The verdict and its findings stay on this attempt. */
+      edge (#1868): they went to the fix stage. A terminal advance gate gets one
+      final re-check (#2247). The verdict and findings stay on this attempt. */
   budgetSpent?: boolean;
   /** On a `budgetSpent` attempt: the head that review judged (#1938), compared
       with the head the fix writes to decide whether the lane may move on. */
@@ -1079,6 +1082,8 @@ export type PatchPipelineRequest = {
   /** for set-position: exact world coordinates selected by a user drag. */
   pos?: { x: number; y: number };
   stage?: PipelineStageInput;
+  /** add-stage: explicitly splice into this stage's pass edge. */
+  after?: string;
   index?: number;
   stageIds?: string[];
   toIndex?: number;
