@@ -157,6 +157,10 @@ function subscribeSeat(project: string, cwd: string | undefined, listener: (read
   }
   const started = poll;
   started.listeners.add(listener);
+  // A mounted hook can leave this scope and return after another surface
+  // refreshed its cache. Adopt that answer before an unchanged poll is skipped.
+  const cached = answers.get(key);
+  if (cached) listener(cached);
   if (started.timer === null) {
     started.controller = new AbortController();
     listenForSeatVisibility();
@@ -220,9 +224,9 @@ export function useOrchestratorSeat(project: string | null, cwd?: string): Orche
   /* Every answer carries the project and cwd it answered for, so a scope switch
      invalidates the previous seat HERE, in render, with no effect and no frame
      in which another checkout's preflight appears under this draft. */
-  const current = read && read.project === project && read.cwd === (cwd ?? "")
-    ? read
-    : cachedSeat(project, cwd);
+  const current = cachedSeat(project, cwd) ?? (
+    read && read.project === project && read.cwd === (cwd ?? "") ? read : null
+  );
 
   /* An operator action that MOVED the seat — a designation, a rotation — asks
      for the answer now rather than at the next tick, so it reads past the

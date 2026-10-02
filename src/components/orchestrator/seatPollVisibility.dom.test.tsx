@@ -138,3 +138,35 @@ test("enabling a reader adopts the cached seat references even when the poll is 
   await Bun.sleep(30);
   expect(host.querySelector('[data-reader="later"]')?.textContent).toBe("/sessions/seat-a.jsonl");
 });
+
+
+test("returning to a seat scope adopts an answer another reader refreshed while away", async () => {
+  let title = "Original notes";
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    seat: null, pending: null, exists: true,
+    currentTask: { taskId: "seat-task", title, hasNotes: true },
+  }))) as unknown as typeof fetch;
+  function Reader({ active, label }: { active: boolean; label: string }) {
+    const seat = useOrchestratorSeat(active ? "project-a" : null);
+    return <span data-reader={label}>{seat.status?.currentTask?.title ?? "away"}</span>;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const render = (active: boolean) => flushSync(() => root!.render(<>
+    <Reader active label="first" />
+    <Reader active={active} label="returning" />
+  </>));
+  render(true);
+  await Bun.sleep(30);
+  expect(host.querySelector('[data-reader="returning"]')?.textContent).toBe("Original notes");
+  render(false);
+  title = "Updated notes";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await Bun.sleep(30);
+  expect(host.querySelector('[data-reader="first"]')?.textContent).toBe("Updated notes");
+  render(true);
+  expect(host.querySelector('[data-reader="returning"]')?.textContent).toBe("Updated notes");
+  await Bun.sleep(30);
+  expect(host.querySelector('[data-reader="returning"]')?.textContent).toBe("Updated notes");
+});
