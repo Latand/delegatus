@@ -10,7 +10,7 @@ Review retries and delivery takeovers record a durable `remoteAction`. The contr
 
 Retrying a passed stage retains its accepted attempt and records pending head verification on its committing cursor. A legacy publication request records a pending repository admission before reading Git identity. Publication rechecks the lane and delivery owner before every command and during execution, and checks them again when settling. Cancellation after a remote write began retains an unknown outcome for reconciliation. Automatic restart admission rechecks the enabled switch, pending request, launcher identity and admission gate after Git observations, with its quiet-work check last.
 
-Publication also retains its original admission fence, so a pause before execution supersedes queued work. A fresh explicit publication may retry a settled failure while replaying pending or running work. Lock-admission failures settle the original operation and journal under its ID and ownership fence. Review retry teardown runs in the continuation outside the request lease. A cancelled takeover preserves the newer lane state and detail. Review-head backoff keeps its durable wait and uses a delayed tick; a held settlement lock also schedules a delayed retry. Automatic build and restart-request admission recheck the enabled switch after asynchronous observations.
+Publication also retains its original admission fence. A durable control token changes on pause and resume, so a pause supersedes queued and running work even when the lane returns to the same state under an unchanged clock. Takeover completion and its journal entry commit atomically with the ownership transfer; a restart sees that completed outcome. A fresh explicit publication may retry a settled failure while replaying pending or running work. Lock-admission failures settle the original operation and journal under its ID and ownership fence. Review retry teardown runs in the continuation outside the request lease. A cancelled takeover preserves the newer lane state and detail. Review-head backoff keeps its durable wait and uses a delayed tick; a held settlement lock also schedules a delayed retry. Automatic build and restart-request admission recheck the enabled switch after asynchronous observations.
 
 `request_attention` retains its default browser-arrival contract. `waitFor: "accepted"` returns after durable acceptance with `accepted: true`, a current arrival state and `handoff: null`; callers can inspect the attention receipt for arrival later.
 
@@ -20,10 +20,10 @@ The audit's integration profile was rerun against main after the MCP answer-slim
 
 | MCP scenario | Before p95 / max | After p95 / max | Samples |
 | --- | ---: | ---: | ---: |
-| Remote review retry | 3621.77 / 3621.77 ms | 13.25 / 13.25 ms | 2 |
-| Stage report with delayed forge | 1226.26 / 1226.26 ms | 26.91 / 26.91 ms | 3 |
-| Pipeline read during forge check | 1222.48 / 1222.48 ms | 26.50 / 26.50 ms | 3 |
-| Attention, default arrival | 1256.62 / 1256.62 ms | 1257.29 / 1257.29 ms | 2 |
-| Attention, accepted-only | New option | 2.83 / 2.83 ms | 2 |
+| Remote review retry | 3621.77 / 3621.77 ms | 8.23 / 8.23 ms | 2 |
+| Stage report with delayed forge | 1226.26 / 1226.26 ms | 16.35 / 16.35 ms | 3 |
+| Pipeline read during forge check | 1222.48 / 1222.48 ms | 19.57 / 19.57 ms | 3 |
+| Attention, default arrival | 1256.62 / 1256.62 ms | 1257.88 / 1257.88 ms | 2 |
+| Attention, accepted-only | New option | 1.58 / 1.58 ms | 2 |
 
 The numeric record is [before-after.json](../evidence/mcp-async-remote/before-after.json). The request-path regressions first failed against the original synchronous implementation. Existing real-Git tests cover preserved history, exact publication SHA, inherited locks and cancellation. Deferred-work tests cover restart recovery, supersession, remote failure and receipt settlement. Tests use explicit files and isolated state; type checking, changed-file lint and the trusted-main publication gate accompany the change.
