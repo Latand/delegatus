@@ -1582,3 +1582,11 @@
 :is(.kb, [data-phone-kanban]) .remote-agent time { grid-column: 3; grid-row: 1; white-space: nowrap; }
 :is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
 .kb .remote-unbound { padding: 4px 10px; }
+
+/* A resting card keeps its note quiet; the existing task focus/reader shows
+   the full text below the description without repeating it under the title. */
+.kb .card [data-task-note="full"] { display: none; }
+.kb .card:not(.folded):focus-within [data-task-note="full"],
+.kb .card:not(.folded).has-reader [data-task-note="full"] { display: flex; }
+.kb .card:not(.folded):focus-within [data-task-note="compact"],
+.kb .card:not(.folded).has-reader [data-task-note="compact"] { display: none; }

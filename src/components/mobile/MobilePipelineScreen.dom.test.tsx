@@ -358,7 +358,7 @@ test("a paused lane holds its stage: a hollow mark and no live tone, still expan
   expect(q(live, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
 });
 
-test("every stage that ran opens its own conversation from its row; one whose transcript is gone is a statement", () => {
+test("every stage that ran opens its own conversation from its row; one missing from the scan uses the reader link", () => {
   const opened: string[] = [];
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
   click(q(host, "[data-passed-fold]"));
@@ -371,8 +371,8 @@ test("every stage that ran opens its own conversation from its row; one whose tr
 
   const gone = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[]} now={NOW} onOpenConversation={() => {}} />);
   click(q(gone, "[data-passed-fold]"));
-  expect(q(stageRow(gone, "implement")!, ".pb-stage-row")!.tagName).toBe("DIV");
-  expect(q(gone, "[data-open-conversation]")).toBeNull();
+  expect(q(stageRow(gone, "implement")!, ".pb-stage-row")!.tagName).toBe("BUTTON");
+  expect(q(gone, "[data-open-conversation]")).toBeTruthy();
 });
 
 test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop's own editor — Tab stays inside it, and Escape closes only the sheet (lane 10, PR #431, #507 F2)", async () => {
@@ -616,5 +616,38 @@ test("in Ukrainian the stage names stay the pipeline's and every word is the des
   expect(qa(host, ".pb-stage[data-stage] .pb-name").map((el) => el.textContent)).toEqual(["Design", "Implement", "Review", "Fix", "Merge"]);
   expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
   expect(qa(host, "[data-answer-action]").map((el) => el.textContent)).toEqual([translate("uk", "mobile2.pipeline.skip"), translate("uk", "mobile2.pipeline.retry")]);
-  expect(q(host, "[data-open-conversation]")!.textContent).toBe(translate("uk", "pipelineBlock.openConversation"));
+  expect(q(host, "[data-open-conversation]")!.textContent).toBe(translate("uk", "pipelineStage.openAgent"));
+});
+
+test.each(["running", "passed", "failed", "needs_decision"] as const)("stage agent row opens %s conversations and earlier attempts", (state) => {
+  const old = { ...IMPLEMENT, path: "/fixture/old-design.jsonl", conversationId: "conversation_old" } as FileEntry;
+  const current = { ...REVIEW, conversationId: "conversation_design" } as FileEntry;
+  const p = parkedPipeline({
+    stages: [STAGES[0]!], state: state === "passed" ? "completed" : state === "running" ? "running" : "needs_decision",
+    cursor: state === "passed" ? null : { stageId: "design", state, input: null, activatedBy: null },
+    runs: [{ stageId: "design", attempts: [
+      attempt({ n: 1, state: "failed", agentPath: old.path }),
+      attempt({ n: 2, state, agentPath: current.path, conversationId: current.conversationId, report: { verdict: { status: "needs_decision", findings: [] }, summary: "Choose a layout.\nCompact or expanded?" } }),
+    ] }],
+  } as unknown as Partial<Pipeline>);
+  const opened: string[] = [];
+  const host = mount(<MobilePipelineScreen pipeline={p} files={[old, current]} now={NOW} onOpenConversation={(file) => opened.push(file.path)} />);
+  const stage = q(host, '[data-stage="design"]')!;
+  expect(q(stage, '[data-open-conversation]')?.textContent).toContain("Open agent");
+  click(q(stage, '[data-open-conversation]'));
+  expect(opened).toEqual([current.path]);
+  expect(q(stage, '[data-stage-question]')?.textContent ?? null).toBe(state === "needs_decision" ? "Choose a layout.\nCompact or expanded?" : null);
+  if (state === "needs_decision") expect(stage.innerHTML.indexOf("data-stage-question")).toBeLessThan(stage.innerHTML.indexOf("data-answer="));
+  click(q(stage, 'details summary'));
+  click(q(stage, '[data-open-attempt="1"]'));
+  expect(opened).toEqual([current.path, old.path]);
+});
+
+test("a conversation id missing from the scan still offers Open agent and uses the normal reader link in Ukrainian", () => {
+  setLocale("uk");
+  const p = parkedPipeline({ stages: [STAGES[0]!], cursor: { stageId: "design", state: "needs_decision", input: null, activatedBy: null }, runs: [{ stageId: "design", attempts: [attempt({ state: "needs_decision", conversationId: "conversation_design", report: { verdict: { status: "needs_decision", findings: [] }, summary: "Який варіант обрати?" } })] }] } as unknown as Partial<Pipeline>);
+  const host = mount(<MobilePipelineScreen pipeline={p} files={[]} now={NOW} onOpenConversation={() => { throw new Error("not scanned"); }} />);
+  expect(q(host, '[data-open-conversation]')?.textContent).toContain("Відкрити агента");
+  click(q(host, '[data-open-conversation]'));
+  expect(dom.location.hash).toContain("conversation_design");
 });

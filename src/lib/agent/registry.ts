@@ -177,6 +177,8 @@ export interface AgentRegistryEntry {
   host: TmuxHostEvidence | null;
   /** Structured hosting metadata lives beside legacy tmux evidence during migration. */
   structuredHost?: StructuredHostColumns | null;
+  /** Exact process identities left alive by a partial structured-host kill. */
+  structuredTerminationSurvivors?: ProcessIdentity[];
   claimEpoch: number;
   claimOwner: string | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
@@ -2033,12 +2035,35 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   };
 }
 
+function normalizeStructuredTerminationSurvivors(value: unknown): ProcessIdentity[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("structured termination survivor evidence is malformed");
+  return value.map((identity: unknown) => {
+    if (identity === null || typeof identity !== "object") {
+      throw new Error("structured termination survivor identity is malformed");
+    }
+    const candidate = identity as Partial<ProcessIdentity>;
+    if (!Number.isSafeInteger(candidate.pid) || candidate.pid! <= 1
+      || (typeof candidate.startIdentity !== "string" && candidate.startIdentity !== null)
+      || (candidate.bootEpoch !== undefined && typeof candidate.bootEpoch !== "string" && candidate.bootEpoch !== null)) {
+      throw new Error("structured termination survivor identity is malformed");
+    }
+    return {
+      pid: candidate.pid!,
+      startIdentity: candidate.startIdentity,
+      ...(candidate.bootEpoch === undefined ? {} : { bootEpoch: candidate.bootEpoch }),
+    };
+  });
+}
+
 function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): AgentRegistryEntry {
+  const terminationSurvivors = normalizeStructuredTerminationSurvivors(value.structuredTerminationSurvivors);
   return {
     ...value,
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
     host: value.host && typeof value.host === "object" && value.host.kind === "tmux" ? value.host : null,
     structuredHost: normalizeStructuredHost(value.structuredHost),
+    ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
   };
 }
 
@@ -5946,6 +5971,7 @@ export class AgentRegistry {
     const receipt = file.receipts[launchId];
     if (!receipt) throw new Error("unknown spawn receipt");
     const prior = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+    const existingTarget = file.entries[sessionKeyId(entry.key)];
     const conflict = (code: "spawn_artifact_conflict" | "spawn_pane_conflict" | "spawn_identity_conflict"): SpawnSettlement => {
       if (receipt.state !== "completed") {
         receipt.state = "conflicted";
@@ -5953,6 +5979,9 @@ export class AgentRegistry {
       }
       return { kind: "conflict", receipt: clone(receipt), code };
     };
+    if ([prior, existingTarget].some(candidate => (candidate?.structuredTerminationSurvivors?.length ?? 0) > 0)) {
+      return conflict("spawn_identity_conflict");
+    }
     if (completionMode === "observed-completed" && entry.host?.kind === "tmux") {
       /* Live process evidence can enrich a binding whose birth identity was
          unavailable during launch verification. */
@@ -6491,14 +6520,17 @@ export class AgentRegistry {
         process: clone(entry.structuredHost?.process ?? null),
         releaseRegisteredHost,
       };
+      const retainedSurvivors = entry.structuredTerminationSurvivors ?? [];
       /* A foreground launch can prove its transcript will never materialize
          while the host still refuses release. The receipt must settle so the
          stage can retry, and the exact process identity must remain listed
          so the Viewer can finish the reap without an operator searching the
-         process table. Only this launch's registered live host qualifies. */
-      if (options.retainRegisteredHost === true
+         process table. Only this launch's registered live host qualifies.
+         A captured descendant has the same preservation requirement: clearing
+         the root row would strand its identity and let a resume start a twin. */
+      if (retainedSurvivors.length > 0 || (options.retainRegisteredHost === true
         && releaseRegisteredHost
-        && entry.structuredHost?.process) {
+        && entry.structuredHost?.process)) {
         entry.pendingAction = null;
         entry.updatedAt = now();
         return { claimed: true, receipt: clone(receipt), cleanup };
@@ -6548,12 +6580,18 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const keyId = sessionKeyId(entry.key);
       const existing = file.entries[keyId];
+      const survivors = existing?.structuredTerminationSurvivors ?? [];
+      const requestedHost = entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost;
+      if (survivors.length > 0 && (!existing?.structuredHost?.process || !requestedHost?.process
+        || !sameRecordedProcessIdentity(existing.structuredHost.process, requestedHost.process))) {
+        throw new Error("structured host termination still has live survivors");
+      }
       const replacement = entry.structuredHost === undefined && existing?.structuredHost !== undefined
         ? { ...entry, structuredHost: existing.structuredHost }
         : entry;
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, entry.key.engine, changedHostPaths);
-      const full = { ...replacement, updatedAt: now() };
+      const full = { ...replacement, ...(survivors.length > 0 ? { structuredTerminationSurvivors: survivors } : {}), updatedAt: now() };
       file.entries[keyId] = full;
       advanceMigrationScopeRevision(file, entry.key.engine, readinessBefore, changedHostPaths);
       return clone(full);
@@ -6569,6 +6607,11 @@ export class AgentRegistry {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) throw new Error("agent registry entry is missing");
+      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0
+        && (!structuredHost?.process || !entry.structuredHost?.process
+          || !sameRecordedProcessIdentity(entry.structuredHost.process, structuredHost.process))) {
+        throw new Error("structured host termination still has live survivors");
+      }
       const replacement = {
         ...entry,
         structuredHost: structuredHost ? normalizeStructuredHost(structuredHost) : null,
@@ -6588,17 +6631,26 @@ export class AgentRegistry {
       clearing to the process the caller actually terminated: a row that names
       a different live process belongs to a replacement host and is left
       alone, inside the same mutation that would otherwise clear it (#1199). */
-  terminateStructuredHost(key: SessionKey, expected?: Readonly<ProcessIdentity>): boolean {
+  terminateStructuredHost(
+    key: SessionKey,
+    expected?: Readonly<ProcessIdentity>,
+    confirmedSurvivors: readonly ProcessIdentity[] = [],
+  ): boolean {
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
       const current = entry.structuredHost?.process ?? null;
       if (expected && current && !sameRecordedProcessIdentity(current, expected)) return false;
+      const retained = entry.structuredTerminationSurvivors ?? [];
+      if (retained.length > 0 && (!expected || !current || !sameRecordedProcessIdentity(current, expected))) return false;
+      const confirmed = new Set(confirmedSurvivors.map(identity => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`));
+      if (retained.some(identity => !confirmed.has(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`))) return false;
       const replacement = {
         ...entry,
         host: null,
         structuredHost: null,
+        structuredTerminationSurvivors: [],
         status: "dead" as const,
         claimOwner: null,
         pendingAction: null,
@@ -6607,6 +6659,27 @@ export class AgentRegistry {
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
       Object.assign(entry, replacement, { updatedAt: now() });
       advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
+      return true;
+    });
+  }
+
+  /** Retains exact captured tree identities, bound to their root row. */
+  recordStructuredTerminationSurvivors(
+    key: SessionKey,
+    expectedRoot: Readonly<ProcessIdentity>,
+    survivors: readonly ProcessIdentity[],
+  ): boolean {
+    return this.mutate((file) => {
+      const entry = file.entries[sessionKeyId(key)];
+      const current = entry?.structuredHost?.process ?? null;
+      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return false;
+      const identities = new Map((entry.structuredTerminationSurvivors ?? []).map(identity =>
+        [`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`, identity]));
+      for (const identity of survivors) {
+        identities.set(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`, { ...identity });
+      }
+      entry.structuredTerminationSurvivors = [...identities.values()];
+      entry.updatedAt = now();
       return true;
     });
   }
@@ -6692,6 +6765,7 @@ export class AgentRegistry {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       const structuredProcess = entry?.structuredHost?.process ?? null;
+      const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
       const staleStructuredWrapper = structuredProcess !== null && !this.ownerAlive(structuredProcess);
       if (!conversation
         || conversation.engine !== key.engine
@@ -6702,6 +6776,7 @@ export class AgentRegistry {
           || entry.claimEpoch !== expected.claimEpoch
           || entry.structuredHost?.writerClaimEpoch !== expected.claimEpoch))
         || entry.host
+        || retainedSurvivors.length > 0
         || (structuredProcess !== null && !staleStructuredWrapper)
         || (entry.claimOwner && !staleStructuredWrapper)
         || (!staleStructuredWrapper && entry.status !== "dead" && entry.status !== "unhosted")) return false;
@@ -6736,7 +6811,8 @@ export class AgentRegistry {
       if (!entry?.structuredHost
         || entry.claimOwner !== claimOwner
         || entry.claimEpoch !== claimEpoch
-        || entry.structuredHost.writerClaimEpoch !== claimEpoch) return null;
+        || entry.structuredHost.writerClaimEpoch !== claimEpoch
+        || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       let normalizedHost = normalizeStructuredHost(structuredHost);
       const handoffClaimEpoch = entry.structuredHost.releaseHandoffClaimEpoch;
       const completesHandoff = entry.pendingAction === "handoff"
@@ -6815,6 +6891,7 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry?.structuredHost) return null;
+      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so

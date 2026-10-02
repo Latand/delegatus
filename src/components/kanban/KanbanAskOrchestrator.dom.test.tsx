@@ -110,7 +110,11 @@ test("every task card has one ask button, in its foot", () => {
 });
 
 test("pressing it adds this task's chip to the project's orchestrator, and changes nothing else on the card", () => {
-  const host = mount([task("a", "assigned", "Fix the mobile board\nSecond line", { color: "teal" })]);
+  const note = { text: "Review is running. Route checks are next.", author: { kind: "agent" as const, conversationId: "conversation_fixture" }, updatedAt: "2026-09-19T10:00:00.000Z" };
+  const host = mount([task("a", "assigned", "Fix the mobile board\nSecond line", { color: "teal", note })]);
+  const noteLine = cardEl(host, "a")!.querySelector("[data-task-note=compact]")!;
+  expect(noteLine.textContent).toContain(note.text);
+  expect(noteLine.querySelectorAll("button,input,textarea")).toHaveLength(0);
   const withoutButton = () => {
     const clone = cardEl(host, "a")!.cloneNode(true) as HTMLElement;
     clone.querySelector("[data-ask-orchestrator]")!.remove();
@@ -123,6 +127,7 @@ test("pressing it adds this task's chip to the project's orchestrator, and chang
   /* No input anywhere was written to, and the rest of the card is exactly as it was. */
   expect([...host.querySelectorAll("input, textarea")].every((input) => (input as HTMLInputElement).value === "")).toBe(true);
   expect(withoutButton()).toBe(before);
+  expect(cardEl(host, "a")!.querySelector("[data-task-note=compact]")!.textContent).toContain(note.text);
   /* The button itself says it took, wherever the composer is. */
   expect(askButton(host, "a")!.getAttribute("aria-pressed")).toBe("true");
 });

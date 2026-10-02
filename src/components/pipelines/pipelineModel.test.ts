@@ -40,6 +40,7 @@ import {
   stageHasNavigableHistory,
   stageOpenTarget,
   attemptNavTarget,
+  stageAgentRowModel,
   resolveStageNavFile,
   partitionPipelineSurfaces,
   pipelineBoardProjection,
@@ -1796,4 +1797,23 @@ test.each([undefined, 7])("optimistic fail edge defaults to 3 and keeps explicit
   const before = pipeline({ stages: [stage("a"), stage("b")] });
   const next = optimisticSetEdge(before, "a", "fail", "b", maxRounds);
   expect(next.stages[0]!.onFail).toEqual({ to: "b", maxRounds: maxRounds ?? 3 });
+});
+
+describe("stage agent row", () => {
+  test.each(["running", "passed", "failed", "needs_decision"] as const)("%s keeps its latest conversation without scanned files", (state) => {
+    const p = pipeline({ runs: [{ stageId: "design", attempts: [{ n: 4, state, conversationId: "conversation_design", agentPath: null, report: { summary: "Which layout should we use?" } } as PipelineStageAttempt] }] });
+    const row = stageAgentRowModel(p, "design");
+    expect(row.target).toEqual({ conversationId: "conversation_design", agentPath: null });
+    expect(row.question).toBe(state === "needs_decision" ? "Which layout should we use?" : null);
+  });
+  test("keeps earlier own attempts, path-only launches, and their positions while excluding historical helpers", () => {
+    const p = pipeline({ runs: [{ stageId: "design", attempts: [
+      { n: 1, state: "failed", conversationId: null, agentPath: "/fixture/old.jsonl" },
+      { n: 2, state: "passed", conversationId: "helper", historical: true },
+      { n: 3, state: "failed", conversationId: null, agentPath: null },
+      { n: 4, state: "needs_decision", conversationId: "conversation_design", agentPath: null, report: { summary: "  Question\nOptions  " } },
+    ] as PipelineStageAttempt[] }] });
+    expect(stageAgentRowModel(p, "design")).toEqual({ target: { conversationId: "conversation_design", agentPath: null }, question: "Question\nOptions", earlier: [{ n: 1, position: 1, state: "failed", target: { conversationId: null, agentPath: "/fixture/old.jsonl" } }] });
+    expect(stageAgentRowModel(p, "unstarted")).toEqual({ target: null, question: null, earlier: [] });
+  });
 });

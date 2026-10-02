@@ -1,5 +1,6 @@
 "use client";
 
+import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { ArrowDown, ArrowLeftRight, Bot, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -1124,6 +1125,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
                 )}
+
+                <TaskStatusNote note={task.note} nowMs={now * 1000} full />
 
                 {/* The standing tick notice opens the panel that holds the setting it describes. */}
                 {tickNotice ? (

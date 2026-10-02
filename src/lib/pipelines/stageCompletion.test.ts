@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
    MCP call. Every port is a mock and the state directory is private to this
    file, so nothing here reaches a host, an account or the operator's registry. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-completion-"));
-const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = await import("./engine");
+const { createPipelineFromRequest, patchPipeline, reportStageCompletion, tickPipelines } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, withPipelineMutation } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
@@ -51,7 +51,7 @@ function harness() {
   const spawnedStages: string[] = [];
   const spawnedPrompts: string[] = [];
   /* What the mocked worktree answers the server's own provenance reads. */
-  const worktree = { status: "", knownPaths: "docs/report.html\0", pullRequest: PULL_REQUEST };
+  const worktree = { remote: "https://forge.example/repo.git", status: "", knownPaths: "docs/report.html\0", pullRequest: PULL_REQUEST };
   const execCalls: string[] = [];
   /* Runs once, while the server is reading provenance and holds no lease. */
   let duringProvenance: (() => void) | null = null;
@@ -68,6 +68,9 @@ function harness() {
         return ports.exec("git", bounded.slice(1), "");
       }
       const args = rawArgs;
+      // The publication contract needs a forge remote; an absent one parks.
+      if (args[0] === "remote" && args[1] === "get-url") return { code: worktree.remote ? 0 : 2, stdout: worktree.remote, stderr: "" };
+      if (args[0] === "ls-remote") return { code: 0, stdout: `${HEAD}\trefs/heads/${loadPipelines()[0]?.delivery?.target.branch ?? "fixture"}\n`, stderr: "" };
       if (args[0] === "status" && args[1] === "--porcelain") return { code: 0, stdout: worktree.status, stderr: "" };
       if (args[0] === "ls-files") return { code: 0, stdout: worktree.knownPaths, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
@@ -96,7 +99,10 @@ function harness() {
     monotonicNow: () => Date.now(),
     worktreePresent: () => true,
     conversationAgentActive: async () => null,
-    durableTurnEvidence: async () => null,
+    durableTurnEvidence: async (_engine, transcriptPath) => {
+      const message = messages.get(transcriptPath);
+      return message ? { turn: "terminal", message, lastRecordAt: message.ts } : null;
+    },
     headCwd: () => loadPipelines()[0]?.worktreeDir ?? null,
     lastMessage: (item) => messages.get(item.path) ?? null,
     pathForConversation: (id) => {
@@ -892,4 +898,229 @@ test("the PR a report looked up reaches the board's forge cache with no second f
   expect(pipelineWorkLinks(current()).links).toEqual([expect.objectContaining({ number: 2059, kind: "pr", state: "open" })]);
   /* The provenance read is the report's only forge call. */
   expect(h.execCalls.slice(before).filter((call) => call.includes(" gh "))).toHaveLength(1);
+});
+
+test("a parked lane writes a short status note and preserves a newer agent note", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  for (const author of [null, { kind: "agent" as const, conversationId: "conversation_stage_1" }, { kind: "orchestrator" as const, conversationId: "conversation_manager" }, { kind: "operator" as const }]) {
+    const h = harness();
+    await started(h.ports, [stage("build", null)]);
+    const pipeline = current();
+    const id = "park-note-task";
+    pipeline.taskIds = [id];
+    savePipelines([pipeline]);
+    const row: import("@/lib/tasks/types").BoardTask = { id, project: "viewer", text: "Choose the source", status: "assigned", placement: "unplaced", assignments: [], createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt };
+    const tasks = [row];
+    if (author) row.note = { text: "Waiting for the operator to choose a source.", author, updatedAt: new Date(Date.parse(attemptsOf("build")[0]!.startedAt!) + 1_000).toISOString() };
+    saveTasks(tasks);
+    await h.report(1, { verdict: "needs_decision", summary: "Choose the source." });
+    await tickPipelines([h.endTurn(1, "Waiting.")], h.ports);
+    expect(current().state).toBe("needs_decision");
+    const note = loadTasks().find(task => task.id === id)!.note;
+    expect(note).toBeDefined();
+    if (author) expect(note).toEqual(row.note);
+    else {
+      expect(note!.author).toEqual({ kind: "orchestrator" });
+      expect(note!.text.length).toBeLessThanOrEqual(280);
+      expect(note!.text).not.toContain("needs_decision");
+      expect(note!.text).not.toContain("\n");
+    }
+  }
+});
+
+test("a stage parked before spawn replaces the preceding stage note, while newer notes still win", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const h = harness();
+  await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  const oldNoteAt = new Date(Date.parse(pipeline.createdAt) - 1_000).toISOString();
+  saveTasks([{
+    id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
+    createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+    note: { text: "The builder is running.", author: agent("conversation_stage_1"), updatedAt: oldNoteAt },
+  }]);
+
+  await h.report(1, { verdict: "pass", summary: "Build passed." });
+  h.ports.engineReadiness = () => "signed-out";
+  await tickPipelines([h.endTurn(1, "Build passed.")], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(current().state).toBe("needs_decision");
+  expect(attemptsOf("verify")[0]!.startedAt).toBeNull();
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  const { operatorLocale } = await import("@/lib/operator/settings");
+  expect(loadTasks()[0]!.note?.text).toBe(parkedTaskNote(
+    current().stateDetail ?? "",
+    operatorLocale() ?? "uk",
+    false,
+    { kind: "signed-out", engine: "codex" },
+  ));
+  expect(loadTasks()[0]!.note?.text).not.toBe("The builder is running.");
+
+  const { writeParkedTaskNote } = await import("./taskStatusNote");
+  const stillNewer = {
+    text: "The operator is choosing an account now.",
+    author: agent("conversation_current"),
+    updatedAt: new Date().toISOString(),
+  };
+  saveTasks([{ ...loadTasks()[0]!, note: stillNewer }]);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  writeParkedTaskNote(current(), "signed out", attemptsOf("verify")[0]);
+  expect(loadTasks()[0]!.note).toEqual(stillNewer);
+});
+
+test.each(["agent", "orchestrator", "operator"] as const)("a current %s note survives the next stage's signed-out pre-spawn park", async writer => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const h = harness();
+  await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  saveTasks([{
+    id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
+    createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+  }]);
+  await h.report(1, { verdict: "pass", summary: "Build passed." });
+  await tickPipelines([h.endTurn(1, "Build passed.")], h.ports);
+
+  const currentNote = {
+    text: "Waiting for the operator to choose a source.",
+    author: writer === "agent"
+      ? agent("conversation_current")
+      : writer === "orchestrator"
+        ? { kind: "orchestrator" as const, conversationId: "conversation_manager" }
+        : { kind: "operator" as const },
+    updatedAt: new Date().toISOString(),
+  };
+  saveTasks([{ ...loadTasks()[0]!, note: currentNote }]);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  h.ports.engineReadiness = () => "signed-out";
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(current().state).toBe("needs_decision");
+  expect(loadTasks()[0]!.note).toEqual(currentNote);
+});
+
+test("retrying a signed-out park clears its automatic note through running and completion", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const h = harness();
+  await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  saveTasks([{
+    id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
+    createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+  }]);
+
+  await h.report(1, { verdict: "pass", summary: "Build passed." });
+  await tickPipelines([h.endTurn(1, "Build passed.")], h.ports);
+  h.ports.engineReadiness = () => "signed-out";
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(current().state).toBe("needs_decision");
+  expect(loadTasks()[0]!.note?.text).toMatch(/account is connected|під’єднано обліковий запис/i);
+
+  h.ports.engineReadiness = () => "connected";
+  const retried = await patchPipeline(current().id, { action: "retry-stage" }, h.ports);
+  expect(retried.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(current().state).toBe("running");
+  expect(attemptsOf("verify").at(-1)!.state).toBe("running");
+  expect(loadTasks()[0]!.note).toBeUndefined();
+
+  const currentNote = {
+    text: "The verify stage is running against the selected account.",
+    author: { kind: "operator" as const },
+    updatedAt: new Date().toISOString(),
+  };
+  saveTasks([{ ...loadTasks()[0]!, note: currentNote }]);
+  await h.report(2, { verdict: "pass", summary: "Verification passed." });
+  await tickPipelines([h.endTurn(2, "Verification passed.")], h.ports);
+  expect(current().state).toBe("completed");
+  expect(loadTasks()[0]!.note).toEqual(currentNote);
+});
+
+test("automatic notes explain signed-out and quota-reset parks in both languages without diagnostics", async () => {
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  expect(parkedTaskNote("Stage \"verify\" runs on Codex, and no Codex account is signed in", "en", false, { kind: "signed-out", engine: "codex" }))
+    .toBe("No Codex account is connected. Connect one to continue.");
+  expect(parkedTaskNote("Stage \"verify\" runs on Codex, and no Codex account is signed in", "uk", false, { kind: "signed-out", engine: "codex" }))
+    .toBe("Для Codex не під’єднано обліковий запис. Під’єднайте його, щоб продовжити.");
+  for (const locale of ["en", "uk"] as const) {
+    const note = parkedTaskNote("rate limited until 2026-10-02T12:00:00.000Z, account fixture-private", locale, true, { kind: "quota-reset" });
+    expect(note).toMatch(/limit|ліміт/i);
+    expect(note).not.toContain("fixture-private");
+    expect(note).not.toContain("2026-10-02");
+  }
+});
+
+test("publication blocked, a failed stage and a spent budget each leave a plain current note", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  const attach = () => {
+    const pipeline = current();
+    pipeline.taskIds = ["park-note-task"];
+    savePipelines([pipeline]);
+    saveTasks([{ id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [], createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt }]);
+  };
+  const h = harness();
+  h.worktree.remote = "";
+  await started(h.ports, [stage("build", null)]);
+  attach();
+  await h.report(1, { verdict: "pass", summary: "Checked." });
+  await tickPipelines([h.endTurn(1, "Done.")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(current().stateDetail).toContain("unavailable");
+  expect(loadTasks()[0]!.note?.text).toBe(parkedTaskNote("publication blocked", "uk"));
+  const f = harness();
+  await started(f.ports, [stage("build", null)]);
+  attach();
+  await f.report(1, { verdict: "fail", findings: [{ severity: "P2", text: "The card loses its title." }] });
+  await tickPipelines([f.endTurn(1, "Failed.")], f.ports);
+  expect(loadTasks()[0]!.note?.text).toBe(parkedTaskNote("stage verdict: fail", "uk"));
+  const b = harness();
+  await reachedVerify(b, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1, onExhausted: "park" } })]);
+  attach();
+  await b.report(2, { verdict: "fail" });
+  await tickPipelines([b.endTurn(2, "Failed." )], b.ports);
+  await tickPipelines([], b.ports);
+  await b.report(3, { verdict: "pass" });
+  await tickPipelines([b.endTurn(3, "Fixed." )], b.ports);
+  await tickPipelines([], b.ports);
+  await b.report(4, { verdict: "fail" });
+  await tickPipelines([b.endTurn(4, "Still failing." )], b.ports);
+  expect(current().stateDetail).toContain("budget");
+  expect(loadTasks()[0]!.note?.text).toBe(parkedTaskNote("budget spent", "uk"));
+});
+
+test("an older agent note is replaced on park, in the operator's chosen language, and a clear survives idle ticks", async () => {
+  const { loadTasks, saveTasks, mutateTasks } = await import("@/lib/tasks/store");
+  const { patchTask } = await import("@/lib/tasks/commands");
+  const { updateOperatorSettings } = await import("@/lib/operator/settings");
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  const before = new Date(Date.parse(attemptsOf("build")[0]!.startedAt!) - 1_000).toISOString();
+  saveTasks([{ id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [], createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+    note: { text: "The build is running.", author: { kind: "agent", conversationId: "conversation_earlier" }, updatedAt: before },
+  }]);
+  updateOperatorSettings({ locale: "en" });
+  try {
+    await h.report(1, { verdict: "needs_decision" });
+    await tickPipelines([h.endTurn(1, "Waiting." )], h.ports);
+    expect(loadTasks()[0]!.note).toMatchObject({ text: "Waiting for your decision before work can continue.", author: { kind: "orchestrator" } });
+    mutateTasks(tasks => {
+      const cleared = patchTask(tasks, "park-note-task", { note: null });
+      if (!cleared.ok) throw new Error(cleared.error);
+      return { tasks: cleared.tasks, result: undefined };
+    });
+    await tickPipelines([], h.ports);
+    expect(loadTasks()[0]!.note).toBeUndefined();
+  } finally { updateOperatorSettings({ locale: "uk" }); }
 });

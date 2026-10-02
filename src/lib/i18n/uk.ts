@@ -2134,6 +2134,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.foldMore": { one: "ще {count} етап", few: "ще {count} етапи", many: "ще {count} етапів", other: "ще {count} етапу" },
   "pipelineBlock.passedRow": { one: "{count} пройдено", few: "{count} пройдено", many: "{count} пройдено", other: "{count} пройдено" },
   "pipelineBlock.latest": "«{text}»",
+  "pipelineStage.openAgent": "Відкрити агента",
   "pipelineBlock.openConversation": "Відкрити розмову",
   "pipelineState.paused": "пауза",
   "pipelineState.completed": "завершено",
