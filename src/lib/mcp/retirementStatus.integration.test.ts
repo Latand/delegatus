@@ -144,7 +144,7 @@ test("served schema teaches automatic launch identity and bounded pagination", a
     for (const name of ["kind", "project", "callerLaunchId", "limit", "cursor"]) expect(properties[name]).toBeDefined();
     expect(properties.callerLaunchId!.description).toContain("Optional");
     expect(tool.description).toContain("designated seat");
-    expect(tool.inputSchema.required).not.toContain("callerLaunchId");
+    expect(tool.inputSchema.required ?? []).not.toContain("callerLaunchId");
   } finally { await f.close(); }
 });
 

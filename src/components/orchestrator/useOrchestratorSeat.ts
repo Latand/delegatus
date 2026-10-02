@@ -101,6 +101,10 @@ function listenForSeatVisibility(): void {
 
 /** Give every mount of `key` the answer, and keep it for the next one. */
 function publishSeat(key: string, next: ScopedRead): void {
+  const previous = answers.get(key);
+  // Polls parse fresh objects even when the seat has not moved. Keep the
+  // complete answer stable so its phone/board readers do no work for a tick.
+  if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
   answers.set(key, next);
   for (const listener of polls.get(key)?.listeners ?? []) listener(next);
 }
@@ -153,6 +157,10 @@ function subscribeSeat(project: string, cwd: string | undefined, listener: (read
   }
   const started = poll;
   started.listeners.add(listener);
+  // A mounted hook can leave this scope and return after another surface
+  // refreshed its cache. Adopt that answer before an unchanged poll is skipped.
+  const cached = answers.get(key);
+  if (cached) listener(cached);
   if (started.timer === null) {
     started.controller = new AbortController();
     listenForSeatVisibility();
@@ -216,9 +224,9 @@ export function useOrchestratorSeat(project: string | null, cwd?: string): Orche
   /* Every answer carries the project and cwd it answered for, so a scope switch
      invalidates the previous seat HERE, in render, with no effect and no frame
      in which another checkout's preflight appears under this draft. */
-  const current = read && read.project === project && read.cwd === (cwd ?? "")
-    ? read
-    : cachedSeat(project, cwd);
+  const current = cachedSeat(project, cwd) ?? (
+    read && read.project === project && read.cwd === (cwd ?? "") ? read : null
+  );
 
   /* An operator action that MOVED the seat — a designation, a rotation — asks
      for the answer now rather than at the next tick, so it reads past the
@@ -278,6 +286,7 @@ function loadSeatConversations(): void {
   seatConversationsPending = true;
   void fetchSeatConversations(poll.controller.signal)
     .then((answer) => {
+      if (JSON.stringify(seatConversations) === JSON.stringify(answer)) return;
       seatConversations = answer;
       for (const listener of seatConversationsListeners) listener(answer);
     })
@@ -291,6 +300,9 @@ function loadSeatConversations(): void {
 
 function joinSeatConversationsPoll(listener: (refs: SeatRefs | null) => void): () => void {
   seatConversationsListeners.add(listener);
+  // A reader may have been disabled while another surface filled the cache.
+  // Adopt that answer even if the revalidation has nothing new to publish.
+  listener(seatConversations);
   if (!seatConversationsPoll) {
     const onVisibility = () => {
       if (!documentHidden()) loadSeatConversations();

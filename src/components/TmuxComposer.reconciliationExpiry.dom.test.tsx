@@ -1470,7 +1470,7 @@ test.each([
        evidence under its own progress affordance (send-latency slice 3). */
     expect(host.querySelector("[data-outbox-status]")?.textContent).toBe(translate("en", "outbox.awaitingConfirmation"));
     expect(host.querySelector("[data-outbox-progress]")?.getAttribute("title"))
-      .toBe(translate("en", "orchPanel.errorUnknownTitle"));
+      .toBe(translate("en", "composer.deliveryChecking"));
     /* The recovery lives one tap behind the message's own progress affordance
        (send-latency slice 3), and for an admission with no operation id there
        is exactly ONE thing on offer: asking under the original key. */

@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import type { FileEntry } from "@/lib/types";
 
@@ -17,7 +18,6 @@ const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/se
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
-type Pipeline = import("./types").Pipeline;
 
 /* The board projection the operator reads, over the record the engine wrote:
    the card's own summarize + progress path, not a hand-built fixture (#1785). */
@@ -156,6 +156,37 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
 
+test("stage_report and controller ticks ignore a future stage beside a healthy running lane", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const future = structuredClone(current());
+  future.id = "future-stage-record";
+  delete future.delivery;
+  (future.stages[0] as unknown as { kind: string }).kind = "future-kind";
+  // Keep the future lane's identity structurally consistent.
+  const { pipelineIdentity } = await import("./store");
+  Object.assign(future, pipelineIdentity(future.id, future.task, future.repoDir));
+  const bytes = JSON.stringify(future, null, 3);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    db.transaction(() => {
+      db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
+      db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) SELECT 'pipelines',?,?,99,revision,1 FROM state_collections WHERE collection='pipelines'").run(future.id, bytes);
+    })();
+    expect((await h.report(1, { verdict: "pass", summary: "Healthy lane complete" })).error).toBeUndefined();
+    await tickPipelines([h.endTurn(1, "Done")], h.ports);
+    expect(attemptsOf("build")[0]!.state).toBe("passed");
+    expect(h.spawnedStages).toEqual(["build"]);
+    expect(db.query("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=?").get(future.id)).toEqual({ value_json: bytes });
+  } finally {
+    // This fixture is intentionally unreadable to this release; remove it only
+    // from this test's private database so subsequent cases stay independent.
+    db.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key=?").run(future.id);
+    db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
+    db.close();
+  }
+});
+
 test("stage_report retries the same request after a pre-admission pipeline store busy refusal", async () => {
   const h = harness();
   await started(h.ports, [stage("build", null)]);
@@ -189,6 +220,31 @@ test("stage_report retries the same request after a pre-admission pipeline store
   expect(await reopened.callTool("stage_report", args)).toEqual({ ...accepted, replayed: true });
   expect(current().stageReports).toHaveLength(1);
   expect(attemptsOf("build")[0]!.report).toMatchObject({ calls: 1, verdict: { status: "pass" } });
+});
+
+test("stage_report preserves structured blocked state through MCP and clears it on replacement", async () => {
+  const h = harness();
+  await started(h.ports, [stage("fix", "review"), stage("review", null)]);
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    reportStageCompletion: (request: StageCompletionRequest, actor: ReturnType<typeof agent>) => reportStageCompletion(request, actor, h.ports),
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_stage_1", role: "builder" }),
+  } as never);
+  const service = createMcpToolService(bindings, new FileMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "blocked-stage-report-receipts.json")));
+  expect(await service.callTool("stage_report", {
+    clientRequestId: "structured-blocker", verdict: "fail", blocked: true,
+    blockedReason: "Required check service is unavailable", summary: "Partial fix committed.",
+  })).toMatchObject({ ok: true });
+  expect(attemptsOf("fix")[0]!.report?.verdict).toEqual({
+    status: "fail", blocked: true, blockedReason: "Required check service is unavailable",
+  });
+  expect(await service.callTool("stage_report", {
+    clientRequestId: "invalid-blocker", verdict: "pass", blocked: true, blockedReason: "Contradictory",
+  })).toMatchObject({ ok: false });
+  expect(attemptsOf("fix")[0]!.report?.calls).toBe(1);
+  expect(await service.callTool("stage_report", {
+    clientRequestId: "blocker-resolved", verdict: "pass", summary: "All required checks passed.",
+  })).toMatchObject({ ok: true, replaced: true });
+  expect(attemptsOf("fix")[0]!.report?.verdict).toEqual({ status: "pass" });
 });
 
 test("terminal JSON with a bare severity cannot settle as a review finding", async () => {

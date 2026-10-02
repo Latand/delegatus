@@ -214,3 +214,35 @@ test("a scroll gesture is answered by a bounded number of measurements, not one 
   await tick(250);
   expect(visible()).toEqual([files[2]!.path, files[3]!.path, files[4]!.path]);
 });
+
+test("a scroll that holds no column, such as a feed following its stream, measures no card", async () => {
+  const { host } = board();
+  await tick(20);
+
+  /* The seat's feed and every reader pin to the bottom on each streamed event
+     and each pin scrolls; none of it can move a card, so the board must not
+     read a single rect. One feed sits in a card, one beside the columns. */
+  const feeds = [host.querySelector(".card")!, host.querySelector(".column")!.parentElement!].map((parent) => {
+    const feed = document.createElement("div");
+    parent.appendChild(feed);
+    return feed;
+  });
+  measurements = 0;
+  for (let i = 0; i < 40; i++) {
+    for (const feed of feeds) feed.dispatchEvent(new Event("scroll", { bubbles: true }));
+    await tick(5);
+  }
+  await tick(250);
+  expect(measurements).toBe(0);
+
+  /* The column scroller still measures, so the guard drops only the feeds'. */
+  scroll(host);
+  await tick(250);
+  expect(measurements).toBeGreaterThan(0);
+
+  /* And so does the board's own scroller, which holds the columns. */
+  measurements = 0;
+  host.querySelector(".column")!.parentElement!.dispatchEvent(new Event("scroll", { bubbles: true }));
+  await tick(250);
+  expect(measurements).toBeGreaterThan(0);
+});

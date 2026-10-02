@@ -385,7 +385,7 @@ export function RuntimeComposerReceipts({
   payloadRecoveryKeys?: ReadonlySet<string>;
   /** Complete local submissions whose admission has no server operation yet. */
   localRecoveryKeys?: ReadonlySet<string>;
-  onRecheck?: () => void;
+  onRecheck?: (receipt?: RuntimeReceipt) => void;
 }) {
   const { t } = useLocale();
   const statusId = useId();
@@ -444,11 +444,11 @@ export function RuntimeComposerReceipts({
     nowMs: now,
   });
   const receiptStatusText = (receipt: RuntimeReceipt): string => receiptHasUnknownFate(receipt)
-    ? [t("orchPanel.errorUnknownTitle"), receipt.reason].filter(Boolean).join(": ")
+    ? t("composer.deliveryChecking")
     : runtimeReceiptStatusText(t, receipt);
   const uncertainControls = (receipt: RuntimeReceipt) => (
     <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5" data-operation={receipt.operationId}>
-      <span role="status" className="text-caption text-warning">{t("orchPanel.errorUnknownTitle")}</span>
+      <span role="status" className="text-caption text-warning">{t("composer.deliveryChecking")}</span>
       {/* #1560: an injection gets the verdict and NO controls. Both of these
           re-arm or end the original operation, and the journal refuses either
           for this kind — the engine does not deduplicate a second insertion,
@@ -460,7 +460,7 @@ export function RuntimeComposerReceipts({
       {(!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) || localRecoveryKeys.has(receipt.idempotencyKey)) && isRetryableReceipt(receipt) ? <>
         {alternateRetry(receipt)
           ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
-          : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={onRecheck}>{t("composer.payloadRecheck")}</button>}
+          : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRecheck?.(receipt)}>{t("composer.payloadRecheck")}</button>}
         {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
       </> : null}
     </span>
@@ -500,9 +500,9 @@ export function RuntimeComposerReceipts({
      sentence with its remediation waits behind expand/hover. The per-message
      history below keeps the detail — the notice is its disclosure, not a copy. */
   const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
-  const noticeFailure = notice ? describeReceiptFailure(t, notice.current.reason) : null;
   const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
-  const noticeLabel = t(noticeUnknown ? "orchPanel.errorUnknownTitle" : "composer.receiptFailed");
+  const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
+  const noticeLabel = t(noticeUnknown ? "composer.deliveryChecking" : "composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`
@@ -569,7 +569,7 @@ export function RuntimeComposerReceipts({
                only (design §3.7: role in the edge, never a full wash) — an
                annotation under the composer, subordinate to it in both themes. */
             className={`group w-full min-w-0 rounded-control border border-border ${
-              notice ? "border-l-2 border-l-danger " : ""
+              notice ? noticeUnknown ? "border-l-2 border-l-warning " : "border-l-2 border-l-danger " : ""
             }bg-sunken/55 text-caption text-secondary`}
             data-runtime-receipt-stack
             {...(notice ? { "data-delivery-notice": "" } : {})}
@@ -596,7 +596,7 @@ export function RuntimeComposerReceipts({
                     data-delivery-notice-cause
                     title={noticeFailure?.full ?? undefined}
                   >
-                    <span className="font-semibold text-danger">{noticeLabel}</span>
+                    <span className={`font-semibold ${noticeUnknown ? "text-warning" : "text-danger"}`}>{noticeLabel}</span>
                     {noticeFailure?.cause ? <span className="text-secondary">{` — ${noticeFailure.cause}`}</span> : null}
                   </span>
                   {/* Counters are plain muted text, never badges (design rule 5). */}
@@ -662,14 +662,16 @@ export function RuntimeComposerReceipts({
                     <button
                       type="button"
                       data-delivery-notice-retry
-                      aria-label={t("runtime.receipt.retry")}
-                      title={t("runtime.receipt.retry")}
+                      aria-label={t(noticeUnknown ? "composer.payloadRecheck" : "runtime.receipt.retry")}
+                      title={t(noticeUnknown ? "composer.payloadRecheck" : "runtime.receipt.retry")}
                       disabled={actionsDisabled}
                       className={`${noticeActionClass} hover:text-accent`}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        retryFailed(notice.current);
+                        if (noticeUnknown && onRecheck && !notice.current.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+                          onRecheck(notice.current);
+                        } else retryFailed(notice.current);
                       }}
                     >
                       <RotateCcw className="h-3 w-3" aria-hidden />
@@ -825,7 +827,7 @@ export function RuntimeComposerReceipts({
                         className="min-w-0 max-w-full text-right text-caption text-muted"
                         data-receipt-uncertain-why
                       >
-                        {unknownFate ? receipt.reason : deliveryUncertainWhy(t, wait!)}
+                        {unknownFate ? t("composer.deliveryCheckingDetail") : deliveryUncertainWhy(t, wait!)}
                       </span>
                     ) : null}
                     {history.length ? (
@@ -868,7 +870,7 @@ export function RuntimeComposerReceipts({
                       onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
                     />}
                     {receiptHasUnknownFate(receipt) && receipt.reason ? (
-                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{receipt.reason}</span>
+                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{t("composer.deliveryCheckingDetail")}</span>
                     ) : null}
                     {onDismiss && !receiptHasUnknownFate(receipt) && receiptIsTerminal(receipt.status) ? (
                       <button
@@ -4913,7 +4915,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                 ...payloadRows.flatMap(row => [row.ref.key, ...payloadReceiptEvidence({ conversationId: row.ref.conversationId,
                   key: row.ref.key, operationId: row.operationId }, [...runtimeReceipts, ...displayedRuntimeReceipts]).map(receipt => receipt.idempotencyKey)]),
                 ...pendingDeliveries.current.filter(entry => entry.payloadComplete === false).map(entry => entry.key)])}
-              onRecheck={() => void runtimeDependencies.refreshRuntime().then(() => refreshPayloads())}
+              onRecheck={(receipt) => {
+                if (receipt && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+                  readOperationBack({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey, original: receipt }, true);
+                }
+                void runtimeDependencies.refreshRuntime().then(() => refreshPayloads());
+              }}
               actionsDisabled={busy || voiceSending || deadHostBlocksSend}
               dismissed={dismissedReceipts}
               session={structuredSession
