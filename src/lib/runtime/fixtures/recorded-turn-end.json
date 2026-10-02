@@ -1,0 +1,16 @@
+{
+  "claude": {
+    "type": "assistant",
+    "timestamp": "2026-10-01T22:42:58.880Z",
+    "message": {
+      "role": "assistant",
+      "stop_reason": "end_turn",
+      "content": [{ "type": "text", "text": "Replay response." }]
+    }
+  },
+  "codex": {
+    "type": "event_msg",
+    "timestamp": "2026-10-01T22:41:24.001Z",
+    "payload": { "type": "task_complete" }
+  }
+}

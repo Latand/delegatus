@@ -1,3 +1,6 @@
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 /*
  * The page `issue1671Evidence.browser.test.tsx` drives: the real Viewer over an
  * invented phone board — ten lanes waiting on a decision, one running
@@ -123,8 +126,12 @@ const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
 const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
+/* `?firstmessage=<p|s|f>`: a new conversation's first message from the first paint to the transcript. p is a plain
+   spawn's prompt and f a failed launch (the running conversation, opened in the focus view); s is a seat created from
+   the sheet's draft with Confirm actually pressed (`&kanban=1&seatless=donly`). */
+const FIRST_MESSAGE = new URLSearchParams(location.search).get("firstmessage");
 const RUNTIME_PERF = new URLSearchParams(location.search).get("runtime") === "perf";
-const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
+const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -194,6 +201,74 @@ if (SEAT_NOISE !== null) {
   else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }); }
   else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
   else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
+}
+/* The first-message cases. The raw recovery envelope rides in `error` on every pending step on purpose: the window
+   must not print it. */
+const FM_PROMPT = "Fix the failing export test. The pinned task is in the card.";
+// A hand-over case deliberately delivers the reply before its provenance.
+const FM_HANDOVER = new URLSearchParams(location.search).get("handover");
+const FM_ENGINE = new URLSearchParams(location.search).get("engine") === "codex" ? "codex" : "claude";
+let releaseFirstMessageEvidence: () => void = () => undefined;
+const fmEvidenceGate = new Promise<void>((resolve) => { releaseFirstMessageEvidence = resolve; });
+const FM_LAUNCH_ID = "launch-first-message";
+const FM_SEAT = FIRST_MESSAGE === "s";
+const FM_CONVERSATION_ID = FM_SEAT ? "conversation_first_message" : "conversation_running";
+const FM_SEAT_PATH = "/repo/first-message.jsonl";
+const fmText = () => (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
+// Include the runtime role prefix; the DOM suite composes its resolved role.
+const fmDeliveredText = () => FM_HANDOVER
+  ? `${ROLE_DEFAULTS.find((role) => role.id === "orchestrator")!.promptScaffold}\n\n${orchestratorMandateForDelivery(fmText())}`
+  : fmText();
+/* `&step=<n>` opens the page on that state: the phone's focus view re-resolves the conversation when its path
+   flips, so each state of the plain cases is a first paint of its own. */
+const fm = { step: Number(new URLSearchParams(location.search).get("step") ?? 0), confirmed: false, posts: [] as Array<Record<string, unknown>> };
+/** The window the first message lives in: the running conversation, or the seat the Confirm created. */
+let fmTarget: FileEntry | null = FIRST_MESSAGE !== null && !FM_SEAT ? files[0]! : null;
+function fmApply() {
+  const target = fmTarget as unknown as Record<string, unknown>;
+  const launch = (over: Record<string, unknown>) => ({
+    launchId: FM_LAUNCH_ID, clientAttemptId: null, accountId: null, conversationId: FM_CONVERSATION_ID, generation: 1,
+    state: "reconciling", initialMessage: "queued", retrySafe: false, error: SEAT_ENVELOPE,
+    admittedAt: (now - 90) * 1_000, promptAt: (now - 90) * 1_000, promptImages: 0, prompt: fmText(), promptEcho: fmText(),
+    ...(FM_SEAT ? { mandate: { kind: "version", version: 1 } } : {}), ...over,
+  });
+  const window_ = (facts: Record<string, unknown>) => Object.assign(target, {
+    engine: FM_ENGINE, fmt: FM_ENGINE, root: FM_ENGINE === "codex" ? "codex-sessions" : "claude-projects", model: FM_ENGINE === "codex" ? "gpt-6.1" : "opus", effort: "high", conversationId: FM_CONVERSATION_ID,
+    generation: 1, spawnOrigin: "viewer", launch: undefined,
+    path: `spawn:${FM_LAUNCH_ID}`, name: `spawn:${FM_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling", spawn: facts,
+  });
+  /* The scanned row: the server's live-adoption signal is `launch`, the spawn placeholder is gone. */
+  const adopted = (facts: Record<string, unknown> | undefined) => Object.assign(target, {
+    path: FM_SEAT ? FM_SEAT_PATH : RUNNING_PATH, name: FM_SEAT ? "first-message.jsonl" : "running.jsonl", size: 2_048,
+    activityReason: undefined, spawn: undefined, launch: facts,
+    lastAssistantMessageAt: fm.step >= (FM_HANDOVER ? 2 : 3) ? (now - 20) * 1_000 : null,
+    sessionStartedAt: iso(60), lastTurn: { startedAt: (now - 60) * 1_000, endedAt: null },
+  });
+  if (FIRST_MESSAGE === "f") {
+    window_(launch({ state: "failed", initialMessage: "failed", retrySafe: true, error: "runtime host unavailable" }));
+    return;
+  }
+  const retired = { prompt: undefined, promptAt: undefined, promptImages: undefined, mandate: undefined };
+  if (fm.step === 0) window_(launch({}));
+  else if (fm.step === 1) window_(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now() }));
+  else if (fm.step === 2 && FM_HANDOVER === "answered") adopted(undefined);
+  else if (fm.step === 2) adopted(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now(), ...retired }));
+  else adopted(undefined);
+}
+/* A Claude seat's mandate is journaled the way the SDK delivers it: `promptSource: "sdk"` with an engine uuid. */
+const FM_SEAT_UUID = "engine_message_seat_mandate";
+function fmTranscript(): string {
+  const user = JSON.stringify(FM_SEAT
+    ? { type: "user", uuid: FM_SEAT_UUID, timestamp: iso(60), message: { role: "user", content: fmDeliveredText() }, promptSource: "sdk" }
+    : { type: "user", timestamp: iso(60), message: { role: "user", content: fmDeliveredText() }, promptSource: "typed", origin: { kind: "human" } });
+  const answer = JSON.stringify({ type: "assistant", timestamp: iso(20), message: { role: "assistant", content: [{ type: "text", text: "Looking at the export test." }] } });
+  const codexUser = JSON.stringify({ timestamp: iso(60), type: "response_item", payload: { type: "message", id: FM_SEAT_UUID, role: "user", content: [{ type: "input_text", text: fmDeliveredText() }] } });
+  const codexAnswer = JSON.stringify({ timestamp: iso(20), type: "response_item", payload: { type: "message", id: "seat_answer", role: "assistant", content: [{ type: "output_text", text: "Looking at the export test." }] } });
+  return `${[FM_ENGINE === "codex" ? codexUser : user, ...(fm.step >= (FM_HANDOVER ? 2 : 3) ? [FM_ENGINE === "codex" ? codexAnswer : answer] : [])].join("\n")}\n`;
+}
+if (FIRST_MESSAGE !== null && !FM_SEAT) {
+  files[0]!.title = "Builder";
+  fmApply();
 }
 if (CONTEXT_MODE !== null) seatOn("codex", "gpt-5.6-sol", "high", "");
 const SEAT_CODEX_FEED = `${[
@@ -297,6 +372,14 @@ const evidence = {
      The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session. */
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
+  /* The first-message cases: move the same window Pending -> Delivered -> Transcript arrived -> Answered. */
+  releaseFirstMessageEvidence,
+  advanceFirstMessage() {
+    fm.step += 1;
+    fmApply();
+    window.dispatchEvent(new Event("llv:files-changed"));
+    return fm.step;
+  },
   refuseNextPipelinePatch: false,
   /* Composer context mode: the turn the runtime reports, every inject and send the composer posted, the receipts the
      driver publishes for injections, and the switch that appends the injected record to the transcript. */
@@ -434,6 +517,7 @@ const ICONS_SCENE = new URLSearchParams(location.search).has("icons");
 const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
 const asksSetting = { enabled: ASKS_SCENE };
 const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
+const STAGE_AGENT = new URLSearchParams(location.search).get("stage-agent");
 /* `?launch=1`: the phone launches an agent from a draft. The spawn route answers a
    structured receipt, and the scan swaps the launch window for the agent's
    transcript once the driver asks (`evidence.materializeLaunch()`). The running
@@ -513,6 +597,25 @@ if (KANBAN) {
   kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
     { id: "implement", state: "needs_decision", ago: 2_460 }, { id: "review", role: "reviewer" },
   ]));
+  if (STAGE_AGENT) {
+    const current = kanbanPipelines[0]!;
+    const oldPath = kanbanConversation("Earlier design attempt", "settled", 3_600);
+    const agentPath = current.runs[0]!.attempts[0]!.agentPath!;
+    const state = STAGE_AGENT as "running" | "passed" | "failed" | "needs_decision";
+    current.stages = [{ ...current.stages[0]!, id: "design", next: null }];
+    current.state = state === "passed" ? "completed" : state === "running" ? "running" : "needs_decision";
+    current.cursor = state === "passed" ? null : { stageId: "design", state: state === "running" ? "running" : "pending", input: null, activatedBy: null };
+    current.runs = [{ stageId: "design", attempts: [
+      { ...current.runs[0]!.attempts[0]!, n: 1, state: "failed", agentPath: oldPath, conversationId: idOf(oldPath) },
+      { ...current.runs[0]!.attempts[0]!, n: 2, state, agentPath, conversationId: idOf(agentPath), verdict: { status: state === "failed" ? "fail" : state === "needs_decision" ? "needs_decision" : "pass", findings: [] },
+        report: { seq: 1, at: iso(60), actor: { kind: "operator" }, calls: 1,
+          verdict: { status: state === "needs_decision" ? "needs_decision" : state === "failed" ? "fail" : "pass", findings: [] },
+          summary: ["Which layout should we use?", "Choose the compact layout or keep the expanded layout.", "Яке компонування обрати? Компактне чи розгорнуте?",
+            ...Array.from({ length: 36 }, (_, index) => `Option ${index + 1}: explain the choice here.`),
+            `/repo/${"unbroken-path-segment".repeat(8)}`, "End of the question. Кінець питання."].join("\n"), provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
+      },
+    ] }];
+  }
   kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
   kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };
   const buildPath = kanbanConversation("GitHub Copilot as a third engine · build", "settled", 900);
@@ -1102,6 +1205,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SYNCED && url.pathname === "/api/links/agents") return serverFetch(url.pathname + url.search);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
+  if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (typeof body.text === "string") evidence.sends.push(body);
+    return json({ ok: true, outcome: "resumed", receipt: { operationId: "stage-agent-send", idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1 } });
+  }
+  /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
+     record of it renders as the mandate card, never as the operator's bubble. */
+  if (url.pathname === "/api/log/provenance" && FM_SEAT) {
+    if (FM_HANDOVER) await fmEvidenceGate;
+    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+  }
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {
@@ -1213,6 +1327,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
       workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
   if (url.pathname === "/api/files" && LAUNCH_SCENE && evidence.launchMaterialized) {
@@ -1228,6 +1343,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
       workflows: [], tasks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      /* The durable route of the launch, as the server hands it, so the pane follows the conversation from `spawn:` to its transcript. */
+      ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
   /* The fixture has no runtime plane, and says so the way a Viewer without one
@@ -1307,6 +1424,32 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const limit = Number(url.searchParams.get("limit") ?? 20);
     return json({ items: catalog.slice(offset, offset + limit), total: catalog.length ? 4_595 : 0, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
+  if (FM_SEAT && url.pathname === "/api/orchestrator/seat" && method === "POST") {
+    fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    fm.confirmed = true;
+    fmTarget = conversation(FM_SEAT_PATH, "Orchestrator", { activity: "live", proc: "running", pid: 4_402, mtime: now - 5, lastTurn: { startedAt: (now - 90) * 1_000, endedAt: null } });
+    kanbanFiles.push(fmTarget);
+    fmApply();
+    return json({ ok: true, launched: true, transport: "structured", launchId: FM_LAUNCH_ID, conversationId: FM_CONVERSATION_ID, state: "path-pending", initialMessage: "queued", path: null });
+  }
+  if (FM_SEAT && fm.confirmed && url.pathname === "/api/orchestrator/seat") {
+    const path = (fmTarget as { path: string }).path;
+    if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [FM_CONVERSATION_ID], paths: [path], previous: { conversationIds: [], paths: [] } } });
+    return json({
+      seat: { project: PROJECT, seatEpoch: 1, conversationId: FM_CONVERSATION_ID, path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(30), intent: { clientRequestId: "seat-first-message", mode: "spawn", launchId: null, error: null } },
+      pending: null, exists: true,
+    });
+  }
+  if (FM_SEAT && fm.confirmed && url.pathname === "/api/orchestrator/seat/status") {
+    return json({
+      project: PROJECT, designated: true, conversationId: FM_CONVERSATION_ID, predecessorConversationId: null,
+      engine: "claude", model: "opus", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: (fmTarget as { path: string }).path,
+      liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
+      context: { tokens: 12_000, limit: 1_000_000, percent: 1, estimated: false, basis: "" },
+      transcriptFacts: null,
+      rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    });
+  }
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
@@ -1365,7 +1508,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = FAST_TTS ? FAST_TTS_FEED : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

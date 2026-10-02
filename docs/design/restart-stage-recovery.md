@@ -5,7 +5,9 @@ interrupted stage attempts remained running. An idle host returned unknown
 agent activity, and a busy transcript then kept its attempt open indefinitely.
 The existing continuation path required a runtime-host epoch change; a Viewer
 restart with the same host epoch did not qualify. Provider limit/auth recovery
-and terminal verdict settlement remain on their existing paths.
+and terminal verdict settlement remain on their existing paths. A persisted
+provider recovery owns its cut until that recovery observes new stage progress
+and clears the wait; restart recovery cannot reserve another retry for it.
 
 The seat scheduler did restart and continued checking every five minutes.
 The persisted journal records 51 wake candidates withheld by
