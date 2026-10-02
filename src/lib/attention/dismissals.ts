@@ -83,7 +83,7 @@ function emptyFile(now: Date): AttentionDismissalsFileV1 {
   return { schemaVersion: ATTENTION_DISMISSALS_SCHEMA_VERSION, revision: 0, updatedAt: now.toISOString(), records: [] };
 }
 
-const REASON_KINDS: ReadonlySet<string> = new Set(["decision", "question", "plan", "permission", "delivery", "launch", "ask"]);
+const REASON_KINDS: ReadonlySet<string> = new Set(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask"]);
 const nullableString = (value: unknown): value is string | null => value === null || typeof value === "string";
 
 function parseRecord(value: unknown): AttentionDismissalV1 | null {

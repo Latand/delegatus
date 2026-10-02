@@ -27,7 +27,7 @@ let detectTailscale, getToken, OPERATOR_HINT, OPERATOR_PATTERN, phoneAccessFlagP
   readPhoneAccessFlag, readStatus, serveTailscale, serveBackground, TailscaleError;
 let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
-  viewerServerBunRuntime;
+  viewerServerBunRuntime, viewerExitStatus;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
   probePageAndChunk, selfUpdatePaths, watchRestartRequests;
 let probeHeadersFrom, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
@@ -512,11 +512,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
       process.exit(1);
     }
 
-    if (signal) {
-      process.exit(0);
-    }
-
-    process.exit(code ?? 1);
+    process.exit(viewerExitStatus(code, signal));
   });
 
   return { child, state };
@@ -1017,6 +1013,9 @@ async function main() {
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
   if (legacyNotice) console.error(`${legacyNotice}\n`);
+  const { detectOomPolicyNotice } = await import("./oomPolicy.mjs");
+  const oomNotice = detectOomPolicyNotice(LANG);
+  if (oomNotice) console.error(`${oomNotice}\n`);
 
   let runtime;
   try {
@@ -1389,7 +1388,7 @@ async function checkoutLauncher() {
   const runtime = await import("./server-runtime.mjs");
   ({ browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
     newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
-    viewerServerBunRuntime } = runtime);
+    viewerServerBunRuntime, viewerExitStatus } = runtime);
   runtime.discardUnsupportedApiCredentials();
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
     probePageAndChunk, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));

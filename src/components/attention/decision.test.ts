@@ -341,3 +341,10 @@ describe("a launch that failed before it ran (#2170)", () => {
     expect(needLabel(t, { subject: "conversation", file: entry, reason } as NeedReason)).toBe("launch failed");
   });
 });
+
+test("memory labels name the stage and limit in en and uk", () => {
+  const subject = file({ memoryKill: { at: new Date((NOW - 10) * 1000).toISOString(), limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true },
+    durableLineage: { role: "builder", memberships: [{ kind: "pipeline", stageId: "build", role: "builder" }] } as FileEntry["durableLineage"] });
+  expect(decisionLine(t, subject, NOW)).toContain("Killed: out of memory · build · limit 15 GB");
+  expect(decisionLine(tUk, subject, NOW)).toContain("Зупинено: нестача пам’яті · build · ліміт 15 ГБ");
+});
