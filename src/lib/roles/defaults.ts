@@ -75,7 +75,7 @@ const PROCESS_CLEANUP_RULE =
     brief is a list of findings, and the reviewer judges the lane against the
     pinned specification (review of #2301). `roleScaffoldBody` swaps them. */
 export const BUILDER_FINISH_LINE = "You are done when every acceptance criterion in the pinned specification holds at your final commit and the project's own checks you ran pass; a finish line the brief names governs over this one.";
-export const FIX_ROUND_FINISH_LINE = "You are done when every finding that names its place is fixed, or left unfixed with the evidence that it is wrong, and the project's own checks for what you touched pass. Acceptance criteria of the pinned specification beyond the findings are not this round's work: the reviewer judges the lane against them.";
+export const FIX_ROUND_FINISH_LINE = "You are done when every handed finding and every issue you notice within the pinned specification is fixed, or left unfixed with evidence that it is wrong, and the project's own checks for what you touched pass. The reviewer evaluates the result against the pinned specification.";
 
 /** The block every role but the orchestrator ends with, whose mandate carries
     longer versions of the search and human-in-the-loop rules. How an agent

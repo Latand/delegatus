@@ -658,6 +658,93 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test.each(["Another issue noticed", "Users cannot save", "rejected publication", "historical red tests"])("a fixer self-fail with a committed head goes to review with its findings as notes: %s", async (finding) => {
+  const fixture = await realWorktreeLane("fixer-self-fail", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ], "remote-branch");
+  try {
+    const { h, git, worktree, origin } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "fix handed findings");
+    const fixed = git(worktree, "rev-parse", "HEAD");
+    const hook = path.join(origin, "hooks", "pre-receive");
+    if (finding === "rejected publication") fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    h.setConversationActive(false);
+    const summary = finding === "historical red tests" ? "Regression tests failed on base and passed on head. No blockers." : "Handed findings fixed; checks passed.";
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: [`P2 — ${finding} in fix.txt:1`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    await tickPipelines([], h.ports);
+    if (finding === "rejected publication") {
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      fs.unlinkSync(hook);
+      expect((await patchPipeline(fixture.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+      await tickPipelines([], h.ports);
+      await tickPipelines([], h.ports);
+    }
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(fixed);
+    expect(current.runs[0]!.attempts[0]!.verdict?.status).toBe("fail");
+    expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
+    expect(current.cursor?.input).toContain(`${finding} in fix.txt:1`);
+    expect(git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs.at(-1)?.prompt).toContain(`${finding} in fix.txt:1`);
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { label: "unchanged head", commit: false, mode: "apply-fixes", summary: "Could not finish handed work", verdict: "fail" },
+  { label: "blocked build after commit", commit: true, mode: "apply-fixes", summary: "Blocked: cannot build because a dependency is unavailable", verdict: "fail" },
+  { label: "blocked checks after commit", commit: true, mode: "apply-fixes", summary: "Cannot run required checks because the service is unavailable", verdict: "fail" },
+  { label: "impossible handed finding", commit: true, mode: "apply-fixes", summary: "A handed finding is impossible within the specification", verdict: "fail" },
+  { label: "plain builder", commit: true, mode: "plain", summary: "Checks passed", verdict: "fail" },
+  { label: "operator decision", commit: true, mode: "apply-fixes", summary: "Operator must choose the scope", verdict: "needs_decision" },
+  { label: "report prose blocked", commit: true, mode: "apply-fixes", summary: "Blocked: cannot run required checks because the service is unavailable.", verdict: "fail" },
+])("fixer safety net parks $label with its reason", async ({ label, commit, mode, summary, verdict }) => {
+  const fixture = await realWorktreeLane("fixer-blocked", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    if (commit) {
+      fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "partial fix\n");
+      fixture.git(fixture.worktree, "add", "fix.txt");
+      fixture.git(fixture.worktree, "commit", "-m", "partial fix");
+    }
+    fixture.h.setConversationActive(false);
+    const shortSummary = "Committed partial fixes; remaining discovery listed";
+    if (label === "report prose blocked") {
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1, at: fixture.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
+        provenance: { head: fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    fixture.h.messages.set("/codex/stage-1.jsonl", { text: `${summary}\n\`\`\`json\n${JSON.stringify({ status: verdict, findings: [`P1 — ${label}`] })}\n\`\`\``, ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], fixture.h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.lastPassedCommit).toBe(fixture.base);
+    expect(current.stateDetail).toContain(label);
+    expect(current.runs[0]!.attempts[0]!.output).toContain(label === "report prose blocked" ? shortSummary : summary);
+    expect(fixture.h.spawnInputs).toHaveLength(1);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("an owner publishes a review-fix commit before the passing review starts", async () => {
   const fixture = await realWorktreeLane("owner-review-fix", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },

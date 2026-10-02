@@ -470,6 +470,9 @@ export type PipelineStageAttempt = {
   activatedBy: PipelineEdgeActivation | null;
   output: string | null;
   verdict: StageVerdict | null;
+  /** A committed fixer self-fail accepted for independent review. Keeps the
+      original verdict while publication recovery retries the accepted head. */
+  acceptedForReview?: true;
   /** The completion the attempt reported for itself (graph slice 2), standing
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */

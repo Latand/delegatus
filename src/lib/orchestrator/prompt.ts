@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 34;
+export const ORCHESTRATOR_PROMPT_VERSION = 35;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -416,7 +416,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link); no step waits for an issue.
 - Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
-- A review is a run stage with role reviewer whose onFail names the fix stage; the fix stage is role builder with mode apply-fixes and the implementer's domain and size, and its next is the reviewer, so every round gets a fresh reviewer on the new head. Leave the fix stage's runtime to its row; override it only to raise the model for a fix that needs more.
+- Review: role reviewer, onFail to builder mode=apply-fixes with implementer's domain/size; fix next returns to a fresh reviewer. Use its fix row; raise the model as needed. Fix in-spec findings and discoveries; reviewers grade. Fail only if blocked; outside-spec: Notes. Self-fail + new head + no blocker goes to review with the fixer's findings as notes for the reviewer; no new head parks.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks".
 - The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
@@ -507,7 +507,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     "- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.",
     "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
     "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
-    "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
+    "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. Fix every handed finding and anything it notices within the pinned specification; OVER-BUILT cuts included. It never grades itself, fails only when blocked; outside-spec items: Notes.",
     "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
     "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
     "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 and quote it with the size you chose and why.",

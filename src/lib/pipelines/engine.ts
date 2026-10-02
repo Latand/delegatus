@@ -2698,10 +2698,14 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
   const detail = pipeline.stateDetail;
   // Older engines passed the accepted attempt to park() on HEAD verification
   // failure, so its pass verdict survived with a needs_decision state.
-  return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
+  return pipeline.cursor?.state === "committing" && attempt !== null && stageHeadAccepted(attempt)
     && (detail?.startsWith("publishing the passed stage:") === true
       || ((attempt.state === "passed" || attempt.state === "needs_decision") && (detail?.startsWith("the worktree moved to ") === true
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
+}
+
+function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
+  return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
 function retryTerminalStagePublication(
@@ -2997,7 +3001,7 @@ function reportedStageVerdict(
   text: string,
   backgroundReportedAt: number | null | undefined,
   reportProse: string | null = null,
-): ParsedStageVerdict | null {
+): (ParsedStageVerdict & { completionText?: string }) | null {
   const report = attempt.report;
   if (!report) return null;
   /* A report filed while background work was still out is interim (#1441):
@@ -3008,6 +3012,9 @@ function reportedStageVerdict(
     output: report.verdict.status === "pass"
       ? reportedPassOutput(report.summary, text, reportProse)
       : (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
+    // The report owns the verdict and relay summary. A short summary does
+    // not erase a blocker the fixer stated in its final assistant prose.
+    completionText: [text, reportProse].filter(Boolean).join("\n"),
   };
 }
 
@@ -3017,7 +3024,7 @@ function settleStageVerdict(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
-  parsed: NonNullable<ReturnType<typeof parseStageVerdict>>,
+  parsed: NonNullable<ReturnType<typeof parseStageVerdict>> & { completionText?: string },
   ports: PipelinePorts,
   persist: () => void,
 ): void {
@@ -3029,6 +3036,19 @@ function settleStageVerdict(
     return;
   }
   attempt.verdict = parsed.verdict;
+  /* A fixer repairs discoveries; its next reviewer owns the verdict. Admit
+     only an already committed, clean head through the normal acceptance and
+     publication path. Blocked work and other roles retain fail routing. */
+  if (fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports)) {
+    attempt.acceptedForReview = true;
+    attempt.output = [parsed.output, "Fixer notes for the reviewer:", ...(parsed.verdict.findings ?? []).map((finding) => `- ${finding}`)]
+      .filter(Boolean).join("\n\n");
+    attempt.state = "committing";
+    setCursorState(pipeline, stage.id, "committing");
+    persist();
+    commitPassedStage(pipeline, stage, attempt, ports);
+    return;
+  }
   if (parsed.verdict.status !== "pass") {
     attempt.state = parsed.verdict.status === "fail" ? "failed" : "needs_decision";
     attempt.completedAt = ports.now();
@@ -3078,6 +3098,30 @@ function settleStageVerdict(
   setCursorState(pipeline, stage.id, "committing");
   persist();
   commitPassedStage(pipeline, stage, attempt, ports);
+}
+
+function fixerSelfFailCanGoToReview(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  parsed: ParsedStageVerdict & { completionText?: string },
+  ports: PipelinePorts,
+): boolean {
+  const definition = attemptStage(stage, attempt);
+  const next = pipeline.stages.find((candidate) => candidate.id === stage.next);
+  if (parsed.verdict.status !== "fail" || !parsed.verdict.findings?.length
+    || stage.kind !== "run" || attempt.effectiveRole.roleId !== "builder"
+    || attempt.effectiveRole.access !== "read-write" || definition.role?.params?.mode !== "apply-fixes"
+    || !next || !(next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer")) return false;
+  // Reports have no blocked bit. Fix scaffolds request a Blocked: reason;
+  // also recognize ordinary blocker prose in legacy reports and findings.
+  const reason = [parsed.output, parsed.completionText, ...parsed.verdict.findings].filter(Boolean).join("\n")
+    .replace(/\b(?:not blocked|no blockers?)\b/gi, "")
+    // Red/green evidence describes a resolved failure, not a present stop.
+    .replace(/[^.\n]*\bfailed (?:on (?:the )?base|before (?:the )?fix)\b[^.\n]*\bpassed\b[^.\n]*/gi, "");
+  if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\s+(?:failed|failing|fail)\b/i.test(reason)) return false;
+  const head = currentPipelineBranchHead(pipeline, ports.exec);
+  return head.ok && head.sha !== pipeline.lastPassedCommit;
 }
 
 function updateAttemptIdentity(pipeline: Pipeline, attempt: PipelineStageAttempt, entries: FileEntry[], ports: PipelinePorts): void {
@@ -5838,7 +5882,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
             || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
-        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
+        if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
           passed.error = null;

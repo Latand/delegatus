@@ -697,11 +697,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    expect(onFail?.properties?.onExhausted?.description).toContain("without asking this stage again");
-    /* #2187: the default completes after the last fix; stopping there is asked for. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("the fix stage takes the last findings and the lane continues or completes");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after that fix the lane waits for the operator in needs_review");
-    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the fix");
+    /* #2425: terminal gates re-check the last fix; explicit stops remain. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("it re-checks the fix once more");
+    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review");
+    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
     expect(tool?.description).toContain("onExhausted");
     expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
     expect(stage?.kind?.description).toContain("convertedStages");
@@ -728,6 +728,9 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
     expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
+    expect(tool?.description).toContain("fixes every handed finding and anything it notices within the specification");
+    expect(tool?.description).toContain("fails only when blocked");
+    expect(tool?.description).toContain("fixer's findings as notes for the reviewer");
     expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
     expect(stage?.access?.description).toContain("does not select the sandbox");

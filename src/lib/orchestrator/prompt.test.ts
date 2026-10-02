@@ -78,7 +78,7 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
 test("the default mandate is at version 34, and a v33 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(34);
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(35);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -110,7 +110,8 @@ test("the default mandate is at version 34, and a v33 seat reads as stale", () =
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
   expect(orchestratorMandateStale(33)).toBe(true);
-  expect(orchestratorMandateStale(34)).toBe(false);
+  expect(orchestratorMandateStale(34)).toBe(true);
+  expect(orchestratorMandateStale(35)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -151,6 +152,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
   33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
   34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
+  35: "65dbc413dbf6ee522833fc239d384dee3b483761a8ad045d1d39c32995a14cd4",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -744,10 +746,12 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
   /* §3 (a): the fix stage's params select its row. */
   expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
-  /* Review of #2301: a fix round takes what names its place, an OVER-BUILT cut
-     included, and the seat is told that the rest parks the lane. */
+  /* Fixers repair discoveries within the spec; reviewers grade the result. */
   expect(table).toContain("OVER-BUILT cuts included");
-  expect(table).toContain("which parks the lane: re-plan it.");
+  expect(table).toContain("anything it notices within the pinned specification");
+  expect(table).toContain("never grades itself");
+  expect(table).toContain("fails only when blocked");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("fixer's findings as notes for the reviewer");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
   expect(table).toContain("- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.");
