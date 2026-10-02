@@ -2473,7 +2473,7 @@ test("structured spawn maps operational image storage failures to 503", async ()
   }
 });
 
-test("an oversized structured spawn prompt returns 413 before receipts, blobs, or deferral", async () => {
+test("an oversized structured spawn prompt is accepted for bounded first-message materialization", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "oversized-spawn-prompt-"));
   const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
   const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
@@ -2514,11 +2514,10 @@ test("an oversized structured spawn prompt returns 413 before receipts, blobs, o
       }),
     }), dependencies);
 
-    expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({ error: expect.stringContaining("32000-byte envelope") });
-    expect(stores).toBe(0);
-    expect(deferred).toBe(0);
-    expect(Object.keys(agentRegistry().snapshot().receipts).sort()).toEqual(beforeReceipts);
+    expect(response.status).toBe(202);
+    expect(stores).toBe(1);
+    expect(deferred).toBe(1);
+    expect(Object.keys(agentRegistry().snapshot().receipts).sort()).not.toEqual(beforeReceipts);
   } finally {
     if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
     else process.env.LLV_SPAWN_TRANSPORT = previousTransport;

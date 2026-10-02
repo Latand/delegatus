@@ -15203,6 +15203,227 @@ describe("launch layout shift rendered evidence", () => {
   }, 240_000);
 });
 
+describe("task chip: the card's Ask button puts a task in the orchestrator's composer", () => {
+  /*
+   * Rendered evidence for the card's one «Ask» button. With the seat folded, a press on a card in the Assigned
+   * column attaches the task as a chip above the seat's composer (never as text in the input), unfolds the seat,
+   * and leaves the card where it was on the screen. A second card adds a second chip, × takes one back out, and
+   * the longer Ukrainian label holds in the narrowest card foot.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task chip"
+   *
+   * Measurements go to `evidence/task-chip-to-orchestrator/geometry.json`; frames to `.artifacts/task-chip/`.
+   */
+  const OUT = path.resolve(".artifacts/task-chip");
+  const EVIDENCE = path.resolve("evidence/task-chip-to-orchestrator");
+  const FOLDED = JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null, topWidths: {}, sideWidths: {} });
+
+  browserTest("task chip: a mouse press keeps Ask in place on a note card and the card below it", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const focusTarget of ["card", "control"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, VIEWPORT, "light", locale, "reduce");
+        try {
+          const note = page.locator(card("t-note"));
+          await note.waitFor();
+          for (const [id, expectedChips] of [["t-note", 1], ["t-pending", 2]] as const) {
+            // Losing focus from the note must also leave its neighbour in place.
+            if (id === "t-pending") {
+              await note.focus();
+              await page.keyboard.press("Tab");
+              if (focusTarget === "card") await page.keyboard.press("Shift+Tab");
+              await note.locator('[data-task-note="full"]').waitFor();
+            }
+            const ask = page.locator(`[data-ask-orchestrator="task:${id}"]`);
+            await ask.scrollIntoViewIfNeeded();
+            const before = (await ask.boundingBox())!;
+            await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+            await page.mouse.down();
+            const during = (await ask.boundingBox())!;
+            await ask.evaluate(element => element.addEventListener("mouseup", () => {
+              element.setAttribute("data-test-release-top", String(element.getBoundingClientRect().top));
+            }, { once: true }));
+            // Release at the original pointer coordinates, as a physical mouse does.
+            await page.mouse.up();
+            const releaseTop = await ask.getAttribute("data-test-release-top");
+            const pressed = await ask.getAttribute("aria-pressed");
+            const chips = await page.locator("[data-orchestrator-conversation] [data-task-chip]").count();
+            cases.push({ locale, focusTarget, id, before, during, releaseTop, pressed, chips });
+            if (releaseTop === null || Math.abs(Number(releaseTop) - before.y) > 0.5 || Math.abs(during.y - before.y) > 0.5) failures.push(`${locale} ${focusTarget} ${id}: Ask moved during the mouse press`);
+            if (pressed !== "true" || chips !== expectedChips) failures.push(`${locale} ${id}: pressed=${pressed}, chips=${chips}`);
+            await page.screenshot({ path: path.join(OUT, `note-ask-${locale}-${focusTarget}-${id}.png`) });
+          }
+          if (pageErrors.length) failures.push(`${locale}: ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(EVIDENCE, "note-press.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, cases }, null, 2)}\n`);
+  }, 120_000);
+
+  browserTest("task chip: pressing Ask on a card adds a chip to the seat's composer, unfolds the seat and keeps the card in place", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const passes: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string>) => translate(lang, key, vars);
+        const record: Record<string, unknown> = { lang };
+        passes.push(record);
+        const opened = await openFixture(browser, `${server.base}?scenario=seat-noise`, VIEWPORT, "light", lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.evaluate((folded) => localStorage.setItem("llv:kanban-seat:v2", folded), FOLDED);
+          await page.reload();
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const ids = await page.$$eval('.card[data-id^="task:"] [data-ask-orchestrator]', (nodes) => nodes.map((node) => node.getAttribute("data-ask-orchestrator")!));
+          record.askButtons = ids.length;
+          if (ids.length < 2) { failures.push(`${lang}: expected an Ask button on every task card, found ${ids.length}`); continue; }
+          const [first, second] = ids as [string, string];
+          const top = (id: string) => page.$eval(`.card[data-id="${id}"]`, (node) => Math.round(node.getBoundingClientRect().top * 10) / 10);
+          const seatState = () => page.$eval("[data-kanban-seat]", (node) => node.getAttribute("data-collapsed"));
+          const foldedBefore = await seatState() === "1";
+          await page.$eval(`.card[data-id="${first}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          const topBefore = await top(first);
+          await page.click(`[data-ask-orchestrator="${first}"]`);
+          await page.waitForSelector("[data-orchestrator-conversation] [data-task-chip]", { timeout: 10_000 });
+          await page.waitForTimeout(600);
+          const topAfter = await top(first);
+          const seatAfter = await seatState();
+          const pressed = await page.$eval(`[data-ask-orchestrator="${first}"]`, (node) => node.getAttribute("aria-pressed"));
+          /* Nothing has scrolled the seat into view yet: what the operator sees at the press is the receipt. */
+          const receipt = await page.$eval("[data-kanban-receipt]", (node) => {
+            const rect = node.getBoundingClientRect();
+            const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+            return {
+              text: node.querySelector(".msg")?.textContent?.trim() ?? "",
+              action: node.querySelector(".act")?.textContent?.trim() ?? "",
+              inView: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth,
+              seatInView: seat.top >= 0 && seat.bottom <= innerHeight,
+            };
+          }).catch(() => null);
+          await page.click("[data-kanban-receipt] .act");
+          await page.waitForTimeout(600);
+          const composerInView = await page.$eval("[data-kanban-seat] textarea", (node) => {
+            const rect = node.getBoundingClientRect();
+            return rect.top >= 48 && rect.bottom <= innerHeight && document.activeElement === node;
+          });
+          const chip = await page.$eval("[data-orchestrator-conversation] [data-task-chip]", (node) => ({
+            text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            width: Math.round(node.getBoundingClientRect().width),
+            inView: node.getBoundingClientRect().top >= 0 && node.getBoundingClientRect().bottom <= innerHeight,
+            cut: [node, ...node.querySelectorAll<HTMLElement>("*")].some((child) => child.scrollWidth > child.clientWidth + 1 && getComputedStyle(child).overflow !== "visible" && !child.classList.contains("truncate")),
+          }));
+          const draft = await page.$eval("[data-orchestrator-conversation] textarea", (node) => (node as HTMLTextAreaElement).value);
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chip-${lang}.png`) });
+          await page.$eval(`.card[data-id="${second}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          await page.click(`[data-ask-orchestrator="${second}"]`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length === 2);
+          await page.$eval("[data-kanban-seat]", (node) => node.scrollIntoView({ block: "start" }));
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chips-two-${lang}.png`) });
+          await page.screenshot({ path: path.join(OUT, `board-${lang}.png`) });
+          const removed = await page.evaluate(async () => {
+            const before = document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length;
+            document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-task-chip-remove]")!.click();
+            await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+            return { before, after: document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length };
+          });
+          const footFit = await page.$$eval('.card[data-id^="task:"] .foot', (foots) => foots.filter((foot) => foot.scrollWidth > foot.clientWidth + 1).length);
+          const ask = await page.$eval(`[data-ask-orchestrator="${second}"]`, (node) => ({ label: node.getAttribute("aria-label"), text: node.textContent?.trim(), height: Math.round(node.getBoundingClientRect().height) }));
+          Object.assign(record, { foldedBefore, seatAfter, pressed, topBefore, topAfter, receipt, composerInView, chip, draft, removed, footOverflow: footFit, ask });
+          if (!foldedBefore) failures.push(`${lang}: the seat was not folded before the press`);
+          if (Math.abs(topAfter - topBefore) > 2) failures.push(`${lang}: the card moved ${topAfter - topBefore} px when the seat unfolded`);
+          if (seatAfter !== "0") failures.push(`${lang}: the seat is still folded after the press`);
+          if (!receipt || !receipt.inView || !/^«.+»/.test(receipt.text) || receipt.action !== tr("taskChip.show")) failures.push(`${lang}: no visible receipt at the press ${JSON.stringify(receipt)}`);
+          if (!composerInView) failures.push(`${lang}: the receipt's ${tr("taskChip.show")} did not bring the composer into view`);
+          if (pressed !== "true") failures.push(`${lang}: the card's button does not read as pressed`);
+          if (draft !== "") failures.push(`${lang}: the input holds "${draft}" after the press`);
+          if (!chip.inView || chip.cut) failures.push(`${lang}: the chip ${JSON.stringify(chip)}`);
+          if (removed.before !== 2 || removed.after !== 1) failures.push(`${lang}: × ${JSON.stringify(removed)}`);
+          if (footFit > 0) failures.push(`${lang}: ${footFit} card foot(s) overflow sideways`);
+          if (ask.text !== tr("taskChip.ask")) failures.push(`${lang}: the button says "${ask.text}"`);
+          if (opened.pageErrors.length) failures.push(`${lang}: page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    /* The record is written only by a run that held: a failing run must not leave
+       its numbers where a reviewer reads them as the outcome. */
+    expect(failures).toEqual([]);
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
+  }, 300_000);
+});
+
+
+describe("task chip native queue presentation", () => {
+  browserTest("task chip queue badges and clean editor fit desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/task-chip-native-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-queue-preview`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          /* Recovery is exercised after a normal reload; it also gives headless
+             Chromium a fresh paint of the mixed-locale text. */
+          await page.reload();
+          const panel = page.locator('[data-testid="native-queue-panel"]');
+          await panel.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          await page.waitForTimeout(1000);
+          for (const selector of ['[data-testid="native-queue-row"]', '[data-testid="native-queue-unresolved-row"]', '[data-testid="native-queue-refused-row"]']) {
+            const row = panel.locator(selector);
+            expect(await row.textContent()).not.toContain("task reference");
+            expect(await row.textContent()).toContain("start this one");
+            const wordsFit = await row.evaluate((node) => {
+              const words = node.querySelector("p")!.lastElementChild!;
+              const range = document.createRange(); range.selectNodeContents(words);
+              const box = range.getBoundingClientRect(); const parent = words.parentElement!.getBoundingClientRect();
+              const style = getComputedStyle(words);
+              return box.width > 0 && box.height > 0 && box.top >= parent.top && box.bottom <= parent.bottom + 1
+                && style.visibility === "visible" && style.opacity === "1";
+            });
+            expect(wordsFit).toBeTrue();
+            expect(await row.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          }
+          const deputyHead = page.locator('[data-deputy-head]');
+          expect(await deputyHead.textContent()).toContain("start this one");
+          expect(await deputyHead.textContent()).not.toContain("task reference");
+          expect(await deputyHead.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          expect(await page.locator('[data-seat-deputy-chip]').getAttribute("title")).toBe("start this one");
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          await panel.locator('[data-testid="native-queue-edit"]').click();
+          const field = panel.locator('[data-testid="native-queue-edit-field"]');
+          expect(await field.inputValue()).toBe("start this one");
+          await page.waitForTimeout(1000);
+          expect(await panel.locator('[data-testid="native-queue-row"] [data-task-badge]').count()).toBe(1);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-edit.png`) });
+          cases.push({ locale, width, cleanPreview: true, wordsWithinBounds: true, cleanEdit: true, cleanDeputy: true, badge: "Fix __init__.py (#42)", overflow: false });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/task-chip-to-orchestrator", { recursive: true });
+    fs.writeFileSync("evidence/task-chip-to-orchestrator/native-queue.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 120_000);
+});
+
 describe("passive task status note", () => {
   browserTest("notes stay within two lines on desktop and phone, with full text in the task", async () => {
     const out = path.resolve(".artifacts/card-status-note");

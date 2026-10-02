@@ -1,3 +1,4 @@
+import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 import type { NativeQueuedSubmission, NativeQueueSnapshot } from "@/lib/runtime/nativeCodexQueue";
 import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import type { RuntimeSendSettings } from "@/lib/runtime/contracts";
@@ -66,6 +67,7 @@ export interface NativeQueueRow {
   revision: number;
   /** The latest admitted version's text. */
   text: string;
+  selectedContext?: SelectedContextRef;
   /** The latest admitted version's attachments, so an edit of the words carries
       them forward instead of admitting a payload that has lost them. */
   images: readonly StructuredImageRef[];
@@ -201,6 +203,7 @@ export function projectNativeQueue(input: NativeQueueViewInput): NativeQueueView
       nativeSubmissionId: entry.nativeSubmissionId,
       revision: entry.revision,
       text: version?.text ?? "",
+      ...(version?.selectedContext ? { selectedContext: version.selectedContext } : {}),
       images: version?.images ?? [],
       imageCount: version?.images.length ?? 0,
       state: entry.state,

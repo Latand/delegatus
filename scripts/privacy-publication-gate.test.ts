@@ -2153,7 +2153,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           temporaryDirectories.push(directory);
           const generation = generatePrivacyPlaceholders(directory);
           expect(generation.exitCode).toBe(0);
-          const image = join(directory, "docs", "acceptance", "issue-290", "readiness-kanban.png");
+          const imagePath = "docs/acceptance/issue-290/readiness-kanban.png";
+          const image = join(directory, imagePath);
+          const ocrText = contiguous ? fullWidth(value) : words.join("-");
           const configuration = join(directory, "known.json");
           writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
             fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
@@ -2161,11 +2163,16 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           const result = runGateArguments(["--repository", directory, "--paths", image], {
             ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
             LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
-            OCR_TEXT: contiguous ? fullWidth(value) : words.join("-"),
+            OCR_TEXT: ocrText,
           });
           expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
-          expect(result.stdout.toString()).toBe(!exactOnly || contiguous
-            ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+          const output = result.stdout.toString();
+          expect(output).toBe(!exactOnly || contiguous
+            ? `PRIVACY GATE: FAIL\nknown_value: 1\n${fileNotice(imagePath, "known_value")}\n` : "PRIVACY GATE: PASS\n");
+          expect(output).not.toContain(imagePath);
+          expect(output).not.toContain(image);
+          expect(output).not.toContain(ocrText);
+          expect(output).not.toContain(value);
           expect(result.stderr.toString()).toBe("");
         });
       }
