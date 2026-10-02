@@ -37,7 +37,8 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
     "scripts/fixtures/usage-metrics/recorded.json", "scripts/docker-image-scope.cjs",
     ".env", ".env.local", ".env.production", ".env.production.local",
-    ".gitignore", "src/components/.gitignore", ".github/workflows/docker-image.yml",
+    ".gitignore", "src/.gitignore", "src/components/.gitignore", "public/.gitignore",
+    "bin/.gitignore", "patches/.gitignore", "vendor/.gitignore", ".github/workflows/docker-image.yml",
   ]) expect(isImageInput(file), file).toBe(true);
   for (const file of [
     "README.md", "CONTRIBUTING.md", "docs/docker.md", "docs/guide.md", "evidence/report.txt",
@@ -46,6 +47,7 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     "evidence/docker-image/incident.json", "docs/unused.json", "docs/unused.js",
     "external/unused.cjs", "external/unused.mjs", "external/unused.jsx",
     ".env.development", ".env.test", ".env.example", "docs/.env.production",
+    "docs/.gitignore", "docs/design/desktop-v2/.gitignore", "landing/site/.gitignore",
   ]) expect(isImageInput(file), file).toBe(false);
 });
 
@@ -172,6 +174,11 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       ["evidence/docker-image/incident.json", false], ["docs/unused.json", false],
       ["docs/unused.js", false], ["external/unused.cjs", false],
       ["external/unused.mjs", false], ["external/unused.jsx", false],
+      ["docs/.gitignore", false], ["docs/design/desktop-v2/.gitignore", false],
+      ["landing/site/.gitignore", false],
+      [".gitignore", true], ["src/.gitignore", true], ["src/components/.gitignore", true],
+      ["public/.gitignore", true], ["bin/.gitignore", true],
+      ["patches/.gitignore", true], ["vendor/.gitignore", true],
       ["landing/site/demo/taskIcons.json", true],
       ["scripts/demo-capture-browser.cjs", true],
       [".env", true], [".env.local", true],
