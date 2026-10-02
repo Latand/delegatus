@@ -143,14 +143,14 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(16);
-          for (const id of ["reviewer", "architect", "prod-auditor"]) {
+          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
+          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
             const row = page.locator(`[data-mapping-row="${id}"]`);
             await row.scrollIntoViewIfNeeded();
             const effort = await row.locator("select").nth(1).inputValue();
             const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
-            expect(effort).toBe("xhigh");
-            expect(cost).toBe("very-heavy");
+            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
+            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
             expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
             await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
             rows.push({ id, effort, cost, nudge: false });
@@ -14809,6 +14809,40 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+describe("agent memory isolation", () => {
+  browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
+    const out = path.resolve(".artifacts/agent-memory-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 },  colorScheme: "light", reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${locale}&memory=1&open=1`);
+          const row = page.locator("[data-needs-you-panel] [data-needs-you-row]").filter({ hasText: locale === "en" ? "Killed: out of memory" : "Зупинено: нестача пам’яті" });
+          await row.waitFor({ timeout: 15000 });
+          expect(await row.innerText()).toContain(locale === "en" ? "build · limit 15 GB" : "build · ліміт 15 ГБ");
+          await row.scrollIntoViewIfNeeded();
+          const geometry = await row.evaluate((element) => ({ width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, overflow: document.documentElement.scrollWidth > innerWidth }));
+          expect(geometry.right).toBeLessThanOrEqual(1440);
+          expect(geometry.overflow).toBeFalse();
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+          cases.push({ locale, ...geometry, errors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/agent-memory", { recursive: true });
+      fs.writeFileSync("evidence/agent-memory/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
 });
 
 // The focused common-path case shares its assertions with the phone driver.

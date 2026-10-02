@@ -1,3 +1,4 @@
+import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
 
@@ -101,6 +102,10 @@ export function renderStagePrompt(
     "```",
     "Its status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
   ].join("\n");
+}
+
+export function renderOutOfMemoryRetryInput(previousInput: string | null, attempt: number, kill: Pick<AgentMemoryKill, "limitBytes" | "limit">): string {
+  return [previousInput ?? "", `The previous attempt of this stage (attempt ${attempt}) was ${memoryKillText(kill)}. Its changes are still in this worktree; continue from them. Keep memory-heavy commands (benchmarks, browsers, large test runs) within the limit: smaller inputs, or one at a time.`].filter(Boolean).join("\n\n");
 }
 
 /** A cut attempt keeps its worktree and receives a durable recovery note. */

@@ -1,0 +1,20 @@
+{
+  "driver": "src/lib/runtime/agentMemory.test.ts",
+  "platform": "linux",
+  "signalsInjected": true,
+  "limits": { "agent": 100, "shared": 151 },
+  "sampleRss": { "wrapper": 1, "native": 60, "tool": 50, "healthy": 100 },
+  "baseline": {
+    "sourceCommit": "c44392979",
+    "casesFailed": 3,
+    "signals": [125, 200]
+  },
+  "cases": [
+    { "name": "vanished native subtree", "signals": [125], "healthyAlive": true, "memoryKills": 1 },
+    { "name": "reused native PID", "signals": [125], "healthyAlive": true, "memoryKills": 1 },
+    { "name": "real native reaped by living wrapper", "nativeGone": true, "wrapperAlive": true, "signals": [125], "healthyAlive": true, "memoryKills": 1 }
+  ],
+  "memoryEvidence": { "limit": "agent", "fatal": false, "process": "native-agent" },
+  "regressionSuite": { "passed": 52, "failed": 0 },
+  "providerHostSuites": { "passed": 284, "failed": 0, "skipped": 1 }
+}

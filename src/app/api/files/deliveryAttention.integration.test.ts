@@ -142,3 +142,31 @@ test("a switch the registry has claimed rides the file as applying until it sett
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+for (const engine of ["claude", "codex", "copilot"] as const) test(`${engine} terminal memory evidence reaches the real files response and attention`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-projection-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const transcriptPath = path.join(directory, "memory.jsonl");
+  fs.writeFileSync(transcriptPath, "\n");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false);
+  setAgentRegistryForTests(registry);
+  try {
+    const conversation = registry.ensureConversation(engine, transcriptPath, null);
+    const key = { engine, sessionId: conversation.generations.at(-1)!.id };
+    const memoryKill = { at: new Date().toISOString(), limitBytes: 15 * 2 ** 30, limit: "agent" as const, fatal: true };
+    registry.upsert({ key, artifactPath: transcriptPath, cwd: directory, accountId: null, status: "dead", host: null, claimOwner: null, claimEpoch: 0, pendingAction: null,
+      structuredHost: { kind: engine === "claude" ? "claude-broker" : engine === "codex" ? "codex-app-server" : "copilot-acp", endpoint: "stdio:memory", process: null, eventCursor: 0, protocolVersion: "1", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+        memory: { mechanism: "scope", unit: "delegatus-agent-test-projection.scope", limitBytes: memoryKill.limitBytes, kills: 1, lastKill: { ...memoryKill, process: null } } } });
+    const response = await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+      listFilesWithProjectCatalog: async () => ({ files: [{ ...scannedFile(transcriptPath), engine, pid: null }], projectCatalog: [], complete: true }),
+    });
+    const file = (await response.json() as { files: FileEntry[] }).files[0]!;
+    expect(file.memoryKill).toEqual(memoryKill);
+    expect(attentionId(file)).toBe(`${transcriptPath}:memory:${memoryKill.at}`);
+  } finally {
+    setAgentRegistryForTests(null);
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
