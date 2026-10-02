@@ -1,6 +1,7 @@
 "use client";
 
 import { useLocale } from "@/lib/i18n";
+import { stripTaskReferenceLines } from "@/lib/selection/selectedContext";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 import { DeputyMark } from "../conversation/deputyInk";
@@ -11,7 +12,7 @@ import { DeputyMark } from "../conversation/deputyInk";
 
 /** The ask, cut for a chip. */
 export function deputyAskLabel(deputy: Pick<SeatDeputyView, "ask">, limit = 40): string {
-  const flat = deputy.ask.text.replace(/\s+/g, " ").trim();
+  const flat = stripTaskReferenceLines(deputy.ask.text).replace(/\s+/g, " ").trim();
   return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat;
 }
 
@@ -58,7 +59,7 @@ export function SeatDeputyChip({ deputy }: { deputy: SeatDeputyView }) {
       data-seat-deputy-chip={deputy.askId}
       onClick={() => scrollToDeputyBlock(deputy.askId)}
       aria-label={t("deputy.chipAria", { ask })}
-      title={deputy.ask.text}
+      title={stripTaskReferenceLines(deputy.ask.text)}
       className="inline-flex min-h-6 min-w-0 max-w-[18rem] items-center gap-1.5 rounded-full border border-accent/35 bg-accent-soft px-2 py-0.5 text-label font-semibold text-accent hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 [@media(pointer:coarse)]:min-h-11"
     >
       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" aria-hidden />
