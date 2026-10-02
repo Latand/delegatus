@@ -126,7 +126,7 @@ test("snapshot and second-account admission stay bounded during a live Fable-lik
         engine: "claude",
         cwd: directory,
         "prompt": "synthetic launch prompt",
-        accountId: "opensource",
+        accountId: "synthetic-second-account",
       }),
     ]);
     const frames: string[] = [];
