@@ -37,7 +37,7 @@ test("review flow identity Git yields to a pause before the controller lease", a
   lane.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
   lane.runs[1]!.attempts = [];
   const transcript = path.join(root, "builder.jsonl");
-  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: "22222222-3333-4333-8444-555555555555", cwd: lane.worktreeDir } })}\n`);
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: crypto.randomUUID(), cwd: lane.worktreeDir } })}\n`);
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   setAgentRegistryForTests(registry);
   const owner = registry.ensureConversation("codex", transcript, null);

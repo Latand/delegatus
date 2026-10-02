@@ -146,9 +146,9 @@ function harness() {
 const stage = (id: string, next: string | null, extra: Record<string, unknown> = {}) =>
   ({ id, kind: "run", role: { roleId: "builder" }, prompt: `Do ${id}`, next, ...extra });
 
-async function started(ports: PipelinePorts, stages: unknown[]): Promise<string> {
+async function started(ports: PipelinePorts, stages: unknown[], publication: Pipeline["publication"] = "internal"): Promise<string> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", publication: "internal", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", publication, repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   /* A review-loop here stands for a lane stored before #2187, which still
      reviews through its embedded flow; creation now converts new ones. */
@@ -1085,7 +1085,7 @@ test("publication blocked, a failed stage and a spent budget each leave a plain 
   };
   const h = harness();
   h.worktree.remote = "";
-  await started(h.ports, [stage("build", null)]);
+  await started(h.ports, [stage("build", null)], "remote-branch");
   attach();
   await h.report(1, { verdict: "pass", summary: "Checked." });
   await tickPipelines([h.endTurn(1, "Done.")], h.ports);
