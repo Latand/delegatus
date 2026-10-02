@@ -22,6 +22,7 @@ import {
   commitMessageFindings,
   formatPrivacyReport,
   mergeBoundaryReview,
+  sensitiveClasses,
   TRUSTED_TELEGRAM_VENDOR_EXEMPT_FINDING_CLASSES,
   TRUSTED_TELEGRAM_VENDOR_ROOT_DIGEST,
   trustedVendorRootDigest,
@@ -30,6 +31,73 @@ import {
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
+const systemdUnitSamples = [
+  ["user", "1000.service"].join("@"),
+  ["delegatus", "review.service"].join("@"),
+  `0::/user.slice/user-1000.slice/${["user", "1000.service"].join("@")}/app.slice/delegatus.service`,
+  ["delegatus", String.raw`review\x2dworker.service`].join("@"),
+  [String.raw`delegatus\x2dworker`, "review.service"].join("@"),
+  ...["service", "socket", "scope", "slice", "timer", "mount", "automount", "path", "device", "swap"]
+    .map((type) => ["delegatus", `review.${type}`].join("@")),
+  ["delegatus", "review.SERVICE"].join("@"),
+  `Inspect \`${["delegatus", "review.service"].join("@")}\`.`,
+  `Inspect [${["delegatus", "review.service"].join("@")}](https://fixture.invalid).`,
+  ...[" ", "\t", "\r", "\n", "\v", "\f", "/", '"', "'", "`", ")", "]", ",", ";", ":"]
+    .map((boundary) => ["delegatus", "review.service"].join("@") + boundary),
+];
+const unitLookingRealAddresses = [
+  [JSON.stringify(["probe", "personal.dev"].join("@")), "review.service"].join("@"),
+  [JSON.stringify(["probe", "personal.dev"].join("@")), "review.service/"].join("@"),
+  ["probe", "b**.service**%E2%80%8B"].join("%40"),
+  ["probe", "b**.service**\u200B"].join("@"),
+  ["probe", "b**.service**%00"].join("%40"),
+  ["probe", "b.service&#x200B;"].join("&#64;"),
+  ["probe", "b.service%E2%80%8B"].join("%40"),
+  ["probe", "b&#46;service\u200B"].join("@"),
+  ["probe", "b.service%25E2%2580%258B"].join("%2540"),
+  ["probe", "b.service%00"].join("%40"),
+  ["probe", "b\u200B.service"].join("@"),
+  ["probe", "b.service\u200C"].join("@"),
+  ["probe", "b.service\u04C0"].join("@"),
+  `\`${["probe", "b.service"].join("@")}\`.com`,
+  `\`${["probe", "b.service"].join("@")}\`.\u0375α.com`,
+  `\`${["probe", "b.service"].join("@")}\`.💡.com`,
+  "`" + ["probe", "b.service"].join("@") + "` and " + ["probe", "b.service"].join("@") + ".",
+  ...["FEFF", "AD", "2060"].map((code) => ["probe", `b.service&#x${code};`].join("&#64;")),
+  ["probe", "͵α.com"].join("@"),
+  ["probe", "・カ.com"].join("@"),
+  ...[".", "-", "+", "!", "?", ">tail", "}", "=", "\\tail", "α", "\u0301", "\u0375", "\u30FB", "\u200B", "\u00A0", "）", "／", "💡"]
+    .map((suffix) => ["probe", `b.service${suffix}`].join("@")),
+  ["probe", "a.b.service"].join("@"),
+  ["probe", "b。service"].join("@"),
+  ["probe", "b.ｓｅｒｖｉｃｅ"].join("@"),
+  ["probe", String.raw`b\x2dworker.service+`].join("@"),
+  ["someone", "company.services"].join("@"),
+  ["probe", "b.target"].join("@"),
+  ["a", "b.com"].join("@"),
+  ["delegatus", "review.service.com"].join("@"),
+  ["delegatus", "review.service.dev"].join("@"),
+  ["delegatus", "review.services"].join("@"),
+  ["delegatus", "review.serviceevil"].join("@"),
+  ["someone", "b.service.TaRgEt"].join("@"),
+  ["probe", "b.service.१२३.com"].join("@"),
+  ["probe", "b.service.๐๑๒.com"].join("@"),
+  ["probe", "b.service.１２３.com"].join("@"),
+  ["probe", "b.service.xn--e4bcd.com"].join("@"),
+  ["probe", "b.service.xn--b5ccd.com"].join("@"),
+  ["probe", "b.service。com"].join("@"),
+  ["probe", "b.service．com"].join("@"),
+  ["probe", "b.service｡com"].join("@"),
+  ["probe", "b.service.͵α.com"].join("@"),
+  ["probe", "b.service.・カ.com"].join("@"),
+  ["probe", "b.service.xn--wva4j.com"].join("@"),
+  ["probe", "b.service.xn--lckxi.com"].join("@"),
+  ["someone", "b.SeRvIcE.укр"].join("@"),
+  ["probe", "b.service.xn--j1amh"].join("@"),
+  ["probe", "b.SeRvIcE.XN--J1aMh"].join("@"),
+  ["probe", "b.service.xn--p1ai"].join("@"),
+  ["probe", "b.service.xn--j1amh.com"].join("@"),
+];
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -605,6 +673,43 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(1);
     expect(output).toBe("PRIVACY GATE: FAIL\nemail_address: 1\n");
     expect(output).not.toContain(quotedAddress);
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test("systemd unit names pass text publication inspection", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-systemd-"));
+    temporaryDirectories.push(directory);
+    const text = join(directory, "units.md");
+    writeFileSync(text, systemdUnitSamples.join("\n"));
+
+    const result = runGate([text]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test("systemd boundaries reject every unlisted ASCII character and representative Unicode characters", () => {
+    const permitted = new Set([" ", "\t", "\r", "\n", "\v", "\f", "/", '"', "'", "`", ")", "]", ",", ";", ":"]);
+    const boundaries = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
+    boundaries.push("α", "\u0301", "\u0375", "\u30FB", "\u200B", "\u00A0", "）", "／", "💡");
+    for (const boundary of boundaries) {
+      const unit = ["probe", "b.service"].join("@") + boundary;
+      expect(sensitiveClasses(unit).has("email_address"), `boundary ${boundary.codePointAt(0)}`).toBe(!permitted.has(boundary));
+      expect(commitMessageAddressReview(unit).attributable.length, `boundary ${boundary.codePointAt(0)}`).toBe(permitted.has(boundary) ? 0 : 1);
+    }
+  });
+
+  test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD text blocked (%#)", (address) => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-systemd-address-"));
+    temporaryDirectories.push(directory);
+    const text = join(directory, "units.md");
+    writeFileSync(text, address);
+
+    const result = runGate([text]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nemail_address: 1\n");
     expect(result.stderr.toString()).toBe("");
   });
 
@@ -3562,6 +3667,31 @@ describe("mergeBoundaryReview", () => {
     });
     return result.stdout.toString().trim();
   }
+
+  test.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", (unit) => {
+    const repo = gitRepo();
+    commit(repo, `chore: inspect ${unit}`, { email: unit, name: "Fixture Tool" });
+
+    expect(commitMessageFindings(repo, "main").size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main").findings.size).toBe(0);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD commits and identities blocked (%#)", (address) => {
+    const repo = gitRepo();
+    commit(repo, `chore: inspect ${address}`, { email: address, name: "Fixture Person" });
+
+    expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address: 2\n");
+    expect(result.stdout.toString()).not.toContain(address);
+    expect(result.stderr.toString()).toBe("");
+  });
 
   /* What the forge records as COMMITTER on a commit it composes itself: its
      own web-flow mailbox, whose local part is exactly `noreply`. It names the

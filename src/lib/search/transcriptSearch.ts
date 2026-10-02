@@ -1,13 +1,27 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 import type { Database as BunDatabase } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "./snippet";
+import { isFunctionWord, queryUnits, type QueryUnit } from "./queryUnits";
+import { resolveProjectScope, type ProjectScope } from "./projectScope";
 
 export const TRANSCRIPT_SEARCH_TOKENIZER = "FTS5 unicode61, remove_diacritics=0, tokenchars=#_";
+/** Library pages reserve room for titles in HTTP and decoded MCP pages. */
+export const TRANSCRIPT_RELEVANCE_PAGE_BYTES = 12 * 1024;
+const RELEVANCE_SNIPPET_BYTES = 512;
+
+export class TranscriptSearchPageTooLargeError extends Error {
+  constructor() {
+    super("transcript search metadata exceeds the page byte budget; refine the query or project scope");
+    this.name = "TranscriptSearchPageTooLargeError";
+  }
+}
+
 export const TRANSCRIPT_SEARCH_FIELDS = ["message.body"] as const;
 
 export interface TranscriptIndexSource {
@@ -33,6 +47,10 @@ export interface TranscriptSearchItem {
   lineNumber: number;
   project: string;
   engine: "claude" | "codex" | "copilot";
+  matched?: string[];
+  missing?: string[];
+  fragments?: Array<Pick<TranscriptSearchItem, "snippet" | "speaker" | "timestamp" | "byteOffset" | "lineNumber">>;
+  alsoIn?: { count: number; transcriptPaths: string[] };
 }
 
 export interface TranscriptCorpusStats {
@@ -47,6 +65,11 @@ export interface TranscriptSearchResult {
   nextCursor: string | null;
   total: number;
   stats: TranscriptCorpusStats;
+  order?: "newest" | "relevance";
+  interpretedAs?: { units: string[]; ignored: string[] };
+  projectScope?: ProjectScope;
+  /** Conversations covering at least 60% of interpreted units, before folding. */
+  strongTotal?: number;
 }
 
 export interface ParsedTranscriptMessage {
@@ -126,8 +149,15 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 4;
+const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 5;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
+const scheduledSearchIndexes = new Set<string>();
+const readySearchDatabases = new WeakSet<Database>();
+// Readiness is schema metadata. Invalidate on either replacement of the file
+// or a schema change; ordinary appends keep the same readiness. Bound the cache
+// because tests and offline tools can choose many independent state roots.
+const searchSchemas = new Map<string, { identity: string; schema: number; version: number; hit: number; vocabulary: number }>();
+const newestExpressions = new Map<string, string>();
 
 function normalizedBodyHash(body: string): string {
   const normalized = body.trim().replace(/\s+/gu, " ");
@@ -165,11 +195,9 @@ function migrateSearchSchema(db: Database): void {
     }
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(transcript_messages)").all();
     if (!columns.some((column) => column.name === "sort_timestamp")) {
-      db.exec(`
-        ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL;
-        UPDATE transcript_messages SET sort_timestamp = COALESCE(timestamp,
-          (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path));
-      `);
+      // Adding the nullable column is metadata-only. Backfilling every row
+      // belongs to background work; readers use timestamp/file time meanwhile.
+      db.exec("ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL");
     }
     if (currentVersion < 4) {
       db.exec(`
@@ -204,6 +232,10 @@ function migrateSearchSchema(db: Database): void {
         DROP TABLE transcript_files_previous;
         CREATE INDEX IF NOT EXISTS transcript_messages_path
           ON transcript_messages(transcript_path, message_index);
+        UPDATE transcript_messages
+          SET sort_timestamp = COALESCE(timestamp,
+            (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
+          WHERE sort_timestamp IS NULL;
       `);
     }
     db.exec(`
@@ -212,8 +244,6 @@ function migrateSearchSchema(db: Database): void {
       );
       INSERT OR IGNORE INTO transcript_search_sequence VALUES
         (1, (SELECT COALESCE(MAX(id), 0) FROM transcript_messages));
-      CREATE INDEX IF NOT EXISTS transcript_messages_body_hash
-        ON transcript_messages(speaker, body_hash);
       PRAGMA user_version = ${Math.max(currentVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
       COMMIT;
     `);
@@ -263,12 +293,17 @@ function openWriterDatabase(): Database {
       );
     `);
     migrateSearchSchema(db);
-    /* The activity dashboard reads rows by time and never the body; this
-       covers that read (the implicit rowid orders rows sharing a second). */
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS transcript_messages_time
-        ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
-    `);
+    if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transcript_messages").get()!.n === 0) {
+      /* Empty fresh indexes are cheap to create before the first indexing pass. */
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_vocab
+          USING fts5vocab(transcript_messages_fts, row);
+        CREATE INDEX IF NOT EXISTS transcript_messages_search_hit
+          ON transcript_messages(id, speaker, body_hash, sort_timestamp, transcript_path);
+        CREATE INDEX IF NOT EXISTS transcript_messages_time
+          ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
+      `);
+    }
     secureDatabaseFiles(filename);
     return db;
   } catch (error) {
@@ -277,26 +312,96 @@ function openWriterDatabase(): Database {
   }
 }
 
+/** Upgrade a legacy index and build its read accelerators outside the request thread. */
+export function prepareTranscriptSearchIndexInBackground(): void {
+  const filename = statePath("transcript-search.sqlite");
+  const db = openWriterDatabase();
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_vocab
+        USING fts5vocab(transcript_messages_fts, row);
+      UPDATE transcript_messages
+      SET sort_timestamp = COALESCE(timestamp,
+        (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
+      WHERE sort_timestamp IS NULL;
+      CREATE INDEX IF NOT EXISTS transcript_messages_search_hit
+        ON transcript_messages(id, speaker, body_hash, sort_timestamp, transcript_path);
+      CREATE INDEX IF NOT EXISTS transcript_messages_time
+        ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
+      CREATE INDEX IF NOT EXISTS transcript_messages_body_hash
+        ON transcript_messages(speaker, body_hash);
+    `);
+    secureDatabaseFiles(filename);
+  } finally {
+    db.close();
+  }
+}
+
 function openQueryDatabase(): Database {
   const filename = statePath("transcript-search.sqlite");
-  if (!fs.existsSync(filename)) return openWriterDatabase();
-  const Database = sqliteDatabase();
-  const probe = new Database(filename, { readonly: true, strict: true });
-  let needsMigration: boolean;
-  try {
-    needsMigration = schemaVersion(probe) < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !hasBodyHashColumn(probe);
-  } finally {
-    probe.close();
+  let stat: fs.Stats;
+  try { stat = fs.statSync(filename); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return openWriterDatabase();
+    throw error;
   }
-  if (needsMigration) openWriterDatabase().close();
+  const Database = sqliteDatabase();
   const db = new Database(filename, { readonly: true, strict: true });
   try {
     db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON; PRAGMA foreign_keys = ON;");
+    const identity = `${stat.dev}:${stat.ino}`;
+    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    const cached = searchSchemas.get(filename);
+    const metadata = cached?.identity === identity && cached.schema === schema ? cached : db.query<{ version: number; hit: number; vocabulary: number }, []>(`
+      SELECT user_version AS version,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit') AS hit,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary
+      FROM pragma_user_version
+    `).get()!;
+    if (metadata !== cached) {
+      if (searchSchemas.size >= 16) searchSchemas.delete(searchSchemas.keys().next().value!);
+      searchSchemas.set(filename, { ...metadata, identity, schema });
+    }
+    const currentVersion = metadata.version;
+    // Pre-v4 schemas need table reshaping before they can be read. Close the
+    // reader before that compatibility upgrade; v4 work stays off-thread.
+    if (currentVersion < 4) {
+      db.close();
+      openWriterDatabase().close();
+      return openQueryDatabase();
+    }
+    if (metadata.hit && metadata.vocabulary) readySearchDatabases.add(db);
+    if (currentVersion < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !metadata.hit || !metadata.vocabulary) scheduleSearchIndexBuild(filename);
     return db;
   } catch (error) {
     db.close();
     throw error;
   }
+}
+
+function scheduleSearchIndexBuild(filename: string): void {
+  if (scheduledSearchIndexes.has(filename)) return;
+  scheduledSearchIndexes.add(filename);
+  try {
+    const proc = Bun.spawn([process.execPath, transcriptSearchWorkerPath()], {
+      env: { ...process.env, LLV_STATE_DIR: path.dirname(filename) },
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
+    });
+    void proc.exited.then((code) => {
+      if (code !== 0) console.error(`[transcript-search] index worker exited with status ${code}; migration will retry on the next search`);
+    }, () => {
+      console.error("[transcript-search] index worker failed; migration will retry on the next search");
+    }).finally(() => scheduledSearchIndexes.delete(filename));
+    proc.unref();
+  } catch {
+    scheduledSearchIndexes.delete(filename);
+    console.error("[transcript-search] could not start index worker; migration will retry on the next search");
+  }
+}
+
+export function transcriptSearchWorkerPath(cwd = process.cwd()): string {
+  const bundled = path.join(cwd, ".next/server/transcript-search-index-worker.js");
+  return fs.existsSync(bundled) ? bundled : path.join(cwd, "src/lib/transcriptSearchIndex.worker.ts");
 }
 
 function secureDatabaseFiles(filename: string): void {
@@ -565,17 +670,21 @@ export async function indexTranscriptSources(
         try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
         throw error;
       }
+      // Release the write lock and yield between bounded FTS merge steps.
+      if (!failures.length) {
+        while (true) {
+          const before = db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
+          db.query("INSERT INTO transcript_messages_fts(transcript_messages_fts, rank) VALUES('merge', 256)").run();
+          const after = db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
+          if (after - before <= 1) break;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      }
     }
     return { filesRead, filesSkipped, messagesIndexed, failures };
   } finally {
     db.close();
   }
-}
-
-function ftsQuery(query: string): string | null {
-  const terms = query.trim().split(/\s+/).filter(Boolean);
-  if (!terms.length) return null;
-  return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
 }
 
 /* Cursors bind the query and filters, a high-water message ID, and the last
@@ -703,6 +812,7 @@ function pageItems(
   query: string,
   page: readonly CollapsedHit[],
   files: ReadonlyMap<string, TranscriptFileRow>,
+  tokens = 24,
 ): TranscriptSearchItem[] {
   if (!page.length) return [];
   const ids = page.map((group) => group.newest.id);
@@ -712,7 +822,7 @@ function pageItems(
      pass the filter. */
   const snippets = new Map<number, string>();
   const snippetRows = db.query(`
-    SELECT rowid, snippet(transcript_messages_fts, 0, '${SNIPPET_MATCH_OPEN}', '${SNIPPET_MATCH_CLOSE}', '…', 24)
+    SELECT rowid, snippet(transcript_messages_fts, 0, '${SNIPPET_MATCH_OPEN}', '${SNIPPET_MATCH_CLOSE}', '…', ${tokens})
     FROM transcript_messages_fts
     WHERE transcript_messages_fts MATCH ? AND +rowid IN (${ids.map(() => "?").join(", ")})
   `).values(query, ...ids) as Array<[number, string]>;
@@ -768,9 +878,13 @@ export function readTranscriptActivity(fromSec: number, toSec: number): Transcri
   try {
     db.exec("BEGIN");
     try {
+      const ready = readySearchDatabases.has(db);
+      const hasSortTimestamp = ready || db.query<{ name: string }, [string]>("SELECT name FROM pragma_table_info('transcript_messages') WHERE name = ?").get("sort_timestamp");
+      const activityTime = ready ? "m.sort_timestamp" : hasSortTimestamp ? "COALESCE(m.sort_timestamp, m.timestamp, f.mtime_ms / 1000.0)" : "COALESCE(m.timestamp, f.mtime_ms / 1000.0)";
       const values = db.query(`
-        SELECT id, speaker, transcript_path, timestamp FROM transcript_messages
-        WHERE sort_timestamp BETWEEN ? AND ? AND timestamp IS NOT NULL
+        SELECT m.id, m.speaker, m.transcript_path, m.timestamp FROM transcript_messages AS m
+        ${ready ? "" : "JOIN transcript_files AS f ON f.path = m.transcript_path"}
+        WHERE ${activityTime} BETWEEN ? AND ? AND m.timestamp IS NOT NULL
       `).values(fromSec, toSec) as Array<[number, TranscriptSpeaker, string, number]>;
       const rows: TranscriptActivityRow[] = [];
       const paths = new Set<string>();
@@ -802,31 +916,413 @@ export function readTranscriptActivity(fromSec: number, toSec: number): Transcri
  * cursor. Deleted or edited messages leave the result set; this is not an
  * archive of removed transcript content.
  */
-export function searchTranscripts(options: {
+export interface TranscriptSearchOptions {
   query: string;
   project?: string;
   /** Restrict to one side of the conversation; omitted searches both. */
   speaker?: TranscriptSpeaker;
   limit?: number;
   cursor?: string | null;
-}): TranscriptSearchResult {
+  order?: "newest" | "relevance";
+  /** Offline replay only: the HTTP/MCP surfaces never accept this fence. */
+  fence?: { timestamp: number; excludeTranscript: string };
+}
+
+interface RelevanceCursor {
+  version: 6;
+  scope: string;
+  throughId: number;
+  seen: string;
+  now: number;
+  units: QueryUnit[];
+  weights: number[];
+  ignored: string[];
+  /** During migration only a bounded subset is retrieved; coverage keeps all units. */
+  retrieve?: number[];
+}
+
+/** Delta varints keep a large traversal compact without retaining server state. */
+function encodeSeenFiles(ids: ReadonlySet<number>): string {
+  const bytes: number[] = [];
+  let previous = 0;
+  for (const id of [...ids].sort((a, b) => a - b)) {
+    let delta = id - previous;
+    previous = id;
+    do {
+      const byte = delta % 128;
+      delta = Math.floor(delta / 128);
+      bytes.push(byte + (delta ? 128 : 0));
+    } while (delta);
+  }
+  return deflateRawSync(Buffer.from(bytes)).toString("base64url");
+}
+
+function decodeSeenFiles(encoded: string): Set<number> {
+  const bytes = inflateRawSync(Buffer.from(encoded, "base64url"), { maxOutputLength: 128 * 1024 });
+  const seen = new Set<number>();
+  let previous = 0, delta = 0, scale = 1;
+  for (const byte of bytes) {
+    delta += (byte % 128) * scale;
+    if (byte < 128) {
+      const id = previous + delta;
+      if (!Number.isSafeInteger(id) || id <= previous) throw new InvalidTranscriptSearchCursorError();
+      seen.add(id); previous = id; delta = 0; scale = 1;
+    } else {
+      scale *= 128;
+      if (scale > Number.MAX_SAFE_INTEGER) throw new InvalidTranscriptSearchCursorError();
+    }
+  }
+  if (scale !== 1) throw new InvalidTranscriptSearchCursorError();
+  return seen;
+}
+
+function unitFrequency(db: Database): (term: string, prefix: boolean) => number {
+  const cache = new Map<string, number>();
+  const exact = db.query<{ n: number | null }, [string]>("SELECT doc AS n FROM transcript_messages_vocab WHERE term = ?");
+  const range = db.query<{ n: number | null }, [string, string]>("SELECT SUM(doc) AS n FROM transcript_messages_vocab WHERE term >= ? AND term < ?");
+  const tokenized = db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM transcript_messages_fts WHERE transcript_messages_fts MATCH ?");
+  return (term, prefix) => {
+    const key = term + (prefix ? "*" : "");
+    if (!cache.has(key)) {
+      let frequency = (prefix ? range.get(term, term + "\uffff") : exact.get(term))?.n ?? 0;
+      // unicode61 has case folds that JavaScript lowercasing does not share.
+      // Let FTS tokenize an absent vocabulary key before excluding the unit.
+      if (!frequency) frequency = tokenized.get(`"${term.replaceAll('"', '""')}"${prefix ? "*" : ""}`)?.n ?? 0;
+      cache.set(key, frequency);
+    }
+    return cache.get(key)!;
+  };
+}
+
+/** Count JSON escapes too, and keep Unicode scalar values intact. */
+function boundedRelevanceSnippet(snippet: string): string {
+  if (Buffer.byteLength(JSON.stringify(snippet)) <= RELEVANCE_SNIPPET_BYTES) return snippet;
+  const scalars = Array.from(snippet);
+  let low = 0, high = Math.min(scalars.length, RELEVANCE_SNIPPET_BYTES);
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(JSON.stringify(scalars.slice(0, mid).join("") + "…")) <= RELEVANCE_SNIPPET_BYTES) low = mid;
+    else high = mid - 1;
+  }
+  let text = scalars.slice(0, low).join("");
+  // Do not leave an unmatched highlight sentinel at the truncation boundary.
+  if (text.lastIndexOf(SNIPPET_MATCH_OPEN) > text.lastIndexOf(SNIPPET_MATCH_CLOSE)) {
+    text = text.slice(0, text.lastIndexOf(SNIPPET_MATCH_OPEN));
+  }
+  return text + "…";
+}
+
+/** Cursor JSON is caller input; only expressions built from literal units execute. */
+function validCursorUnit(unit: QueryUnit): boolean {
+  if (!unit || typeof unit.label !== "string" || typeof unit.phrase !== "boolean"
+    || !Array.isArray(unit.terms) || !unit.terms.length
+    || !unit.terms.every((term) => term && typeof term.term === "string"
+      && /^[\p{L}\p{N}\p{M}\p{Co}_#]+$/u.test(term.term) && typeof term.prefix === "boolean")) return false;
+  const quote = (term: string) => `"${term.replaceAll('"', '""')}"`;
+  if (unit.phrase) return unit.terms.every((term) => !term.prefix)
+    && unit.expression === quote(unit.terms.map((term) => term.term).join(" "));
+  const terms = unit.terms.map((term) => quote(term.term) + (term.prefix ? "*" : "")).join(" OR ");
+  return unit.expression === (unit.terms.length > 1 ? `(${terms})` : terms);
+}
+
+function relevanceSearch(
+  db: Database,
+  options: TranscriptSearchOptions,
+  stats: TranscriptCorpusStats,
+  projectScope?: ProjectScope,
+): TranscriptSearchResult {
+  const scope = cursorScope(options.query.trim() + "\0relevance", options.project, options.speaker);
+  let cursor: RelevanceCursor | undefined;
+  let seen = new Set<number>();
+  if (options.cursor) {
+    try {
+      cursor = JSON.parse(Buffer.from(options.cursor, "base64url").toString("utf8"));
+      if (!cursor || cursor.version !== 6 || cursor.scope !== scope
+        || !Number.isSafeInteger(cursor.throughId) || cursor.throughId < 0
+        || typeof cursor.seen !== "string" || cursor.seen.length > 64 * 1024
+        || !Number.isFinite(cursor.now) || !Array.isArray(cursor.units) || !Array.isArray(cursor.weights)
+        || cursor.units.length !== cursor.weights.length || !cursor.weights.every((n) => Number.isFinite(n) && n > 0)
+        || !Array.isArray(cursor.ignored) || !cursor.ignored.every((s) => typeof s === "string")
+        || !cursor.units.every(validCursorUnit)
+        || (cursor.retrieve !== undefined && (!Array.isArray(cursor.retrieve)
+          || !cursor.retrieve.every((i) => Number.isSafeInteger(i) && i >= 0 && i < cursor!.units.length)))) {
+        throw new InvalidTranscriptSearchCursorError();
+      }
+      seen = decodeSeenFiles(cursor.seen);
+    } catch { throw new InvalidTranscriptSearchCursorError(); }
+  }
+  const hasSequence = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_search_sequence'").get());
+  const throughId = cursor?.throughId ?? (hasSequence
+    ? db.query<{ last_id: number }, []>("SELECT last_id FROM transcript_search_sequence WHERE singleton = 1").get()!.last_id
+    : db.query<{ last_id: number }, []>("SELECT COALESCE(MAX(id), 0) AS last_id FROM transcript_messages").get()!.last_id);
+  const now = cursor?.now ?? options.fence?.timestamp ?? Date.now() / 1000;
+  const hasVocabulary = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transcript_messages_vocab'").get());
+  const frequency = hasVocabulary ? unitFrequency(db) : () => 0;
+  const raw = cursor?.units ?? queryUnits(options.query, hasVocabulary ? frequency : undefined, stats.messagesIndexed);
+  const ignored: string[] = cursor?.ignored ?? [];
+  let units = raw;
+  let weights = cursor?.weights ?? [];
+  let retrieve = cursor?.retrieve;
+  if (!cursor) {
+    const candidates = raw.filter((u) => !isFunctionWord(u));
+    if (!hasVocabulary) {
+      // Until the vocabulary builder finishes, use one likely-specific term
+      // so an ordinary first request does not scan the entire corpus for each
+      // word in a long prompt.
+      units = candidates;
+      const selected = candidates.slice().sort((a, b) => {
+        const aLength = a.terms.reduce((length, term) => Math.max(length, term.term.length), 0);
+        const bLength = b.terms.reduce((length, term) => Math.max(length, term.term.length), 0);
+        return bLength - aLength;
+      })[0];
+      retrieve = selected ? [units.indexOf(selected)] : [];
+      weights = units.map(() => 1);
+      ignored.push(...raw.filter((u) => !units.includes(u)).map((u) => u.label));
+    } else {
+      // A phrase's words may each be common while the atomic phrase is rare.
+      const phraseFrequency = db.query<{ n: number }, [string]>(
+        "SELECT COUNT(*) AS n FROM transcript_messages_fts WHERE transcript_messages_fts MATCH ?",
+      );
+      const counts = candidates.map((u) => Math.min(stats.messagesIndexed,
+        u.phrase ? phraseFrequency.get(u.expression)!.n
+          : u.terms.reduce((n, t) => n + frequency(t.term, t.prefix), 0)));
+      const indexed = candidates.map((_, i) => i).filter((i) => counts[i] > 0);
+      let kept = indexed.filter((i) => counts[i] <= stats.messagesIndexed * 0.05);
+      if (!kept.length && indexed.length) {
+        kept = [indexed.reduce((best, i) => counts[i] < counts[best] ? i : best)];
+      }
+      units = kept.map((i) => candidates[i]);
+      if (!units.length && !candidates.length && raw.length) units = [raw[0]];
+      ignored.push(...raw.filter((u) => !units.includes(u)).map((u) => u.label));
+      weights = units.map((u) => {
+        const i = candidates.indexOf(u);
+        const df = i >= 0 ? counts[i] : stats.messagesIndexed;
+        return Math.log(1 + (stats.messagesIndexed - df + 0.5) / (df + 0.5));
+      });
+    }
+  }
+  const interpretedAs = { units: units.map((u) => u.label), ignored };
+  if (!units.length) return { items: [], total: 0, strongTotal: 0, nextCursor: null, stats, order: "relevance", interpretedAs, ...(projectScope ? { projectScope } : {}) };
+  interface Message extends RankedHit { bodyHash: string; units: Set<number>; weight: number }
+  interface Conversation { path: string; messages: Map<number, Message>; units: Set<number>; newest: number; score: number; fragments: Message[] }
+  const conversations = new Map<string, Conversation>();
+  const hasSortTimestamp = Boolean(db.query<{ name: string }, [string]>("SELECT name FROM pragma_table_info('transcript_messages') WHERE name = ?").get("sort_timestamp"));
+  const timestampExpr = hasSortTimestamp
+    ? "COALESCE(m.sort_timestamp, m.timestamp, f.mtime_ms / 1000.0)"
+    : "COALESCE(m.timestamp, f.mtime_ms / 1000.0)";
+  const filters = `${options.speaker ? " AND m.speaker = ?" : ""}${options.project ? " AND f.project = ?" : ""}${options.fence ? ` AND ${timestampExpr} <= ? AND m.transcript_path != ?` : ""}`;
+  const rows = db.query(`
+    SELECT m.id, m.speaker, m.body_hash, ${timestampExpr}, m.transcript_path
+    FROM transcript_messages_fts JOIN transcript_messages m ON m.id = transcript_messages_fts.rowid
+    JOIN transcript_files f ON f.path = m.transcript_path
+    WHERE transcript_messages_fts MATCH ? AND m.id <= ?${filters}
+  `);
+  for (const [i, unit] of units.entries()) {
+    if (retrieve && !retrieve.includes(i)) continue;
+    const args: Array<string | number> = [unit.expression, throughId];
+    if (options.speaker) args.push(options.speaker);
+    if (options.project) args.push(options.project);
+    if (options.fence) args.push(options.fence.timestamp, options.fence.excludeTranscript);
+    for (const [id, speaker, bodyHash, timestamp, transcriptPath] of rows.values(...args) as HitRow[]) {
+      let conversation = conversations.get(transcriptPath);
+      if (!conversation) {
+        conversation = { path: transcriptPath, messages: new Map(), units: new Set(), newest: timestamp, score: 0, fragments: [] };
+        conversations.set(transcriptPath, conversation);
+      }
+      conversation.units.add(i);
+      conversation.newest = Math.max(conversation.newest, timestamp);
+      let message = conversation.messages.get(id);
+      if (!message) {
+        message = { id, speaker, bodyHash, timestamp, transcriptPath, units: new Set(), weight: 0 };
+        conversation.messages.set(id, message);
+      }
+      message.units.add(i);
+      message.weight += weights[i];
+    }
+  }
+  const files = transcriptFiles(db, new Set(conversations.keys()));
+  const sizeRows = cursor
+    ? db.query<{ path: string; messages_count: number }, [number]>(`
+      SELECT f.path, (SELECT COUNT(*) FROM transcript_messages m
+        WHERE m.transcript_path = f.path AND m.id <= ?) AS messages_count FROM transcript_files f
+    `).all(throughId)
+    : db.query<{ path: string; messages_count: number }, []>("SELECT path, messages_count FROM transcript_files").all();
+  const sizes = new Map(sizeRows.map((r) => [r.path, r.messages_count]));
+  const fileIds = new Map(db.query<{ path: string; id: number }, []>("SELECT path, rowid AS id FROM transcript_files").all().map((row) => [row.path, row.id]));
+  const weight = (found: Iterable<number>) => [...found].reduce((sum, i) => sum + weights[i], 0);
+  const sum = weight(units.keys());
+  for (const conversation of conversations.values()) {
+    const messages = [...conversation.messages.values()];
+    const best = messages.reduce((best, m) => Math.max(best, m.weight), 0);
+    const damp = 1 / (1 + 0.15 * Math.log10(Math.max(1, sizes.get(conversation.path) ?? 1)));
+    conversation.score = (weight(conversation.units) * damp + best) / (2 * sum)
+      * (1 + 0.6 * Math.exp(-Math.max(0, now - conversation.newest) / 86400 / 14));
+    const covered = new Set<number>();
+    for (let pick = 0; pick < 3; pick++) {
+      let selected: Message | undefined;
+      let gain = 0;
+      for (const message of messages) {
+        const added = weight([...message.units].filter((u) => !covered.has(u)));
+        if (added > gain || (added > 0 && added === gain && selected && newerFirst(message, selected) < 0)) {
+          selected = message; gain = added;
+        }
+      }
+      if (!selected) break;
+      conversation.fragments.push(selected);
+      for (const u of selected.units) covered.add(u);
+    }
+  }
+  const compare = (a: { score: number; newest: number; path: string }, b: { score: number; newest: number; path: string }) =>
+    b.score - a.score || b.newest - a.newest || a.path.localeCompare(b.path);
+  const ranked = [...conversations.values()].sort(compare);
+  const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 6)));
+  const expression = units.map((u) => u.expression).join(" OR ");
+  // Exact body copies need just one snippet signature. A single FTS scan
+  // computes the signatures of the remaining leads before grouping, so copies
+  // with different text outside the snippet fold across page boundaries too.
+  const leads = new Map<string, Message>();
+  for (const conversation of ranked) {
+    const lead = conversation.fragments[0]!;
+    leads.set(`${lead.speaker}\0${lead.bodyHash}`, lead);
+  }
+  const signatures = new Map<number, string>();
+  if (leads.size) {
+    const rows = db.query(`SELECT rowid,
+      snippet(transcript_messages_fts, 0, '${SNIPPET_MATCH_OPEN}', '${SNIPPET_MATCH_CLOSE}', '…', 16)
+      FROM transcript_messages_fts WHERE transcript_messages_fts MATCH ?
+      AND +rowid IN (SELECT value FROM json_each(?))
+    `).values(expression, JSON.stringify([...leads.values()].map((lead) => lead.id))) as Array<[number, string]>;
+    for (const [id, snippet] of rows) signatures.set(id, snippet);
+  }
+  const groups = new Map<string, Conversation[]>();
+  for (const conversation of ranked) {
+    const lead = conversation.fragments[0]!;
+    const representative = leads.get(`${lead.speaker}\0${lead.bodyHash}`)!;
+    const key = `${lead.speaker}\0${signatures.get(representative.id)}`;
+    const group = groups.get(key);
+    if (group) group.push(conversation);
+    else groups.set(key, [conversation]);
+  }
+  // A file keeps its rowid through indexing upserts. Traversing by consumed
+  // identities survives score changes when unrelated messages are pruned.
+  const groupRows = [...groups.values()].map((group) => {
+    const unvisited = group.filter((conversation) => !seen.has(fileIds.get(conversation.path)!));
+    return unvisited.length ? [...unvisited, ...group.filter((conversation) => seen.has(fileIds.get(conversation.path)!))] : [];
+  }).filter((group) => group.length);
+  const pageGroups = groupRows.slice(0, limit);
+  // Snippet work stays bounded by this page and its at-most-three fragments.
+  const messages = pageGroups.flatMap((group) => group[0]!.fragments);
+  const snippets = pageItems(db, expression, messages.map((m) => ({ newest: m, duplicateCount: 1 })), files, 16);
+  const byId = new Map(messages.map((m, i) => [m.id, snippets[i]]));
+  const items: TranscriptSearchItem[] = [];
+  for (const group of pageGroups) {
+    const conversation = group[0]!;
+    const lead = byId.get(conversation.fragments[0].id)!;
+    const item: TranscriptSearchItem = {
+      ...lead,
+      snippet: boundedRelevanceSnippet(lead.snippet),
+      duplicateCount: group.length,
+      matched: [...conversation.units].sort((a, b) => a - b).map((i) => units[i].label),
+      missing: units.filter((_, i) => !conversation.units.has(i)).map((u) => u.label),
+      fragments: conversation.fragments.slice(1).map((m) => {
+        const { snippet, speaker, timestamp, byteOffset, lineNumber } = byId.get(m.id)!;
+        return { snippet: boundedRelevanceSnippet(snippet), speaker, timestamp, byteOffset, lineNumber };
+      }),
+      alsoIn: { count: group.length - 1, transcriptPaths: group.slice(1, 4).map((copy) => copy.path) },
+    };
+    items.push(item);
+  }
+  const strongTotal = ranked.filter((c) => c.units.size >= Math.ceil(units.length * 0.6)).length;
+  const page: TranscriptSearchResult = {
+    items, total: conversations.size, strongTotal, stats, order: "relevance", interpretedAs,
+    ...(projectScope ? { projectScope } : {}), nextCursor: null,
+  };
+  const nextCursor = () => {
+    if (!items.length || items.length === groupRows.length) return null;
+    const visited = new Set(seen);
+    for (const group of pageGroups.slice(0, items.length)) {
+      for (const conversation of group) visited.add(fileIds.get(conversation.path)!);
+    }
+    return Buffer.from(JSON.stringify({ version: 6, scope, throughId, seen: encodeSeenFiles(visited),
+      now, units, weights, ignored, retrieve } satisfies RelevanceCursor)).toString("base64url");
+  };
+  page.nextCursor = nextCursor();
+  // Reserve 610 bytes per item for the route's title (100 UTF-16 units, each
+  // at most six JSON bytes). Page by bytes as well as conversation count.
+  // The cursor moves
+  // only over returned groups, so trimming the tail never loses a result.
+  while (Buffer.byteLength(JSON.stringify(page)) + items.length * 610 > TRANSCRIPT_RELEVANCE_PAGE_BYTES) {
+    if (items.length <= 1) throw new TranscriptSearchPageTooLargeError();
+    items.pop();
+    page.nextCursor = nextCursor();
+  }
+  return page;
+}
+
+export function searchTranscripts(options: TranscriptSearchOptions): TranscriptSearchResult {
   const db = openQueryDatabase();
   try {
     db.exec("BEGIN");
     try {
-      const query = ftsQuery(options.query);
       const stats = corpusStats(db);
-      if (!query) return { items: [], nextCursor: null, total: 0, stats };
+      let projectScope: ProjectScope | undefined;
+      if (options.project) {
+        projectScope = resolveProjectScope(options.project, new Set(db.query<{ project: string }, []>("SELECT DISTINCT project FROM transcript_files").all().map((r) => r.project)));
+        options = { ...options, project: projectScope.resolved ?? undefined };
+      }
+      if (options.order === "relevance") {
+        const page = relevanceSearch(db, options, stats, projectScope);
+        if (Buffer.byteLength(JSON.stringify(page)) > TRANSCRIPT_RELEVANCE_PAGE_BYTES) throw new TranscriptSearchPageTooLargeError();
+        return page;
+      }
+      const units = queryUnits(options.query);
+      const originalQuery = units.map((u) => u.expression).join(" AND ");
+      if (!originalQuery) return { items: [], nextCursor: null, total: 0, stats, order: "newest", ...(projectScope ? { projectScope } : {}) };
       const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
-      const scope = cursorScope(query, options.project, options.speaker);
+      const scope = cursorScope(originalQuery, options.project, options.speaker);
       const cursor = decodeCursor(options.cursor, scope);
-      const throughId = cursor?.throughId ?? db.query<{ last_id: number }, []>(
-        "SELECT last_id FROM transcript_search_sequence WHERE singleton = 1",
-      ).get()!.last_id;
+      const ready = readySearchDatabases.has(db);
+      const hasSequence = ready || Boolean(db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_search_sequence'").get());
+      const throughId = cursor?.throughId ?? (hasSequence
+        ? db.query<{ last_id: number }, []>("SELECT last_id FROM transcript_search_sequence WHERE singleton = 1").get()!.last_id
+        : db.query<{ last_id: number }, []>("SELECT COALESCE(MAX(id), 0) AS last_id FROM transcript_messages").get()!.last_id);
+      // FTS5 constructs a prefix doclist even when just one dictionary word
+      // matches. Small exact unions preserve prefix semantics at lower cost.
+      // Scope stays bound to the original units as the vocabulary grows.
+      // The high-water ID changes whenever indexing adds vocabulary. Deletes
+      // can leave harmless extra exact terms in the union, but cannot add a
+      // missing term. Bound retained expressions across query/state roots.
+      const metadata = searchSchemas.get(db.filename);
+      const expressionKey = ready && originalQuery.length <= 4096
+        ? JSON.stringify([db.filename, metadata?.identity, metadata?.schema, throughId, originalQuery]) : undefined;
+      const cachedExpression = expressionKey ? newestExpressions.get(expressionKey) : undefined;
+      const expansion = ready && !cachedExpression ? db.query<{ term: string }, [string, string]>(
+        "SELECT term FROM transcript_messages_vocab WHERE term >= ? AND term < ? LIMIT 17",
+      ) : undefined;
+      const query = cachedExpression ?? (expansion ? units.map((unit) => {
+        if (unit.phrase) return unit.expression;
+        const terms = unit.terms.flatMap((term) => {
+          if (!term.prefix) return [`"${term.term.replaceAll('"', '""')}"`];
+          const words = expansion.all(term.term, term.term + "\uffff");
+          if (!words.length || words.length > 16) return [`"${term.term.replaceAll('"', '""')}"*`];
+          return words.map(({ term }) => `"${term.replaceAll('"', '""')}"`);
+        });
+        return `(${terms.join(" OR ")})`;
+      }).join(" AND ") : originalQuery);
+      if (expressionKey && !cachedExpression && query.length <= 8192) {
+        if (newestExpressions.size >= 128) newestExpressions.delete(newestExpressions.keys().next().value!);
+        newestExpressions.set(expressionKey, query);
+      }
+      const hasSortTimestamp = ready || Boolean(db.query<{ name: string }, [string]>("SELECT name FROM pragma_table_info('transcript_messages') WHERE name = ?").get("sort_timestamp"));
+      const timestampExpr = ready ? "m.sort_timestamp" : hasSortTimestamp
+        ? "COALESCE(m.sort_timestamp, m.timestamp, f.mtime_ms / 1000.0)"
+        : "COALESCE(m.timestamp, f.mtime_ms / 1000.0)";
       const hits = db.query(`
-        SELECT transcript_messages_fts.rowid, m.speaker, m.body_hash, m.sort_timestamp, m.transcript_path
+        SELECT transcript_messages_fts.rowid, m.speaker, m.body_hash,
+          ${timestampExpr}, m.transcript_path
         FROM transcript_messages_fts
         JOIN transcript_messages AS m ON m.id = transcript_messages_fts.rowid
+        ${ready ? "" : "JOIN transcript_files AS f ON f.path = m.transcript_path"}
         WHERE transcript_messages_fts MATCH ? AND m.id <= ?${options.speaker ? " AND m.speaker = ?" : ""}
       `).values(...(options.speaker ? [query, throughId, options.speaker] : [query, throughId])) as HitRow[];
       const paths = new Set<string>();
@@ -857,6 +1353,8 @@ export function searchTranscripts(options: {
         nextCursor: ranked.length > limit ? encodeCursor(page.at(-1)!.newest, throughId, scope) : null,
         total,
         stats,
+        order: "newest",
+        ...(projectScope ? { projectScope } : {}),
       };
     } finally {
       db.exec("COMMIT");
