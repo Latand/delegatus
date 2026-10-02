@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,8 @@ type Step = {
   uses?: string;
   run?: string;
   if?: string;
+  "working-directory"?: string;
+  "timeout-minutes"?: number;
   with?: Record<string, string>;
 };
 type Job = { env: Record<string, string>; steps: Step[] };
@@ -23,6 +25,33 @@ const workflows = names.map((name) => {
 });
 const jobs = workflows.map((workflow, index) => workflow.jobs[names[index]!]!);
 const step = (job: Job, name: string) => job.steps.find((entry) => entry.name === name)!;
+
+test("candidate privacy tests run last with a failing time budget", () => {
+  const job = jobs[0]!;
+  const trusted = step(job, "Verify privacy gate behavior");
+  expect(trusted["working-directory"]).toBe("trusted");
+  expect(trusted.run).toBe("bun test scripts/privacy-*.test.ts");
+  const candidate = step(job, "Verify candidate privacy gate behavior within budget");
+  expect(job.steps.at(-1)).toBe(candidate);
+  expect(candidate["working-directory"]).toBe("candidate");
+  expect(candidate["timeout-minutes"]).toBe(2);
+  expect(candidate.run).toContain("timeout --kill-after=5s 90s bun test scripts/privacy-*.test.ts");
+  const root = mkdtempSync(join(tmpdir(), "privacy-candidate-budget-"));
+  try {
+    // Drive the actual shell with a short budget and a stalled test process.
+    mkdirSync(join(root, "trusted/node_modules"), { recursive: true });
+    mkdirSync(join(root, "candidate"));
+    writeFileSync(join(root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("90s", "0.1s")], {
+      cwd: join(root, "candidate"),
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(124);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // Execute the actual inline workflow shell. The sudo double records apt
 // invocations and refuses a warm install unless network use is disabled.

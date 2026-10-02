@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -369,26 +369,31 @@ function runGateArguments(arguments_: string[], environment: Record<string, stri
   });
 }
 
-async function runGateWithDeadline(arguments_: string[], environment: Record<string, string>) {
-  const started = performance.now();
-  const child = Bun.spawn({
-    cmd: [process.execPath, gate, ...arguments_], cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, ...environment, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe",
-  });
-  // Keep pathological input bounded while allowing concurrent gate workers.
-  const timeout = setTimeout(() => child.kill("SIGTERM"), 10_000);
-  try {
-    const exitCode = await child.exited;
-    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { elapsed: performance.now() - started, exitCode, stdout, stderr };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 function runGate(paths: string[], environment: Record<string, string> = {}) {
   return runGateArguments(["--paths", ...paths], environment);
 }
+
+test("prepared text keeps known-value configurations independent", async () => {
+  const environment = {
+    LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+    LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "", LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+  };
+  const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
+  const texts = ["freshwater", "x".repeat(100_000) + " freshwater"];
+  try {
+    for (const [index, value] of ["freshwater", "saltwater", "freshwater"].entries()) {
+      Object.assign(process.env, environment, { LLV_PRIVACY_KNOWN_VALUES: value });
+      const modulePath = `${gate}?independent-preparation=${index}`;
+      const scanner: typeof import("./privacy-publication-gate") = await import(modulePath);
+      for (const text of texts) expect(scanner.sensitiveClasses(text).has("known_value")).toBe(value === "freshwater");
+    }
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 function runGit(directory: string, arguments_: string[]): void {
   const result = Bun.spawnSync({ cmd: ["git", ...arguments_], cwd: directory, stderr: "pipe", stdout: "pipe" });
@@ -1367,7 +1372,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
   // The relay-value matrix spawns the gate per case and does not finish within
   // the required check's budget; it runs on demand until it is batched.
-  describe.skipIf(process.env.LLV_PRIVACY_RELAY_MATRIX !== "1")("operator-approved public relay values", () => {
+  describe("operator-approved public relay values", () => {
     // Keep sanctioned strings out of publication input for the trusted gate.
     const relayLabel = "chatmoderator";
     const relayZone = "botfather";
@@ -1496,6 +1501,47 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         ...["&amp;#160;", "%26#160;", String.raw`\u0026#160;`].flatMap((prefix, encoding) => [
           { name: `raw encoded hash call ${form} ${encoding}`, text: `${prefix}f /* " */ ("${value}")`, pass: false },
           { name: `raw encoded hash index ${form} ${encoding}`, text: `${prefix}x /* ${tick} */ ["${value}"]`, pass: false },
+        ]),
+      ]),
+      ...[host, origin, discovery].flatMap((value, form) => [
+        ...["%20", "%09", "&#32;", "&#x09;", String.raw`\u0020`, String.raw`\u0009`, "&amp;#32;"].flatMap((gap, encoding) => [
+          { name: `raw encoded call trivia regression ${form} ${encoding}`, text: `\u200bf${gap} /* " */ ("${value}")`, pass: false },
+          { name: `raw encoded index trivia regression ${form} ${encoding}`, text: `\u200bx${gap} /* ${tick} */ ["${value}"]`, pass: false },
+        ]),
+        ...["f", "helpers.tag", "(f)", "x[0]"].map((tag, kind) => ({
+          name: `review tagged template regression ${form} ${kind}`, text: `${tag}${tick}${value}${tick}`, pass: false,
+        })),
+        ...["/[)]/", "/[}]/", '/"/', "/`/", "/\\)/"].flatMap((regex, kind) => [
+          { name: `review regex delimiter prefix regression ${form} ${kind}`, text: `"other." + f(${regex}, "${value}")`, pass: false },
+          { name: `review regex delimiter suffix regression ${form} ${kind}`, text: `f("${value}", ${regex}) + "/private"`, pass: false },
+        ]),
+        ...["1 + /[)]/", "() => /[)]/", "function(){return /[)]/}", "typeof /[)]/", "/*c*/ /[)]/", "/*c*/ /)/", String.raw`/*c*/ /\)/`, String.raw`()=>{return /*c*/ /\)/}`, "()=>{return /*c*/ /[)]/}", "(()=>{if(x) /[)]/; return 0;})()", "(()=>{if(x){} /[)]/; return 0;})()"].map((operand, kind) => ({
+          name: `review expression regex ownership regression ${form} ${kind}`, text: `"other." + f(${operand}, "${value}")`, pass: false,
+        })),
+        ...["{/[)]/", "{x:/[)]/", "switch(x){default: /[)]/"].map((operand, kind) => ({
+          name: `raw call suffix unfinished regex wrapper regression ${form} ${kind}`, text: `f("${value}", ${operand}) + "/private"`, pass: false,
+        })),
+        ...["[/*)]", "[//)]", "[()]*", String.raw`[\"()]`].flatMap((pattern, kind) => [
+          { name: `review control regex suffix regression ${form} ${kind}`, text: `f("${value}", (()=>{if(x) /${pattern}/; return 0;})()) + "/private"`, pass: false },
+          { name: `review control block regex suffix regression ${form} ${kind}`, text: `f("${value}", (()=>{if(x){} /${pattern}/; return 0;})()) + "/private"`, pass: false },
+        ]),
+        ...["/*c*/ /x)/", "/*c*/ /)/"].map((operand, kind) => ({
+          name: `review malformed regex suffix regression ${form} ${kind}`, text: `f("${value}", ${operand}) + "/private"`, pass: false,
+        })),
+        ...["return", "typeof", "await", "throw", "in", "instanceof"].flatMap((property, kind) => ["x . ", "x./*c*/", "x.//c\n", "x.\u00a0"].flatMap((prefix, trivia) => [
+          { name: `review property division suffix regression ${form} ${kind} ${trivia}`, text: `f("${value}", ${prefix}${property} / 2) + "/private"`, pass: false },
+          { name: `review standalone property division regression ${form} ${kind} ${trivia}`, text: `f("${value}", ${prefix}${property} / 2);`, pass: true },
+        ])),
+        ...["1 / 2", "x / y", "x /*c*/ / y", "x++ / 2", "x-- / 2", "({x:1}) / 2", "x.return / 2"].map((operand, kind) => ({
+          name: `review standalone division regression ${form} ${kind}`, text: `f("${value}", ${operand});`, pass: true,
+        })),
+        { name: `review unrelated division regression ${form}`, text: `function relay(){const endpoint="${value}"; return 1 / 2;}`, pass: true },
+        ...["1 / 2", "x / y", "x /*c*/ / y", "x++ / 2", "x-- / 2", "({x:1}) / 2", "{x:1} / 2", "x.return / 2"].map((operand, kind) => ({
+          name: `review division ownership regression ${form} ${kind}`, text: `f("${value}", ${operand}) + "/private"`, pass: false,
+        })),
+        ...[")", "]", "}"].flatMap((close, kind) => [
+          { name: `review unmatched close prefix regression ${form} ${kind}`, text: `"other." + ${close}("${value}")`, pass: false },
+          { name: `review unmatched close suffix regression ${form} ${kind}`, text: `("${value}")${close}/private`, pass: false },
         ]),
       ]),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
@@ -1965,149 +2011,140 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }
       return environment;
     }
-    for (const source of sources) {
-      for (const [name, fragment] of [
+    const boundedCases = [
+      ...[
         ["block comments", "/* ".repeat(200_000)],
-        ["templates", String.fromCharCode(96) + String.fromCharCode(92, 96).repeat(200_000)],
+        ["templates", tick + String.fromCharCode(92, 96).repeat(200_000)],
         ["double quotes", String.fromCharCode(34) + String.fromCharCode(92, 34).repeat(200_000)],
         ["single quotes", String.fromCharCode(39) + String.fromCharCode(92, 39).repeat(200_000)],
-      ]) test(`${source}: unclosed ${name} stay bounded and fail closed`, async () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "unclosed.ts");
-        writeFileSync(publication, `${fragment} ${host}`);
-        const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.elapsed).toBeLessThan(10_000);
-        expect(result.exitCode).toBe(1);
-        expect(result.stdout).toContain("known_value:");
-        expect(result.stderr).toBe("");
-      }, 30_000);
-      test(`${source}: long identifiers without schemes stay bounded`, async () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "identifier.ts");
-        writeFileSync(publication, `${"a".repeat(200_000)},"${host}"`);
-        const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.elapsed).toBeLessThan(10_000);
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout).toBe("PRIVACY GATE: PASS\n");
-        expect(result.stderr).toBe("");
-      }, 30_000);
-      test(`${source}: repeated type declarations stay bounded`, async () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "declarations.ts");
-        writeFileSync(publication, `${"const a: ".repeat(30_000)}"${host}"`);
-        const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.elapsed).toBeLessThan(10_000);
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout).toBe("PRIVACY GATE: PASS\n");
-        expect(result.stderr).toBe("");
-      }, 30_000);
-      test(`${source}: large unquoted tokens stay bounded`, () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "unquoted.ts");
-        writeFileSync(publication, `(${host})`.repeat(4000));
-        const started = performance.now();
-        const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(performance.now() - started).toBeLessThan(3000);
-        expect(result.exitCode).toBe(1);
-        expect(result.stdout.toString()).toContain("known_value:");
-        expect(result.stderr.toString()).toBe("");
-      }, 30_000);
-      test(`${source}: large chained calls stay bounded`, () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "chained.ts");
-        writeFileSync(publication, `relay${`("${host}")`.repeat(100_000)};`);
-        const started = performance.now();
-        const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
-        // The merged strict email-unit scanner adds complete source views. Both
-        // baseline and candidate take about three seconds at this size; retain
-        // a bounded check with room for concurrent gate workers.
-        expect(performance.now() - started).toBeLessThan(10_000);
-        // A following call opener is outside the positive closing boundary.
-        expect(result.exitCode).toBe(1);
-        expect(result.stdout.toString()).toContain("known_value:");
-        expect(result.stderr.toString()).toBe("");
-      }, 30_000);
-      test(`${source}: large quoted JSON stays bounded`, () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "repeated.json");
-        writeFileSync(publication, JSON.stringify(Array(10_000).fill(host)));
-        const environment = configuration(directory, source);
-        const started = performance.now();
-        const result = runGateArguments(["--require-known-values", "--paths", publication], environment);
-        expect(performance.now() - started).toBeLessThan(3000);
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
-        expect(result.stderr.toString()).toBe("");
-      }, 15_000);
-      test(`${source}: inspects gate and test source without marker collisions`, () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const result = runGateArguments(["--require-known-values", "--paths", gate, import.meta.path], configuration(directory, source));
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
-        expect(result.stderr.toString()).toBe("");
+      ].map(([name, fragment]) => ({ name: `unclosed ${name}`, text: `${fragment} ${host}`, pass: false, budget: 10_000 })),
+      ...["/private", "", ";"].map((suffix, index) => ({ name: `nested closing delimiters ${index}`, text: "(".repeat(200_000) + `"${host}"` + ")".repeat(200_000) + suffix, pass: false, budget: 10_000 })),
+      { name: "unclosed regex classes", text: `${"/[".repeat(100_000)} "${host}"`, pass: false, budget: 10_000 },
+      { name: "long identifiers", text: `${"a".repeat(200_000)},"${host}"`, pass: true, budget: 10_000 },
+      { name: "repeated declarations", text: `${"const a: ".repeat(30_000)}"${host}"`, pass: true, budget: 10_000 },
+      { name: "large unquoted tokens", text: `(${host})`.repeat(4000), pass: false, budget: 3000 },
+      { name: "large chained calls", text: `relay${`("${host}")`.repeat(100_000)};`, pass: false, budget: 10_000 },
+      { name: "large quoted JSON", text: JSON.stringify(Array(10_000).fill(host)), pass: true, budget: 3000 },
+    ];
+    for (const specimen of boundedCases) test(`${specimen.name}: all sources stay bounded`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+      temporaryDirectories.push(directory);
+      const publication = join(directory, "bounded.ts");
+      writeFileSync(publication, specimen.text);
+      const batches = sources.map((source, index) => {
+        const root = join(directory, `source-${index}`);
+        mkdirSync(join(root, ".git"), { recursive: true });
+        return { source, environment: configuration(root, source) };
       });
-      for (const channel of ["metadata", "OCR"]) {
-        for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "percent host"].includes(c.name))) {
-          test(`${source}: ${channel} ${specimen.name}`, () => {
-            const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-            temporaryDirectories.push(directory);
-            mkdirSync(join(directory, ".git"));
-            const publication = join(directory, "publication.png");
-            writeFileSync(publication, pngWithMetadata(channel === "metadata" ? specimen.text : "Synthetic fixture"));
-            const result = runGate([publication], {
-              ...configuration(directory, source),
-              ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
-              OCR_TEXT: channel === "OCR" ? specimen.text : "",
-            });
-            expect(result.exitCode).toBe(1); // The fixture intentionally has no provenance.
-            expect(result.stdout.toString().includes("known_value:")).toBe(channel === "metadata" || !specimen.pass);
-            expect(result.stdout.toString()).toContain("provenance_missing:");
-            expect(result.stdout.toString()).not.toContain(domain);
-            expect(result.stderr.toString()).toBe("");
-          });
+      // One isolated child per pathological input. Each child loads
+      // every source independently and reports timings/findings per source.
+      const child = Bun.spawn([process.execPath, "--eval", `
+        const request = JSON.parse(await Bun.stdin.text());
+        const results = [];
+        for (const [index, batch] of request.batches.entries()) {
+          Object.assign(process.env, batch.environment);
+          const scanner = await import(request.gate + "?bounded=" + index);
+          const started = performance.now();
+          const findings = scanner.inspectPaths([request.publication], false, true);
+          results.push({ source: batch.source, elapsed: performance.now() - started,
+            findings: [...findings.keys()], report: scanner.formatPrivacyReport(findings) });
         }
+        process.stdout.write(JSON.stringify(results));
+      `], { stdin: Buffer.from(JSON.stringify({ gate, publication, batches })), stdout: "pipe", stderr: "pipe" });
+      const timeout = setTimeout(() => child.kill("SIGKILL"), specimen.budget * sources.length);
+      try {
+        const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect(code).toBe(0);
+        expect(stderr).toBe("");
+        const results: { source: string; elapsed: number; findings: string[]; report: string }[] = JSON.parse(stdout);
+        expect(results.map((result) => result.source)).toEqual(sources);
+        for (const result of results) {
+          expect(result.elapsed, result.source).toBeLessThan(specimen.budget);
+          expect(result.findings.length === 0, result.source).toBe(specimen.pass);
+          expect(result.findings.includes("known_value"), result.source).toBe(!specimen.pass);
+          expect(result.report).not.toContain(domain);
+        }
+      } finally {
+        clearTimeout(timeout);
+        // This PID belongs to this test. Reap it even if a read/assertion fails.
+        if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
       }
-      test(`${source}: generic credential detection retains approved text`, () => {
+    }, 100_000);
+    for (const source of sources) {
+      test(`${source}: file, commit and merge-identity batches assert every specimen`, async () => {
         const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
         temporaryDirectories.push(directory);
         mkdirSync(join(directory, ".git"));
-        const publication = join(directory, "publication.ts");
-        writeFileSync(publication, `password="${origin}"`);
-        const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.exitCode).toBe(1);
-        expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
-        expect(result.stderr.toString()).toBe("");
-      });
-      for (const specimen of cases) {
-        test(`${source}: ${specimen.name}`, () => {
-          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-          temporaryDirectories.push(directory);
-          mkdirSync(join(directory, ".git"));
-          const extension = specimen.name.includes("JSON") ? ".json" : specimen.name.includes("shell") ? ".sh" : specimen.name.includes("Python") ? ".py" : specimen.name === "test code" ? ".test.ts" : ".ts";
-          const publication = join(directory, `publication${extension}`);
-          writeFileSync(publication, specimen.text);
-          const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
-          expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
-          expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
-          expect(result.stdout.toString()).not.toContain(domain);
-          expect(result.stderr.toString()).toBe("");
-        });
-      }
-      for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "base-domain email",
+        const environment = configuration(directory, source);
+        const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
+        try {
+          Object.assign(process.env, environment);
+          // Each source gets its own module instance: known values are loaded at
+          // import time. Restore the environment before leaving this batch.
+          const modulePath = `${gate}?relay-source=${encodeURIComponent(source)}`;
+          const scanner: typeof import("./privacy-publication-gate") = await import(modulePath);
+          // Inspect the complete source bytes once per source configuration.
+          // File/line attribution has dedicated CLI regressions elsewhere.
+          const sourceFindings = scanner.inspectPaths([gate, import.meta.path], false, true, directory);
+          expect(scanner.formatPrivacyReport(sourceFindings)).toBe("PRIVACY GATE: PASS\n");
+          const credentialPath = join(directory, "credential.ts");
+          writeFileSync(credentialPath, `password="${origin}"`);
+          expect(scanner.formatPrivacyReport(scanner.inspectPaths([credentialPath], false, true)))
+            .toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
+          const toolEnvironment = installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"');
+          const savedPath = process.env.PATH;
+          const savedOcr = process.env.OCR_TEXT;
+          const which = Bun.which.bind(Bun);
+          const toolLookup = spyOn(Bun, "which").mockImplementation((command, options) =>
+            command === "tesseract" ? join(directory, "tesseract") : which(command, options));
+          try {
+            Object.assign(process.env, toolEnvironment);
+            for (const channel of ["metadata", "OCR"]) {
+              for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "percent host"].includes(c.name))) {
+                const publication = join(directory, "publication.png");
+                writeFileSync(publication, pngWithMetadata(channel === "metadata" ? specimen.text : "Synthetic fixture"));
+                process.env.OCR_TEXT = channel === "OCR" ? specimen.text : "";
+                const findings = scanner.inspectPaths([publication], false, false);
+                expect(findings.has("known_value"), `${channel}: ${specimen.name}: ${scanner.formatPrivacyReport(findings)}`).toBe(channel === "metadata" || !specimen.pass);
+                expect(findings.has("provenance_missing")).toBe(true);
+                expect(scanner.formatPrivacyReport(findings)).not.toContain(domain);
+              }
+            }
+          } finally {
+            toolLookup.mockRestore();
+            if (savedPath === undefined) delete process.env.PATH; else process.env.PATH = savedPath;
+            if (savedOcr === undefined) delete process.env.OCR_TEXT; else process.env.OCR_TEXT = savedOcr;
+          }
+          const publications = cases.map((specimen, index) => {
+            const extension = specimen.name.includes("JSON") ? ".json" : specimen.name.includes("shell") ? ".sh" : specimen.name.includes("Python") ? ".py" : specimen.name === "test code" ? ".test.ts" : ".ts";
+            const filename = `case-${index}${extension}`;
+            const path = join(directory, filename);
+            writeFileSync(path, specimen.text);
+            return { path, digest: createHash("sha256").update(filename).digest("hex") };
+          });
+          const fileNotices: string[] = [];
+          const fileFindings = scanner.inspectPaths(publications.map((publication) => publication.path), false, true, directory, undefined, fileNotices);
+          const attributed = new Set(fileNotices.map((notice) => `${notice.split(" ")[0].split(":")[1]} ${notice.split(" ")[1]}`));
+          // Configuration/path failures cannot silently escape case mapping.
+          expect([...fileFindings.values()].reduce((sum, count) => sum + count, 0)).toBe(attributed.size);
+          const reportedFiles = new Set(fileNotices.map((notice) => notice.split(" ")[0].split(":")[1]));
+          const knownFiles = new Set(fileNotices.filter((notice) => notice.endsWith(" known_value")).map((notice) => notice.split(" ")[0].split(":")[1]));
+          const fileReport = scanner.formatPrivacyReport(fileFindings, fileNotices);
+          expect(fileReport).not.toContain(domain);
+          const caseNotices = new Map<string, string[]>();
+          for (const notice of fileNotices) {
+            const digest = notice.split(" ")[0].split(":")[1];
+            const notices = caseNotices.get(digest) ?? [];
+            notices.push(notice);
+            caseNotices.set(digest, notices);
+          }
+          for (const [index, specimen] of cases.entries()) {
+            const digest = publications[index].digest;
+            expect(reportedFiles.has(digest), specimen.name).toBe(!specimen.pass);
+            expect(knownFiles.has(digest), specimen.name).toBe(!specimen.pass);
+            expect((caseNotices.get(digest) ?? []).join("\n")).not.toContain(domain);
+          }
+          const identityCases = cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "base-domain email",
         "review shell bare prefix", "review shell bare suffix", "review shell port suffix"].includes(c.name)
         || c.name.startsWith("review Unicode zero-width shell")
         || c.name.startsWith("review Unicode NFKC shell")
@@ -2120,38 +2157,45 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         || c.name.startsWith("raw encoded ")
         || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
         || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
-        || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {
-        test(`${source}: merge identity ${specimen.name}`, () => {
-          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-          temporaryDirectories.push(directory);
-          runGit(directory, ["init", "--quiet"]);
-          runGit(directory, ["config", "user.name", "Fixture Tool"]);
-          runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
-          runGit(directory, ["commit", "--allow-empty", "-m", "base"]);
-          runGit(directory, ["-c", `user.name=${specimen.text}`, "commit", "--allow-empty", "-m", "fixture"]);
-          const result = runGateArguments(["--base", "HEAD~1", "--require-known-values", "--check-commits"], configuration(directory, source), directory);
-          expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
-          expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
-          expect(result.stdout.toString()).not.toContain(domain);
-          expect(result.stderr.toString()).toBe("");
-        });
-      }
-      for (const specimen of cases.filter((c) => !c.text.includes("\0") && (["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || ((c.name.startsWith("review ") || c.name.startsWith("raw ")) && c.name !== "review metadata boundary")))) {
-        test(`${source}: commit ${specimen.name}`, () => {
-          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-          temporaryDirectories.push(directory);
-          runGit(directory, ["init", "--quiet"]);
-          runGit(directory, ["config", "user.name", "Fixture Tool"]);
-          runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
-          runGit(directory, ["commit", "--allow-empty", "-m", "base"]);
-          runGit(directory, ["commit", "--allow-empty", "-m", specimen.text]);
-          const result = runGateArguments(["--base", "HEAD~1", "--require-known-values", "--check-commits"], configuration(directory, source), directory);
-          expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
-          expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
-          expect(result.stdout.toString()).not.toContain(domain);
-          expect(result.stderr.toString()).toBe("");
-        });
-      }
+        || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name));
+          const commitCases = cases.filter((c) => !c.text.includes("\0") && (["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || ((c.name.startsWith("review ") || c.name.startsWith("raw ")) && c.name !== "review metadata boundary")));
+          for (const [channel, specimens] of [["identity", identityCases], ["commit", commitCases]] as const) {
+            const repository = join(directory, channel);
+            mkdirSync(repository);
+            runGit(repository, ["init", "--quiet"]);
+            // fast-import preserves git's recorded identity/message behavior
+            // without initializing and committing a new repository per case.
+            const records = [{ name: "base", text: "base", pass: true }, ...specimens];
+            const stream = records.map((specimen, index) => {
+              const name = channel === "identity" && index > 0 ? specimen.text.replace(/[\n<>]/g, "").replace(/^[\x09-\x0d ]+|[\x09-\x0d ]+$/g, "") : "Fixture Tool";
+              const message = channel === "commit" ? specimen.text + "\n" : "fixture\n";
+              return `commit refs/heads/matrix\nmark :${index + 1}\ncommitter ${name} <noreply@example.invalid> ${index + 1} +0000\ndata ${Buffer.byteLength(message)}\n${message}\n`;
+            }).join("");
+            const imported = Bun.spawnSync(["git", "fast-import", "--quiet", "--export-marks=.git/marks"], { cwd: repository, stdin: Buffer.from(stream), stdout: "pipe", stderr: "pipe" });
+            expect(imported.exitCode, imported.stderr.toString()).toBe(0);
+            runGit(repository, ["symbolic-ref", "HEAD", "refs/heads/matrix"]);
+            const hashes = readFileSync(join(repository, ".git/marks"), "utf8").trim().split("\n").map((line) => line.split(" ")[1]);
+            const notices: string[] = [];
+            const findings = channel === "identity"
+              ? (() => { const result = scanner.mergeBoundaryReview(repository, hashes[0]); notices.push(...result.notices); return result.findings; })()
+              : scanner.commitMessageFindings(repository, hashes[0], notices);
+            expect(findings.has("inspection_error")).toBe(false);
+            const reported = new Set(notices.map((notice) => notice.split(" ")[1]));
+            const known = new Set(notices.filter((notice) => notice.includes("known_value")).map((notice) => notice.split(" ")[1]));
+            for (const [index, specimen] of specimens.entries()) {
+              const hash = hashes[index + 1].slice(0, 12);
+              expect(reported.has(hash), `${channel}: ${specimen.name}`).toBe(!specimen.pass);
+              expect(known.has(hash), `${channel}: ${specimen.name}`).toBe(!specimen.pass);
+            }
+            expect(scanner.formatPrivacyReport(findings, notices)).not.toContain(domain);
+          }
+        } finally {
+          for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+        }
+      }, 60_000);
     }
   });
 
@@ -4473,6 +4517,27 @@ describe("commitMessageFindings", () => {
 
     expect(commitMessageFindings(repo, "no-such-base", notices).get("inspection_error")).toBe(1);
     expect(notices).toEqual(["commit_message: range unreadable"]);
+  });
+
+  test("fails closed for a raw commit declaring a legacy message encoding", () => {
+    const repo = gitRepo();
+    const tree = git(repo, "rev-parse", "HEAD^{tree}").trim();
+    const parent = git(repo, "rev-parse", "HEAD").trim();
+    const value = "r\u00e9sum\u00e9";
+    const header = `tree ${tree}\nparent ${parent}\nauthor Fixture Tool <noreply@example.invalid> 1 +0000\ncommitter Fixture Tool <noreply@example.invalid> 1 +0000\nencoding ISO-8859-1\n\n`;
+    const object = Bun.spawnSync(["git", "hash-object", "-t", "commit", "-w", "--stdin"], {
+      cwd: repo, stdin: Buffer.concat([Buffer.from(header), Buffer.from(value + "\n", "latin1")]),
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(object.exitCode).toBe(0);
+    runGit(repo, ["update-ref", "refs/heads/feature", object.stdout.toString().trim()]);
+    // The previous per-message reader asked Git to transcode this value.
+    expect(git(repo, "log", "-1", "--format=%B")).toContain(value);
+    const result = runGateArguments(["--base", "main", "--check-commits"], { LLV_PRIVACY_KNOWN_VALUES: value }, repo);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("inspection_error:");
+    expect(result.stdout.toString()).not.toContain(value);
+    expect(result.stderr.toString()).toBe("");
   });
 
   test("reads a message that is nothing but a hash-shaped value", () => {
