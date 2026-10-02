@@ -5,18 +5,37 @@ import os from "node:os";
 import path from "node:path";
 
 import { procBackend } from "@/lib/proc";
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 /* The state dir must point at a sandbox before store.ts computes its
    module-level constants, so exec/store load dynamically after the env set. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-exec-test-"));
+const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, scanEventStream, startHeadlessReview, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./exec");
-const { runHeadlessCodexOnce } = await import("@/lib/agent/headless");
+const { prepareHeadlessPublication, runHeadlessCodexOnce, reviewerEnvironment } = await import("@/lib/agent/headless");
 const { reviewerPrompt } = await import("./prompts");
 const { outputPathFor, stdoutPathFor } = await import("./store");
 const { registerPipelineTick } = await import("../pipelines/controllerSignal");
 
 afterAll(() => {
+  restorePolicyReader();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
+
+test("headless launch asynchronously retains publication fields through restrictive shell filters", async () => {
+  let probes = 0;
+  const restore = setCodexShellPolicyReaderForTest(async () => {
+    probes += 1;
+    await Promise.resolve();
+    return { include_only: ["PATH", "HOME"] };
+  });
+  try {
+    const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+    expect(probes).toBe(0);
+    const prepared = await prepareHeadlessPublication(built, process.env.LLV_STATE_DIR!);
+    expect(probes).toBe(1);
+    expect(prepared.args).toContain(`shell_environment_policy.include_only=${JSON.stringify(["PATH", "HOME", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"])}`);
+  } finally { restore(); }
 });
 
 const EVENTS = [
@@ -25,12 +44,51 @@ const EVENTS = [
   JSON.stringify({ item: { type: "agent_message", text: "VERDICT: APPROVE\n\nLooks good." } }),
 ].join("\n");
 
+test.each([
+  ["claude", false], ["codex", false], ["claude", true], ["codex", true],
+] as const)("headless %s command pins the publication identity (configured: %s)", (engine, configured) => {
+  const keys = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    "LLV_PUBLICATION_NAME", "LLV_PUBLICATION_EMAIL", "DELEGATUS_PUBLICATION_NAME", "DELEGATUS_PUBLICATION_EMAIL"];
+  const previous = keys.map((key) => process.env[key]);
+  const email = [configured ? "no-reply" : "noreply", configured ? "build.example.invalid" : "delegatus.invalid"].join("@");
+  const name = configured ? "Build Agent" : "Delegatus";
+  try {
+    keys.forEach((key) => { delete process.env[key]; });
+    Object.assign(process.env, {
+      GIT_AUTHOR_NAME: "Inherited", GIT_COMMITTER_NAME: "Inherited",
+      GIT_AUTHOR_EMAIL: ["author", "example.invalid"].join("@"),
+      GIT_COMMITTER_EMAIL: ["committer", "example.invalid"].join("@"),
+      ...(configured ? { LLV_PUBLICATION_NAME: name, LLV_PUBLICATION_EMAIL: email } : {}),
+    });
+    const built = reviewerCommand({ engine, model: "fixture", effort: "high" }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+    expect([built.env.GIT_AUTHOR_NAME, built.env.GIT_AUTHOR_EMAIL, built.env.GIT_COMMITTER_NAME, built.env.GIT_COMMITTER_EMAIL])
+      .toEqual([name, email, name, email]);
+    if (engine === "claude") {
+      const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
+      expect(Object.values(settings.env)).toEqual([name, email, name, email]);
+    } else {
+      expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
+    }
+    expect(process.env.GIT_AUTHOR_NAME).toBe("Inherited");
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
+});
+
 test.each(["ultrafast", "priority", "default", "standard"])("headless reviewer command carries and normalizes admitted service tier %s", (serviceTier) => {
   const built = reviewerCommand({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
   const tierIndex = built.args.indexOf(`service_tier=${serviceTier === "standard" ? "default" : serviceTier}`);
   expect(tierIndex).toBeGreaterThan(0);
   expect(built.args[tierIndex - 1]).toBe("-c");
   if (serviceTier === "standard") expect(built.args).not.toContain("service_tier=standard");
+});
+
+test("headless and ephemeral environments refuse unsafe publication settings", () => {
+  expect(() => reviewerEnvironment({ NODE_ENV: "test", LLV_PUBLICATION_EMAIL: "invalid" }))
+    .toThrow("Invalid agent publication identity");
 });
 
 test("reviewer group escalation kills a TERM-resistant child after the leader exits", () => {
@@ -241,7 +299,7 @@ test("a headless review exit schedules one flow and pipeline reconciliation", as
   });
 
   try {
-    startHeadlessReview(
+    await startHeadlessReview(
       "flow-completion-signal",
       1,
       { engine: "codex", model: null, effort: null },
@@ -269,7 +327,7 @@ test("an owned reviewer stays running when process identity is briefly unavailab
     { mode: 0o700 },
   );
   let identityReads = 0;
-  const launched = startHeadlessReview(
+  const launched = await startHeadlessReview(
     "flow-delayed-identity",
     1,
     { engine: "codex", model: null, effort: null },

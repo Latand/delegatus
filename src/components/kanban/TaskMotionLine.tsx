@@ -17,7 +17,8 @@ export function TaskMotionLine({ motion, working, nowMs, plain = false, taskTitl
   const note = hold && !["operator", "external", "postponed", "unstated"].includes(hold.kind) ? hold.note : "";
   const refUrl = referenceUrl ?? (hold?.ref && /^https?:\/\//i.test(hold.ref) ? hold.ref : null);
   const age = motion.since ? fmtAgeSeconds(Math.max(0, (nowMs - Date.parse(motion.since)) / 1000)) : "";
-  return <span className="motion-line block text-label leading-snug text-muted [overflow-wrap:anywhere]" data-motion={motion.key} title={hold ? t(`kanban.hold.by.${hold.by}`) : undefined}>
+  const fullText = [label, note, motion.due ? t("kanban.motion.due") : "", age, motion.holdStillSet ? t("kanban.motion.holdStillSet") : ""].filter(Boolean).join(" · ");
+  return <span className="motion-line block text-label leading-snug text-muted [overflow-wrap:anywhere]" data-motion={motion.key} title={hold ? `${fullText}\n${t(`kanban.hold.by.${hold.by}`)}` : undefined}>
     {!plain && onOpenTask ? <button type="button" onClick={onOpenTask}>{label}</button> : !plain && refUrl ? <a href={refUrl} target="_blank" rel="noreferrer">{label}</a> : <span>{label}</span>}
     {note ? <span> · {note}</span> : null}
     {motion.due ? <span> · {t("kanban.motion.due")}</span> : null}

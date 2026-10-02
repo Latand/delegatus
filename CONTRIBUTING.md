@@ -41,3 +41,19 @@ bun run privacy:check
 
 Findings name a class and a count, never the value that matched, so a failing
 run tells you where to look without republishing what it found.
+
+## Commits from launched agents
+
+Delegatus sets the author and committer environment for every launched agent,
+including pipeline stages and plain spawns. The default is the controller's
+Delegatus machine identity. Git configuration stays untouched, and agents can
+keep their machine attribution trailers.
+
+To configure an installation's agent publication identity, set
+`DELEGATUS_PUBLICATION_NAME` and `DELEGATUS_PUBLICATION_EMAIL` in the launching
+Viewer and runtime host environment. The legacy `LLV_` spellings also work;
+the `DELEGATUS_` spelling takes precedence. Use a machine display name and a
+mailbox whose local part is exactly `noreply` or `no-reply`. Personal mailboxes,
+the forge's merge composer mailbox, empty values and malformed identities
+refuse the launch with an error that withholds the configured values. These
+settings apply to newly launched agents after the next deploy.

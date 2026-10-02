@@ -247,11 +247,14 @@
 @container col-head (max-width: 299.98px) {
   /* Shortened, the counters keep their number, and the title is what gives way last. */
   .kb .col-head { gap: 6px; }
-  .kb .col-head > :is(.live, .needs) { flex-shrink: 0; }
+  .kb .col-head > :is(.live, .needs, [data-column-no-reason]) { flex-shrink: 0; }
   .kb .col-head > h2 { flex-shrink: 1; }
   .kb .col-head :is(.live, .needs) > .ct { display: none; }
   .kb .col-head :is(.live, .needs)::after { content: attr(data-count); }
-  .kb .col-head .needs::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .kb .col-head .needs::before { content: "⚠"; }
+  .kb .col-head [data-column-no-reason] { font-size: 0; }
+  .kb .col-head [data-column-no-reason]::before { content: "⏸"; font-size: var(--text-label); }
+  .kb .col-head [data-column-no-reason]::after { content: attr(data-count); font-size: var(--text-label); margin-left: 2px; }
 }
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
@@ -993,6 +996,8 @@
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }
+/* A launched reader keeps the height of the draft it came from (launchedConversations.ts). */
+.kb .reader.conv.launched:not(.folded):not(.in-sheet):not(.full) { height: var(--conv-in-card-h); }
 .kb .reader.conv:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
 .kb .reader.conv.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); }
 .kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
@@ -1588,10 +1593,12 @@
 .kb .remote-unbound { padding: 4px 10px; }
 
 /* Task motion stays visible when card contents fold. */
+.motion-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .kb .card .motion-line { margin: 2px 0 6px; font-size: var(--text-label); line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere; }
 .kb .card .motion-line[data-motion="working"] { color: var(--color-success); }
 .kb .card .motion-line[data-motion="needs-you"] { color: var(--color-warning); }
-.kb .card .motion-line a { text-decoration: underline; }
+.motion-line a { text-decoration: underline; }
+.motion-line button { display: inline; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; }
 .kb .card .motion-age { color: var(--color-muted); white-space: nowrap; }
 
 .hold-editor { display: grid; gap: 8px; margin: 8px 0; font-size: var(--text-label); }

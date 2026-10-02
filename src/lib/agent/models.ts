@@ -52,7 +52,10 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
-    { id: "haiku", label: "Haiku", shortLabel: "Haiku", use: "general" },
+    // The `haiku` alias names the one Haiku shipping today, as the transcript
+    // does once it records the resolved id, so the live chip and the reloaded
+    // card spell the model the same way.
+    { id: "haiku", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
   ],
   codex: [
     // Catalogue order is independent of the shipped launch fallback below.
@@ -141,7 +144,12 @@ const CLAUDE_VERSIONED_MODEL = /^(?:claude-)?(fable|mythos|opus|sonnet|haiku)-(\
 export function modelDisplayName(engine: string, model: string): string {
   if (engine !== "claude") return model;
   const match = CLAUDE_VERSIONED_MODEL.exec(model.trim().toLowerCase());
-  if (!match) return model;
+  if (!match) {
+    /* A launch alias (`haiku`, `opus`) is what a live conversation records
+       until its transcript names the resolved id; it reads as its catalogue
+       row, the way the resolved id would. */
+    return ENGINE_MODELS.claude.find((option) => option.id === model.trim().toLowerCase())?.label ?? model;
+  }
   const [, family, major, minor, tagged1m] = match;
   const version = minor && Number(minor) !== 0 ? `${major}.${minor}` : major;
   const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { resolveBinary } from "@/lib/agent/cli";
+import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import {
   claudeManagedEnvironment,
   claudeProviderForHome,
@@ -168,6 +169,8 @@ export function buildEphemeralCommand(
       "--tools",
       "",
       "--strict-mcp-config",
+      "--settings",
+      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv) }),
       "--json-schema",
       JSON.stringify(request.schema),
       "--no-session-persistence",
@@ -257,6 +260,7 @@ export function buildEphemeralCommand(
       ? ["-c", `model_reasoning_effort=${request.effort}`]
       : []),
   ];
+  args.push(...agentCodexPublicationArgs({}, request.account.env));
   return {
     command: resolveBinary("codex"),
     args,

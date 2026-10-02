@@ -805,7 +805,7 @@ describe("#1695 K1+K2 kanban board", () => {
       }
 
       /* + Task and + Agent (#1695 K9a): the new task is an inline card at the top of Inbox and lands there, the
-         bar's + Agent opens a draft on a card of its own, and a card's + Agent opens one on that card. Each draft
+         bar's + Agent opens a draft on a card of its own in Assigned, where its launch lands, and a card's + Agent opens one on that card. Each draft
          pane stays inside its card at reading width, and nothing pushes the page sideways. */
       const create = await openFixture(browser, base, VIEWPORTS[1], "light");
       try {
@@ -851,7 +851,7 @@ describe("#1695 K1+K2 kanban board", () => {
 
         if (composerFirst.column !== "inbox" || !composerFirst.first || !composerFirst.focused) failures.push(`k9a: the new task card ${JSON.stringify(composerFirst)}`);
         if (creates.length !== 1 || creates[0]!.placement !== "unplaced" || creates[0]!.clientRequestId !== "present") failures.push(`k9a: + Task wrote ${JSON.stringify(creates)}`);
-        if (barDraft.column !== "inbox" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
+        if (barDraft.column !== "assigned" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
         if (!cardDraft.inside || cardDraft.paneWidth > 780 || cardDraft.prompt !== "Repair old links in the release notes") failures.push(`k9a: the card's draft ${JSON.stringify(cardDraft)}`);
         if (pageOverflow > 0) failures.push(`k9a: the page scrolls sideways by ${pageOverflow} px`);
         if (create.pageErrors.length) failures.push(`k9a: page errors ${create.pageErrors.join(" | ")}`);
@@ -12989,9 +12989,9 @@ describe("model glyphs in place of the stage dot", () => {
   const WORD_HOSTS = new Set(["pnode", "pane-head"]);
   /* The model words a host's accessible text must carry: the catalogue's short
      label, which the identity sentence and the identity line both print. */
-  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
   /* The pane head's glyph names itself with the catalogue's full label. */
-  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
   /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
   const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
   /* The legend: every word on the three cards hidden, so only the drawings
@@ -14423,11 +14423,31 @@ describe("task motion and waiting reasons", () => {
           const stopped = page.locator(`${selector("motion-stopped")} [data-motion="stopped"]`);
           expect(await stopped.textContent()).toContain(translate(locale, "kanban.motion.stopped"));
           expect(await page.locator(`${selector("motion-working")} [data-motion="working"]`).count()).toBe(1);
+          expect(await page.locator(`${selector("motion-working")} [data-foot-working]`).count()).toBe(0);
+          expect(translate(locale, "attention.chip")).toBe(locale === "en" ? "Needs you" : "Потрібні ви");
           await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
           if (phone) await page.locator('[data-phone-kanban-tab="blocked"]').click();
           const waiting = page.locator(`${selector("motion-worker")} [data-motion="waiting"]`);
           expect(await waiting.textContent()).toContain(translate(locale, "kanban.hold.worker"));
-          expect(await page.locator(`${selector("motion-operator")} [data-motion="needs-you"]`).textContent()).toContain(translate(locale, "kanban.hold.operator", { note: locale === "en" ? "Choose a release to publish" : "Оберіть реліз для публікації" }));
+          const operatorLine = await page.locator(`${selector("motion-operator")} [data-motion="needs-you"]`).textContent();
+          expect(operatorLine).toContain(translate(locale, "kanban.hold.operator", { note: locale === "en" ? "Choose a release to publish" : "Оберіть реліз для публікації" }));
+          if (locale === "en") expect(operatorLine).not.toContain("Waiting");
+          if (!phone) {
+            const waitingColumn = page.locator('[data-status="blocked"]');
+            const heading = waitingColumn.locator("h2");
+            const headingBounds = await heading.evaluate((el) => ({ clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }));
+            expect(headingBounds.scrollWidth).toBeLessThanOrEqual(headingBounds.clientWidth);
+            expect(await waitingColumn.locator(".needs").textContent()).toContain("1");
+            expect(await waitingColumn.locator(".needs").evaluate((el) => getComputedStyle(el, "::before").content)).toContain("⚠");
+          }
+          const longLine = page.locator(`${selector("motion-long")} [data-motion]`);
+          const fullLongText = await longLine.getAttribute("title");
+          expect(fullLongText).toContain(locale === "en" ? "external audit team" : "зовнішня аудиторська команда");
+          const longLineHeight = await longLine.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return { height: el.getBoundingClientRect().height, lineHeight: Number.parseFloat(style.lineHeight) };
+          });
+          expect(longLineHeight.height).toBeLessThanOrEqual(longLineHeight.lineHeight * 2 + 1);
           expect(await page.locator(selector("motion-hidden")).count()).toBe(0);
           const stepLine = page.locator(`${selector("motion-checklist")} [data-task-steps]`);
           await stepLine.waitFor();
@@ -14472,6 +14492,8 @@ describe("task motion and waiting reasons", () => {
           } else {
             expect(await prHold.getAttribute("href")).toBe("https://github.com/acme/atlas/pull/2190");
             expect(await issueHold.getAttribute("href")).toBe("https://github.com/acme/atlas/issues/2044");
+            const taskRefButton = page.locator(`${selector("motion-taskref")} [data-motion] button`);
+            expect(await taskRefButton.evaluate((el) => getComputedStyle(el).textAlign)).toBe(await taskRefButton.evaluate((el) => getComputedStyle(el.parentElement!).textAlign));
             await page.locator(`${selector("motion-taskref")} [data-motion] button`).click();
             await page.waitForFunction(() => document.activeElement?.getAttribute("data-id") === "task:motion-bare");
           }
@@ -14531,4 +14553,313 @@ describe("task motion and waiting reasons", () => {
     fs.mkdirSync("evidence/task-states-and-reasons", { recursive: true });
     fs.writeFileSync("evidence/task-states-and-reasons/renders.json", `${JSON.stringify({ cases }, null, 2)}\n`);
   }, 180_000);
+});
+
+/*
+ * Launch layout shifts (docs/design/launch-render-polish.md). A launch is read
+ * the way the operator watches it: the draft is opened, the first prompt sent
+ * and the page left alone until the turn ends, while a PerformanceObserver
+ * records every layout shift the page makes. The page is the real Viewer over
+ * the fixture's `launch-cls` scenario, which answers the spawn, the files poll
+ * and the transcript on a clock (receipt, `spawn:` projection, adoption, tool
+ * rows, prose, the turn's end). The sum of the shifts no input explains, from
+ * the send to the turn's end, is the launch's cumulative layout shift.
+ *
+ *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "launch layout shift"
+ *
+ * LLV_LAUNCH_CLS_LABEL names the record (`before` or `after`); the readings go
+ * to `evidence/launch-render-polish/cls-<label>.json`.
+ */
+type Shift = { at: number; value: number; sources: string[]; mandate: boolean };
+/* Chrome's layout-shift entries, from here on, each with the nodes that moved. */
+async function installShiftObserver(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean }> };
+    w.__shifts = [];
+    const describeNode = (node: Node | null) => node instanceof Element ? `${node.tagName}.${String(node.getAttribute("class") ?? "").split(/\s+/).slice(0, 2).join(".")}${node.getAttribute("data-status") ? `[${node.getAttribute("data-status")}]` : ""}` : "?";
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as unknown as Array<{ startTime: number; value: number; hadRecentInput: boolean; sources?: Array<{ node: Node | null }> }>) {
+        w.__shifts.push({
+          at: entry.startTime, value: entry.value, recent: entry.hadRecentInput, sources: (entry.sources ?? []).slice(0, 3).map((source) => describeNode(source.node)),
+          /* A shift of the orchestrator's mandate bubble: its hand-over is the first-bubble lane's (#2006, #2415). */
+          mandate: (entry.sources ?? []).some((source) => (source.node?.textContent ?? "").trimStart().startsWith("You are this project's orchestrator")),
+        });
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
+}
+/* The shifts no input explains, from `from` (a `performance.now()` reading) on. */
+function collectShifts(page: Page, from: number): Promise<Shift[]> {
+  return page.evaluate((start) => (window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean }> }).__shifts
+    .filter((entry) => entry.at >= start && !entry.recent)
+    .map((entry): Shift => ({ at: Math.round(entry.at - start), value: Number(entry.value.toFixed(4)), sources: entry.sources, mandate: entry.mandate })), from);
+}
+
+describe("launch layout shift rendered evidence", () => {
+  const LAUNCH_CLS_LIMIT = 0.1;
+  const label = process.env.LLV_LAUNCH_CLS_LABEL?.trim() || "after";
+  const viewports = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("sending a first prompt shifts the page by less than 0.1 at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const viewport of viewports) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: viewport.width, height: viewport.height }, "light", "en", "no-preference", viewport.touch);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id], [data-phone-card]", { state: "attached", timeout: 20_000 });
+          await installShiftObserver(page);
+          if (viewport.touch) {
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-menu-row="new-agent"]');
+          } else {
+            /* A project the operator is launching its first agents in has no seat open over the board. */
+            const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+            if (await seat.count()) await seat.click();
+            await page.waitForTimeout(600);
+            await page.click('[data-bar-control][aria-label="Create"]');
+            await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+          }
+          const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
+          await prompt.waitFor({ timeout: 10_000 });
+          /* The runtime the operator chose is Haiku at low effort, on Claude. */
+          await page.selectOption('select[aria-label="Agent model"]', "haiku");
+          await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
+          await prompt.fill("Read the README and tell me what this project does");
+          await page.waitForTimeout(800);
+          const sentAt = await page.evaluate(() => {
+            /* A scroll moves the content as visibly as a shift, and the layout-shift metric does not count it: the
+               Assigned column's scroll position is sampled from the send to the turn's end. */
+            const w = window as unknown as { __scrolls: number[] };
+            w.__scrolls = [];
+            const body = document.querySelector<HTMLElement>('.col-body[data-status="assigned"]');
+            if (body) {
+              w.__scrolls.push(body.scrollTop);
+              setInterval(() => w.__scrolls.push(body.scrollTop), 50);
+            }
+            return performance.now();
+          });
+          await page.getByRole("button", { name: "Launch the agent" }).first().click();
+          /* The fixture's turn ends 10.8 s after the receipt is asked for; the page is left alone until then. */
+          await page.waitForTimeout(14_000);
+          const shifts = await collectShifts(page, sentAt);
+          const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          const largest = [...shifts].sort((a, b) => b.value - a.value).slice(0, 8);
+          await page.screenshot({ path: path.join(out, `${label}-${viewport.name}.png`) });
+          const handOff = viewport.touch ? null : await page.evaluate(() => {
+            const scrolls = (window as unknown as { __scrolls: number[] }).__scrolls;
+            const body = document.querySelector<HTMLElement>('.col-body[data-status="assigned"]')!;
+            const head = body.querySelector<HTMLElement>('.card[data-id^="task:"] .head')?.getBoundingClientRect();
+            const view = body.getBoundingClientRect();
+            return {
+              scrollFrom: scrolls[0] ?? 0, scrollDrift: Math.max(0, ...scrolls.map((value) => Math.abs(value - (scrolls[0] ?? 0)))),
+              headTop: head ? Math.round(head.top) : null, headBottom: head ? Math.round(head.bottom) : null, columnTop: Math.round(view.top), columnBottom: Math.round(view.bottom),
+              headVisible: Boolean(head && head.top >= view.top - 0.5 && head.bottom <= view.bottom + 0.5),
+            };
+          });
+          /* Opening a second draft beside the launched agent must leave that agent in the window. */
+          let secondDraft: Record<string, unknown> | null = null;
+          if (!viewport.touch) {
+            await page.click('[data-bar-control][aria-label="Create"]');
+            await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+            await page.locator('[data-kanban-draft] textarea[aria-label="First prompt text"]').first().waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(800);
+            secondDraft = await page.evaluate(() => {
+              const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
+              const box = reader?.getBoundingClientRect();
+              const visibleWidth = box ? Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) : 0;
+              const visibleHeight = box ? Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0)) : 0;
+              return box ? { top: Math.round(box.top), left: Math.round(box.left), width: Math.round(box.width), visibleShare: Number(((visibleWidth * visibleHeight) / (box.width * box.height)).toFixed(3)), viewportHeight: window.innerHeight } : null;
+            });
+            await page.screenshot({ path: path.join(out, `${label}-${viewport.name}-second-draft.png`) });
+          }
+          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest, handOff, secondDraft, pageErrors });
+          expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
+          if (handOff && label === "after") {
+            expect(handOff.headVisible, `${viewport.name} the launched card's head stays in view after the hand-off`).toBe(true);
+            expect(handOff.scrollDrift, `${viewport.name} the Assigned column does not scroll at the hand-off`).toBeLessThanOrEqual(2);
+          }
+          if (secondDraft && label === "after") {
+            expect(secondDraft.visibleShare, `${viewport.name} the launched agent stays in the window while a second draft opens`).toBeGreaterThan(0.6);
+          }
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+    fs.writeFileSync(`evidence/launch-render-polish/cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings }, null, 2)}\n`);
+    for (const reading of readings as Array<{ viewport: string; cls: number }>) {
+      if (label === "after") expect(reading.cls, `${reading.viewport} cumulative layout shift of one launch`).toBeLessThan(LAUNCH_CLS_LIMIT);
+    }
+  }, 240_000);
+
+  /* A launch made while the operator reads another agent in Assigned: the draft opens beside that agent and
+     the launched card lands under it, so the agent being read neither moves nor leaves the window, when the
+     draft opens or when the launch hands off. */
+  browserTest("launching while an agent is read in Assigned keeps that agent in the window and shifts by less than 0.1 at 1440", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: 1440, height: 900 }, "light", "en", "no-preference", false);
+      try {
+        await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+        await installShiftObserver(page);
+        const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+        if (await seat.count()) await seat.click();
+        await page.waitForTimeout(600);
+        /* The agent the operator is reading: the first task card in Assigned, opened from its tile. */
+        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]').first();
+        const readId = await card.getAttribute("data-id");
+        await card.locator(".tile").first().click();
+        const readerOf = `.card[data-id="${readId}"] [data-kanban-reader]`;
+        await page.locator(readerOf).first().waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(600);
+        await page.click('[data-bar-control][aria-label="Create"]');
+        await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+        const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
+        await prompt.waitFor({ timeout: 10_000 });
+        await page.selectOption('select[aria-label="Agent model"]', "haiku");
+        await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
+        await prompt.fill("Read the README and tell me what this project does");
+        await page.waitForTimeout(800);
+        const sentAt = await page.evaluate((selector) => {
+          /* The share of the read agent's reader in the window, sampled from the send to the turn's end. */
+          const w = window as unknown as { __readerShare: number[] };
+          w.__readerShare = [];
+          const share = () => {
+            const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+            if (!box || !box.width || !box.height) return 0;
+            const width = Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0));
+            const height = Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0));
+            return (width * height) / (box.width * box.height);
+          };
+          w.__readerShare.push(share());
+          setInterval(() => w.__readerShare.push(share()), 50);
+          return performance.now();
+        }, readerOf);
+        await page.getByRole("button", { name: "Launch the agent" }).first().click();
+        await page.waitForTimeout(14_000);
+        const shifts = await collectShifts(page, sentAt);
+        const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+        await page.screenshot({ path: path.join(out, `${label}-read-launch-desktop-1440.png`) });
+        const state = await page.evaluate(() => {
+          const shares = (window as unknown as { __readerShare: number[] }).__readerShare;
+          return { minShare: Number(Math.min(...shares).toFixed(3)), samples: shares.length };
+        });
+        const launchedBelow = await page.evaluate((id) => {
+          const cards = [...document.querySelectorAll<HTMLElement>('.col-body[data-status="assigned"] .card[data-id^="task:"]')];
+          const read = cards.findIndex((entry) => entry.dataset.id === id);
+          const launched = cards.findIndex((entry) => entry.dataset.id === "task:t-launch");
+          return { read, launched };
+        }, readId);
+        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: launchedBelow, pageErrors };
+        fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+        fs.writeFileSync(`evidence/launch-render-polish/read-launch-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings: [reading] }, null, 2)}\n`);
+        expect(pageErrors, "page errors").toEqual([]);
+        if (label === "after") {
+          expect(state.minShare, "the agent being read stays in the window from the send to the turn's end").toBeGreaterThan(0.6);
+          expect(launchedBelow.launched, "the launched card stands right under the agent being read").toBe(launchedBelow.read + 1);
+          expect(cls, "cumulative layout shift of a launch made beside a read agent").toBeLessThan(LAUNCH_CLS_LIMIT);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
+  /* Creating an orchestrator from the project's draft: the same clock as a launch (`?scenario=seat-create-cls`).
+     The page is left alone from Confirm to the first rows of the seat's transcript, while the layout shifts
+     and the composer's runtime pill are recorded. The pill must read the effort the draft chose from the first
+     frame it exists in: reading the engine's lowest tier first and the chosen one a poll later is the
+     Light to High flip the operator saw. */
+  browserTest("creating an orchestrator shifts the page by less than 0.1 at 1440 and 390 and its effort pill never changes word", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Array<Record<string, unknown> & { viewport: string; cls: number; clsWithoutMandate: number }> = [];
+    try {
+      for (const viewport of viewports) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-create-cls`, { width: viewport.width, height: viewport.height }, "light", "en", "no-preference", viewport.touch);
+        try {
+          if (viewport.touch) {
+            await page.click("[data-mobile2-seat-open]");
+            await page.waitForSelector('[data-mobile2-sheet="rotate"] [data-orchestrator-confirm], [data-mobile2-sheet="rotate"] button[type="submit"]', { timeout: 20_000 });
+          } else {
+            await page.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+          }
+          await page.waitForTimeout(800);
+          const chosen = (await page.locator("[data-orchestrator-runs-on-value]").first().textContent())?.match(/(\w+) effort/)?.[1] ?? null;
+          expect(chosen, `${viewport.name} the draft names its effort`).not.toBeNull();
+          const word = viewport.touch ? chosen! : translate("en", `reasoningTier.${chosen}` as Parameters<typeof translate>[1]);
+          const others = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+            .filter((tier) => tier !== chosen)
+            .map((tier) => (viewport.touch ? tier : translate("en", `reasoningTier.${tier}` as Parameters<typeof translate>[1])));
+          await installShiftObserver(page);
+          /* Every distinct text the composer's runtime pill draws, with the time it first drew it. */
+          await page.evaluate(() => {
+            const w = window as unknown as { __pills: Array<{ at: number; text: string }> };
+            w.__pills = [];
+            const read = () => {
+              for (const pill of document.querySelectorAll("[data-runtime-pill]")) {
+                const text = (pill.textContent ?? "").replace(/\s+/g, " ").trim();
+                if (text && !w.__pills.some((entry) => entry.text === text)) w.__pills.push({ at: performance.now(), text });
+              }
+            };
+            new MutationObserver(read).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+            read();
+          });
+          const sentAt = await page.evaluate(() => performance.now());
+          await page.locator('[data-orchestrator-confirm], [data-mobile2-sheet="rotate"] button[type="submit"]').first().click();
+          if (viewport.touch) {
+            /* The phone's create sheet stays over the board once the seat is live; the operator closes it and opens
+               the seat's conversation from its card, which is where the composer and its pill are drawn. */
+            await page.waitForTimeout(1_500);
+            await page.locator('[data-mobile2-sheet="rotate"] button[aria-label="Close"]').click();
+            await page.click("[data-mobile2-seat-open]");
+            await page.waitForTimeout(10_500);
+          } else {
+            /* Adoption is 2.4 s after the receipt; the tool rows and prose follow for ten seconds. */
+            await page.waitForTimeout(12_000);
+          }
+          const shifts = await collectShifts(page, sentAt);
+          const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          /* The mandate bubble's own hand-over is read apart: the first-bubble lane (#2006, #2415) owns it. */
+          const clsWithoutMandate = Number(shifts.filter((entry) => !entry.mandate).reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          const pills = await page.evaluate(() => (window as unknown as { __pills: Array<{ at: number; text: string }> }).__pills.map((entry) => entry.text));
+          /* The seat header and the composer's pill name one model and one tier the same way. */
+          const names = await page.evaluate(() => ({
+            header: (document.querySelector("[data-orchestrator-model]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+            pill: (document.querySelector("[data-runtime-pill]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+          }));
+          await page.screenshot({ path: path.join(out, `${label}-seat-${viewport.name}.png`) });
+          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), clsWithoutMandate, chosen, pills, names, pageErrors });
+          expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
+          if (label === "after") {
+            if (names.header) {
+              const headerModel = names.header.split(" · ")[0]!;
+              expect(names.pill, `${viewport.name} the seat header's model name is the composer pill's`).toContain(headerModel);
+              expect(names.header, `${viewport.name} the seat header names the tier as the pill does`).toContain(word);
+            }
+            expect(pills.length, `${viewport.name} the composer drew a runtime pill`).toBeGreaterThan(0);
+            for (const text of pills) {
+              expect(text, `${viewport.name} the runtime pill reads the chosen effort from its first frame`).toContain(word);
+              for (const other of others) expect(text, `${viewport.name} the runtime pill never reads ${other}`).not.toMatch(new RegExp(`\\b${other}\\b`));
+            }
+          }
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+    fs.writeFileSync(`evidence/launch-render-polish/seat-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings }, null, 2)}\n`);
+    for (const reading of readings) {
+      if (label === "after") expect(reading.clsWithoutMandate, `${reading.viewport} cumulative layout shift of creating an orchestrator, the mandate bubble's hand-over apart`).toBeLessThan(LAUNCH_CLS_LIMIT);
+    }
+  }, 240_000);
 });

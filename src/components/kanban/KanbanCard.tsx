@@ -455,7 +455,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           {t("needs.undo")}
         </button>
       ) : null}
-      {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
+      {card.working && !(card.motion.key === "working" && card.working > 0) ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
         : card.pipelines.length === 0 && !remote ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}

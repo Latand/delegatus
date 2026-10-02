@@ -374,6 +374,9 @@ function fenceLang(line: string): string | null {
   return line.match(/^\s*```+\s*([A-Za-z0-9+#_-]+)/)?.[1] ?? null;
 }
 
+/* A bullet item: optional indent, one of - * +, then a space and its text. */
+const BULLET_RE = /^([ \t]*)[-*+]\s+(\S.*)$/;
+
 /* One line that is not part of a multi-line block: a styled heading or
    blockquote, otherwise the inline pass. */
 function lineNode(line: string, key: number | string, drawn?: Drawn): ReactNode {
@@ -382,6 +385,19 @@ function lineNode(line: string, key: number | string, drawn?: Drawn): ReactNode 
     return (
       <span key={key} className="text-[14px] font-bold">
         {md(heading[1], drawn)}
+      </span>
+    );
+  }
+  const bullet = line.match(BULLET_RE);
+  if (bullet) {
+    /* Inline-level, so the pending newline after it stays a line break and
+       the streaming machine settles on the same nodes; the marker sits in its
+       own column so a wrapped item hangs under its text. */
+    const depth = Math.min(Math.floor(bullet[1].replace(/\t/g, "    ").length / 2), 4);
+    return (
+      <span key={key} className="inline-flex max-w-full items-baseline gap-1.5" style={depth ? { marginLeft: `${depth}rem` } : undefined}>
+        <span aria-hidden="true" className="shrink-0 text-muted">•</span>
+        <span className="min-w-0">{md(bullet[2], drawn)}</span>
       </span>
     );
   }

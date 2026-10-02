@@ -140,7 +140,10 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
    Board carries the create draft above empty columns; `orchestrator-first-
    overview` is the quiet Overview, which leads with its band. No project has a
    seat in either. */
-const ORCH_FIRST = SCENARIO === "orchestrator-first";
+/* `seat-create-cls`: the same new project, and the seat created from its draft on a clock (the receipt, the
+   `spawn:` projection, the scanned transcript), for the layout shifts of creating an orchestrator. */
+const SEAT_CLS = SCENARIO === "seat-create-cls";
+const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
 /* #2166 §3.8: the same project a moment after its seat was created, the seat
@@ -253,6 +256,11 @@ const PRIORITY = SCENARIO === "task-priority";
     (`seatTickSettingsCardText`, `maintenanceCardText`) and handed over in the
     query, so the board draws what the server would have written. */
 const TICK_CARDS = SCENARIO === "seat-tick-cards";
+/* Launch layout shifts: the board of `atlas`, a draft opened from the bar, and a launch the page drives end
+   to end on a clock — the receipt, the `spawn:` projection, the scanned transcript, tool rows and prose
+   arriving while the turn runs, the turn's end. The driver reads every layout shift from the first click to
+   the end of the turn. */
+const LAUNCH_CLS = SCENARIO === "launch-cls";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -1506,6 +1514,7 @@ if (SCENARIO === "task-motion") {
       ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, ...(index === 0 ? { ref: "p-motion-checklist" } : {}), hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
     ] }),
     task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }),
+    task("motion-long", "blocked", L("Migrate the legacy billing integration safely", "Безпечно перенести інтеграцію старих платежів"), "", 25 * MIN, [], { hold: { kind: "external", note: L("Waiting for the external audit team to finish its review of the migration plan and confirm that every legacy billing record has been reconciled before the cutover can proceed without risking customer invoices or payment history", "Очікуємо, поки зовнішня аудиторська команда завершить перевірку плану міграції та підтвердить звірку всіх старих платіжних записів, перш ніж продовжити перенесення без ризику для рахунків клієнтів та історії платежів"), since: iso(25 * MIN), by: "agent" } }),
     task("motion-bare", "blocked", L("Review older work", "Переглянути давнішу роботу"), "", 120 * MIN),
     task("motion-due", "blocked", L("Run the postponed check", "Виконати відкладену перевірку"), "", 120 * MIN, [], { hold: { kind: "postponed", note: L("After green checks", "Після успішних перевірок"), since: iso(120 * MIN), until: iso(60 * MIN), by: "operator" } }),
     task("motion-done", "done", L("Completed review", "Завершене ревʼю"), "", 10 * MIN, [], { doneAt: iso(10 * MIN) }),
@@ -1711,6 +1720,8 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
+  /* A launch the transcript has not appeared for reads nothing. */
+  if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (file === searchVer2) {
@@ -2123,6 +2134,81 @@ function fixtureWorkLinks(): FilesWorkLinks {
 }
 const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
 
+/* The launch the page runs on a clock (`?scenario=launch-cls`). POST /api/spawn answers the receipt after the
+   latency a real launch has; /api/files then shows the `spawn:` projection, and from the adoption on the
+   scanned transcript, whose rows arrive on the timeline below. */
+const SEAT_TITLE = "Orchestrator for atlas";
+const launchRun = {
+  launchId: "launch-cls", conversationId: "conversation_launch-cls", path: "/repo/launch-cls.jsonl",
+  startedAt: 0, prompt: "", title: "Claude", engine: "claude", model: "haiku", effort: "low", clientAttemptId: null as string | null,
+};
+const LAUNCH_RECEIPT_MS = 700;
+const LAUNCH_ADOPT_MS = 2_400;
+const LAUNCH_END_MS = 10_800;
+const launchTimeline: Array<{ at: number; lines: (stamp: (ms: number) => number) => string[] }> = [
+  { at: 3_000, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(0, 1) },
+  { at: 3_400, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(1) },
+  { at: 4_300, lines: (at) => [said(at(4_300), "Looking at the project files first.")] },
+  { at: 5_200, lines: (at) => tool(at(5_200), "toolu_launch_read", "Read", { file_path: "README.md" }).slice(0, 1) },
+  { at: 5_700, lines: (at) => tool(at(5_200), "toolu_launch_read", "Read", { file_path: "README.md" }).slice(1) },
+  { at: 7_000, lines: (at) => [said(at(7_000), "The project has three parts:\n\n- the server, which owns the state\n- the web board, which reads it\n- the scripts that drive both\n\nNothing needs changing yet.")] },
+  { at: 9_400, lines: (at) => [said(at(9_400), "Summary: the README describes the layout above and points at the scripts directory for the rest.")] },
+];
+function launchTranscript(): string {
+  if (!launchRun.startedAt) return "";
+  const elapsed = Date.now() - launchRun.startedAt;
+  if (elapsed < LAUNCH_ADOPT_MS) return "";
+  /* A row's stamp is its own time on the clock, so the feed's times read as a turn that ran. */
+  const stamp = (ms: number) => (Date.now() - (launchRun.startedAt + ms)) / 1_000;
+  const rows = [asked(stamp(LAUNCH_RECEIPT_MS), launchRun.prompt)];
+  for (const entry of launchTimeline) if (elapsed >= entry.at) rows.push(...entry.lines(stamp));
+  return `${rows.join("\n")}\n`;
+}
+/* The files and tasks the board holds at this moment of the launch. */
+function launchAdvance() {
+  if (!(LAUNCH_CLS || SEAT_CLS) || !launchRun.startedAt) return;
+  const elapsed = Date.now() - launchRun.startedAt;
+  const nowSeconds = Date.now() / 1_000;
+  for (let index = files.length - 1; index >= 0; index -= 1) if (files[index]!.conversationId === launchRun.conversationId) files.splice(index, 1);
+  const adopted = elapsed >= LAUNCH_ADOPT_MS;
+  const ended = elapsed >= LAUNCH_END_MS;
+  const common = { model: launchRun.model, launchModel: launchRun.model, effort: launchRun.effort, fast: null, mtime: nowSeconds };
+  files.push(adopted
+    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.prompt.split("\n")[0] ?? "", {
+      ...common, path: launchRun.path, size: new TextEncoder().encode(launchTranscript()).length,
+      ...(ended
+        ? { activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, lastTurn: { startedAt: launchRun.startedAt, endedAt: Date.now() } }
+        : working({ mtime: nowSeconds, lastTurn: { startedAt: launchRun.startedAt, endedAt: null } })),
+    })
+    : conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.title, {
+      ...common, path: `spawn:${launchRun.launchId}`, size: 0, activity: "live", activityReason: "structured_spawn_starting", generation: 1,
+      spawn: {
+        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: null, conversationId: launchRun.conversationId, generation: 1,
+        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt,
+        ...(SEAT_CLS ? { mandate: { kind: "version", version: ORCHESTRATOR_PROMPT_VERSION } } : {}),
+      },
+    }));
+  /* The seat's conversation belongs to no task. */
+  if (SEAT_CLS) return;
+  const index = tasks.findIndex((entry) => entry.id === "t-launch");
+  const placeholder = {
+    id: "t-launch", project: PROJECT, text: launchRun.prompt.split("\n")[0] ?? "", status: "assigned", placement: "unplaced",
+    origin: { kind: "launch", key: launchRun.clientAttemptId ?? launchRun.launchId, refinement: "pending" },
+    assignments: [{
+      launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
+      panePid: null, state: "delivered", error: null, at: new Date(launchRun.startedAt).toISOString(),
+    }],
+    createdAt: new Date(launchRun.startedAt).toISOString(), updatedAt: new Date().toISOString(), revision: REV(900 + Math.floor(elapsed / 1_000)),
+  } as unknown as BoardTask;
+  if (index >= 0) tasks[index] = placeholder;
+  else tasks.push(placeholder);
+}
+/* Nothing waits on the operator, so the phone's own fallback focus has no reason to leave the launched conversation. */
+/* A project created a moment ago holds nothing until its seat is made. */
+if (SEAT_CLS) files.splice(0, files.length);
+if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: null, pendingQuestion: null });
+Object.assign(window, { launchRun });
+
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2153,7 +2239,51 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(albumPage(taskId));
   }
+  if (LAUNCH_CLS && url.pathname === "/api/spawn" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    Object.assign(launchRun, {
+      startedAt: Date.now(), prompt: String(body.prompt ?? ""), title: String(body.title ?? "Claude"), engine: String(body.engine ?? "claude"),
+      model: String(body.model ?? "") || "haiku", effort: String(body.effort ?? "") || "low", clientAttemptId: typeof body.clientAttemptId === "string" ? body.clientAttemptId : null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, LAUNCH_RECEIPT_MS));
+    launchAdvance();
+    return json({ ok: true, launched: true, transport: "structured", state: "path-pending", target: "", launchId: launchRun.launchId, conversationId: launchRun.conversationId, initialMessage: "queued" });
+  }
+  /* The seat's create: the same receipt a spawn answers, after the same latency. */
+  if (SEAT_CLS && url.pathname === "/api/orchestrator/seat" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    Object.assign(launchRun, {
+      startedAt: Date.now(), prompt: String(body.mandate ?? ""), title: SEAT_TITLE, engine: String(body.engine ?? "claude"),
+      model: String(body.model ?? "") || "opus", effort: String(body.effort ?? "") || "high", clientAttemptId: typeof body.clientRequestId === "string" ? body.clientRequestId : null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, LAUNCH_RECEIPT_MS));
+    launchAdvance();
+    return json({ ok: true, launched: true, transport: "structured", state: "path-pending", target: "", launchId: launchRun.launchId, conversationId: launchRun.conversationId, initialMessage: "queued" });
+  }
+  if (SEAT_CLS && url.pathname === "/api/orchestrator/seat" && launchRun.startedAt && url.searchParams.get("scope") !== "all") {
+    evidence.seatReads += 1;
+    const adopted = Date.now() - launchRun.startedAt >= LAUNCH_ADOPT_MS;
+    const at = new Date(launchRun.startedAt).toISOString();
+    return json({
+      seat: {
+        project: PROJECT, seatEpoch: 1, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : `spawn:${launchRun.launchId}`, mandate: launchRun.prompt,
+        promptVersion: ORCHESTRATOR_PROMPT_VERSION, predecessorConversationId: null, state: "active",
+        intent: { clientRequestId: launchRun.clientAttemptId, mode: "spawn", launchId: launchRun.launchId, error: null }, designatedAt: at, activatedAt: at,
+      },
+      pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null,
+      all: { conversationIds: [launchRun.conversationId], paths: [launchRun.path], previous: { conversationIds: [], paths: [] } },
+    });
+  }
+  if (SEAT_CLS && url.pathname === "/api/orchestrator/seat/status" && launchRun.startedAt) {
+    return json({
+      project: PROJECT, designated: true, conversationId: launchRun.conversationId, predecessorConversationId: null,
+      engine: launchRun.engine, model: launchRun.model, effort: launchRun.effort, accountId: "primary", cwd: "/repo/atlas", transcriptPath: launchRun.path,
+      liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
+      context: null, transcriptFacts: null, rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    });
+  }
   if (url.pathname === "/api/files") {
+    launchAdvance();
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has
        an idle process and a turn that closed, nothing waits on the operator,
@@ -2181,7 +2311,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : ORCH_FIRST
-      ? { files: [], projectCatalog: [{ project: PROJECT, conversations: 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
@@ -2278,6 +2408,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json({ ok: true, ...asksYouFixtureSetting(ASKS_YOU_SETTING.enabled) });
   }
+  if (url.pathname === "/api/tasks" && method === "GET") launchAdvance();
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY || ORCH_FIRST || ORCH_WALK ? [] : tasks });
   if (ORCH_WALK && url.pathname === "/api/onboarding") {
     const existing = params.get("install") === "existing";
@@ -2558,6 +2689,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
       if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
+      if ((LAUNCH_CLS || SEAT_CLS) && req.path === launchRun.path) {
+        /* The transcript grows by whole lines: a read answers what lies past the offset it was given. */
+        const bytes = new TextEncoder().encode(launchTranscript());
+        return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: bytes.length, size: bytes.length }];
+      }
       const data = transcriptOf(req.path);
       const size = new TextEncoder().encode(data).length;
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
