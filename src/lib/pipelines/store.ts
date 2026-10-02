@@ -699,6 +699,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.branch === "string" &&
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
+    (pipeline.baseRefPinned === undefined || typeof pipeline.baseRefPinned === "boolean") &&
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
@@ -1455,6 +1456,7 @@ export function buildPipeline(input: {
     ...identity,
     baseBranch: "",
     baseRef: "",
+    baseRefPinned: false,
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,

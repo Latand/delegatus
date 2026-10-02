@@ -9,6 +9,7 @@ import {
   type EphemeralAgentRequest,
 } from "./ephemeral";
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { answerSchema } from "@/lib/externalRelay/protocol";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ephemeral-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -87,6 +88,17 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
   );
   expect(catalog).toEqual({ models: [{ slug: "gpt-6-sol", preserved: 1 }] });
 });
+test.each(["claude", "codex"] as const)("%s answer profile pins publication identity in env and engine settings", (engine) => {
+  const request = fixture(engine);
+  const email = ["no-reply", "build.example.invalid"].join("@");
+  Object.assign(request.account.env, { DELEGATUS_PUBLICATION_NAME: "Build Agent", DELEGATUS_PUBLICATION_EMAIL: email });
+  const built = buildEphemeralCommand(request);
+  expect([built.env.GIT_AUTHOR_NAME, built.env.GIT_AUTHOR_EMAIL, built.env.GIT_COMMITTER_NAME, built.env.GIT_COMMITTER_EMAIL]).toEqual(["Build Agent", email, "Build Agent", email]);
+  if (engine === "claude") {
+    const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
+    expect(Object.values(settings.env)).toEqual(["Build Agent", email, "Build Agent", email]);
+  } else expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
+});
 test("Codex finds a new account model when the answer-home cache is stale", () => {
   const request = fixture("codex");
   buildEphemeralCommand(request);
@@ -129,7 +141,7 @@ test("Codex replaces a stale auth link without leaving a temporary link", () => 
   expect(fs.readlinkSync(link)).toBe(path.join(request.account.home, "auth.json"));
   expect(fs.readdirSync(built.env.CODEX_HOME!)).toEqual(["auth.json"]);
 });
-test("Claude answer profile excludes settings, connectors, and instruction marker", () => {
+test("Claude answer profile excludes account settings, connectors, and instruction marker", () => {
   const request = fixture("claude");
   fs.writeFileSync(
     path.join(request.account.home, "CLAUDE.md"),
@@ -141,8 +153,10 @@ test("Claude answer profile excludes settings, connectors, and instruction marke
   expect(built.args).toContain("--strict-mcp-config");
   expect(built.args).toContain("--json-schema");
   expect(built.args).toContain("");
+  expect(JSON.parse(built.args[built.args.indexOf("--settings") + 1]!)).toEqual({
+    env: agentPublicationIdentityEnv(request.account.env),
+  });
   for (const flag of [
-    "--settings",
     "--mcp-config",
     "--session-id",
     "--dangerously-skip-permissions",

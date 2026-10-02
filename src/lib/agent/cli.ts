@@ -8,6 +8,8 @@ import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
 import { accountForSpawn, codexHomeOwningSessionPath, isManagedCodexHome } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
 import { homeDirectory } from "@/lib/platformHome";
+import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
 import { TELEGRAM_CONNECTOR_TOKEN_ENV, telegramSessionPath } from "@/lib/telegram/sessionStore";
@@ -139,13 +141,26 @@ export interface ResumeSpec {
       under structured transport (the migration successor fork). */
   printMode?: true;
   launchProfile?: LaunchProfile;
+  /** Only legacy launches probe native policy; structured hosts read it themselves. */
+  codexPublication?: { home: string; command: string; mcpServers: string[] };
 }
 
-export function withSpawnCapability(spec: ResumeSpec, capability: string): ResumeSpec {
+export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<ResumeSpec> {
+  const input = spec.codexPublication;
+  if (!input) return spec;
+  const source = { ...process.env, CODEX_HOME: input.home };
+  const policy = await readCodexShellPolicy(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), spec.cwd, source);
+  const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
+  return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}`, input.mcpServers) };
+}
+
+export function withSpawnCapability(spec: ResumeSpec, capability: string, source: NodeJS.ProcessEnv = process.env): ResumeSpec {
   if (!/^[A-Za-z0-9_-]{43}$/.test(capability)) throw new Error("Viewer spawn capability is invalid");
+  const identity = Object.entries(agentPublicationIdentityEnv(source))
+    .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
   return {
     ...spec,
-    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${spec.command} )`,
+    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${spec.command} )`,
   };
 }
 
@@ -344,7 +359,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
         })
       : null;
     if (installedPolicy) pushClaudePolicyArgs(args, installedPolicy);
-    else args.push("--strict-mcp-config");
+    else args.push("--settings", JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }), "--strict-mcp-config");
     const command = args.map(shellQuote).join(" ");
     return {
       command: telegramScopedCommand(`${claudeEnvPrefix(options.claudeConfigDir ?? legacyClaudeHome(), mcpServers)} ${command}`, mcpServers),
@@ -411,6 +426,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   }
   const args = [resolveBinary("codex")];
   const home = options.codexHome ?? accountForSpawn().home;
+  args.push(...agentCodexPublicationArgs({}, process.env));
   if (isManagedCodexHome(home)) args.push("-c", "cli_auth_credentials_store=file");
   for (const override of codexMcpRuntimeOverrides(home, cwd, mcpServers)) args.push("-c", override);
   if (options.model) args.push("-m", options.model);
@@ -422,6 +438,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   const command = args.map(shellQuote).join(" ");
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
+    codexPublication: { home, command, mcpServers },
     cwd,
     windowName: "codex-new",
     engine: "codex",
@@ -552,6 +569,8 @@ export function resumeSpecForSession(
     };
   }
   let command = `${(options.hostTerminal ? resolveHostBinary : resolveBinary)("codex")}`;
+  const publicationArgs = agentCodexPublicationArgs({}, process.env);
+  command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
   if (isManagedCodexHome(home)) command += " -c cli_auth_credentials_store=file";
   for (const override of codexMcpRuntimeOverrides(home, cwd, mcpServers)) command += ` -c ${shellQuote(override)}`;
   if (options.model) command += ` -m ${shellQuote(options.model)}`;
@@ -566,6 +585,7 @@ export function resumeSpecForSession(
   command += ` resume ${sessionId}`;
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
+    codexPublication: { home, command, mcpServers },
     cwd,
     windowName: "codex-resume",
     engine: "codex",

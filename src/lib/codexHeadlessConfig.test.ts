@@ -4,6 +4,25 @@ import { viewerMcpHttpCodexEntry, viewerMcpServerEntry, viewerMcpServerEnv } fro
 import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessConfig";
 import { telegramMcpUrl } from "./telegram/packaging";
 
+test("stdio Viewer forwards the current launch capability without embedding it in thread config", () => {
+  const configured = { command: "bun", env_vars: ["CUSTOM_VIEWER_ENV"], env: { CUSTOM_VIEWER_ENV: "kept" } };
+  for (const servers of [{}, { viewer: configured }]) {
+    const config = headlessCodexThreadConfig({ config: { mcp_servers: servers } }) as {
+      mcp_servers: { viewer: { env_vars: string[]; env: Record<string, string> } };
+    };
+    expect(config.mcp_servers.viewer.env_vars).toContain("LLV_SPAWN_CAPABILITY");
+    expect(config.mcp_servers.viewer.env).not.toHaveProperty("LLV_SPAWN_CAPABILITY");
+    if ("viewer" in servers) {
+      expect(config.mcp_servers.viewer.env_vars).toContain("CUSTOM_VIEWER_ENV");
+      expect(config.mcp_servers.viewer.env.CUSTOM_VIEWER_ENV).toBe("kept");
+    }
+  }
+  const replay = headlessCodexThreadConfig({ config: { mcp_servers: {
+    viewer: { ...configured, env_vars: ["LLV_SPAWN_CAPABILITY", "CUSTOM_VIEWER_ENV"] },
+  } } }) as { mcp_servers: { viewer: { env_vars: string[] } } };
+  expect(replay.mcp_servers.viewer.env_vars.filter((name) => name === "LLV_SPAWN_CAPABILITY")).toHaveLength(1);
+});
+
 test("a granted Codex thread materializes the operator Telegram connector when account registration is missing", () => {
   const config = headlessCodexThreadConfig({ config: { mcp_servers: {} } }, false, ["viewer", "telegram"]);
   expect((config.mcp_servers as Record<string, unknown>).telegram).toMatchObject({
@@ -31,6 +50,7 @@ test("headless Codex threads allow only the registered Viewer MCP server", () =>
       viewer: {
         command: "agent-log-viewer-mcp",
         env: viewerMcpServerEnv(),
+        env_vars: ["LLV_SPAWN_CAPABILITY"],
         enabled: true,
         default_tools_approval_mode: "approve",
       },
@@ -45,7 +65,7 @@ test("configurations without Viewer add the packaged server and disable every un
   expect(headlessCodexThreadConfig({ config: { mcp_servers: { docs: {} } } })).toEqual({
     mcp_servers: {
       docs: { enabled: false },
-      viewer: { ...viewerMcpServerEntry(), enabled: true, default_tools_approval_mode: "approve" },
+      viewer: { ...viewerMcpServerEntry(), env_vars: ["LLV_SPAWN_CAPABILITY"], enabled: true, default_tools_approval_mode: "approve" },
     },
     features: { plugins: false, apps: false, multi_agent: false, realtime_conversation: true },
     include_apps_instructions: false,
@@ -163,6 +183,7 @@ test("a replayed Viewer entry drops the unset fields config/read reports as null
     args: ["/opt/viewer/bin/mcp-server.mjs"],
     environment_id: "local",
     env: viewerMcpServerEnv(),
+    env_vars: ["LLV_SPAWN_CAPABILITY"],
     enabled: true,
     default_tools_approval_mode: "approve",
   });
@@ -223,7 +244,7 @@ test("over HTTP, a stdio registration keeps the thread on stdio, because Codex c
   expect(codexViewerOverHttp(registered, "http")).toBe(false);
   const config = headlessCodexThreadConfig({ config: { mcp_servers: { viewer: registered } } }, false, undefined, undefined, "http");
   expect(config.mcp_servers).toEqual({
-    viewer: { ...registered, env: viewerMcpServerEnv(), enabled: true, default_tools_approval_mode: "approve" },
+    viewer: { ...registered, env: viewerMcpServerEnv(), env_vars: ["LLV_SPAWN_CAPABILITY"], enabled: true, default_tools_approval_mode: "approve" },
   });
 });
 
