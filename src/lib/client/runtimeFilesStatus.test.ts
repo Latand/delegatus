@@ -129,15 +129,42 @@ test("retained runtime status yields to fallback polls while the stream is disco
   } finally { cache.dispose(); fallback.dispose(); }
 });
 
-test("host shutdown and recovery cannot reopen an idle turn for the same generation", async () => {
+test("host shutdown and unknown recovery cannot reopen an idle turn for the same generation", async () => {
   const cache = await catalog();
   try {
     const project = createRuntimeFilesStatusProjection();
     const raw = cache.read();
     const settled = project(raw, runtime());
     for (const host of ["dead", "recovering", "unhosted"] as const) {
-      expect(project(raw, runtime({ host }))).toBe(settled);
+      expect(project(raw, runtime({ host, turn: "unknown" })).files[0]).toBe(settled.files[0]);
     }
+  } finally { cache.dispose(); }
+});
+
+test("a late metadata-only replacement keeps its matching turn settlement while offline", async () => {
+  let releaseLate!: (response: Response) => void;
+  let requests = 0;
+  const lateResponse = new Promise<Response>((resolve) => { releaseLate = resolve; });
+  const cache = createFilesClientCache(async () => {
+    requests += 1;
+    return requests === 1
+      ? new Response(JSON.stringify({ files: [file] }))
+      : lateResponse;
+  });
+  try {
+    const project = createRuntimeFilesStatusProjection();
+    await cache.revalidate();
+    const lateRead = cache.revalidate();
+    const settled = project(cache.read(), runtime());
+    releaseLate(new Response(JSON.stringify({ files: [{ ...file, title: "Updated label" }] })));
+    await lateRead;
+
+    const offline = project(cache.read(), { ...runtime(), connection: "offline" });
+    expect(offline.files[0]).toMatchObject({ title: "Updated label", activity: "idle", activityReason: "runtime_turn_idle" });
+
+    const newTurn = { ...cache.read(), files: [{ ...file, title: "Updated label", lastTurn: { startedAt: 91_000, endedAt: null } }] };
+    expect(project(newTurn, { ...runtime(), connection: "offline" }).files[0]?.activity).toBe("live");
+    expect(settled.files[0]?.title).toBe(file.title);
   } finally { cache.dispose(); }
 });
 

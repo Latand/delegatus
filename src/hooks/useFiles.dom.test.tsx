@@ -145,7 +145,7 @@ for (const engine of ["claude", "codex"] as const) {
       source!.onmessage?.({ data: JSON.stringify({
         schemaVersion: 1, seq: 102, eventId: "host-after-end",
         scope: { type: "session", id: conversationId }, revision: 3, kind: "session-status",
-        payload: { conversationId, host: "dead", turn: "idle" },
+        payload: { conversationId, host: "dead", turn: "unknown" },
       }) });
       await Bun.sleep(60);
       expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");

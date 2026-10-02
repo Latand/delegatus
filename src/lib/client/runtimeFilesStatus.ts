@@ -5,6 +5,15 @@ import type { FileEntry } from "@/lib/types";
 
 type Status = Pick<RuntimeSession, "conversationId" | "sessionKey" | "artifactPath" | "turn" | "activeTurnId">
   & { hasAttention: boolean; observedTurn: boolean };
+type Settlement = {
+  conversationId: string;
+  path: string;
+  engine: FileEntry["engine"];
+  authoritativeTurn: NonNullable<FileEntry["authoritativeTurn"]>;
+  clearAttention: boolean;
+  sourceRow?: FileEntry;
+  projectedRow?: FileEntry;
+};
 
 /** Inventory generations deliberately coalesce transcript revisions for five
  * minutes. Turn status must instead follow the structured runtime in the same
@@ -19,7 +28,7 @@ export function createRuntimeFilesStatusProjection() {
   let projected = new WeakMap<FilesData, FilesData>();
   let rows = new WeakMap<FileEntry, FileEntry>();
   let arrays = new WeakMap<FileEntry[], FileEntry[]>();
-  const lastTrustedRows = new WeakMap<FileEntry, FileEntry>();
+  const settlements = new Map<string, Settlement>();
   const observedTurns = new Set<string>();
   let live = false;
 
@@ -44,7 +53,17 @@ export function createRuntimeFilesStatusProjection() {
     const currentIdentities = new Set(sessions.map(identity));
     for (const key of observedTurns) if (!currentIdentities.has(key)) observedTurns.delete(key);
     for (const session of sessions) {
-      if (session.turn === "running" || session.turn === "interrupt_requested") observedTurns.add(identity(session));
+      if (session.turn === "running" || session.turn === "interrupt_requested") {
+        observedTurns.add(identity(session));
+        // A positive running snapshot starts a new generation. Drop the prior
+        // generation's overlay for this artifact before projecting its rows.
+        for (const [key, settlement] of settlements) {
+          if (settlement.path === session.artifactPath && settlement.engine === session.sessionKey.engine
+            && settlement.conversationId === session.conversationId) {
+            settlements.delete(key);
+          }
+        }
+      }
     }
     const statuses = sessions.filter((session) => session.turn === "idle").map((session) => ({
       conversationId: session.conversationId, sessionKey: session.sessionKey, artifactPath: session.artifactPath,
@@ -73,10 +92,30 @@ export function createRuntimeFilesStatusProjection() {
     updateRuntime(runtime);
     const cached = projected.get(data);
     if (cached) return cached;
+    const generationKey = (file: FileEntry) => JSON.stringify([
+      file.path, file.engine, file.lastTurn?.startedAt ?? null,
+    ]);
+    const settlementFor = (file: FileEntry) => {
+      const settlement = settlements.get(generationKey(file));
+      return settlement && (!file.conversationId || settlement.conversationId === file.conversationId)
+        ? settlement : undefined;
+    };
+    const applySettlement = (file: FileEntry, settlement: Settlement): FileEntry => {
+      if (settlement.sourceRow === file && settlement.projectedRow) return settlement.projectedRow;
+      const projectedRow: FileEntry = {
+        ...file,
+        activity: Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle",
+        activityReason: "runtime_turn_idle",
+        authoritativeTurn: file.authoritativeTurn?.state === "terminal" ? file.authoritativeTurn : settlement.authoritativeTurn,
+        ...(settlement.clearAttention ? { pendingQuestion: null, waitingInput: null } : {}),
+      };
+      return projectedRow;
+    };
     let changed = false;
     const files = arrays.get(data.files) ?? data.files.map((file) => {
       if (!live) {
-        const retained = lastTrustedRows.get(file) ?? file;
+        const settlement = settlementFor(file);
+        const retained = settlement ? applySettlement(file, settlement) : file;
         changed ||= retained !== file;
         return retained;
       }
@@ -93,24 +132,32 @@ export function createRuntimeFilesStatusProjection() {
       // paths and a launch still waiting to deliver its prompt keep their facts.
       if (!status || status.sessionKey.engine !== file.engine || (pendingLaunch && !status.observedTurn)
         || (!provisional && status.artifactPath !== file.path)) {
+        const settlement = settlementFor(file);
+        if (settlement) {
+          const retained = applySettlement(file, settlement);
+          rows.set(file, retained);
+          changed = true;
+          return retained;
+        }
         rows.set(file, file);
-        lastTrustedRows.set(file, file);
         return file;
       }
       // The runtime's running axis stays open across silent tools and can lag
       // a terminal transcript flush. Only settlement overlays the inventory:
       // a running axis cannot revive a completed or stalled scanner turn.
-      const activity = Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle";
-      const next: FileEntry = {
-        ...file,
-        activity,
-        activityReason: "runtime_turn_idle",
+      const settlement: Settlement = {
+        conversationId: status.conversationId,
+        path: file.path,
+        engine: file.engine,
         authoritativeTurn: file.authoritativeTurn?.state === "terminal" ? file.authoritativeTurn
           : { state: "idle", source: "lifecycle", terminalAt: null },
-        ...(!status.hasAttention ? { pendingQuestion: null, waitingInput: null } : {}),
+        clearAttention: !status.hasAttention,
+        sourceRow: file,
       };
+      const next = applySettlement(file, settlement);
+      settlement.projectedRow = next;
+      settlements.set(generationKey(file), settlement);
       rows.set(file, next);
-      lastTrustedRows.set(file, next);
       changed = true;
       return next;
     });
