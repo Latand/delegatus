@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { CAP_USD, charged, collect, metrics, paidReplay, parseAnswer, queryFor, requestBody,
-  confidenceIntervals, sampleOperatorPrompts, machineMessage, nativeMatch, budgetSelect, entryText, offerRows, offerIntervals, contextView, replayText, summarizeExpanded, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
+  confidenceIntervals, sampleOperatorPrompts, machineMessage, nativeMatch, budgetSelect, entryText, offerRows, offerIntervals, contextView, replayText, summarizeVariants, REQUEST_VARIANTS, graphScores, cleanEnvelope, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
 
 const roots: string[] = [];
 const priorKey = process.env.OPENROUTER_API_KEY;
@@ -131,7 +131,7 @@ test("Jev gets bounded redacted summaries, no bodies; malformed usage never mean
   const body = requestBody({ ...c, prompt: email + " " + "x".repeat(5000) });
   expect(JSON.stringify(body)).not.toContain(email);
   expect(JSON.stringify(body)).not.toContain("Private body");
-  expect(body.state.prompt.length).toBeLessThanOrEqual(4003);
+  expect(("prompt" in body.state ? body.state.prompt : "").length).toBeLessThanOrEqual(4003);
   expect(reservation(body)).toBeGreaterThanOrEqual(0.01);
   expect(() => parseAnswer({ answers: { c1: { noul: 0.9 } }, usage: { input_tokens: 1 } }, ["c1"])).toThrow();
   expect(() => parseAnswer({ answers: { c1: { noul: 2 } }, usage: { input_tokens: 1, cost: 0 } }, ["c1"])).toThrow();
@@ -292,7 +292,8 @@ test("context view preserves role order and explicitly marks truncation; credent
   const value = ["Fixture", "Only", "12345"].join("");
   expect(replayText("password: " + value)).not.toContain(value);
   expect(replayText(value)).not.toContain(value);
-  expect(requestBody(contextual).state.context).toBe(contextView(contextual));
+  const state = requestBody(contextual).state;
+  expect("context" in state ? state.context : null).toBe(contextView(contextual));
 });
 
 
@@ -332,15 +333,17 @@ test("expanded FTS returns top thirty after native duplicate filtering", () => {
 
 
 test("all-turn public evidence independently reproduces every confidence arm and interval", () => {
-  const results = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.all-turns.results.json", import.meta.url), "utf8")) as ReturnType<typeof summarizeExpanded>;
+  const results = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.all-turns.results.json", import.meta.url), "utf8")) as ReturnType<typeof summarizeVariants>;
   const publishedLabels = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.all-turns.labels.json", import.meta.url), "utf8")) as Labels;
   expect(results.counts.sampled).toBe(100);
   expect(results.population!.reduce((n, p) => n + p.operator, 0)).toBe(results.counts.eligible);
   expect(results.counts.messages).toBe(results.counts.machine + results.counts.copies + results.counts.eligible);
   for (const arm of results.arms) {
     const rows = results.cases.map((c, i) => {
+      const graph = results.graph.cases.find(g => g.id === c.id)!.scores;
+      const probabilities = results.calls.find(r => r.id === `${arm.arm === "graph-grounded" ? "grounded" : arm.arm}:${c.id}`)?.scores ?? {};
       const scores: Record<string, number> = arm.arm === "fts" ? Object.fromEntries(c.candidates.map(m => [m.id, m.score!])) :
-        arm.arm === "jev" ? results.calls.find(r => r.id === c.id)?.scores ?? {} : {};
+        arm.arm === "graph" ? graph : arm.arm === "graph-grounded" ? Object.fromEntries(Object.entries(probabilities).filter(([id]) => graph[id] >= 0.5)) : probabilities;
       const ranked = c.candidates.filter(m => scores[m.id] >= arm.threshold).sort((a, b) => scores[b.id] - scores[a.id]);
       const selected: string[] = []; let characters = 0, bytes = 0;
       for (const m of ranked) if (selected.length < 15 && characters + m.characters <= 10000) {
@@ -363,8 +366,87 @@ test("all-turn public evidence independently reproduces every confidence arm and
   expect(results.spendUsd).toBe(charged(results.calls));
   expect(results.spendUsd).toBeLessThan(2);
   expect(results.calls.every(r => r.status === "complete")).toBeTrue();
-  expect(results.operating).toEqual([null, null]);
-  const fts = results.arms.find(a => a.arm === "fts" && a.threshold === results.exploratoryPaired!.ftsThreshold)!;
-  const jev = results.arms.find(a => a.arm === "jev" && a.threshold === results.exploratoryPaired!.jevThreshold)!;
-  expect(results.exploratoryPaired!.intervals).toEqual(offerIntervals(jev.rows, results.cases.map(c => c.conversation), fts.rows));
+  for (const { arm, threshold } of results.operating) {
+    const qualifying = results.arms.filter(a => a.arm === arm && (a.precision ?? 0) >= 0.9 &&
+      (a.intervals.precision.interval[0] ?? 0) >= 0.8 && a.rows.reduce((n, r) => n + r.offered, 0) >= 20)
+      .sort((a, b) => (b.recall ?? 0) - (a.recall ?? 0) || a.threshold - b.threshold)[0];
+    expect(threshold).toBe(qualifying?.threshold ?? null);
+  }
+  for (const { variant, comparison, exploratory } of results.paired) for (const pair of [comparison, exploratory]) {
+    if (!pair) continue;
+    const fts = results.arms.find(a => a.arm === "fts" && a.threshold === pair.ftsThreshold)!;
+    const jev = results.arms.find(a => a.arm === variant && a.threshold === pair.jevThreshold)!;
+    expect(pair.intervals).toEqual(offerIntervals(jev.rows, results.cases.map(c => c.conversation), fts.rows));
+  }
+});
+
+
+test("positive operator provenance outranks tool-name and urgency heuristics through collect", () => {
+  const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite"), transcript = path.join(dir, "native.jsonl");
+  memoryDb(mp).close();
+  const body = "<!-- llv:structured-user origin=operator -->\nPlease fix send_message_to_orchestrator so failed sends stay visible.";
+  fs.writeFileSync(transcript, JSON.stringify({ type: "response_item", timestamp: "2026-01-01T00:00:00Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: body }] } }) + "\n");
+  const db = new Database(tp);
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
+  db.query("INSERT INTO transcript_files VALUES (?,?,?)").run(transcript, "codex", "project-a");
+  db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,?)").run(transcript, 0, body, 1, "user", 0); db.close();
+  const result = collect(tp, mp);
+  expect(result.counts.eligible).toBe(1);
+  expect(result.cases[0].prompt).toBe("Please fix send_message_to_orchestrator so failed sends stay visible.");
+  expect(machineMessage("ТЕРМІНОВО: check the result", true)).toBeFalse();
+  expect(machineMessage("Your turn ended and the pipeline controller could not read a verdict", true)).toBeTrue();
+  expect(sampleOperatorPrompts([{ ...message("Review this now"), operatorOrigin: true, machineOrigin: true }]).counts.eligible).toBe(0);
+});
+
+
+test("voice digest is stripped while the operator suffix survives", () => {
+  const text = "While you were away the manager reported:\n- [info] Finished a task.\n\nMention what matters in your own words. Do not read this list aloud.\n\nPlease check the result.";
+  expect(cleanEnvelope(text)).toBe("Please check the result.");
+  expect(machineMessage(text, true)).toBeFalse();
+  expect(machineMessage("Від локального оркестратора: relay", true)).toBeTrue();
+});
+
+test("improved questions carry their own memory, context and literal criteria", () => {
+  const contextual = { ...c, project: "project-a", context: [{ role: "user", text: "Fix the socket handler" }, { role: "assistant", text: "I will inspect cleanup" }] };
+  const original = requestBody(contextual, "original");
+  expect(JSON.stringify(original)).not.toContain("I will inspect cleanup");
+  for (const variant of ["framed", "grounded"] as const) {
+    const request = requestBody(contextual, variant);
+    expect(JSON.stringify(request.state)).toContain("project-a");
+    expect(JSON.stringify(request.state)).toContain("codex");
+    expect(JSON.stringify(request.state)).toContain("I will inspect cleanup");
+    const question = JSON.stringify(request.questions.c1);
+    expect(question).toContain(candidate("c1").summary);
+    expect(question).toContain("criteria");
+    expect(question.includes("supportingBodyExcerpt")).toBe(variant === "grounded");
+  }
+});
+
+test("all variants share one durable cap and replay without further charges", async () => {
+  const { ledger, probe } = setup(); let calls = 0;
+  const fake = async () => { calls++; return response(); };
+  const result = await paidReplay(sample, labels, ledger, probe, fake, [...REQUEST_VARIANTS]);
+  expect(calls).toBe(4);
+  expect(charged(result.receipts)).toBeCloseTo(0.00041, 9);
+  await paidReplay(sample, labels, ledger, probe, fake, [...REQUEST_VARIANTS]);
+  expect(calls).toBe(4);
+  expect(summarizeVariants(sample, labels, result).variantUsage).toHaveLength(4);
+  const next = setup();
+  fs.writeFileSync(next.probe, JSON.stringify({ kind: "prior-experiments", status: "complete", costUsd: 1.995 }));
+  await expect(paidReplay(sample, labels, next.ledger, next.probe, fake, [...REQUEST_VARIANTS])).rejects.toThrow("Budget refuses");
+  expect(calls).toBe(4);
+});
+
+test("graph reranks linked neighbours and Codex keywords within the eligible pool", () => {
+  const pool = [
+    { ...candidate("c1"), title: "Seed", body: "See [[Target]]", score: 10 },
+    { ...candidate("c2"), title: "Target", body: "Details", score: 1 },
+    { ...candidate("c3"), title: "Unrelated", body: "Other", score: 4, kind: "other" },
+  ];
+  const graph = graphScores(pool);
+  expect(graph.edges.link).toBe(1);
+  expect(graph.scores.c2).toBeGreaterThan(graph.scores.c3);
+  expect(Object.keys(graph.scores)).toEqual(["c1", "c2", "c3"]);
+  const keywords = pool.slice(0, 2).map(c => ({ ...c, sourceKind: "codex_memory", body: c.summary + "\n- socket, lifecycle" }));
+  expect(graphScores(keywords).edges.keywords).toBe(1);
 });
