@@ -246,7 +246,7 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
     ]));
     expect(retirement.description).toContain("designated seat");
     expect((retirement.inputSchema.properties?.callerLaunchId as { description: string }).description).toContain("Optional");
-    expect(retirement.inputSchema.required).not.toContain("callerLaunchId");
+    expect(retirement.inputSchema.required ?? []).not.toContain("callerLaunchId");
 
     const first = await session.client.callTool({
       name: "list_flows",
