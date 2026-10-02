@@ -303,6 +303,7 @@ test.each(["action", "stage", "repair"] as const)("a blocked artifact parent pro
     disposition: "owner", publish: "enabled", ownerId: blocked.id, epoch: 1, active: true, journal: [] };
   if (kind === "repair") {
     blocked.stages[0]!.effectiveRole.access = "read-only"; blocked.stages[0]!.outputs = ["report.md"];
+    blocked.runs[0]!.attempts[0]!.agentPath = "/sandbox/producer.jsonl";
     blocked.runs[1]!.attempts[0]!.flowId = "blocked-parent-repair";
   }
   savePipelines([blocked, h.lane]);
