@@ -65,7 +65,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
+import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
@@ -235,6 +235,8 @@ export interface PipelinePorts {
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
   stopStageAgent(target: PipelineStageHostRef): Promise<PipelineStageStopResult>;
+  /** Null means newer working-host evidence withdrew the automatic stop. */
+  stopInterruptedStageAgent?(target: PipelineStageHostRef, options?: { allowIdle?: boolean }): Promise<PipelineStageStopResult | null>;
   /** Identity-verified teardown of a stage attempt's tmux pane, for a
       pane-hosted agent the registry can no longer address. `unknown` means the
       pane could not be proven to be this stage's, so nothing was signalled. */
@@ -291,6 +293,8 @@ export interface PipelinePorts {
     transcriptPath: string;
     clientMessageId: string;
     text: string;
+    /** Restart recovery must not interrupt work that began after its snapshot. */
+    policy?: "queue";
     project?: string;
     cwd?: string;
   }): Promise<boolean>;
@@ -938,6 +942,7 @@ async function stopStageHostByRecordedIdentity(
   target: PipelineStageHostRef,
   probe: StageHostProbe,
   termination: StructuredHostTerminationDependencies,
+  observationGuard?: () => { status: 409; error: string } | null,
 ): Promise<PipelineStageStopResult> {
   const registry = agentRegistry();
   const refused = (reason: string): PipelineStageStopResult => ({
@@ -970,6 +975,8 @@ async function stopStageHostByRecordedIdentity(
      signal: the row must still name this exact process as this conversation's
      current host, and the conversation must not hold an orchestrator seat. */
   const authorize = (): { status: 403 | 409; error: string } | null => {
+    const changed = observationGuard?.();
+    if (changed) return changed;
     const current = structuredHostKillRefFromRegistry(probe.key);
     if (!current.ok) return { status: 409, error: `authority lost before signalling: ${current.error}` };
     if (current.ref.pid !== ref.pid
@@ -1228,6 +1235,43 @@ export function defaultPipelinePorts(
       return info !== null && !isShellCommand(info.command);
     },
     stopStageAgent: (target) => stopPipelineStageAgent(target),
+    stopInterruptedStageAgent: async (target, options) => {
+      const probe = await stageHostProbe(target);
+      const stamp = () => {
+        if (!probe) return null;
+        const current = registry.readOnlySnapshot();
+        const generation = current.conversations[probe.conversationId]?.generations.at(-1);
+        const entry = current.entries[sessionKeyId(probe.key)];
+        let artifact: [number, number, number] | null = null;
+        try {
+          const stat = fs.statSync(probe.transcriptPath);
+          artifact = [stat.ino, stat.size, stat.mtimeMs];
+        } catch { /* An unreadable or removed artifact withdraws its old stamp. */ }
+        return JSON.stringify([generation?.id, entry?.updatedAt, entry?.structuredHost?.process, artifact]);
+      };
+      const observed = stamp();
+      // A new reader bypasses this sweep's cached runtime snapshot. Bind the
+      // resulting stop to the registry revision captured before that await.
+      const id = probe?.conversationId ?? target.conversationId;
+      if (!id) return null;
+      const interrupted = await defaultPipelinePorts(dependencies).conversationTurnInterrupted!(id);
+      if (interrupted !== "dead" && interrupted !== "stalled" && !(options?.allowIdle && interrupted === "idle")) return null;
+      if (!probe || !probe.resident()) return { outcome: "not-running" };
+      let changed = false;
+      const guard = (): { status: 409; error: string } | null => {
+        if (stamp() === observed) return null;
+        changed = true;
+        return { status: 409, error: "stage host evidence changed before automatic termination" };
+      };
+      if (guard()) return null;
+      const stopped = await stopStageHostByRecordedIdentity(target, probe, {}, guard);
+      // The runtime can retire its own row during termination. That revision
+      // change is a completed stop when no captured process survived.
+      if (stopped.outcome === "unresolved" && stopped.survivors.length === 0 && !probe.resident()) {
+        return { outcome: "stopped" };
+      }
+      return changed && stopped.outcome === "failed" ? null : stopped;
+    },
     stopStagePane: (target) => stopPipelineStagePane(target),
     stageHostResident: async (target) => {
       try {
@@ -1353,6 +1397,7 @@ export function defaultPipelinePorts(
         conversationId: input.conversationId,
         clientMessageId: input.clientMessageId,
         text: input.text,
+        ...(input.policy ? { policy: input.policy } : {}),
         /* #1117: the continuation is the controller's own message, and the
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
@@ -2571,11 +2616,11 @@ function advancePipeline(
   accepted = false,
 ): void {
   const successor = passSuccessor(pipeline, stage, attempt);
-  const detail = successor.handoff ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
+  const detail = successor.handoff && !successor.recheck ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
      new head leaves a head nobody reviewed. Under the default `advance` the
-     lane still completes or takes the reviewer's pass edge, and the record and
-     the next stage's input say the findings went unreviewed. Only an edge that
+     terminal gate re-checks the fix once, while a nonterminal gate takes its
+     pass edge and relays the findings as unreviewed. Only an edge that
      asked for `stop-after-fix` stops in needs_review for the operator; a fix
      that wrote nothing new moves on under either. */
   if (
@@ -2604,29 +2649,29 @@ function advancePipeline(
   pipeline.cursor = {
     stageId: successor.next,
     state: "pending",
-    input: successor.handoff ? budgetSpentInput(attempt?.output ?? null, successor.handoff) : attempt?.output ?? null,
-    activatedBy: attempt ? { stageId: stage.id, attempt: attempt.n, edge: "pass" } : null,
+    input: successor.handoff && !successor.recheck ? budgetSpentInput(attempt?.output ?? null, successor.handoff) : attempt?.output ?? null,
+    activatedBy: attempt ? { stageId: stage.id, attempt: attempt.n, edge: "pass", ...(successor.recheck ? { budgetRecheck: true as const } : {}) } : null,
   };
   pipeline.state = "running";
   pipeline.stateDetail = detail;
   pipeline.pausedState = null;
 }
 
-/** Where a pass of this attempt goes. A fix that ran on a spent fail edge's
-    last handoff (#1868) follows the reviewer's own pass edge: the budget said
-    how much review the lane gets, so the reviewer is not asked again. */
+/** A spent advance fix returns to its terminal gate for one final re-check
+    (#2247). Nonterminal handoffs continue along the source's pass edge. */
 function passSuccessor(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt?: PipelineStageAttempt | null,
-): { next: string | null; handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null } | null } {
+): { next: string | null; handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null } | null; recheck?: boolean } {
   const activation = attempt?.activatedBy;
   const source = activation?.edge === "fail" && activation.budgetSpent
     ? pipeline.stages.find((candidate) => candidate.id === activation.stageId) ?? null
     : null;
   if (!source || !activation) return { next: stage.next, handoff: null };
   const sourceAttempt = pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null;
-  return { next: source.next, handoff: { source, attempt: sourceAttempt } };
+  const recheck = source.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance";
+  return { next: recheck ? source.id : source.next, handoff: { source, attempt: sourceAttempt }, recheck: !!recheck };
 }
 
 /** Stop a lane whose spent review budget left an unreviewed head (#1938). The
@@ -2795,7 +2840,13 @@ function routeFailedAttempt(
   reviewed = true,
 ): boolean {
   if (!stage.onFail) return false;
+  if (attempt.activatedBy?.budgetRecheck) {
+    park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
+    return true;
+  }
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
+  const spent = failEdgeExhaustion(stage.onFail) === "advance"
+    ? advanceFailEdgeBudgetSpent(pipeline, stage, attempt) : failEdgeBudgetSpent(pipeline, stage);
   const used = failEdgeRoundsUsed(pipeline, stage);
   /* Under the default `advance` (#1868) `maxRounds` is also how many reviews
      the source gets: the fail of its last one is the handoff below, so the
@@ -2821,8 +2872,9 @@ function routeFailedAttempt(
      findings go to the fix stage one more time, and that fix's pass follows
      this stage's pass edge (or, under `stop-after-fix` with a new head, stops
      in needs_review); `park` keeps the stop for the operator. The handoff
-     happens once per stage, so a later fail of the same stage parks. */
-  if (targetStage && advancesWhenSpent && !failEdgeBudgetSpent(pipeline, stage)) {
+     is scoped to a gate entry under advance: another gate's fail loop may
+     bring it back, while a terminal re-check cannot hand off again. */
+  if (targetStage && advancesWhenSpent && !spent) {
     attempt.budgetSpent = true;
     /* #1938: the head this review judged, so the fix's pass can tell whether
        it wrote one nobody reviewed. */
@@ -3066,8 +3118,8 @@ function settleStageVerdict(
        A spent budget (#1868) hands the findings to the target once more under
        the edge's default `onExhausted: "advance"` and under `stop-after-fix`,
        and parks under `park`. After that last fix `advance` moves on or
-       completes, and `stop-after-fix` waits in needs_review when the fix wrote
-       a new head (#2187). */
+       re-checks a terminal gate before completion (#2247); `stop-after-fix`
+       waits in needs_review when the fix wrote a new head (#2187). */
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -3235,6 +3287,15 @@ async function stopInterruptedStageAttempt(stage: PipelineStage, attempt: Pipeli
   return stopped;
 }
 
+async function stopAutomaticInterruptedStageAttempt(stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, allowIdle = false): Promise<PipelineStageStopResult | null> {
+  if (!ports.stopInterruptedStageAgent) return stopInterruptedStageAttempt(stage, attempt, ports);
+  const stopped = await ports.stopInterruptedStageAgent({ stageId: stage.id, attempt: attempt.n,
+    launchId: attempt.launchId, conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId,
+    ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}) }, { allowIdle });
+  if (stopped?.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+  return stopped;
+}
+
 /** Restart and stall recovery share the existing durable conversation delivery
     seam. Reserve before any host/transport effect, and preserve partial work. */
 async function recoverInterruptedStageTurn(
@@ -3278,7 +3339,13 @@ async function recoverInterruptedStageTurn(
   const previous = attempt.restartRecovery;
   if (previous?.bootId === bootId) {
     if (unixMs(ports.now()) - unixMs(previous.requestedAt) < SEVERED_TURN_PARK_SILENCE_MS) return true;
-    const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+    if (interrupted === "idle") {
+      park(pipeline, "stage interrupted again after its one restart continuation; retry-stage to start a fresh attempt", attempt);
+      persist();
+      return true;
+    }
+    const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports);
+    if (stopped === null) return true;
     const detail = stopped.outcome === "stopped" || stopped.outcome === "not-running"
       ? "stage interrupted again after its one restart continuation; retry-stage to start a fresh attempt"
       : "stage interrupted again after its one restart continuation; host termination is still unconfirmed";
@@ -3295,7 +3362,13 @@ async function recoverInterruptedStageTurn(
   persist();
   try {
     if (interrupted !== "idle") {
-      const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+      const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports);
+      if (stopped === null) {
+        if (previous) attempt.restartRecovery = previous;
+        else delete attempt.restartRecovery;
+        persist();
+        return true;
+      }
       if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
         park(pipeline, "restart continuation could not confirm termination of the stalled host", attempt);
         persist();
@@ -3303,7 +3376,7 @@ async function recoverInterruptedStageTurn(
       }
     }
     const accepted = await ports.resumeSeveredTurn?.({ conversationId: attempt.conversationId,
-      transcriptPath: attempt.agentPath, clientMessageId, project: pipeline.project, cwd: pipeline.repoDir,
+      transcriptPath: attempt.agentPath, clientMessageId, project: pipeline.project, cwd: pipeline.repoDir, policy: "queue",
       text: "Your turn was interrupted by a Delegatus restart. Continue from your current work, finish it, and report your verdict with stage_report; use the fenced JSON fallback only if that tool is unavailable or returns an error." });
     if (accepted !== true) park(pipeline, "restart continuation was refused; retry-stage to start a fresh attempt", attempt);
     else pipeline.stateDetail = "interrupted stage received one restart continuation";
@@ -8131,21 +8204,32 @@ export async function patchPipeline(
       const inputs = draftStageInputs(pipeline.stages);
       const index = req.index === undefined ? inputs.length : req.index;
       if (!Number.isInteger(index) || index < 0 || index > inputs.length) return { error: "stage index is out of range", status: 400 };
-      /* Splice the new stage into the chain at its own seam only: it inherits the
-         predecessor's former pass target and the predecessor now points at it, so
-         every OTHER stage's intentional edge is untouched (#353). Inserting at the
-         front makes the new stage the head, pointing at the old head. */
-      const predecessor = index > 0 ? inputs[index - 1] : null;
-      /* On a started pipeline the seam rewires the predecessor's pass edge,
-         which is evidence once that stage has taken it. */
-      if (predecessor && passEdgeTaken(pipeline, predecessor.id)) {
-        return { error: `stage ${predecessor.id} has already passed along its pass edge, which is frozen evidence; insert the stage at another index, or add it where its predecessor has not passed yet and wire it with set-edge`, status: 409 };
+      /* Draft records require their entry at position zero. Adding before it
+         would silently replace the execution entry even with unchanged edges. */
+      if (pipeline.state === "draft" && inputs.length && index === 0) {
+        return { error: `cannot insert before draft entry ${inputs[0]!.id}; use index 1 or later to preserve the execution entry`, status: 409 };
       }
-      const seamNext = predecessor ? predecessor.next ?? null : inputs[index]?.id ?? null;
-      const inserted: PipelineStageInput = { ...req.stage, next: seamNext };
+      /* Array order is presentation. Only an explicit after selects a pass
+         edge to splice; otherwise every supplied edge is preserved (#2247). */
+      if (req.after !== undefined && (typeof req.after !== "string" || !req.after.trim())) {
+        return { error: "after requires a stage id", status: 400 };
+      }
+      const predecessor = req.after === undefined ? null : inputs.find((stage) => stage.id === req.after);
+      if (req.after !== undefined && !predecessor) return { error: `after stage ${req.after} does not exist`, status: 400 };
+      if (predecessor && passEdgeTaken(pipeline, predecessor.id)) {
+        return { error: `stage ${predecessor.id} has already passed along its pass edge, which is frozen evidence; add the stage without after and wire an untaken edge with set-edge`, status: 409 };
+      }
+      const inserted: PipelineStageInput = predecessor ? { ...req.stage, next: predecessor.next ?? null } : { ...req.stage };
       inputs.splice(index, 0, inserted);
-      /* An insert before a started stage shifts it, and one at the front
-         makes a head nothing routes to once the pipeline has left it. */
+      /* Structural-edit cleanup may prune deleted targets. A newly supplied
+         edge must be admitted as written or refused, never silently cleared. */
+      const ids = new Set(inputs.map((stage) => stage.id));
+      if (inserted.next != null && (inserted.next === inserted.id || !ids.has(inserted.next))) {
+        return { error: `stage ${inserted.id} has an invalid pass target`, status: 400 };
+      }
+      if (inserted.onFail && !ids.has(inserted.onFail.to)) {
+        return { error: `stage ${inserted.id} has an invalid fail target`, status: 400 };
+      }
       const displaced = startedStagePositionRefusal(pipeline, inputs);
       if (displaced) return displaced;
       if (predecessor) predecessor.next = inserted.id;
@@ -8171,7 +8255,7 @@ export async function patchPipeline(
         stageId: inserted.id,
         effect: "applied",
         appliesFromAttempt: 1,
-        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${seamNext ? `, before ${seamNext}` : ""}${fixer ? `, as a reviewer with fix stage ${fixer}` : ""}`,
+        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${predecessor && inserted.next ? `, before ${inserted.next}` : ""}${fixer ? `, as a reviewer with fix stage ${fixer}` : ""}`,
       });
     } else if (req.action === "remove-stage") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
@@ -8349,6 +8433,10 @@ export async function patchPipeline(
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
       if (elsewhere) return elsewhere;
       if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
+        if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
+          || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
+          return { error: "the restart-parked attempt still has a pending continuation", status: 409 };
+        }
         const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           persist();
@@ -8367,7 +8455,8 @@ export async function patchPipeline(
           || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           return { error: "the running attempt is not confirmed stalled or has a pending delivery", status: 409 };
         }
-        const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+        const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
+        if (stopped === null) return { error: "the stage host resumed work before its stalled retry", status: 409 };
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           persist();
           return { error: "the stalled attempt host has not confirmed termination", status: 409 };

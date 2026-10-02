@@ -633,7 +633,10 @@ function evidenceSummary(evidence: SeatTickWakeEvidence | null): string | null {
       : journal === "unasked" ? "runtime journal not asked"
         : `runtime journal: ${journal.status}${journal.reason ? ` — ${redactBounded(journal.reason, REASON_LIMIT)}` : ""}`);
   if (evidence.recorded === "lost") parts.push("the delivery record was settled lost on the journal's own verdict");
-  if (evidence.recorded === "delivered") parts.push("the delivery record was settled delivered on the journal's own verdict");
+  if (evidence.confirmation === "claude-ledger") parts.push("the Claude delivery ledger confirms the original operation's arrival");
+  if (evidence.recorded === "delivered") parts.push(evidence.confirmation === "claude-ledger"
+    ? "the delivery record was settled delivered on that confirmation"
+    : "the delivery record was settled delivered on the journal's own verdict");
   if (evidence.recorded === "refused") parts.push("the delivery record could not take the journal's verdict and keeps its own answer; the release rests on the journal alone");
   return parts.join("; ");
 }
@@ -1513,7 +1516,11 @@ async function check(
     } else if (mcpHealth?.status === "dead" && !(
       verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
       && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
-        && !(state.reportedStalls ?? []).includes(item.stallToken))
+        && (!(state.reportedStalls ?? []).includes(item.stallToken)
+          // Parking is new news even if the interrupted turn never wrote a
+          // newer record. Its own-lane announcement has independent dedupe.
+          || (item.laneAnnouncement === `${item.id}:needs_decision`
+            && !(state.announcedLanes ?? []).includes(item.laneAnnouncement))))
     )) {
       delivery = { clientMessageId, outcome: "seat-mcp-unavailable" };
       fenceDetail = `${mcpHealth.detail}; rotate the seat`;

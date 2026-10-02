@@ -167,8 +167,14 @@ export function useSeatConfirm(options: {
       setFailure({ kind: "ambiguous", error: t("orchPanel.transportLost"), clientRequestId });
     } finally {
       inFlight.current = false;
-      setSubmitting(false);
-      await refresh();
+      /* The draft keeps its submitting face until the durable read says where the seat landed. Let go first, and
+         the panel shows the draft again for the frames the read takes (a short draft over the board, then the
+         live seat at its full height), and the whole board jumps up and back down. */
+      try {
+        await refresh();
+      } finally {
+        setSubmitting(false);
+      }
     }
   }, [url, project, storage, field, refresh, t]);
 

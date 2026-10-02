@@ -30,6 +30,7 @@ import { conversationIdentity, withoutArchivedPredecessors } from "@/lib/account
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
 import { ComposerBar } from "./ComposerBar";
+import { markLaunchedConversation } from "./launchedConversations";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { DraftLaunchStatus } from "./DraftLaunchStatus";
 import {
@@ -699,6 +700,7 @@ export function DraftAgentPane({
            later confirms and replaces it, never gates the attach. */
         const provisional = provisionalSpawnFile(candidate, outcome, project);
         if (provisional) {
+          markLaunchedConversation(provisional);
           applySpawnedConversationSnapshot(provisional);
           onSpawned(provisional);
         }

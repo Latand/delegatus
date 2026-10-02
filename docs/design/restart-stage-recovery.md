@@ -19,7 +19,9 @@ per Viewer/runtime-host boot when a readable open-turn artifact agrees with
 positive idle, dead, or confirmed stalled runtime evidence. Stalled hosts must
 confirm termination before delivery. Pending deliveries, deploy continuations,
 permission requests, terminal turns and unknown evidence retain their
-existing authority. A recorded report remains authoritative when its resumed turn ends. A failed admission or a second interruption after ten minutes
+existing authority. Continuations queue behind work that resumed after the
+runtime snapshot. A recorded report remains authoritative when its resumed turn
+ends. A failed admission or a second interruption after ten minutes
 parks with an explicit reason. Retry requires the caller's stage and attempt,
 positive stalled evidence, and confirmed host termination; it preserves the
 checkout. Surviving process identities continue to fence replacement attempts.
@@ -31,6 +33,8 @@ interval limits and delivery accounting still apply. Successful arrival records
 the stall token; an unchanged stall cannot repeatedly bypass the heartbeat gate.
 When a lane is already represented by an own-lane agenda item, that same item
 now carries its stall token and reason, preserving delivery dedupe.
+A new own-lane decision announcement also qualifies after parking, even if the
+interrupted turn wrote no newer record. Arrival records that announcement once.
 
 Regression tests use isolated state and reconstruct controllers from the stored
 attempts and stall observations. They cover both engines with idle, dead and

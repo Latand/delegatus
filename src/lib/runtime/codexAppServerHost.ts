@@ -1,4 +1,5 @@
 import { normalizeNativeQueueObservation } from "./nativeQueueContent";
+import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity";
 import { CodexRealtimeTranscript } from "./codexRealtimeTranscript";
 import type { NativeQueueInput } from "./nativeCodexQueue";
 import { StructuredSendRefusedError } from "./engineHost";
@@ -1467,8 +1468,9 @@ export class CodexAppServerHost implements EngineHost {
         provisional.imageInputSupport = "unknown";
       }
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
+      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown } };
       const config = headlessCodexThreadConfig(
-        await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }),
+        configRead,
         options.allowSubagents === true,
         options.mcpServers,
         granted,
@@ -1477,6 +1479,7 @@ export class CodexAppServerHost implements EngineHost {
            over HTTP. */
         viewerMcpTransportForLaunch(childEnv),
       );
+      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
