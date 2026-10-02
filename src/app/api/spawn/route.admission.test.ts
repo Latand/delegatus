@@ -246,8 +246,8 @@ test("an agent capability caller without src spawns with an inferred durable par
     clientAttemptId: "inferred_parent_20260719_a1",
   }), dependencies(cwd));
 
-  expect(response.status).toBe(202);
   const body = await response.json() as { launchId: string; conversationId: string; parent: unknown };
+  expect({ status: response.status, body }).toMatchObject({ status: 202 });
   expect(body.parent).toEqual({ conversationId: caller.conversationId, source: "inferred-caller" });
 
   const snapshot = agentRegistry().snapshot();
@@ -307,11 +307,12 @@ test("an operator capability caller without src proceeds as a silent root (#341)
   const response = await POST.withDependencies(agentRequest(operator, {
     cwd,
     ["prompt"]: "pipeline launch without src",
+    clientAttemptId: "operator-root-attempt",
     role: "builder",
   }), dependencies(cwd));
 
-  expect(response.status).toBe(202);
   const body = await response.json() as { launchId: string; conversationId: string; parent: unknown };
+  expect({ status: response.status, body }).toMatchObject({ status: 202 });
   expect(body.parent).toBeNull();
 
   const snapshot = agentRegistry().snapshot();

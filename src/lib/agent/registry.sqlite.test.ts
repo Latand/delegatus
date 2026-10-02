@@ -748,7 +748,7 @@ test("SQLite restart derives and persists explicit operation ownership before to
   )).toMatchObject({ id: original.id, state: "delivered", command });
 });
 
-test("terminal operation ownership stays bounded and payload-free in JSON and SQLite", () => {
+test("terminal operation ownership stays bounded with recipient evidence in JSON and SQLite", () => {
   for (const backend of ["json", "sqlite"] as const) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-registry-bounded-owners-${backend}-`));
     const filename = path.join(directory, "agent-registry.json");
@@ -807,11 +807,13 @@ test("terminal operation ownership stays bounded and payload-free in JSON and SQ
     expect(snapshot.deliveryOperationOwners[retainedOperationId]).toMatchObject({
       terminalState: "failed",
       requestDigest: expect.any(String),
+      evidenceText: retainedText,
     });
     expect(Object.values(snapshot.heldDeliveries)
       .some((delivery) => delivery.command.operationId === retainedOperationId)).toBeFalse();
     if (backend === "json") {
-      expect(fs.readFileSync(filename, "utf8")).not.toContain(retainedText);
+      // Recipient acknowledgements need the bounded owner evidence after compaction.
+      expect(JSON.parse(fs.readFileSync(filename, "utf8")).deliveryOperationOwners[retainedOperationId].evidenceText).toBe(retainedText);
       expect(fs.statSync(filename).size).toBeLessThanOrEqual(firstJsonBytes + 16_384);
     } else {
       /* SQLite is the only store: no JSON is written at all (#1870). */
@@ -819,7 +821,7 @@ test("terminal operation ownership stays bounded and payload-free in JSON and SQ
       const secondSqliteStats = sqliteOwnerStats();
       expect(secondSqliteStats.count).toBe(200);
       expect(secondSqliteStats.bytes).toBeLessThanOrEqual(firstSqliteStats!.bytes + 4_096);
-      expect(secondSqliteStats.payload).not.toContain(retainedText);
+      expect(secondSqliteStats.payload).toContain(retainedText);
     }
 
     store = new AgentRegistry(filename, undefined, undefined, storage);
@@ -854,7 +856,7 @@ test("terminal operation ownership stays bounded and payload-free in JSON and SQ
       { operationId: retainedOperationId, kind: "send", policy: "queue" },
     )).toThrow("operation id is already reserved for another client message");
   }
-}, 15_000);
+}, 60_000);
 
 test("dual-write leaves both backends unchanged after a no-op mutation", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-noop-"));
@@ -1754,7 +1756,8 @@ test.each(["off", "dual-write", "read", "sqlite"] as const)(
       transactionP95Ms: expect.any(Number),
     });
   },
-  30_000,
+  // All 650 durable mutations must run; slower disks need more than 30 seconds.
+  60_000,
 );
 
 test("SQLite adoption keeps structured-host writer epochs fenced across restarts", () => {

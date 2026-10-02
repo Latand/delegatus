@@ -158,6 +158,7 @@ describe("linkEntries", () => {
     const begun = registry.beginSpawnRequest({
       engine: "claude",
       cwd: SANDBOX,
+      launchProfile: { title: "Build the requested change" },
       transport: "structured",
       accountId: "work",
       parentConversationId: parentConversation.id,
@@ -196,6 +197,7 @@ describe("linkEntries", () => {
     const begun = registry.beginSpawnRequest({
       engine: "claude",
       cwd: SANDBOX,
+      launchProfile: { title: "Build the requested change" },
       transport: "structured",
       accountId: "work",
       parentConversationId: parentConversation.id,
@@ -238,6 +240,7 @@ describe("linkEntries", () => {
     const begun = registry.beginSpawnRequest({
       engine: "claude",
       cwd: SANDBOX,
+      launchProfile: { title: "Build the requested change" },
       transport: "structured",
       accountId: "work",
       parentConversationId: parentConversation.id,

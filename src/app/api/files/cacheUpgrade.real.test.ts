@@ -153,7 +153,7 @@ for (const scenario of [
     if (scenario.oldScan) expect(first.headers.get("x-llv-files-cache")).toBe("miss");
     expect(first.headers.get("x-llv-files-projection-cache")).toBe("miss");
     await drainCaches();
-    expect(JSON.parse(fs.readFileSync(scanPath, "utf8")).schemaVersion).toBe(11);
+    expect(JSON.parse(fs.readFileSync(scanPath, "utf8")).schemaVersion).toBe(12);
 
     // Both consumers and their subsequent cache hits retain the same values.
     for (const view of ["full", "summary"] as const) {

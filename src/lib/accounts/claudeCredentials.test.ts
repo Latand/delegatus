@@ -49,6 +49,7 @@ test("unsafe mode and symlinks cannot be bypassed through Keychain", () => {
   const dir = home(), file = path.join(dir, ".credentials.json");
   const ports: ClaudeCredentialPorts = { platform: "darwin", security: () => { throw new Error("must not read Keychain"); } };
   fs.writeFileSync(file, "{}", { mode: 0o644 });
+  fs.chmodSync(file, 0o644); // The unsafe fixture must survive a restrictive umask.
   expect(readClaudeCredentials(dir, ports)).toEqual({ state: "unsafe" });
   fs.unlinkSync(file); fs.symlinkSync(path.join(root, "missing"), file);
   expect(readClaudeCredentials(dir, ports)).toEqual({ state: "unsafe" });

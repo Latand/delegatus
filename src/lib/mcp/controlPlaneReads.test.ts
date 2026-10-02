@@ -423,6 +423,10 @@ test("get_conversation enforces tailLines through the validated transcript-path 
 });
 
 test("get_conversation returns a held path tail with deadline-partial metadata", async () => {
+  let clockNow = Date.now();
+  const deadlineAt = clockNow + 1_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  try {
   const root = path.dirname(transcriptPath);
   const pathAllowed = (candidate: string) => {
     try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
@@ -438,7 +442,7 @@ test("get_conversation returns a held path tail with deadline-partial metadata",
         { tailLines: options.tailLines },
         { roots: [["codex-sessions", root]], pathAllowed },
       );
-      await Bun.sleep(20);
+      clockNow = deadlineAt + 1;
       return held;
     },
     listFiles: async () => { throw new Error("path tails must stay on the targeted reader"); },
@@ -447,13 +451,14 @@ test("get_conversation returns a held path tail with deadline-partial metadata",
 
   const result = await bindings.get_conversation(
     { clientRequestId: "get-path-tail-deadline-partial", transcriptPath, tailLines: 10 },
-    { deadlineAt: Date.now() + 5 },
+    { deadlineAt },
   ) as { truncated: boolean; hint: string; tail: { lines: string[]; truncated: boolean } };
 
   expect(result.tail.lines).toHaveLength(3);
   expect(result.tail.truncated).toBe(false);
   expect(result.truncated).toBe(true);
   expect(result.hint).toContain("internal read deadline");
+  } finally { clock.mockRestore(); }
 });
 
 test("get_conversation cancels a targeted miss when its caller leaves", async () => {
@@ -512,6 +517,10 @@ test("get_conversation deadlines a targeted miss without orphan work", async () 
 });
 
 test("get_conversation returns hydrated records when the deadline lands after the partial exists", async () => {
+  let clockNow = Date.now();
+  const deadlineAt = clockNow + 1_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  try {
   const { injected } = dependencies({ completedTranscript: false });
   const domain = injected as unknown as {
     targetedFileEntry(pathname: string): Promise<{
@@ -527,7 +536,7 @@ test("get_conversation returns hydrated records when the deadline lands after th
     }>;
   };
   domain.targetedFileEntry = async () => {
-    await Bun.sleep(20);
+    clockNow = deadlineAt + 1;
     return {
       entry: scanRow(0),
       session: {
@@ -544,7 +553,7 @@ test("get_conversation returns hydrated records when the deadline lands after th
 
   const result = await bindings.get_conversation(
     { clientRequestId: "get-deadline-partial", transcriptPath, maxRecords: 8 },
-    { deadlineAt: Date.now() + 5 },
+    { deadlineAt },
   ) as {
     messages: Array<{ kind: "message"; role: "assistant"; ts: null; text: string }>;
     truncated: boolean;
@@ -554,6 +563,7 @@ test("get_conversation returns hydrated records when the deadline lands after th
   expect(result.messages).toEqual([{ kind: "message", role: "assistant", ts: null, text: "partial answer" }]);
   expect(result.truncated).toBe(true);
   expect(result.hint).toContain("internal read deadline");
+  } finally { clock.mockRestore(); }
 });
 
 test("get_conversation returns a bounded partial from a synthetic 100 MiB transcript", async () => {
