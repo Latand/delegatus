@@ -175,6 +175,36 @@ test.each(["artifact root", "handoff directory"] as const)("large stage inputs r
   expect(fs.readFileSync(path.join(publish, "preserve.txt"), "utf8")).toBe("content that must survive\n");
 });
 
+test("large stage inputs reject a hardlinked ignore file without changing its external target", () => {
+  const external = path.join(artifactState, "operator-config.json");
+  const repo = path.join(artifactState, "hardlinked-ignore");
+  fs.mkdirSync(repo, { recursive: true });
+  const runGit = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  runGit("init", "--initial-branch=main");
+  runGit("config", "user.email", "pipeline-test");
+  runGit("config", "user.name", "Pipeline Test");
+  runGit("config", "commit.gpgSign", "false");
+  fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+  runGit("add", "tracked.txt");
+  runGit("commit", "-m", "base");
+  fs.mkdirSync(path.join(repo, ".artifacts", "pipeline-stage-inputs"), { recursive: true });
+  const ignoreFile = path.join(repo, ".artifacts", "pipeline-stage-inputs", ".gitignore");
+  const original = '{"enabled":true}\n';
+  fs.writeFileSync(external, original);
+  fs.linkSync(external, ignoreFile);
+
+  const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
+  pipeline.worktreeDir = repo;
+  expect(() => composeStageInput(pipeline, stage, stage.effectiveRole, "Previous " + "p".repeat(40_000), repo))
+    .toThrow(/pipeline controller artifact ignore file must be a regular file with one link/);
+  expect(fs.readFileSync(external, "utf8")).toBe(original);
+  expect(() => JSON.parse(fs.readFileSync(external, "utf8"))).not.toThrow();
+});
+
 test("read-write settlement never stages or commits controller artifacts", () => {
   const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
   const previous = "Previous " + "p".repeat(40_000);

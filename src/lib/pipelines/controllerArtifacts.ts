@@ -43,13 +43,12 @@ function ensureCatchAllIgnore(filename: string): void {
   }
 
   try {
-    if (!fs.fstatSync(descriptor).isFile()) {
-      throw new Error("pipeline controller artifact ignore file must be a regular file");
-    }
+    assertPrivateIgnoreFile(descriptor);
     const contents = fs.readFileSync(descriptor, "utf8");
     const lastRule = contents.split(/\r?\n/).reverse()
       .find((line) => line.trim() !== "" && !line.trimStart().startsWith("#"));
     if (lastRule !== "*") {
+      assertPrivateIgnoreFile(descriptor);
       fs.writeSync(descriptor, `${contents.length > 0 && !contents.endsWith("\n") ? "\n" : ""}*\n`);
     }
   } finally {
@@ -60,9 +59,16 @@ function ensureCatchAllIgnore(filename: string): void {
 function openExistingIgnore(filename: string, noFollow: number | undefined): number {
   const stat = fs.lstatSync(filename);
   if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error("pipeline controller artifact ignore file must be a regular file");
+    throw new Error("pipeline controller artifact ignore file must be a regular file with one link");
   }
   return fs.openSync(filename, fs.constants.O_RDWR | fs.constants.O_APPEND | (noFollow ?? 0));
+}
+
+function assertPrivateIgnoreFile(descriptor: number): void {
+  const stat = fs.fstatSync(descriptor);
+  if (!stat.isFile() || stat.nlink !== 1) {
+    throw new Error("pipeline controller artifact ignore file must be a regular file with one link");
+  }
 }
 
 function assertDirectoryOrMissing(directory: string): void {

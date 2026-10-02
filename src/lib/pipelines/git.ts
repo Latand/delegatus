@@ -568,10 +568,15 @@ export function commitPipelineStage(
   if (protectedHead !== null && initialHead.stdout.trim() !== protectedHead) {
     return { ok: false, error: `read-only stage ${stageId} created a commit` };
   }
+  const sha = initialHead.stdout.trim();
+  const settleWithoutCommit = (): PipelineGitResult => {
+    const unstage = unstageControllerArtifacts(exec, pipeline.worktreeDir);
+    return unstage ?? { ok: true, sha };
+  };
   let changedOutputPaths: string[] = [];
   if (!allowCommit) {
     if (declaredOutputs.length === 0) {
-      if (!status.stdout.trim()) return { ok: true, sha: initialHead.stdout.trim() };
+      if (!status.stdout.trim()) return settleWithoutCommit();
       return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
     }
     const changed = changedWorktreePaths(exec, pipeline.worktreeDir, declaredOutputs);
@@ -580,10 +585,10 @@ export function commitPipelineStage(
     if (refused.length > 0) {
       return { ok: false, error: `read-only stage ${stageId} modified undeclared worktree paths` };
     }
-    if (changed.paths.length === 0) return { ok: true, sha: initialHead.stdout.trim() };
+    if (changed.paths.length === 0) return settleWithoutCommit();
     changedOutputPaths = changed.paths;
   } else if (!status.stdout.trim()) {
-    return { ok: true, sha: initialHead.stdout.trim() };
+    return settleWithoutCommit();
   }
   const add = exec(
     "git",
@@ -602,12 +607,8 @@ export function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
-  const unstageControllerArtifacts = exec(
-    "git",
-    ["reset", "--quiet", "HEAD", "--", `:(top)${CONTROLLER_ARTIFACT_DIRECTORY}`],
-    pipeline.worktreeDir,
-  );
-  if (unstageControllerArtifacts.code !== 0) return failure("unstaging controller pipeline artifacts", unstageControllerArtifacts);
+  const unstage = unstageControllerArtifacts(exec, pipeline.worktreeDir);
+  if (unstage) return unstage;
   const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir, controllerCommitIdentityEnv());
   if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
@@ -624,6 +625,15 @@ export function commitPipelineStage(
     if (missing) return { ok: false, error: `declared output ${missing} was not committed` };
   }
   return { ok: true, sha: head.stdout.trim() };
+}
+
+function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): PipelineGitResult | null {
+  const result = exec(
+    "git",
+    ["reset", "--quiet", "HEAD", "--", `:(top)${CONTROLLER_ARTIFACT_DIRECTORY}`],
+    worktreeDir,
+  );
+  return result.code === 0 ? null : failure("unstaging controller pipeline artifacts", result);
 }
 
 export type PipelineWorktreeChanges =

@@ -985,6 +985,42 @@ test("read-write settlement removes pre-staged controller artifacts from the com
   }
 });
 
+test.each([
+  { label: "read-write", allowCommit: true, declaredOutputs: [] as string[] },
+  { label: "read-only without outputs", allowCommit: false, declaredOutputs: [] as string[] },
+  { label: "read-only with an unchanged declared output", allowCommit: false, declaredOutputs: ["reports/audit.md"] },
+])("a successful no-change $label settlement unstages private handoffs before ordinary worker commits", ({ allowCommit, declaredOutputs }) => {
+  const box = isolatedIdentityRepo();
+  try {
+    allowMarkdownArtifacts(box);
+    if (declaredOutputs.length > 0) {
+      fs.mkdirSync(path.join(box.repo, "reports"), { recursive: true });
+      fs.writeFileSync(path.join(box.repo, "reports/audit.md"), "unchanged audit\n");
+      box.run("add", "reports/audit.md");
+      box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "add audit output");
+    }
+    stagePrivateHandoffs(box);
+
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    const head = box.run("rev-parse", "HEAD");
+    expect(commitPipelineStage(subject, "build", allowCommit, box.exec, declaredOutputs, head)).toEqual({ ok: true, sha: head });
+    expect(box.run("diff", "--cached", "--name-only")).toBe("");
+
+    fs.writeFileSync(path.join(box.repo, ".artifacts", "pipeline-stage-inputs", ".gitignore"), "*\n");
+    fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    box.run("add", "-A");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "ordinary worker commit");
+    const committed = box.run("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n");
+    expect(committed).toContain("source.ts");
+    expect(committed).not.toContain(".artifacts/pipeline-stage-inputs/previous-output-digest.md");
+    expect(committed).not.toContain(".artifacts/pipeline-stage-inputs/specification-digest.md");
+    expect(box.run("diff", "--cached", "--name-only")).toBe("");
+  } finally {
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
 test("read-only settlement commits its declared output without pre-staged controller artifacts", () => {
   const box = isolatedIdentityRepo();
   try {
