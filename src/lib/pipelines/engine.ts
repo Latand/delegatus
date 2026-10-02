@@ -1790,6 +1790,36 @@ async function recoverProviderCut(
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
   }
+  const engine = attempt.effectiveRole.engine;
+  const pinned = attemptStage(stage, attempt).account?.trim();
+  const refreshReset = (candidate: number | null | undefined) => {
+    const reset = knownReset(candidate);
+    if (reset === null || reset * 1_000 + 60_000 <= time) return;
+    // A reset from this cut remains authoritative while it is still future.
+    if (wait!.resetsAt !== null && wait!.resetsAt * 1_000 + 60_000 > time) return;
+    wait!.resetsAt = reset;
+    wait!.resumeAt = new Date(reset * 1_000 + 60_000).toISOString();
+    const limited = usageLimitsOn(attempt, engine).find(item => item.accountId === wait!.accountId);
+    if (limited) limited.resetsAt = reset;
+    persist();
+  };
+  if (!wait.actionAt && condition.kind === "usage_limit" && engine === "claude" && wait.accountId) {
+    refreshReset(ports.claudeAccountReset?.(wait.accountId, attempt.effectiveRole.model));
+  }
+  let target: string | null = wait.switchedAccountId ?? null;
+  if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
+    try {
+      const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
+        project: pipeline.project, model: attempt.effectiveRole.model,
+        unavailableIds: usageLimitsOn(attempt, engine)
+          .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
+          .map((item) => item.accountId).concat(condition.kind === "auth_required" ? wait.failedAccounts ?? [] : []),
+      });
+      if (condition.kind === "usage_limit" && resolution.kind === "exhausted") refreshReset(resolution.resetsAt);
+      if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
+        && !wait.failedAccounts?.includes(resolution.account.accountId)) target = resolution.account.accountId;
+    } catch { /* No selection evidence: retain the bounded wait. */ }
+  }
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit" && wait.resetsAt !== null) && wait.tries >= 3
     || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
   const parkCut = (reason: string) => {
@@ -1808,21 +1838,6 @@ async function recoverProviderCut(
     catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account switch refused: ${String(error)}`, ports, persist); return true; }
   }
   if (wait.actionAt) return true; // This closing record belongs to an already resumed turn.
-  const engine = attempt.effectiveRole.engine;
-  const pinned = attemptStage(stage, attempt).account?.trim();
-  let target: string | null = wait.switchedAccountId ?? null;
-  if (!target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
-    try {
-      const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
-        project: pipeline.project, model: attempt.effectiveRole.model,
-        unavailableIds: usageLimitsOn(attempt, engine)
-          .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
-          .map((item) => item.accountId).concat(condition.kind === "auth_required" ? wait.failedAccounts ?? [] : []),
-      });
-      if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
-        && !wait.failedAccounts?.includes(resolution.account.accountId)) target = resolution.account.accountId;
-    } catch { /* No selection evidence: retain the bounded wait. */ }
-  }
   if (condition.kind === "auth_required" && !target) {
     parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
     return true;
@@ -1879,6 +1894,14 @@ async function recoverProviderCut(
   return true;
 }
 
+/** An absent registry resident does not establish that a recorded pane exited. */
+async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts): Promise<PipelineStageStopResult> {
+  const stopped = await ports.stopStageAgent(target);
+  if (stopped.outcome !== "not-running" || !target.paneId) return stopped;
+  const pane = await ports.stopStagePane(target);
+  return pane.outcome === "unknown" ? { outcome: "failed", error: pane.detail } : pane;
+}
+
 async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, condition: ProviderCondition, ports: PipelinePorts, persist: () => void, target: string | null): Promise<boolean> {
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(ports.now())) return true;
   const attempts = runFor(pipeline, stage.id)?.attempts ?? [];
@@ -1893,8 +1916,8 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
     return true;
   }
-  const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
-    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId });
+  const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, ports);
   if (!["stopped", "not-running"].includes(stopped.outcome)) {
     const now = ports.now();
     if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
@@ -4105,13 +4128,16 @@ async function tickRunStage(
   if (!heldForDeployCut && (notice || attempt.providerWait)) {
     const newerNormalTurn = !notice && attempt.providerWait && durable?.turn === "terminal"
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
-    const newerOutputBeforeHostLoss = !notice && hostUnavailablePastGrace && attempt.providerWait && durable?.message
+    const newerStageOutput = !notice && attempt.providerWait && durable?.message
       && durable.message.ts > attempt.providerWait.turnTs;
+    const newerActiveTurn = !notice && attempt.providerWait?.actionAt && durable?.turn === "busy"
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
     const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
       && (!notice || notice.ts <= attempt.providerWait.turnTs);
-    if (newerNormalTurn || newerOutputBeforeHostLoss) {
+    if (newerNormalTurn || newerStageOutput || newerActiveTurn) {
       if (durable?.message && durable.message.ts > attempt.providerWait!.turnTs) delete attempt.providerRecoveryBudget;
       delete attempt.providerWait;
+      pipeline.stateDetail = null;
     } else if (attempt.providerWait?.actionAt && attempt.providerWait.turnTs > 0 && attempt.conversationId
       && (!notice || notice.ts <= attempt.providerWait.turnTs)
       && (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true
@@ -5412,9 +5438,9 @@ async function deferRetiredLaunchRetry(
     if (lastRecovery?.action !== "wait" || lastRecovery.condition.label !== startupCondition.label) {
       recordProviderRecovery(attempt, "wait", startupCondition, `waiting after ${recoverySummary}`, now);
     }
-    const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
+    const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n,
       launchId: receipt.launchId, conversationId: attempt.conversationId ?? receipt.conversationId,
-      agentPath: attempt.agentPath ?? receipt.stagedTranscript ?? receipt.transcript ?? null, paneId: attempt.paneId });
+      agentPath: attempt.agentPath ?? receipt.stagedTranscript ?? receipt.transcript ?? null, paneId: attempt.paneId }, ports);
     if (!["stopped", "not-running"].includes(stopped.outcome)) {
       if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
       if (stopped.outcome === "unresolved") {

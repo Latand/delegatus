@@ -979,6 +979,23 @@ test("malformed provider waits and histories are rejected at the persistence bou
   expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
 }));
 
+test("provider evidence timestamps accept finite fractional milliseconds and reject invalid values", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.providerWait!.turnTs = 1_790_923_281_585.1626;
+  attempt.usageLimitedAccounts = [{ accountId: "account-a", engine: "codex", resetsAt: null, limitedAt: attempt.providerWait!.turnTs }];
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.turnTs).toBe(attempt.providerWait!.turnTs);
+  for (const value of [-1, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    attempt.providerWait!.turnTs = value;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+    attempt.providerWait!.turnTs = 1;
+    attempt.usageLimitedAccounts![0]!.limitedAt = value;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+    attempt.usageLimitedAccounts![0]!.limitedAt = 1;
+  }
+}));
+
 test("loaded provider recovery state does not alias the cached persisted record", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z" };

@@ -156,13 +156,18 @@ function isProviderCondition(value: unknown): boolean {
     && typeof condition.label === "string" && condition.label.length > 0 && condition.label.length <= 100;
 }
 
+/** Transcript evidence may use the filesystem's fractional millisecond mtime. */
+function isEvidenceTimestamp(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
 function isProviderWait(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const wait = value as Record<string, unknown>;
   const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
   return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
-    && isNullableString(wait.accountId) && Number.isSafeInteger(wait.turnTs) && Number(wait.turnTs) >= 0
+    && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
     && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
     && dated(wait.startedAt) && dated(wait.resumeAt)
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
@@ -208,7 +213,7 @@ function isAttempt(value: unknown, index: number): boolean {
         && limited.accountId.length > 0
         && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
-        && (limited.limitedAt === undefined || limited.limitedAt === null || (Number.isSafeInteger(limited.limitedAt) && limited.limitedAt >= 0))
+        && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
