@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
@@ -22,6 +22,7 @@ import type { StateWriteHealth } from "@/lib/state/diskFull";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
 
+import { createBoundedPublisher, type BoundedPublisher } from "./boundedTransition";
 import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
 
 /** The universal fallback cadence — also the only source for legacy sessions. */
@@ -1297,24 +1298,36 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
   // A pin changes the subscription scope, while runtime turn settlements
   // remain valid across that change for the same transcript generation.
   const projectStatus = useMemo(() => createRuntimeFilesStatusProjection(), []);
+  const committedRef = useRef(data);
+  const publisherRef = useRef<BoundedPublisher<FilesData> | null>(null);
+  useEffect(() => {
+    committedRef.current = data;
+    publisherRef.current?.settled();
+  }, [data]);
   useEffect(() => {
     let alive = true;
     const cache = filesClientCache;
     const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
     const currentStatus = (next: FilesData) => bus ? projectStatus(next, bus.getState()) : next;
+    /* Scanner generations can change one live row inside a large catalog.
+       Keep that reconciliation interruptible so reload, typing and board
+       gestures do not wait behind a synchronous whole-Viewer render. A stream
+       of live events keeps interrupting a transition, so one that has not
+       committed within the deadline is applied urgently instead of waiting for
+       React to expire the starved lane. */
+    const publisher = createBoundedPublisher<FilesData>({
+      apply: (next) => {
+        if (alive) setData(next);
+      },
+      committed: () => committedRef.current,
+    });
+    publisherRef.current = publisher;
     const publishBackgroundData = (next: FilesData) => {
-      if (!alive) return;
-      const projected = currentStatus(next);
-      /* Scanner generations can change one live row inside a large catalog.
-         Keep that reconciliation interruptible so reload, typing and board
-         gestures do not wait behind a synchronous whole-Viewer render. */
-      startTransition(() => {
-        if (alive) setData(projected);
-      });
+      if (alive) publisher.publish(currentStatus(next));
     };
     const unsubscribeCache = cache.subscribe((next, priority) => {
       if (priority === "urgent") {
-        if (alive) setData(currentStatus(next));
+        if (alive) publisher.publish(currentStatus(next), "urgent");
         return;
       }
       publishBackgroundData(next);
@@ -1515,6 +1528,8 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
 
     return () => {
       alive = false;
+      publisher.dispose();
+      if (publisherRef.current === publisher) publisherRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
       inflight.abort();
       healthController?.abort();
