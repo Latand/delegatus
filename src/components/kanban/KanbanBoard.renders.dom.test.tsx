@@ -49,8 +49,11 @@ const actualCards = await import("./KanbanCard");
 /* `mock.module` rewrites the module's live bindings, so the real card is held here before it does. */
 const RealCard = actualCards.KanbanCard;
 const rendered: string[] = [];
+/* A render loop fails here at once, instead of growing until the machine gives out. */
+const RENDER_CEILING = 600;
 const CountedCard = memo(function CountedCard(props: ComponentProps<typeof actualCards.KanbanCard>) {
   rendered.push(props.card.id);
+  if (rendered.length > RENDER_CEILING) throw new Error(`more than ${RENDER_CEILING} card renders in one test: a render loop`);
   return <RealCard {...props} />;
 });
 mock.module("./KanbanCard", () => ({ ...actualCards, KanbanCard: CountedCard }));
