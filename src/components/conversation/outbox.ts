@@ -480,11 +480,9 @@ export function readOperationShared(
       /* Cancelled by its holders (unmount, hidden tab, inactive composer): not
          a failed read, and due again as soon as someone asks. */
       if (current.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
-      /* Only an arrival or a discard ends the row. An unknown-fate answer
-         (uncertain, or failed with verify-first) is absorbing on the server
-         until the operator retries or discards, so asking again at the
-         interval learns nothing: it backs off to the ceiling like a failure. */
-      else read.failures = receipt && receiptHasAbsorbingOutcome(receipt) ? 0 : read.failures + 1;
+      // Readable uncertainty can acquire a late canonical echo. Recheck it at
+      // the normal 30-second interval; only failed reads back off to five minutes.
+      else read.failures = receipt ? 0 : read.failures + 1;
       read.inFlight = null;
       return receipt;
     });

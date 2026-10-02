@@ -20,6 +20,7 @@ import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimePresentationReceipt, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
 import { readEvidence, type Evidence } from "./evidence";
+import { confirmedSend } from "./confirmedSend";
 import { journalVerdict, resolveSendReceipt, runtimeReceiptForSend, SEND_DISCARDED_REASON, sendReceiptFor, type SendReceipt } from "./sendSettlement";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
@@ -754,6 +755,13 @@ export async function handleRuntimeRetry(
     }
     const registry = (dependencies.registry ?? agentRegistry)();
     const deliverySnapshot = registry.deliverySnapshotForOperation(previous.operationId);
+    if (await confirmedSend(registry.readOnlySnapshot(), previous.operationId)) {
+      const confirmed = await resolveSendReceipt(previous.operationId, { registry, client });
+      if (confirmed?.state === "delivered") {
+        return NextResponse.json({ operationId: previous.operationId,
+          receipt: runtimeReceiptForSend(confirmed), send: confirmed });
+      }
+    }
     const deliveryRecord = sendReceiptFor(deliverySnapshot, previous.operationId);
     if (previous.operationId === operationId
       && previous.receipt.status !== "failed"

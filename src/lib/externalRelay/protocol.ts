@@ -45,6 +45,7 @@ export const descriptorSchema = z.object({
   name: z.string().min(1).max(64),
   description: z.string().max(1000),
   api_base: z.url().max(2048),
+  icon_url: z.string().max(2048).optional(),
   kinds: z.array(z.string()).min(1),
   liveness: livenessSchema,
   limits: z.object({

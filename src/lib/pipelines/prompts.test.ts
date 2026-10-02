@@ -78,6 +78,9 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain('"findings":[]');
   expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.");
   expect(prompt).toContain("Its status uses the same three words.");
+  expect(prompt).toContain("blocked:true and a non-empty blockedReason");
+  expect(prompt).toContain("cannot build, cannot run required checks");
+  expect(prompt).toContain("fixer returns pass unless blocked");
   /* Review of #2301: the fallback block's own shape, which the parser reads:
      string findings led by their severity, and no summary key. */
   expect(prompt).toContain("In the block each finding is a string that starts with its severity");
@@ -273,5 +276,5 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   expect(fixPrompt).toContain("the specification's steps for the first build (where to branch, whether to open a pull request) are already done");
   /* Review of #2301: the fix stage has one finish line, scoped to its findings. */
   expect(fixPrompt.split("You are done when")).toHaveLength(2);
-  expect(fixPrompt).toContain("You are done when every finding that names its place is fixed");
+  expect(fixPrompt).toContain("You are done when every handed finding and every issue you notice within the pinned specification is fixed");
 });

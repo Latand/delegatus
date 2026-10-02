@@ -359,7 +359,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
         const read = () => page.evaluate(() => ({
           engine: document.querySelector('[data-onboarding-relay-engine][aria-checked="true"]')?.getAttribute("data-onboarding-relay-engine") ?? null,
           account: document.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account") ?? null,
-          pairDisabled: (document.querySelector("[data-external-relay-connect] input") as HTMLInputElement | null)?.disabled ?? null,
+          pairDisabled: (document.querySelector("[data-external-relay-connect-known]") as HTMLButtonElement | null)?.disabled ?? null,
           overflow: document.documentElement.scrollWidth > window.innerWidth,
           minControlHeight: Math.min(...Array.from(document.querySelectorAll<HTMLElement>("[data-onboarding-relay] button, [data-onboarding-relay] input"))
             .filter((control) => control.getClientRects().length > 0).map((control) => control.getBoundingClientRect().height)),
