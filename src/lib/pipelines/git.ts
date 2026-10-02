@@ -747,47 +747,58 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
     replay still matches after surrounding lines move on a newer base. */
 interface ExactCommitPatch {
   signature: string;
+  paths: string[];
   locations: Array<{ path: string; start: number }>;
 }
 
 function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): ExactCommitPatch | null | { error: string } {
-  const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
-    "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", commit], pipeline.worktreeDir);
-  if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
-  const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", commit], pipeline.worktreeDir);
-  if (names.code !== 0) return { error: failure("reading accepted replay paths", names).error };
-  const paths = names.stdout.split("\0").filter(Boolean);
-  const evidence: string[] = [];
-  const locations: ExactCommitPatch["locations"] = [];
-  let fileIndex = -1;
-  let binary = false;
-  let inHunk = false;
-  for (const line of patch.stdout.split("\n")) {
-    if (line.startsWith("diff --git ")) {
-      fileIndex++;
-      evidence.push(line);
-      binary = false;
-      inHunk = false;
-    } else if (binary) {
-      evidence.push(line);
-    } else if (/^(?:old mode|new mode|new file mode|deleted file mode|GIT binary patch|literal |delta )/.test(line)) {
-      evidence.push(line);
-      binary = line === "GIT binary patch";
-    } else if (line.startsWith("@@")) {
-      // Keep Git's function/section label (the text after the closing @@) to
-      // distinguish different areas of a file; retain old-side coordinates
-      // separately and map them across the rebase parents before matching.
-      const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line);
-      if (!hunk || !paths[fileIndex]) return { error: "reading accepted replay hunk location: malformed Git patch" };
-      locations.push({ path: paths[fileIndex], start: Number(hunk[1]) });
-      evidence.push(`@@${hunk[5]}`);
-      inHunk = true;
-    } else if (inHunk && ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
-      || line.startsWith("\\ No newline"))) {
-      evidence.push(line);
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-patch-"));
+  const patchPath = path.join(scratch, "patch.diff");
+  try {
+    // Keep arbitrarily large binary patches off spawnSync's bounded stdout
+    // buffer. The comparison needs the full patch, so read Git's file output
+    // only after Git has completed successfully.
+    const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
+      "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", `--output=${patchPath}`, commit], pipeline.worktreeDir);
+    if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
+    const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", commit], pipeline.worktreeDir);
+    if (names.code !== 0) return { error: failure("reading accepted replay paths", names).error };
+    const paths = names.stdout.split("\0").filter(Boolean);
+    const evidence: string[] = [];
+    const locations: ExactCommitPatch["locations"] = [];
+    let fileIndex = -1;
+    let binary = false;
+    let inHunk = false;
+    for (const line of fs.readFileSync(patchPath, "utf8").split("\n")) {
+      if (line.startsWith("diff --git ")) {
+        fileIndex++;
+        evidence.push(line);
+        binary = false;
+        inHunk = false;
+      } else if (binary) {
+        evidence.push(line);
+      } else if (/^(?:old mode|new mode|new file mode|deleted file mode|GIT binary patch|literal |delta )/.test(line)) {
+        evidence.push(line);
+        binary = line === "GIT binary patch";
+      } else if (line.startsWith("@@")) {
+        // Keep Git's function/section label (the text after the closing @@) to
+        // distinguish different areas of a file; retain old-side coordinates separately.
+        const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line);
+        if (!hunk || !paths[fileIndex]) return { error: "reading accepted replay hunk location: malformed Git patch" };
+        locations.push({ path: paths[fileIndex], start: Number(hunk[1]) });
+        evidence.push(`@@${hunk[5]}`);
+        inHunk = true;
+      } else if (inHunk && ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
+        || line.startsWith("\\ No newline"))) {
+        evidence.push(line);
+      }
     }
+    return evidence.length ? { signature: evidence.join("\n"), paths, locations } : null;
+  } catch (error) {
+    return { error: `reading accepted replay patch: ${String(error)}` };
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
   }
-  return evidence.length ? { signature: evidence.join("\n"), locations } : null;
 }
 
 /** Map a replay hunk's parent-side line to the accepted commit's parent.
@@ -843,10 +854,23 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
   const cherryLines = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ") || line.startsWith("- "));
   const retainedByCherry = cherryLines.filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
   const replayedPatches: Array<{ commit: string; patch: ExactCommitPatch }> = [];
+  const acceptedPatches = new Map<string, ExactCommitPatch>();
+  for (const acceptedCommit of retainedByCherry) {
+    const patch = exactCommitPatch(pipeline, acceptedCommit, exec);
+    if (patch && "error" in patch) return { ok: false, error: patch.error };
+    if (patch) acceptedPatches.set(acceptedCommit, patch);
+  }
   if (retainedByCherry.length) {
     const candidates = exec("git", ["rev-list", "--no-merges", `${accepted}..${head}`], pipeline.worktreeDir);
     if (candidates.code !== 0) return failure("checking replayed commit patches", candidates);
     for (const candidate of candidates.stdout.split("\n").filter(Boolean)) {
+      // Main-only commits can contain large unrelated assets. Read their small
+      // path list first and avoid constructing a full patch unless it could
+      // contain one of the accepted changes.
+      const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", candidate], pipeline.worktreeDir);
+      if (names.code !== 0) return failure("reading replay candidate paths", names);
+      const candidatePaths = new Set(names.stdout.split("\0").filter(Boolean));
+      if (![...acceptedPatches.values()].some((patch) => patch.paths.some((file) => candidatePaths.has(file)))) continue;
       const patch = exactCommitPatch(pipeline, candidate, exec);
       if (patch && "error" in patch) return { ok: false, error: patch.error };
       if (patch) replayedPatches.push({ commit: candidate, patch });
@@ -854,8 +878,7 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
   }
   const dropped = cherryLines.filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
   for (const acceptedCommit of retainedByCherry) {
-    const acceptedPatch = exactCommitPatch(pipeline, acceptedCommit, exec);
-    if (acceptedPatch && "error" in acceptedPatch) return { ok: false, error: acceptedPatch.error };
+    const acceptedPatch = acceptedPatches.get(acceptedCommit);
     // An empty commit has no patch to preserve. Its SHA need not block a
     // content-based rebase reconciliation.
     if (!acceptedPatch) continue;

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -1515,6 +1516,64 @@ test("stage reconciliation retains nested multi-file replay paths", () => {
     if (!result.ok) throw new Error(result.error);
     expect(git(box.subject.worktreeDir, "rev-parse", `${result.sha}^{tree}`))
       .toBe(git(box.subject.worktreeDir, "rev-parse", `${head}^{tree}`));
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation skips unrelated large main-only patches and still publishes the preserved tree", async () => {
+  const box = publishSandbox();
+  try {
+    const accepted = box.commit("accepted.txt", "accepted work\n");
+    box.subject.lastPassedCommit = accepted;
+    savePipelines([box.subject]);
+
+    fs.writeFileSync(path.join(box.repo, "asset.bin"), crypto.randomBytes(1_200_000));
+    git(box.repo, "add", "asset.bin");
+    git(box.repo, "commit", "-m", "add large unrelated main asset");
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "fetch", "origin");
+    git(box.subject.worktreeDir, "rebase", "origin/main");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    expect(git(box.subject.worktreeDir, "cherry", head, accepted)).toBe(`- ${accepted}`);
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", `${result.sha}^{tree}`)).toBe(tree);
+    expect(git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha)).toBe(`${result.sha} ${head} ${accepted}`);
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: result.sha })).toEqual({
+      ok: true, sha: result.sha, remote: "published",
+    });
+    expect(box.originHead()).toBe(result.sha);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation reads a large relevant binary replay without truncation", () => {
+  const box = publishSandbox();
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "accepted.bin"), crypto.randomBytes(1_200_000));
+    git(box.subject.worktreeDir, "add", "accepted.bin");
+    git(box.subject.worktreeDir, "commit", "-m", "accept a large binary asset");
+    const accepted = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    box.subject.lastPassedCommit = accepted;
+    savePipelines([box.subject]);
+
+    fs.writeFileSync(path.join(box.repo, "main.txt"), "new main work\n");
+    git(box.repo, "add", "main.txt");
+    git(box.repo, "commit", "-m", "advance main beside the binary replay");
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "fetch", "origin");
+    git(box.subject.worktreeDir, "rebase", "origin/main");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", `${result.sha}^{tree}`)).toBe(tree);
+    expect(git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha)).toBe(`${result.sha} ${head} ${accepted}`);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 

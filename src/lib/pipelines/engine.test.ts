@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -675,7 +676,9 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
+    fs.writeFileSync(path.join(repo, "asset.bin"), crypto.randomBytes(1_200_000));
     git(repo, "add", "main.txt");
+    git(repo, "add", "asset.bin");
     git(repo, "commit", "-m", "advance main");
     git(repo, "push", "origin", "main");
     git(worktree, "rebase", "origin/main");
