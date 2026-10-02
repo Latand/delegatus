@@ -4874,7 +4874,7 @@ export const en = {
   "selfUpdate.auto.block.busy": "An update or restart is in progress.",
   "selfUpdate.auto.block.memory": "Less than 4 GB of free memory ({mb} MB).",
   "selfUpdate.auto.block.unreadable": "Cannot read agent activity: {detail}",
-  "selfUpdate.auto.longWait": "Waiting over 4 hours for running work to finish.",
+  "selfUpdate.auto.longWait": "Waiting over 6 hours for running work to finish.",
   "selfUpdate.auto.drain.scheduled": "No quiet moment yet. From {time} new stage launches are held and the update applies when running work finishes.",
   "selfUpdate.auto.drain.draining": "Draining since {time}: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.",
   "selfUpdate.auto.drain.overran": "Running work has held the update for 6 h. New autonomous launches remain held. Deploy now may interrupt this work; keep waiting lets it finish.",

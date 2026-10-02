@@ -198,6 +198,7 @@ describe("automatic updates", () => {
     try {
       const el = render(s);
       expect(el.querySelector("[data-auto-drain-decision]")?.textContent).toContain("conversation_long_turn");
+      expect(text(section(el, "auto"))).not.toContain("Waiting over");
       button(el, choice)!.click();
       await Bun.sleep(0);
       expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
