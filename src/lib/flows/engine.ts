@@ -1391,7 +1391,6 @@ export async function tickFlow(
         if (parsed) {
           applyVerdict(flow, round, parsed);
         } else {
-          const raw = status.finalOutput || status.stdout || status.stderr;
           const terminal = round.reviewerPath
             ? (await durableStageTurnEvidence(reviewerRoleFor(flow, round).engine, round.reviewerPath))?.terminalProviderMessage
             : null;
