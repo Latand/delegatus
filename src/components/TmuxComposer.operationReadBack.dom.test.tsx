@@ -657,7 +657,7 @@ test("a delivered operation from another sender is not shown as unknown after a 
     operationId,
     receipt: { ...uncertain, status: "delivered", reason: null, resend: "not-needed", at: new Date(Date.parse(admittedAt) + 60_000).toISOString(), revision: 1 },
   }));
-  const unknown = "The last attempt's outcome is unknown";
+  const unknown = "Checking delivery…";
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -757,3 +757,32 @@ test("two composers showing the same operation share one read", async () => {
     await first();
   }
 });
+
+for (const locale of ["uk", "en"] as const) {
+  test(`a real uncertain delivery clears its ${locale} composer banner on canonical readback after restart`, async () => {
+    setLocale(locale);
+    const delivery = admit(`late-canonical-${locale}`);
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    journal.transitionOperation(delivery.operationId, "delivering");
+    journal.transitionOperation(delivery.operationId, "uncertain");
+    delivery.registry.recordDeliveryOutcomeForOperation(delivery.conversationId as `conversation_${string}`,
+      delivery.operationId, "failed", "delivery was started by an earlier executor", "unverified");
+    const admittedAt = new Date(Date.now() - 60_000).toISOString();
+    seedStaleTab(delivery, admittedAt);
+    const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+    const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+    const wire = encodeCodexStructuredUserText(delivery.text, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.operationId));
+    const transcript = delivery.registry.conversation(delivery.conversationId as `conversation_${string}`)!.generations[0]!.path;
+    fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    const requests = serveOperations(id => handleRuntimeOperationQuery(id, {
+      client: () => journalClient(journal), rolledBack: () => false,
+      settle: (operationId, client) => resolveSendReceipt(operationId, { registry: delivery.registry, client }),
+    }));
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+      expect(document.querySelector("[data-delivery-notice]")).toBeNull();
+      expect(touchesOperation(requests, delivery)).toEqual([]);
+    } finally { await unmount(); journal.close(); }
+  });
+}
