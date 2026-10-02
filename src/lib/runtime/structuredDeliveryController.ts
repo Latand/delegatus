@@ -29,6 +29,7 @@ import {
   type InterruptionObligationStore,
 } from "./interruptionObligations";
 import { reapSeveredStructuredHost } from "./registry";
+import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
 import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement";
@@ -803,7 +804,27 @@ export async function bindStructuredDeliveryQueue(
     },
     hostResolver(registry, hosts),
     async (conversationId, expectedKey) => {
-      if (await state.terminateActiveHost?.(expectedKey)) return true;
+      const settleKilledLaunches = async () => {
+        const reason = "structured launch host was intentionally terminated";
+        for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
+          if (receipt.transport !== "structured" || receipt.conversationId !== conversationId
+            || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(expectedKey)
+            || receipt.state === "completed" || receipt.state === "conflicted"
+            || (receipt.state === "failed" && receipt.error !== reason)) continue;
+          // The registry and runtime journal settle separately. A retry must
+          // finish the journal write even if the registry already recorded kill.
+          const failure = registry.failStructuredSpawn(receipt.launchId, reason);
+          if (failure.receipt?.state !== "failed" || failure.receipt.error !== reason) continue;
+          const operation = await client.operationStatus(receipt.launchId);
+          if (operation?.receipt.status === "pending" || operation?.receipt.status === "queued" || operation?.receipt.status === "delivering") {
+            await client.transitionOperation(receipt.launchId, "failed", { reason });
+          }
+        }
+      };
+      if (await state.terminateActiveHost?.(expectedKey)) {
+        await settleKilledLaunches();
+        return true;
+      }
       /* No registration in this process owns the host, so nothing here can end
          it through its own lifecycle. When the evidence also says the turn is
          severed, the recorded process is reaped on its start identity so the
@@ -822,11 +843,45 @@ export async function bindStructuredDeliveryQueue(
           reason: reaped.reason,
         });
       }
-      const terminated = registry.terminateInactiveStructuredHost(
+      let terminated = registry.terminateInactiveStructuredHost(
         conversationId as `conversation_${string}`,
         expectedKey,
       );
+      if (!terminated) {
+        // An explicit kill does not depend on idle/severed-turn evidence. A
+        // launch host can be alive without a transport owned by this process.
+        // Use the recorded process fence and the existing tree termination
+        // ladder, then let the durable kill boundary cancel its queued prompt.
+        const read = () => structuredHostKillRefFromRegistry(expectedKey, {
+          snapshot: () => registry.readOnlySnapshot(), conversationId: conversationId as ViewerConversationId,
+        });
+        const built = read();
+        if (!built.ok || built.ref.conversationId !== conversationId) return false;
+        const ref = built.ref;
+        const authorize = (): { status: 409; error: string } | null => {
+          const current = read();
+          const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
+          if (!current.ok || entry?.host || current.ref.conversationId !== conversationId
+            || current.ref.pid !== ref.pid || current.ref.startIdentity !== ref.startIdentity
+            || current.ref.bootEpoch !== ref.bootEpoch) {
+            return { status: 409, error: "structured kill target changed before termination" };
+          }
+          if (branchSharesRootHost(registry, registry.conversation(conversationId as ViewerConversationId))) {
+            return { status: 409, error: BRANCH_SHARED_HOST_ERROR };
+          }
+          return null;
+        };
+        const refusal = authorize();
+        if (refusal) throw new Error(refusal.error);
+        const outcome = await terminateStructuredHostTree(ref, {
+          authorize,
+          retireRegistryEntry: (key, expected) => { registry.terminateStructuredHost(key, expected); },
+        });
+        if (!outcome.ok) throw new Error(outcome.error);
+        terminated = registry.terminateInactiveStructuredHost(conversationId as ViewerConversationId, expectedKey);
+      }
       if (!terminated) return false;
+      await settleKilledLaunches();
       if (terminated === "current") await refreshCurrentProjection(conversationId);
       return true;
     },

@@ -1267,6 +1267,10 @@ export class CodexAppServerHost implements EngineHost {
     resolve(value: "landed" | "dropped" | "unknown"): void;
   }>();
   private readonly pendingDeliveries = new Map<string, PendingDelivery>();
+  private readonly sendingDeliveries = new Map<string, {
+    contentDigest: string;
+    promise: Promise<DeliveryReceipt>;
+  }>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
   private readonly realtimeDeliveries = new Map<string, RealtimeDeliveryState>();
   private readonly voiceStreams = new Map<string, VoiceStreamState>();
@@ -1823,6 +1827,35 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      return { outcome: "rejected", reason: "dead-host" };
+    }
+    const normalized = normalizeQueueEntry(entry);
+    const sending = this.sendingDeliveries.get(normalized.id);
+    if (sending) {
+      if (sending.contentDigest !== normalized.contentDigest) {
+        throw new Error("Codex queue entry id belongs to a different payload");
+      }
+      return sending.promise;
+    }
+    // Claim the delivery before any history/image read can yield. Confirmation
+    // alone cannot fence overlapping launch retries: both can observe absence
+    // before either turn/start has written the recipient's first user record.
+    let resolve!: (receipt: DeliveryReceipt) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<DeliveryReceipt>((fulfill, fail) => { resolve = fulfill; reject = fail; });
+    this.sendingDeliveries.set(normalized.id, { contentDigest: normalized.contentDigest, promise });
+    void this.sendOnce(normalized, firstDispatch).then(resolve, reject);
+    try {
+      return await promise;
+    } finally {
+      if (this.sendingDeliveries.get(normalized.id)?.promise === promise) {
+        this.sendingDeliveries.delete(normalized.id);
+      }
+    }
+  }
+
+  private async sendOnce(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }

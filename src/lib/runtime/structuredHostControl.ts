@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
@@ -124,9 +125,9 @@ export type StructuredHostRegistryRef =
  * generation the row names (#1501). The row is the association: the engine
  * process the Viewer spawned or adopted (`structuredHost.process`, with its
  * start identity and boot epoch) and the generation that claimed it
- * (`claimOwner`). The ref binds to the conversation whose *current* generation
- * is this session; a row that is not the current generation of any
- * conversation is not a target. Missing identity fields refuse here, before
+ * (`claimOwner`). Resource callers bind to the current generation. A durable
+ * kill can name its conversation explicitly to retain its admitted predecessor
+ * target through succession. Missing identity fields refuse here, before
  * the termination's own fence, so the report can say which field the row lacks.
  */
 export function structuredHostKillRefFromRegistry(
@@ -135,6 +136,8 @@ export function structuredHostKillRefFromRegistry(
     snapshot?: () => RegistryFile;
     owned?: (key: SessionKey) => boolean;
     identityProbe?: ProcessIdentityProbe;
+    /** A durable kill's admitted conversation; permits its older generations. */
+    conversationId?: ViewerConversationId;
   } = {},
 ): StructuredHostRegistryRef {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
@@ -157,7 +160,9 @@ export function structuredHostKillRefFromRegistry(
     return { ok: false, error: `host boot epoch is unknown (pid ${process.pid} was recorded without one)`, owner };
   }
   const conversation = Object.values(file.conversations)
-    .find((candidate) => candidate.generations.at(-1)?.id === key.sessionId) ?? null;
+    .find((candidate) => candidate.engine === key.engine && (dependencies.conversationId
+      ? candidate.id === dependencies.conversationId && candidate.generations.some(generation => generation.id === key.sessionId)
+      : candidate.generations.at(-1)?.id === key.sessionId)) ?? null;
   if (!conversation) {
     return { ok: false, error: "the registry row is not the current generation of any conversation", owner };
   }
