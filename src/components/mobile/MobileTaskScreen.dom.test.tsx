@@ -305,6 +305,10 @@ test("the phone lists only what opens: a transcript the board did not load opens
   }) as typeof fetch;
   try {
     const { host } = mount(taskPorts([]), noPipelinePorts, subject);
+    /* The transcript off the board has no row of its own: it waits behind one line in the folded earlier section. */
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    click(q(host, "[data-phone-task-past-toggle]"));
+    click(q(host, "[data-phone-task-elsewhere-toggle]"));
     const open = qa(host, "[data-phone-task-not-loaded]");
     expect(open.length).toBe(1);
     click(open[0]!);
@@ -316,6 +320,41 @@ test("the phone lists only what opens: a transcript the board did not load opens
     expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/t-ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: null, dismiss: "launch-did-not-start" } }]);
   } finally {
     globalThis.fetch = realFetch;
+    dom.location.hash = "";
+  }
+});
+
+test("the phone folds many conversations off the board into one line inside the earlier section, which lists nothing while folded and opens each from its list", async () => {
+  const wall = Array.from({ length: 24 }, (_, index) => ({
+    conversationId: `conversation_wall_${index}`, path: `/elsewhere/wall-${index}.jsonl`, panePid: null, state: "linked", error: null, at: iso(3_600 - index * 60),
+  }));
+  const subject = { ...theTask, id: "t-wall", assignments: wall } as unknown as BoardTask;
+  /* The lanes of the task: finished attempts that make the Past attempts count. */
+  const own = [lane("done-a", "completed", "passed", 3_600), lane("done-b", "completed", "passed", 5_400)].map((one) => ({ ...one, taskIds: ["t-wall"] }) as unknown as Pipeline);
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject, { pipelines: own });
+    /* Folded: the header alone, no line, no rows. */
+    const section = q(host, "[data-phone-task-past]")!;
+    expect(section.textContent).toBe(en("kanban.past.head", { count: 2 }));
+    expect(qa(host, "[data-phone-task-elsewhere-toggle]").length).toBe(0);
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    /* Open: the attempts, each once and as many as the header says, and one line. */
+    click(q(host, "[data-phone-task-past-toggle]"));
+    const rows = qa(host, "[data-phone-task-past-row]").map((row) => row.getAttribute("data-phone-task-past-row"));
+    expect(rows.length).toBe(2);
+    expect(new Set(rows).size).toBe(2);
+    const lines = qa(host, "[data-phone-task-elsewhere-toggle]");
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.textContent).toBe(`${en("kanban.past.elsewhere", { count: 24 })} · ${en("kanban.past.elsewhereShow")}`);
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    /* Its list holds every one, and each opens. */
+    click(lines[0]!);
+    const listed = qa(host, "[data-phone-task-not-loaded]");
+    expect(listed.length).toBe(24);
+    click(listed[3]!);
+    const { formatConversationHash } = await import("@/lib/accounts/identity");
+    expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_wall_3", path: "/elsewhere/wall-3.jsonl" }));
+  } finally {
     dom.location.hash = "";
   }
 });
