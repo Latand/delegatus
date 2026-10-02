@@ -3,6 +3,9 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
+import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
+import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
 import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
@@ -126,6 +129,9 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const f = fixture();
   const stateFile = join(f.root, "merge-batch.json");
   const calls: string[][] = [];
+  const forge = { credential: "installation" as "installation" | "personal" | "app-user", unavailable: false,
+    installationResponse: "example/fixture",
+    committerName: "Forge Automation", committerEmail: ["noreply", "forge.example.invalid"].join("@") };
   let merged = false, mergedTip = "", reds = 0, refreshes = 0;
   const commands: string[][] = [];
   const defaultRun: CommandRunner = async (_cwd, args, env) => {
@@ -137,6 +143,15 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const gh = async (args: string[]) => {
     calls.push(args);
     const batch = JSON.parse(readFileSync(stateFile, "utf8"));
+    if (args[0] === "api" && args[1] === "installation/repositories?per_page=100") {
+      expect(args).toContain("--hostname");
+      expect(args[args.indexOf("--hostname") + 1]).toBe("github.com");
+      expect(args).toContain("--paginate");
+      expect(args[args.indexOf("--jq") + 1]).toBe('.repositories[] | select(.full_name == "example/fixture") | .full_name');
+      if (forge.unavailable) throw new Error("private credential diagnostic");
+      if (forge.credential !== "installation") throw new Error("Requires installation authentication");
+      return forge.installationResponse;
+    }
     if (args[0] === "repo") return "example/fixture";
     if (args[0] === "api" && args[1]!.endsWith("branches/main")) return JSON.stringify({ protection: { required_status_checks: { contexts: ["privacy"] } } });
     if (args[0] === "api" && args[1]!.includes("/pulls/")) return "https://github.com/example/fixture.git";
@@ -182,10 +197,14 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
     }
     if (args[0] === "pr" && args[1] === "merge") {
       expect(args).toContain("--rebase");
+      if (args.includes("--repo")) expect(args[args.indexOf("--repo") + 1]).toBe("https://github.com/example/fixture");
       expect(args[args.indexOf("--match-head-commit") + 1]).toBe(batch.tip);
-      // Recreate GitHub's per-commit rebase with different committer timestamps.
+      // GitHub keeps authors and replaces committers with the merging principal.
       const commits = git(batch.work, ["rev-list", "--reverse", `${batch.base}..${batch.tip}`]).split("\n");
-      const applied = await commandRunner(f.repo, ["git", "-c", "core.hooksPath=/dev/null", "cherry-pick", ...commits], { ...process.env, GIT_COMMITTER_DATE: "2030-01-01T00:00:00Z" });
+      const applied = await commandRunner(f.repo, ["git", "-c", "core.hooksPath=/dev/null", "cherry-pick", ...commits], {
+        ...process.env, GIT_COMMITTER_DATE: "2030-01-01T00:00:00Z",
+        GIT_COMMITTER_NAME: forge.committerName, GIT_COMMITTER_EMAIL: forge.committerEmail,
+      });
       expect(applied.code).toBe(0);
       mergedTip = git(f.repo, ["rev-parse", "HEAD"]); git(f.repo, ["push", "origin", "main"]); merged = true;
       if (mode === "lost-response") throw new Error("Merge response lost");
@@ -196,7 +215,7 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   };
   git(f.repo, ["config", `url.${join(f.root, "origin.git")}.insteadOf`, "https://github.com/example/fixture.git"]);
   const batch = new MergeBatch(f.repo, stateFile, run, gh, async () => {});
-  return { ...f, batch, calls, commands };
+  return { ...f, batch, calls, commands, forge };
 }
 
 function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
@@ -309,6 +328,8 @@ test("a stale branch privacy scanner cannot block publication after pinned main 
   expect(trustedDirs.length).toBe(3);
   expect(trustedDirs.every((directory) => directory !== landed.work)).toBe(true);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+  const mergeCall = f.calls.find((args) => args[1] === "merge")!;
+  expect(mergeCall[mergeCall.indexOf("--repo") + 1]).toBe("https://github.com/example/fixture");
 });
 
 test("the real main scanner publishes a healthy remainder with a stale branch hook", async () => {
@@ -371,6 +392,116 @@ test("one gated batch rebase-merges with exact head, closes originals with lande
   expect(f.calls.filter((args) => args[1] === "close").map((args) => args[args.indexOf("--comment") + 1]))
     .toEqual(state.rows.map((row) => `Landed on main as ${row.commit} through #99. https://github.com/example/fixture/pull/99`));
   expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-12"])).toContain(a);
+  for (let index = 0; index < state.rows.length; index++) {
+    const landed = state.rows[index]!.commit, original = built.rows[index]!.commit;
+    expect(git(f.repo, ["show", "-s", "--format=%an%n%ae", landed]))
+      .toBe(git(built.work, ["show", "-s", "--format=%an%n%ae", original]));
+    expect(git(f.repo, ["show", "-s", "--format=%cn%n%ce", landed]))
+      .toBe(`${f.forge.committerName}\n${f.forge.committerEmail}`);
+    expect(git(f.repo, ["show", "-s", "--format=%B", landed]))
+      .toBe(git(built.work, ["show", "-s", "--format=%B", original]));
+  }
+});
+
+test.each([
+  ["claude", false], ["codex", false], ["claude", true], ["codex", true],
+] as const)("%s merger verifies forge identity in a launched environment (worktree: %s)", async (engine, worktree) => {
+  const f = landingFixture();
+  const trailer = "Co-Authored-By: Tool <" + ["noreply", "example.invalid"].join("@") + ">";
+  f.addPr(12, "a.txt", "good");
+  git(f.repo, ["checkout", "topic-12"]);
+  git(f.repo, ["commit", "--allow-empty", "-m", `Machine attribution\n\n${trailer}`]);
+  const head = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "origin", `${head}:refs/pull/12/head`, `${head}:refs/heads/topic-12`]);
+  f.views.get(12)!.headRefOid = head;
+  git(f.repo, ["checkout", "main"]);
+  let repo = f.repo;
+  if (worktree) {
+    repo = join(f.root, "linked");
+    git(f.repo, ["worktree", "add", "-b", "merger", repo]);
+  }
+  const source = { ...process.env, HOME: f.root, TMPDIR: f.root, NODE_ENV: "test" };
+  const env = withAgentConfigSandbox({ ...source }, source);
+  if (engine === "claude") {
+    const home = join(f.root, "claude");
+    mkdirSync(home);
+    const policy = applyClaudeSpawnPolicy(home, { publicationEnv: source });
+    Object.assign(env, JSON.parse(readFileSync(policy.settingsPath, "utf8")).env);
+  } else Object.assign(env, agentCodexPublicationPolicy({ include_only: ["PATH", "HOME"] }, source).set);
+  const prior = { ...process.env };
+  try {
+    Object.assign(process.env, env);
+    const batch = new MergeBatch(repo, f.batch.stateFile, f.batch.run, f.batch.gh, async () => {});
+    const built = await batch.build(`12@${head}`);
+    await batch.gate();
+    // A private/no-reply address on a User still represents a person.
+    f.forge.credential = "personal";
+    f.forge.committerName = "Fixture Principal";
+    f.forge.committerEmail = ["noreply", "fixture.example.invalid"].join("@");
+    await expect(batch.land()).rejects.toThrow("verified machine principal");
+    expect(f.calls.some((args) => args[1] === "merge" || args[1] === "create")).toBe(false);
+    expect(git(f.repo, ["ls-remote", "origin", "refs/heads/main"]).split("\t")[0]).toBe(built.base);
+    expect(batch.read().mergeIntent).toBeUndefined();
+    // The identical gated batch can land after machine credentials are available.
+    f.forge.credential = "installation";
+    f.forge.committerName = "Forge Automation";
+    f.forge.committerEmail = ["noreply", "forge.example.invalid"].join("@");
+    const landed = await batch.land();
+    const commit = landed.rows[0]!.commit;
+    expect(git(f.repo, ["show", "-s", "--format=%an%n%ae%n%cn%n%ce", commit]))
+      .toBe([env.GIT_AUTHOR_NAME, env.GIT_AUTHOR_EMAIL, f.forge.committerName, f.forge.committerEmail].join("\n"));
+    expect(git(f.repo, ["show", "-s", "--format=%B", commit])).toContain(trailer);
+    expect(f.commands.some((args) => args.includes("--check-commits"))).toBe(true);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in prior)) delete process.env[key];
+    Object.assign(process.env, prior);
+  }
+}, 20_000);
+
+test.each(["", "null", "{}", "other/fixture", "example/fixture-other", "other/example/fixture",
+  "example/fixture\nother/fixture",
+])("installation must prove access to the exact target before any batch publication: %j", async (response) => {
+  const f = landingFixture();
+  const head = f.addPr(12, "a.txt", "good");
+  await f.batch.build(`12@${head}`); await f.batch.gate();
+  f.forge.installationResponse = response;
+  await expect(f.batch.land()).rejects.toThrow("verified machine principal");
+  expect(f.calls.some((args) => args[1] === "merge" || args[1] === "create")).toBe(false);
+  expect(f.batch.read().published).toBeNull();
+});
+
+test.each(["personal", "app-user"] as const)("%s credentials cannot prove an installation principal", async (credential) => {
+  const f = landingFixture();
+  const head = f.addPr(12, "a.txt", "good");
+  await f.batch.build(`12@${head}`); await f.batch.gate();
+  f.forge.credential = credential;
+  await expect(f.batch.land()).rejects.toThrow("verified machine principal");
+  expect(f.calls.some((args) => args[1] === "merge" || args[1] === "create")).toBe(false);
+});
+
+test("unreadable forge credentials refuse landing without disclosing diagnostics", async () => {
+  const f = landingFixture();
+  const head = f.addPr(12, "a.txt", "good");
+  await f.batch.build(`12@${head}`); await f.batch.gate();
+  f.forge.unavailable = true;
+  await expect(f.batch.land()).rejects.toThrow("personal or unverified credentials refused");
+  expect(f.calls.some((args) => args[1] === "merge" || args[1] === "create")).toBe(false);
+});
+
+test("forge credentials are checked again immediately before the merge", async () => {
+  const f = landingFixture();
+  const head = f.addPr(12, "a.txt", "good");
+  const gh = async (args: string[]) => {
+    const result = await f.batch.gh(args);
+    if (args[0] === "pr" && args[1] === "create") f.forge.credential = "personal";
+    return result;
+  };
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, f.batch.run, gh, async () => {});
+  await batch.build(`12@${head}`); await batch.gate();
+  await expect(batch.land()).rejects.toThrow("verified machine principal");
+  expect(f.calls.filter((args) => args[0] === "api" && args[1] === "installation/repositories?per_page=100")).toHaveLength(2);
+  expect(f.calls.some((args) => args[1] === "merge")).toBe(false);
+  expect(batch.read().mergeIntent).toBeUndefined();
 });
 
 test("an attributed red required check drops its PR and lands the remainder", async () => {
