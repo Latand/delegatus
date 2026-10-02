@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { readStableTailRecords } from "@/lib/scanner/activity";
+import { oauthFailureWithRecoveryTail } from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
 
 import { durableStageTurnEvidence, MAX_REPORT_EVIDENCE_BYTES } from "./durableEvidence";
 
@@ -521,10 +522,10 @@ test("a Codex usage-limit terminal record carries its governing reset (#1371)", 
   });
 });
 
-test("a recorded Claude session-limit API error carries an unknown reset", async () => {
+test("a recorded Claude session-limit API error resolves its timestamped timezone reset", async () => {
   // Shape observed in a 2026-09-26 Claude stage transcript: the CLI writes a
   // synthetic assistant with error=rate_limit and stop_sequence, then appends
-  // bookkeeping. The local clock label does not identify a reset instant.
+  // bookkeeping. Resolve the local clock from the notice's own timestamp.
   const file = writeTranscript("claude-session-limit.jsonl", [
     { type: "user", timestamp: "2026-09-26T11:24:17.140Z", message: { role: "user", content: "fix the stage" } },
     { type: "assistant", timestamp: "2026-09-26T11:27:59.577Z", message: { role: "assistant", content: [{ type: "text", text: "Working on the edit" }] } },
@@ -539,9 +540,37 @@ test("a recorded Claude session-limit API error carries an unknown reset", async
     turn: "terminal",
     terminalProviderMessage: {
       text: "You've hit your session limit · resets 2:30pm (Europe/Kyiv)",
-      usageLimit: { resetsAt: null },
+      usageLimit: { resetsAt: Date.parse("2026-09-26T11:30:00Z") / 1_000 },
     },
   });
+});
+
+test.each([
+  ["2026-10-02T00:16:00Z", "2:30pm (UTC)", "2026-10-02T14:30:00Z"],
+  ["2026-10-02T23:16:00Z", "2:30pm (UTC)", "2026-10-03T14:30:00Z"],
+  ["2026-10-02T23:16:00Z", "2:30am (Asia/Kolkata)", "2026-10-03T21:00:00Z"],
+  ["2026-10-02T00:16:00Z", "12am (UTC)", "2026-10-03T00:00:00Z"],
+  ["2026-10-02T00:16:00Z", "12pm (UTC)", "2026-10-02T12:00:00Z"],
+  ["2026-10-02T00:16:00Z", "Oct 9 at 2:30pm (UTC)", "2026-10-09T14:30:00Z"],
+  ["2026-12-31T00:16:00Z", "Jan 2, 2:30pm (UTC)", "2027-01-02T14:30:00Z"],
+  ["2026-10-24T23:16:00Z", "3:30am (Europe/Kyiv)", "2026-10-25T01:30:00Z"],
+  ["2026-03-29T00:16:00Z", "3:30am (Europe/Kyiv)", null],
+  ["2026-10-02T00:16:00Z", "2:30pm", null],
+  ["2026-10-02T00:16:00Z", "2:30pm (Unknown/Zone)", null],
+  ["2026-10-02T00:16:00Z", "25:30 (UTC)", null],
+  ["2026-10-02T00:16:00Z", "2:90pm (UTC)", null],
+  ["2026-10-02T00:16:00Z", "Feb 30 at 2:30pm (UTC)", null],
+  ["2026-10-02T00:16:00Z", "Oct 1, 2026 at 2:30pm (UTC)", null],
+  ["invalid", "2:30pm (UTC)", null],
+  ["2026-10-02T00:16:00", "2:30pm (UTC)", null],
+] as const)("native Claude weekly reset at %s: %s", async (timestamp, label, expected) => {
+  const file = writeTranscript("claude-weekly-reset.jsonl", [{
+    type: "assistant", timestamp, isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: `You've hit your weekly limit · resets ${label}` }] },
+  }]);
+  expect((await durableStageTurnEvidence("claude", file))?.terminalProviderMessage?.usageLimit)
+    .toEqual({ resetsAt: expected === null ? null : Date.parse(expected) / 1_000 });
 });
 
 test("Claude limit prose without the terminal rate-limit envelope is not capacity evidence", async () => {
@@ -572,4 +601,65 @@ test("a Codex turn that completed normally carries no provider notice (#1141)", 
   ]);
 
   expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ turn: "terminal", terminalProviderMessage: null });
+});
+
+for (const [code, text, kind] of [
+  ["rate_limit", "You've hit your weekly limit · resets 2:30pm", "usage_limit"],
+  ["rate_limit", "You've hit your Opus limit", "usage_limit"],
+  ["rate_limit", "You've reached your Fable limit", "usage_limit"],
+  ["server_error", "Failed to refresh OAuth token: retry in a minute", "transient"],
+  ["authentication_failed", "expired", "auth_required"],
+  ["overloaded", "busy", "transient"],
+] as const) {
+  test(`terminal Claude ${code} carries its provider class: ${kind}`, async () => {
+    const file = writeTranscript(`provider-${kind}-${text.length}.jsonl`, [
+      { type: "user", timestamp: "2026-10-02T10:00:00Z", message: { role: "user", content: "continue" } },
+      { type: "assistant", timestamp: "2026-10-02T10:01:00Z", isApiErrorMessage: true, error: code,
+        message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text }] } },
+    ]);
+    const evidence = await durableStageTurnEvidence("claude", file);
+    expect(evidence?.terminalProviderMessage).toMatchObject({ errorClass: code });
+    if (kind === "usage_limit") expect(evidence?.terminalProviderMessage?.usageLimit).toEqual({ resetsAt: null });
+  });
+}
+
+for (const engine of ["codex", "claude"] as const) {
+  test(`${engine} native aborted turn carries cut evidence and drops stale assistant output`, async () => {
+    const file = writeTranscript(`${engine}-native-abort.jsonl`, engine === "codex" ? [
+      { timestamp: "2026-10-02T10:00:00Z", type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: "2026-10-02T10:01:00Z", type: "event_msg", payload: { type: "agent_message", message: "unfinished edit" } },
+      { timestamp: "2026-10-02T10:02:00Z", type: "event_msg", payload: { type: "turn_aborted" } },
+    ] : [
+      { timestamp: "2026-10-02T10:00:00Z", type: "user", message: { role: "user", content: "continue" } },
+      { timestamp: "2026-10-02T10:01:00Z", type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "unfinished edit" }] } },
+      { timestamp: "2026-10-02T10:02:00Z", type: "user", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } },
+    ]);
+    const evidence = await durableStageTurnEvidence(engine, file);
+    expect(evidence).toMatchObject({ turn: "terminal", terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-10-02T10:02:00Z") } });
+  });
+}
+
+for (const code of ["authentication_failed", "rate_limit", "server_error"] as const) {
+  test(`Claude shutdown recovery bookkeeping preserves the native ${code} failure`, async () => {
+    const records = oauthFailureWithRecoveryTail();
+    if (code === "rate_limit") records[1] = { ...records[1], error: code,
+      message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: "You've hit your weekly limit" }] } };
+    if (code === "server_error") records[1] = { ...records[1], error: code,
+      message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: "Failed to refresh OAuth token: retry in a minute" }] } };
+    const file = writeTranscript(`claude-${code}-recovery-tail.jsonl`, records);
+    const evidence = await durableStageTurnEvidence("claude", file);
+    expect(evidence).toMatchObject({ turn: "terminal", terminalProviderMessage: { errorClass: code } });
+    if (code === "rate_limit") expect(evidence?.terminalProviderMessage?.usageLimit).toEqual({ resetsAt: null });
+  });
+}
+
+test("a real Claude continuation cut is newer than an earlier provider failure", async () => {
+  const records = oauthFailureWithRecoveryTail();
+  records.splice(2, records.length - 2,
+    { type: "user", timestamp: "2026-07-24T08:00:00Z", message: { role: "user", content: "Continue the stage after the account switch." } },
+    { type: "user", timestamp: "2026-07-24T08:01:00Z", interruptedByShutdown: true,
+      message: { role: "user", content: "[Request interrupted by user]" } });
+  const file = writeTranscript("claude-real-continuation-cut.jsonl", records);
+  expect(await durableStageTurnEvidence("claude", file)).toMatchObject({ turn: "terminal",
+    terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-07-24T08:01:00Z") } });
 });

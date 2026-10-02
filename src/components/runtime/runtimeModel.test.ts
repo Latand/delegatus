@@ -101,6 +101,26 @@ function apply(store: RuntimeStore, e: RuntimeEnvelope): RuntimeStore {
 /* ------------------------------ snapshot ------------------------------ */
 
 describe("installSnapshot", () => {
+  test("retains terminal identity on recovery only for the same session and artifact", () => {
+    let store = installSnapshot(snapshot());
+    store = apply(store, env("turn-ended", { type: "session", id: "conv_a" }, 4, { turnId: "t1" }));
+    const recovered = snapshot({ snapshotSeq: store.cursor, sessions: [session({
+      conversationId: "conv_a", revision: 4, turn: "unknown",
+    })] });
+    expect(installSnapshot(recovered, store).sessions.conv_a?.settledTurnId).toBe("t1");
+    for (const change of [
+      { artifactPath: "/sessions/successor.jsonl" },
+      { sessionKey: { engine: "claude" as const, sessionId: "conv_a" } },
+      { sessionKey: { engine: "codex" as const, sessionId: "successor" } },
+      { turn: "running" as const, activeTurnId: "t2" },
+    ]) {
+      const next = { ...recovered, sessions: [{ ...recovered.sessions[0]!, ...change }] };
+      expect(installSnapshot(next, store).sessions.conv_a?.settledTurnId).toBeNull();
+      const status = apply(store, env("session-status", { type: "session", id: "conv_a" }, 5, change));
+      expect(status.sessions.conv_a?.settledTurnId).toBeNull();
+    }
+  });
+
   test("seeds cursor, scope heads, and every projected collection", () => {
     const flow = { id: "flow_1", state: "reviewing" } as unknown as Flow;
     const store = installSnapshot(
@@ -147,6 +167,23 @@ function receipt(overrides: Partial<RuntimeReceipt> & { operationId: string; con
 /* --------------------- live turn streaming --------------------- */
 
 describe("live turn delta buffering", () => {
+  test("terminal events retain the turn id after clearing activeTurnId, until a different turn", () => {
+    for (const explicitId of [false, true]) {
+      let store = installSnapshot(snapshot());
+      store = apply(store, env("turn-started", { type: "session", id: "conv_a" }, 4, { turnId: "t1" }));
+      store = apply(store, env("turn-ended", { type: "session", id: "conv_a" }, 5, explicitId ? { turnId: "t1" } : {}));
+      expect(store.sessions.conv_a).toMatchObject({ turn: "idle", activeTurnId: null, settledTurnId: "t1" });
+      store = apply(store, env("session-status", { type: "session", id: "conv_a" }, 6, { host: "dead", turn: "unknown" }));
+      store = apply(store, env("session-status", { type: "session", id: "conv_a" }, 7, { turn: "running", activeTurnId: "t1" }));
+      expect(store.sessions.conv_a?.settledTurnId).toBe("t1");
+      for (const kind of ["turn-started", "session-status"]) {
+        const next = apply(store, env(kind, { type: "session", id: "conv_a" }, 8,
+          kind === "turn-started" ? { turnId: "t2" } : { turn: "running", activeTurnId: "t2" }));
+        expect(next.sessions.conv_a).toMatchObject({ turn: "running", activeTurnId: "t2", settledTurnId: null });
+      }
+    }
+  });
+
   test("completed assistant items wait for transcript echo across tool work and turn end", () => {
     let store = installSnapshot(snapshot());
     store = apply(store, env("turn-started", { type: "session", id: "conv_a" }, 4, { conversationId: "conv_a", turnId: "t1" }));
