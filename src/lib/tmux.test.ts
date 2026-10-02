@@ -37,6 +37,38 @@ test("known live pid validation reuses a supplied scanner snapshot", () => {
   expect([...live]).toEqual([process.pid]);
 });
 
+test("invalid publication settings reject before creating a tmux pane or spawn receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-tmux-"));
+  const calls = path.join(root, "calls");
+  const keys = ["PATH", "LLV_PUBLICATION_EMAIL", "DELEGATUS_PUBLICATION_EMAIL", "LLV_TEST_TMUX_CALLS"];
+  const previous = keys.map((key) => process.env[key]);
+  fs.writeFileSync(path.join(root, "tmux"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$LLV_TEST_TMUX_CALLS"\nexit 1\n', { mode: 0o755 });
+  Object.assign(process.env, {
+    PATH: `${root}${path.delimiter}${process.env.PATH}`,
+    LLV_PUBLICATION_EMAIL: "invalid", DELEGATUS_PUBLICATION_EMAIL: "invalid",
+    LLV_TEST_TMUX_CALLS: calls,
+  });
+  try {
+    const spec = {
+      command: "codex-fixture", cwd: root, windowName: "fixture", engine: "codex" as const,
+      launchProfile: emptyLaunchProfile({ cwd: root, title: "Publication preflight" }),
+    };
+    await expect(spawnAgentWithPrompt(spec, "begin")).rejects.toThrow("Invalid agent publication identity");
+    expect(fs.existsSync(calls)).toBe(false);
+    expect(Object.values(agentRegistry().snapshot().receipts).filter((receipt) => receipt.cwd === root)).toHaveLength(0);
+    const receipt = agentRegistry().beginSpawn(spec.engine, root, spec.launchProfile);
+    await expect(spawnAgentWithPrompt(spec, "begin", receipt)).rejects.toThrow("Invalid agent publication identity");
+    expect(agentRegistry().snapshot().receipts[receipt.launchId]?.state).toBe("failed");
+    expect(fs.existsSync(calls)).toBe(false);
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe("renameTmuxWindowForPid guards", () => {
   test("a non-positive pid never touches tmux", async () => {
     expect(await renameTmuxWindowForPid(0, "Name")).toBeNull();
