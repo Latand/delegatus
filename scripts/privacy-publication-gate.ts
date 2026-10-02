@@ -578,11 +578,15 @@ type EmailOccurrence = {
    detection reads both rather than only the shape that is easy to match. */
 const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-const idnaDomainLabel = String.raw`[A-Z0-9\p{L}\p{M}\p{N}-]+`;
+/* IDNA CONTEXTO/CONTEXTJ code points can continue a valid label despite not
+   belonging to the usual letter, mark or number categories. Keep them in the
+   whole-domain match so an exemption cannot hide a real IDN continuation. */
+const idnaDomainLabelChar = String.raw`A-Z0-9\p{L}\p{M}\p{N}\u00B7\u0375\u05F3\u05F4\u200C\u200D\u30FB-`;
+const idnaDomainLabel = `[${idnaDomainLabelChar}]+`;
 const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
 const emailDomain = new RegExp(
   `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`
-    + `(?![A-Z0-9\\p{L}\\p{M}\\p{N}-]|${idnaDomainSeparator}${idnaDomainLabel})`,
+    + `(?![${idnaDomainLabelChar}]|${idnaDomainSeparator}${idnaDomainLabel})`,
   "iu",
 );
 const emailAddressSource =
