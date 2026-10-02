@@ -198,6 +198,7 @@ test("issue 532: a marker-created pipeline round captures its published repair h
       createdAt: "2026-07-21T00:00:00Z",
     });
 
+    saveFlows([flow]);
     expect(await tickFlow(flow, [current], new Map([[current.path, current]]), () => {})).toBe(true);
     expect(flow).toMatchObject({
       state: "spawning",
@@ -239,6 +240,7 @@ test("issue 532: a dirty marker-time checkout parks with an actionable decision"
       createdAt: "2026-07-21T00:00:00Z",
     });
 
+    saveFlows([flow]);
     expect(await tickFlow(flow, [current], new Map([[current.path, current]]), () => {})).toBe(true);
     expect(flow).toMatchObject({
       state: "needs_decision",
@@ -283,6 +285,55 @@ test("a review round parks when clean HEAD advances past its synchronized target
     });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "close", "cycle"] as const).map((action) => [boundary, action] as const)))("async flow %s head capture respects %s", async (boundary, action) => {
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const git = await import("./git");
+  const exec = await import("./exec");
+  const decisions = await import("./decisions");
+  const { patchFlow, closeFlow } = await import("./commands");
+  const root = process.env.LLV_STATE_DIR!;
+  const implementer = writeCodexEntry(`head-control-${boundary}-${action}.jsonl`, { id: crypto.randomUUID(), cwd: root }, Date.now() / 1_000);
+  const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
+    home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
+  const choose = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account });
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "head-control-session", reviewerPath: null });
+  const status = spyOn(exec, "headlessReviewStatus").mockReturnValue(null);
+  const turn = spyOn(decisions, "flowTurn").mockResolvedValue({ state: "terminal", successful: true,
+    message: { text: "REVIEW_READY: current work", ts: Date.now() }, backgroundTasks: [] } as never);
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const head = spyOn(git, "resolveCleanFlowHead").mockImplementation(async () => { enter(); await held; return "a".repeat(40); });
+  const flow = raceFlow({ id: `flow-head-${boundary}-${action}`, cwd: root, implementerPath: implementer.path,
+    baseRef: "a".repeat(40), state: boundary === "marker" ? "waiting_ready" : "spawning",
+    stateDetail: "resumed by operator", headRef: "main", requireRemoteHead: false });
+  if (boundary === "launch") {
+    flow.rounds = [newRound(flow, "button", null)];
+    flow.rounds[0]!.accountId = "account-a";
+  }
+  saveFlows([flow]);
+  const receiptsBefore = Object.keys(agentRegistry().snapshot().receipts);
+  let tick: Promise<unknown> | undefined;
+  try {
+    tick = tickFlows([implementer]);
+    await entered;
+    if (action === "close") expect((await closeFlow(flow.id)).flow?.state).toBe("closed");
+    else {
+      expect(patchFlow(flow.id, { action: "pause" }).flow?.state).toBe("paused");
+      if (action === "cycle") expect(patchFlow(flow.id, { action: "resume" }).error).toBeUndefined();
+    }
+    release(); await tick;
+    expect(launch).not.toHaveBeenCalled();
+    expect(Object.keys(agentRegistry().snapshot().receipts)).toEqual(receiptsBefore);
+    expect(loadFlows()[0]!.state).toBe(action === "cycle" ? flow.state : action === "close" ? "closed" : "paused");
+    expect(loadFlows()[0]!.rounds).toHaveLength(boundary === "marker" ? 0 : 1);
+    expect(loadFlows()[0]!.rounds[0]?.reviewHeadSha ?? null).toBeNull();
+  } finally {
+    release(); await tick;
+    head.mockRestore(); turn.mockRestore(); status.mockRestore(); launch.mockRestore(); choose.mockRestore();
   }
 });
 

@@ -40,16 +40,16 @@ export async function resolveFlowMergeIdentity(cwd: string, exec: ExecPort = rea
   return repository && headRef && /^[0-9a-f]{40}$/i.test(headSha) ? { repository, headRef, headSha } : null;
 }
 
-export async function resolveCleanFlowHead(cwd: string): Promise<string | null> {
-  const status = (await realExec("git", ["status", "--porcelain=v1", "--untracked-files=all"], cwd, undefined, { timeoutMs: 2_000 }));
+export async function resolveCleanFlowHead(cwd: string, signal?: AbortSignal): Promise<string | null> {
+  const status = (await realExec("git", ["status", "--porcelain=v1", "--untracked-files=all"], cwd, undefined, { timeoutMs: 2_000, signal }));
   if (status.code !== 0 || status.stdout.trim()) return null;
-  const head = (await realExec("git", ["rev-parse", "HEAD"], cwd, undefined, { timeoutMs: 2_000 }));
+  const head = (await realExec("git", ["rev-parse", "HEAD"], cwd, undefined, { timeoutMs: 2_000, signal }));
   const sha = head.stdout.trim();
   return head.code === 0 && /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
 }
 
-export async function resolveFlowRemoteHead(cwd: string, headRef: string): Promise<string | null> {
-  const remote = (await realExec("git", ["ls-remote", "--heads", "origin", `refs/heads/${headRef}`], cwd, undefined, { timeoutMs: 5_000 }));
+export async function resolveFlowRemoteHead(cwd: string, headRef: string, signal?: AbortSignal): Promise<string | null> {
+  const remote = (await realExec("git", ["ls-remote", "--heads", "origin", `refs/heads/${headRef}`], cwd, undefined, { timeoutMs: 5_000, signal }));
   if (remote.code !== 0) return null;
   const sha = remote.stdout.trim().split(/\s+/)[0] ?? "";
   return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;

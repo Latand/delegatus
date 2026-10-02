@@ -289,11 +289,36 @@ export function reserveReviewerSpawn(
   return begun;
 }
 
-export async function captureReviewHead(flow: Flow, round: Round): Promise<string> {
-  const headSha = (await resolveCleanFlowHead(flow.cwd));
+/** The store's revision changes for controls, roles, rounds and ownership. */
+function flowRevisionCurrent(flow: Flow): boolean {
+  const current = loadFlows().find((item) => item.id === flow.id);
+  return Boolean(current && (current.revision ?? 0) === (flow.revision ?? 0));
+}
+
+async function withFlowGitFence<T>(flow: Flow, observe: (signal: AbortSignal) => Promise<T>): Promise<
+  { current: true; value: T } | { current: false }
+> {
+  const abort = new AbortController();
+  const revalidate = () => {
+    if (!flowRevisionCurrent(flow)) abort.abort();
+    return !abort.signal.aborted;
+  };
+  if (!revalidate()) return { current: false };
+  const watch = setInterval(revalidate, 50);
+  try {
+    const value = await observe(abort.signal);
+    return revalidate() ? { current: true, value } : { current: false };
+  } catch (error) {
+    if (!revalidate()) return { current: false };
+    throw error;
+  } finally { clearInterval(watch); }
+}
+
+export async function captureReviewHead(flow: Flow, round: Round, signal?: AbortSignal): Promise<string> {
+  const headSha = (await resolveCleanFlowHead(flow.cwd, signal));
   if (!headSha) throw new Error("review requires a clean committed HEAD");
   if (flow.headRef && flow.requireRemoteHead === true) {
-    const remoteSha = (await resolveFlowRemoteHead(flow.cwd, flow.headRef));
+    const remoteSha = (await resolveFlowRemoteHead(flow.cwd, flow.headRef, signal));
     if (remoteSha !== headSha) {
       const detail = remoteSha
         ? `review remote head mismatch before launch: local ${headSha}, origin/${flow.headRef} ${remoteSha}`
@@ -1269,7 +1294,10 @@ export async function tickFlow(
            (and its published copy, when the pipeline publishes) in the same
            durable marker transition, before a delayed reviewer launch or
            parent reconciliation can expose the prior HEAD. */
-        if (flow.headRef) (await captureReviewHead(flow, markerRound));
+        if (flow.headRef) {
+          const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(flow, markerRound, signal));
+          if (!observed.current) return false;
+        }
         flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
         flow.stateDetail = null;
       } catch (error) {
@@ -1294,11 +1322,15 @@ export async function tickFlow(
   if (flow.state === "spawning") {
     if (round.launchNotBefore && Date.now() < unixMs(round.launchNotBefore)) return false;
     const submission = flow.agentDecisions?.find((item) => item.decision === "submit-review" && item.disposition === "applied" && item.round + 1 === round.n);
-    if (submission && !round.spawnStartedAt && (!decisionStillOwned(flow, submission)
-      || !decisionStageMatches(flow, submission.stage, loadPipelines())
-      || (await resolveCleanFlowHead(flow.cwd)) !== submission.expectedHead)) {
-      markNeedsDecision(flow, "submitted review lost its owner, generation, stage attempt or exact HEAD fence before launch");
-      return true;
+    if (submission && !round.spawnStartedAt) {
+      if (!flowRevisionCurrent(flow)) return false;
+      const owned = decisionStillOwned(flow, submission) && decisionStageMatches(flow, submission.stage, loadPipelines());
+      const observed = owned ? await withFlowGitFence(flow, (signal) => resolveCleanFlowHead(flow.cwd, signal)) : null;
+      if (observed && !observed.current) return false;
+      if (!owned || observed?.value !== submission.expectedHead) {
+        markNeedsDecision(flow, "submitted review lost its owner, generation, stage attempt or exact HEAD fence before launch");
+        return true;
+      }
     }
     const status = flow.reviewerMode === "headless"
       ? headlessReviewStatus(flow.id, round.n, round, reviewerRoleFor(flow, round).engine)
@@ -1331,12 +1363,14 @@ export async function tickFlow(
     }
     try {
       const prepared = prepareReviewerLaunch(flow, round);
-      (await captureReviewHead(flow, round));
+      const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(flow, round, signal));
+      if (!observed.current) return false;
       round.spawnStartedAt = isoNow();
       const reservation = await withAccountMutationLockAsync(
-        () => reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId),
+        () => flowRevisionCurrent(flow) ? reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId) : null,
         { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
       );
+      if (!reservation || !flowRevisionCurrent(flow)) return false;
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
       persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan
