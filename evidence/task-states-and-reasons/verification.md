@@ -27,6 +27,9 @@ Every test ran by file through `/var/tmp/llv-gate bun test`, with isolated
 - `src/components/kanban/kanbanModel.test.ts`: 50 passed.
 - `src/components/kanban/KanbanEditing.dom.test.tsx`: 27 passed.
 - `src/components/mobile/phoneKanbanModel.test.ts`: 19 passed.
+- `src/components/mobile/MobileKanban.dom.test.tsx`: 14 passed. The footer
+  regression requires the Working motion count, no footer working count, and
+  the retained agent count.
 - `src/lib/mcp/bindings.test.ts`: 88 passed.
 - `src/lib/tasks/taskHold.test.ts`: 4 passed.
 - `src/lib/mcp/schemaParity.test.ts`, task-write case: passed.
@@ -51,10 +54,33 @@ at `src/lib/mcp/schemaParity.test.ts:700`: a pipeline fail-edge description
 assertion expects older wording. The same failure reproduces in an export of
 the merged baseline. Its task-write case passes.
 
-ESLint reports seven existing errors in `MobileKanban.tsx` and
-`MobileTaskScreen.tsx` (refs, purity, immutability and effect-state rules), plus
-three existing unused-variable warnings. The error set matches the merged
-baseline exactly; the changed implementation adds none.
+ESLint on all changed TypeScript files reports 93 existing errors and eight
+warnings. Running the same file set in an export of current main gives the
+same totals and the same per-file, per-rule severity counts; the changed
+implementation adds none.
 
 The pre-existing right-edge clipping of the Done column at 1440 remains
 outside these nine findings. Browser evidence covers emulated phone geometry.
+
+## Follow-up acceptance
+
+Merged the four newer main commits without conflicts at `a817ccadb` before
+updating the phone assertion. The complete phone suite reproduced 13 passing
+tests and one failure before the assertion change, then passed all 14 tests
+with the motion count and retained agent count checked separately.
+
+Reran every changed non-browser test file individually with isolated state
+through the memory-capped gate: 447 passed, with only the unrelated
+schema-description failure above. The same schema-description failure was
+reproduced on current main; the task-write schema acceptance passes.
+The shared task-motion browser case again passed 406 assertions across
+1440/390 in English/Ukrainian. All 30 fresh captures were inspected directly;
+the driver closed the browser and its fixture server. TypeScript, privacy
+with commit checking, and diff checks passed after the merge.
+
+A fresh read-only review of the full diff found no further issue in the nine
+pinned repros. Two additional checklist edge cases were traced statically
+for follow-up: paused/running pipeline references override an open operator
+hold's attention motion (`steps.ts:38-40`), and terminal steps can inherit
+working motion that the task projection accepts without checking whether
+they are open (`motion.ts:33`). These are Notes outside this fix round.

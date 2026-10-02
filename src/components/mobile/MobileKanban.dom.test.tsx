@@ -236,8 +236,13 @@ test("four tabs in the desktop's order carry each column's count and its working
   expect(first.getAttribute("data-edge")).toBe("warning");
   expect(q(first, "[data-phone-card-badge]")!.textContent).toBe(en("mobile2.board.badgeQuestion"));
   expect(q(first, "[data-phone-card-ask]")!.textContent).toContain("Which unit file stays?");
-  /* A card with no pipeline says its agents; a card of one working agent says so. */
-  expect(q(host, '[data-phone-card="task:a1"] [data-phone-card-agents]')!.textContent).toContain(en("mobile2.kanban.working", { count: 1 }));
+  /* Working appears once in the motion line; the footer retains the agent count. */
+  const workingCard = q(host, '[data-phone-card="task:a1"]')!;
+  expect(q(workingCard, '[data-motion="working"]')!.textContent).toContain(en("kanban.motion.workingN", { count: 1 }));
+  const agentsLine = q(workingCard, "[data-phone-card-agents]")!;
+  expect(agentsLine.textContent).toContain(en("mobile2.kanban.agents", { count: 1 }));
+  expect(agentsLine.textContent).not.toContain(en("mobile2.kanban.working", { count: 1 }));
+  expect(q(workingCard, "[data-foot-working]")).toBeNull();
   expect(q(host, '[data-phone-card="task:i2"] [data-phone-card-agents]')!.textContent).toContain(en("mobile2.kanban.noAgents"));
   /* The loose working conversation is under Not on a task. */
   expect(q(host, "[data-phone-kanban-unlinked]")!.textContent).toBe(en("kanban.notOnTask", { count: 1 }));
