@@ -76,6 +76,9 @@ export function useAssistantHandoff(identity: string | null, live: RuntimeLiveTu
   feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null): AssistantHandoff {
   const [snapshot, setSnapshot] = useState(() => ({ identity, live, feed, claims, turn,
     value: projectAssistantHandoff(null, live, feed, claims, turn) }));
+  // History-only panes have nothing to reconcile. In particular, a prepend
+  // must not schedule a second render just to remember another empty handoff.
+  if (!live && snapshot.identity === identity && !snapshot.value.pending.length && !snapshot.value.bindings.size) return snapshot.value;
   if (snapshot.identity !== identity || snapshot.live !== live || snapshot.feed !== feed || snapshot.claims !== claims || snapshot.turn !== turn) {
     const value = projectAssistantHandoff(snapshot.identity === identity ? snapshot.value : null, live, feed, claims, turn);
     setSnapshot({ identity, live, feed, claims, turn, value });

@@ -1431,6 +1431,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         if (row.kind === "item" || row.kind === "delta") rows[index] = { ...row, resumes: { ask } };
       }
     }
+    if (!liveTail.handoff.pending.length && !liveTail.handoff.bindings.size) return rows;
     const rowInstants = new Map<string, number | null>();
     for (const entry of visibleItems) {
       rowInstants.set(entry.key, transcriptInstant(entry.item));
