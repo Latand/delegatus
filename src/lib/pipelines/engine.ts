@@ -90,6 +90,7 @@ import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipel
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
+import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -3025,38 +3026,60 @@ async function commitPassedStage(
     so the controller must accept declared output before that marker captures
     the next review head. The same stage committer enforces the declared paths
     and preserves every other worktree path. */
-export async function preparePipelineReviewRepair(flowId: string): Promise<{ ok: true } | { ok: false; retryable: boolean; detail: string }> {
-  const accepted = await withPipelineMutation(async (pipelines, persist) => {
-    const pipeline = pipelines.find((candidate) => candidate.cursor?.stageId
-      && candidate.runs.some((run) => run.stageId === candidate.cursor!.stageId
-        && run.attempts.some((attempt) => attempt.flowId === flowId)));
-    if (!pipeline) return { ok: true as const, pipelineId: null, sha: null };
-    const reviewStage = currentStage(pipeline);
-    if (reviewStage?.kind !== "review-loop" || pipeline.state !== "running") {
-      return { ok: false as const, detail: "the pipeline review stage no longer owns this repair" };
-    }
-    const implementer = latestAcceptedRun(pipeline, reviewStage.id);
-    if (!implementer) return { ok: false as const, detail: "the review flow has no accepted producer stage" };
-    const source = pipeline.stages.find((stage) => runFor(pipeline, stage.id)?.attempts.includes(implementer));
-    if (!source || source.kind !== "run") return { ok: false as const, detail: "the accepted producer stage is missing" };
-    const outputs = attemptStage(source, implementer).outputs ?? [];
-    if (implementer.effectiveRole.access !== "read-only" || outputs.length === 0) {
-      return { ok: true as const, pipelineId: null, sha: null };
-    }
-    const result = (await commitPipelineStage(pipeline, source.id, false, realExec, outputs, pipeline.lastPassedCommit));
-    if (!result.ok) return { ok: false as const, detail: result.error };
-    if (result.sha !== pipeline.lastPassedCommit) {
-      pipeline.lastPassedCommit = result.sha;
-      persist([pipeline]);
-    }
-    return { ok: true as const, pipelineId: pipeline.id, sha: pipeline.lastPassedCommit };
-  });
-  if (!accepted.ok) return { ok: false, retryable: false, detail: accepted.detail };
-  if (!accepted.pipelineId || !accepted.sha) return { ok: true };
-  const pipeline = findPipelineRecord(accepted.pipelineId);
-  if (!pipeline) return { ok: false, retryable: false, detail: "the pipeline review stage disappeared before publication" };
-  if (!publishesRemoteBranch(pipeline)) return { ok: true };
-  const published = await publishPipelineBranch(pipeline, realExec, { acceptedSha: accepted.sha });
+export async function preparePipelineReviewRepair(flowId: string, ports: PipelinePorts = defaultPipelinePorts()): Promise<{ ok: true } | { ok: false; retryable: boolean; detail: string }> {
+  const preview = loadPipelines().find((candidate) => candidate.cursor?.stageId
+    && candidate.runs.some((run) => run.stageId === candidate.cursor!.stageId
+      && run.attempts.some((attempt) => attempt.flowId === flowId)));
+  if (!preview) return { ok: true };
+  const reviewStage = currentStage(preview);
+  if (reviewStage?.kind !== "review-loop" || preview.state !== "running"
+    || currentAttempt(preview, reviewStage.id)?.flowId !== flowId) {
+    return { ok: false, retryable: false, detail: "the pipeline review stage no longer owns this repair" };
+  }
+  const implementer = latestAcceptedRun(preview, reviewStage.id);
+  if (!implementer) return { ok: false, retryable: false, detail: "the review flow has no accepted producer stage" };
+  const source = preview.stages.find((stage) => runFor(preview, stage.id)?.attempts.includes(implementer));
+  if (!source || source.kind !== "run") return { ok: false, retryable: false, detail: "the accepted producer stage is missing" };
+  const outputs = attemptStage(source, implementer).outputs ?? [];
+  if (implementer.effectiveRole.access !== "read-only" || outputs.length === 0) return { ok: true };
+  const fingerprint = JSON.stringify(preview), flowFingerprint = JSON.stringify(ports.getFlow(flowId));
+  const matches = (current: Pipeline | null) => JSON.stringify(current) === fingerprint
+    && JSON.stringify(ports.getFlow(flowId)) === flowFingerprint;
+  const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  let descriptor: number | null;
+  try { descriptor = await acquirePublicationFileLock(lock); }
+  catch (error) { return { ok: false, retryable: false, detail: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
+  if (descriptor === null) return { ok: false, retryable: true, detail: "review repair is waiting for its owned Git lock" };
+  const abort = new AbortController();
+  const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
+  const watch = setInterval(revalidate, 50);
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    revalidate();
+    if (abort.signal.aborted) return { code: null, stdout: "", stderr: "review repair superseded" };
+    return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor,
+      timeoutMs: options?.timeoutMs ?? 60_000 });
+  };
+  let accepted: Pipeline | null = null;
+  try {
+    const receiptKey = crypto.createHash("sha256").update(JSON.stringify({ flowId, source: source.id,
+      attempt: implementer.n, launchId: implementer.launchId, conversationId: implementer.conversationId,
+      worktreeDir: preview.worktreeDir, branch: preview.branch, parent: preview.lastPassedCommit, outputs })).digest("hex");
+    const receipt = path.join(pipelineArtifactsDir(preview.id), `review-repair-${receiptKey}.json`);
+    const result = await commitPipelineStage(preview, source.id, false, exec, outputs, preview.lastPassedCommit, receipt);
+    revalidate();
+    if (abort.signal.aborted) return { ok: false, retryable: true, detail: "review repair superseded; its owned commit can be recovered" };
+    if (!result.ok) return { ok: false, retryable: false, detail: result.error };
+    accepted = await withPipelineMutation((pipelines, persist) => {
+      const current = pipelines.find((candidate) => candidate.id === preview.id);
+      if (!current || !matches(current)) return null;
+      if (current.lastPassedCommit !== result.sha) { current.lastPassedCommit = result.sha; persist([current]); }
+      return structuredClone(current);
+    });
+  } finally { clearInterval(watch); releasePublicationFileLock(descriptor); }
+  if (!accepted) return { ok: false, retryable: true, detail: "review repair superseded before adoption" };
+  if (!publishesRemoteBranch(accepted)) return { ok: true };
+  const published = await publishPipelineBranch(accepted, ports.exec, { acceptedSha: accepted.lastPassedCommit });
   if (!published.ok) return { ok: false, retryable: false, detail: `publishing the repaired review head: ${published.error}` };
   if (published.remote === "unreachable") return { ok: false, retryable: true, detail: `repaired review head is unpublished: ${published.detail}` };
   if (published.remote === "unavailable") return { ok: false, retryable: false, detail: "the repaired review head has no delivery remote" };
@@ -3746,9 +3769,41 @@ async function spawnRunStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0], activationNow: string,
   ports: PipelinePorts, persist: () => void | Promise<void>,
+  prepareInput = false,
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   try {
+    if (attempt.activation?.prepareInput || prepareInput) {
+      const bound = attemptStage(stage, attempt);
+      const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
+      if (renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput) !== spawnInput.prompt) throw new ActivationSuperseded();
+      const expected = JSON.stringify(pipeline);
+      const abort = new AbortController();
+      const revalidate = () => {
+        if (attempt.activation && JSON.stringify(findPipelineRecord(pipeline.id)) !== expected) abort.abort();
+      };
+      const watch = setInterval(revalidate, 50);
+      const exec: ExecPort = async (command, args, cwd, env, options) => {
+        revalidate();
+        if (abort.signal.aborted) throw new ActivationSuperseded();
+        return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
+      };
+      try {
+        const prompt = await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec);
+        revalidate();
+        if (abort.signal.aborted) throw new ActivationSuperseded();
+        spawnInput = { ...spawnInput, prompt };
+        if (attempt.activation) {
+          attempt.activation.input = spawnInput;
+          attempt.activation.prepareInput = false;
+        }
+      } catch (error) {
+        if (abort.signal.aborted) throw new ActivationSuperseded();
+        throw error;
+      } finally { clearInterval(watch); }
+      // Persist the materialized bytes before reserving or replaying a launch.
+      await persist();
+    }
     let spawned: PipelineStageSpawn | null = null;
     let spawnAttempt = 0;
     /* Set when the spawn reached host publication and found no controller.
@@ -4072,12 +4127,11 @@ async function tickRunStage(
          so the spawn digest is stable across restarts; a migrated pre-v3
          attempt (input === null with no recorded activation) keeps the legacy
          positional scan byte-identically. */
-      const prompt = composeStageInput(
+      const prompt = renderStagePrompt(
         pipeline,
         bound,
         attempt.effectiveRole,
         attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline),
-        pipeline.worktreeDir,
       );
       /* The retried attempt supersedes its predecessor's round (issue #383):
          the prior attempt of the SAME stage that carries a conversation. */
@@ -4108,17 +4162,18 @@ async function tickRunStage(
           parentConversationId: null,
         },
       };
-      if (process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1" || attempt.decisionAnswerId) {
+      if (ports.deferStageGit || process.env.LLV_PIPELINE_ACTIVATION_DRAIN === "1" || attempt.decisionAnswerId) {
         attempt.activation = {
           id: crypto.randomUUID(), phase: "reserved", input: spawnInput,
           clientAttemptId: spawnInput.clientAttemptId, startedAt: activationNow,
           fence: activationFence(pipeline),
+          prepareInput: true,
         };
         spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
         persist();
         return;
       }
-      await spawnRunStage(pipeline, stage, attempt, spawnInput, activationNow, ports, persist);
+      await spawnRunStage(pipeline, stage, attempt, spawnInput, activationNow, ports, persist, true);
     } catch (error) {
       park(pipeline, error instanceof Error ? error.message : String(error), attempt);
     }
@@ -6067,10 +6122,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     };
     const revalidate = () => { if (!matches(findPipelineRecord(preview.id)) || !receiptMatches()) abort.abort(); };
     const watch = setInterval(revalidate, 50);
-    const exec: ExecPort = async (command, args, cwd, env) => {
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "remote action superseded" };
-      return await ports.exec(command, args, cwd, env, { signal: abort.signal, inheritFd: descriptor, timeoutMs: args.includes("fetch") ? 60_000 : 5_000 });
+      return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: args.includes("fetch") ? 60_000 : 5_000 });
     };
     let result: import("./git").PipelineGitResult = { ok: false, error: "remote action superseded" };
     try {
@@ -6205,10 +6260,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const abort = new AbortController();
     const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
     const watch = setInterval(revalidate, 50);
-    const exec: ExecPort = async (command, args, cwd, env) => {
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "stage settlement superseded" };
-      return await ports.exec(command, args, cwd, env, { signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : 60_000 });
+      return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : options?.timeoutMs ?? 60_000 });
     };
     const candidate = structuredClone(preview);
     const effects: Array<() => void> = [];

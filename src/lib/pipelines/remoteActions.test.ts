@@ -11,7 +11,7 @@ const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 closeAgentRegistryForTests();
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord, withPipelineMutation } = await import("./store");
-const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, patchPipeline, preparePipelineReviewRepair, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
 const { publishPipelineBranch } = await import("./git");
 const { registerPipelineTick } = await import("./controllerSignal");
@@ -23,6 +23,87 @@ afterAll(() => {
   fs.rmSync(remoteState, { recursive: true, force: true });
 });
 const HEAD = "a".repeat(40);
+
+test("compact MCP polling exposes a deferred publication failure while preserving operator detail", async () => {
+  const h = setupRetry(); h.lane.state = "paused"; h.lane.stateDetail = "paused by operator";
+  h.lane.worktreeDir = h.lane.worktreeDir.replace(h.lane.id, "publication-poll");
+  h.lane.branch = h.lane.branch.replace(h.lane.id, "publication-poll"); h.lane.id = "publication-poll";
+  h.lane.delivery = { target: { repository: "poll-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => args.includes("ls-remote")
+    ? { code: 1, stdout: "", stderr: "forge unavailable" }
+    : { code: 0, stdout: args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? h.lane.branch : "", stderr: "" } };
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { pipelineActionAcknowledgement } = await import("@/lib/mcp/compactAnswers");
+  const bindings = viewerMcpBindings();
+  const admitted = await patchPipeline(h.lane.id, { action: "publish" }, ports);
+  expect(await bindings.get_pipeline({ pipelineId: h.lane.id })).toMatchObject({ publicationCheck: { state: "pending" } });
+  await publishPipelineBranch(admitted.pipeline!, ports.exec, { acceptedSha: HEAD });
+  const expected = { publicationCheck: { state: "settled", result: { ok: true, remote: "unreachable", detail: expect.stringContaining("unavailable") } } };
+  expect(await bindings.get_pipeline({ pipelineId: h.lane.id })).toMatchObject(expected);
+  expect(await bindings.get_pipeline({ pipelineId: h.lane.id, stageId: "review" })).toMatchObject(expected);
+  expect(await bindings.list_pipelines({ ids: [h.lane.id], statusOnly: true })).toMatchObject({ pipelines: [expected] });
+  expect(pipelineActionAcknowledgement(findPipelineRecord(h.lane.id)!)).toMatchObject(expected);
+  expect(findPipelineRecord(h.lane.id)!.stateDetail).toBe("paused by operator");
+});
+
+test.each(["launch", "repair-before-write", "repair-after-write"] as const)("%s artifact work yields the pipeline lease to a newer pause", async (boundary) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-lease-"));
+  const repo = path.join(root, "source"); fs.mkdirSync(repo);
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr); return result.stdout.trim();
+  };
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const base = git("rev-parse", "HEAD"); const lane = pipelineCorpus(2, 1)[1]!;
+  lane.repoDir = repo; lane.worktreeDir = `${repo}-pipeline-${lane.id}`;
+  git("worktree", "add", "-q", "-b", lane.branch, lane.worktreeDir, base);
+  lane.publication = "internal"; lane.lastPassedCommit = base; lane.baseRef = base;
+  lane.cursor = { stageId: boundary === "launch" ? "build" : "review", state: boundary === "launch" ? "pending" : "reviewing", input: null, activatedBy: null };
+  if (boundary === "launch") lane.runs[0]!.attempts[0]!.state = "pending";
+  else {
+    lane.stages[0]!.effectiveRole.access = "read-only"; lane.stages[0]!.outputs = ["report.md"];
+    lane.runs[0]!.attempts[0]!.agentPath = path.join(root, "producer.jsonl");
+    lane.runs[1]!.attempts[0]!.flowId = "repair-flow";
+    fs.writeFileSync(path.join(lane.worktreeDir, "report.md"), "repaired output\n");
+  }
+  savePipelines([lane]);
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let spawned = 0;
+  const basePorts = { ...defaultPipelinePorts(), exec: realExec, getFlow: () => null,
+    stageHostResident: async () => false, stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    conversationAgentActive: async () => false, paneAgentAlive: async () => false,
+    structuredDeliveryPublication: () => "ready" as const, engineReadiness: () => "connected" as const,
+    spawnAgent: async () => { spawned++; throw new Error("superseded launch must not spawn"); } };
+  const ports = { ...basePorts, exec: async (...args: Parameters<typeof realExec>) => {
+    const intercept = boundary === "launch" ? args[1].includes("--show-toplevel") : args[1][0] === "commit";
+    if (intercept && boundary !== "repair-after-write") { entered(); await held; }
+    const result = await realExec(...args);
+    if (intercept && boundary === "repair-after-write") { entered(); await held; }
+    return result;
+  } };
+  const work = boundary === "launch" ? tickPipelines([], ports) : preparePipelineReviewRepair("repair-flow", ports);
+  let pause: ReturnType<typeof patchPipeline> | undefined;
+  try {
+    expect(await Promise.race([checking.then(() => true), work.then(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500))])).toBe(true);
+    pause = patchPipeline(lane.id, { action: "pause" }, basePorts);
+    expect(await Promise.race([pause, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))])).not.toBeNull();
+    release(); await work;
+    expect(findPipelineRecord(lane.id)!.state).toBe("paused");
+    expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(base); expect(spawned).toBe(0);
+    if (boundary === "repair-after-write") {
+      const head = (await realExec("git", ["rev-parse", "HEAD"], lane.worktreeDir)).stdout.trim();
+      expect(head).not.toBe(base);
+      await patchPipeline(lane.id, { action: "resume" }, basePorts);
+      expect(await preparePipelineReviewRepair("repair-flow", basePorts)).toEqual({ ok: true });
+      expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(head);
+    }
+  } finally { release(); await work; await pause; fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test.each(["pause", "lost-reply"] as const)("a controller output commit survives %s before durable adoption", async (interruption) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owned-stage-commit-"));

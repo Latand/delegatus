@@ -26,14 +26,19 @@ const ERROR_CHARS = 300;
 const TITLE_CHARS = 80;
 const SUMMARY_CHARS = 2_000;
 
-function pipelineCheckFields(pipeline: Pipeline) {
+export function pipelineCheckFields(pipeline: Pipeline) {
+  const result = pipeline.delivery?.operation?.result;
   return {
     ...(pipeline.remoteAction ? { remoteCheck: { id: pipeline.remoteAction.id, action: pipeline.remoteAction.action,
       state: pipeline.remoteAction.state, ...(pipeline.remoteAction.error ? { error: clampChars(pipeline.remoteAction.error, ERROR_CHARS) } : {}) } } : {}),
     ...(pipeline.publicationAdmission ? { publicationAdmission: { id: pipeline.publicationAdmission.id, state: pipeline.publicationAdmission.state,
       ...(pipeline.publicationAdmission.error ? { error: clampChars(pipeline.publicationAdmission.error, ERROR_CHARS) } : {}) } } : {}),
     ...(pipeline.delivery?.operation ? { publicationCheck: { id: pipeline.delivery.operation.id,
-      state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha } } : {}),
+      state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha,
+      ...(result ? { result: result.ok ? { ok: true, remote: result.remote, sha: result.sha,
+        ...(result.detail ? { detail: clampChars(result.detail, ERROR_CHARS) } : {}),
+        ...(result.uncertain === undefined ? {} : { uncertain: result.uncertain }) }
+        : { ok: false, error: clampChars(result.error, ERROR_CHARS) } } : {}) } } : {}),
     ...(pipeline.stateDetail === "accepted head verification and publication pending" ? { gitCheck: { state: "pending" as const } } : {}),
   };
 }
@@ -184,6 +189,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
   const verdict = selected?.verdict ?? reportedVerdict;
   return {
     pipelineId: pipeline.id,
+    ...pipelineCheckFields(pipeline),
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stage: {

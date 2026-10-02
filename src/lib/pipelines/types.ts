@@ -352,6 +352,8 @@ export type PipelineStageAttempt = {
     fence: string;
     owner?: import("@/lib/processIdentity").ProcessIdentity;
     replay?: boolean;
+    /** The reserved prompt still needs asynchronous artifact preparation. */
+    prepareInput?: boolean;
     closeRequested?: boolean;
     cancelRequested?: boolean;
   };

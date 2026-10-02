@@ -76,18 +76,18 @@ test("large board-maintenance briefs reach the shared structured composer and ke
   expect(Buffer.byteLength(original, "utf8")).toBeGreaterThan(32_000);
   const cwd = path.join(held!.dir, "repository");
   fs.mkdirSync(cwd, { recursive: true });
-  const bounded = composeStructuredFirstMessage(original, cwd);
+  const bounded = await composeStructuredFirstMessage(original, cwd);
   expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(32_000);
   const file = bounded.match(/Full structured first message file: (.+)\n/)?.[1];
   expect(file).toBeDefined();
   expect(fs.readFileSync(file!, "utf8")).toBe(original);
-  expect(composeStructuredFirstMessage(original, cwd)).toBe(bounded);
+  expect(await composeStructuredFirstMessage(original, cwd)).toBe(bounded);
 
   const run = h.run();
   const { patchMaintenanceRun } = await import("./store");
   patchMaintenanceRun(run.runId, { conversationId: null, state: "launching" });
   await h.controller.reconcile(PROJECT);
-  expect(composeStructuredFirstMessage(String(h.bodies[1]!.prompt), cwd)).toBe(bounded);
+  expect(await composeStructuredFirstMessage(String(h.bodies[1]!.prompt), cwd)).toBe(bounded);
 });
 test("no account leaves one blocked visible card, success summarizes, hides and archives", async () => {
   const h = harness(); h.respond({ status: 409, body: { code: "project_account_refused", error: "fixture no allowed account" } });

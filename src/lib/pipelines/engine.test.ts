@@ -19,6 +19,7 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
+import { realExec } from "@/lib/workflows/provision";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -497,7 +498,10 @@ function harness() {
   let residentHosts = false;
   let monotonic: () => number = () => Date.now();
   const ports: PipelinePorts = {
-    exec: (rawCommand, rawArgs) => {
+    exec: (rawCommand, rawArgs, cwd, env, options) => {
+      // Artifact safety reads inspect the actual fixture index, including
+      // plain launch directories that have no Git metadata.
+      if (options?.stdoutEncoding === "latin1") return realExec(rawCommand, rawArgs, cwd, env, options);
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
@@ -3904,7 +3908,7 @@ test("spawn reservations persist before actuation and concurrent creation waits 
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBe("launch-durable");
 });
 
-test.each([false, true])("activation drain measures lease hold and unrelated commands (enabled: %s)", async (enabled) => {
+test.each([false, true])("activation drain yields the lease regardless of the legacy flag (%s)", async (enabled) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -3951,13 +3955,11 @@ test.each([false, true])("activation drain measures lease hold and unrelated com
   try {
     await Bun.sleep(100);
     const making = createPipelineFromRequest({ task: "Unrelated draft", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, h.ports);
-    if (enabled) expect((await making).pipeline).toBeDefined();
-    else await expect(making).rejects.toThrow("pipeline state is busy");
+    expect((await making).pipeline).toBeDefined();
     const retrying = patchPipeline(retry.id, { action: "retry-stage" }, h.ports);
-    if (enabled) expect((await retrying).error).toBeUndefined();
-    else await expect(retrying).rejects.toThrow("pipeline state is busy");
+    expect((await retrying).error).toBeUndefined();
     const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
-    try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: enabled ? 0 : 1 }); }
+    try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
     finally { db.close(); }
   } finally {
     console.log(`spawn workload pending for ${(performance.now() - start).toFixed(1)}ms`);

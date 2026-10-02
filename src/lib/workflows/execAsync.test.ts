@@ -31,3 +31,10 @@ test("timeouts and output bounds terminate external commands", async () => {
 test("a command that cannot launch returns a failure", async () => {
   expect((await realExec("missing-command-for-executor-test", [], os.tmpdir())).code).toBeNull();
 });
+
+test("byte-preserving stdout keeps Git path bytes within their original output limit", async () => {
+  const result = await realExec(process.execPath, ["-e", "process.stdout.write(Buffer.from([195,40,255]))"], os.tmpdir(), undefined,
+    { stdoutEncoding: "latin1", maxOutputBytes: 3 });
+  expect(result.code).toBe(0);
+  expect(Buffer.from(result.stdout, "latin1")).toEqual(Buffer.from([195, 40, 255]));
+});

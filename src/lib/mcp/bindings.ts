@@ -222,6 +222,7 @@ import {
   newestDeploymentsFirst,
   pipelineAcknowledgement,
   pipelineActionAcknowledgement,
+  pipelineCheckFields,
   pipelineStageRead,
   stageReportAcknowledgement,
   type AccountLimitsInput,
@@ -4526,6 +4527,7 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     return redactPayload({
       pipelineId,
       ...pipelineCompactRow(pipeline),
+      ...pipelineCheckFields(pipeline),
       revision: recordRevision(pipeline),
       taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
@@ -4692,7 +4694,7 @@ async function listPipelines(
     if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
     if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
     const { stages, ...status } = pipelineCompactRow(pipeline);
-    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
+    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...pipelineCheckFields(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)

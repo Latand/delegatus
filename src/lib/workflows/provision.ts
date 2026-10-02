@@ -30,6 +30,8 @@ export interface ExecOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxOutputBytes?: number;
+  /** Latin-1 keeps Git's arbitrary path bytes intact for safety validation. */
+  stdoutEncoding?: "utf8" | "latin1";
   /** Publication children retain their owner's kernel lock across a restart. */
   inheritFd?: number;
 }
@@ -65,12 +67,12 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
   const append = (chunk: string, stream: "stdout" | "stderr") => {
-    bytes += Buffer.byteLength(chunk);
+    bytes += Buffer.byteLength(chunk, stream === "stdout" ? options.stdoutEncoding ?? "utf8" : "utf8");
     if (bytes > (options.maxOutputBytes ?? 8 * 1024 * 1024)) { stop("command output exceeded its byte limit"); return; }
     if (stream === "stdout") stdout += chunk;
     else stderr += chunk;
   };
-  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => append(chunk, "stdout"));
+  child.stdout?.setEncoding(options.stdoutEncoding ?? "utf8").on("data", (chunk: string) => append(chunk, "stdout"));
   child.stderr?.setEncoding("utf8").on("data", (chunk: string) => append(chunk, "stderr"));
   child.on("error", (error) => { stopped ??= error.message; });
   child.on("close", (code, signal) => {

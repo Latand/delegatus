@@ -278,6 +278,7 @@ function isSpawnActivation(value: unknown): boolean {
     && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
     && typeof activation.startedAt === "string" && typeof activation.fence === "string"
     && (activation.replay === undefined || typeof activation.replay === "boolean")
+    && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
     && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
     && (activation.closeRequested === undefined || typeof activation.closeRequested === "boolean")
     && (!owner || (Number.isSafeInteger(owner.pid) && Number(owner.pid) > 0

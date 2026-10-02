@@ -1018,6 +1018,30 @@ test.each(["missing", "malformed", "nonce", "tree", "newer-changes"] as const)("
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("artifact protection uses the supplied asynchronous executor and refuses cancellation", async () => {
+  const box = await isolatedIdentityRepo();
+  const subject = pipeline(); subject.worktreeDir = box.repo;
+  subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    if (args.includes("--show-toplevel")) {
+      entered(); await held;
+      expect(options?.timeoutMs).toBe(10_000);
+      return { code: null, stdout: "", stderr: "command cancelled" };
+    }
+    return await box.exec(command, args, cwd, env);
+  };
+  const work = commitPipelineStage(subject, "audit", false, exec);
+  try {
+    expect(await Promise.race([checking.then(() => "checking"), work.then(() => "completed")])).toBe("checking");
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    release(); expect(await work).toMatchObject({ ok: false, error: expect.stringContaining("controller artifact") });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+  } finally { release(); await work; fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 async function allowMarkdownArtifacts(box: Awaited<ReturnType<typeof isolatedIdentityRepo>>) {
   fs.writeFileSync(path.join(box.repo, ".gitignore"), "!*/\n!*.md\n");
   fs.mkdirSync(path.join(box.repo, ".artifacts", "pipeline-stage-inputs"), { recursive: true });
@@ -1079,7 +1103,7 @@ test.each([
     fs.mkdirSync(cwd);
     const { composeStructuredFirstMessage } = await import("@/lib/runtime/structuredFirstMessage");
     const input = "PRIVATE_NESTED_SETTLEMENT_SENTINEL\n" + "Full context\n".repeat(3_000);
-    const delivered = composeStructuredFirstMessage(input, cwd);
+    const delivered = (await composeStructuredFirstMessage(input, cwd));
     const file = delivered.match(/Full structured first message file: (.+)\n/)?.[1];
     if (staged) (await box.run("add", "-f", path.relative(box.repo, file!)));
     else fs.unlinkSync(path.join(path.dirname(file!), ".gitignore"));

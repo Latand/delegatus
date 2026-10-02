@@ -662,7 +662,7 @@ export async function commitPipelineStage(
 
 async function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): Promise<PipelineGitResult | null> {
   try {
-    protectExistingControllerArtifacts(worktreeDir);
+    await protectExistingControllerArtifacts(worktreeDir, exec);
   } catch (error) {
     return { ok: false, error: `protecting controller pipeline artifacts: ${error instanceof Error ? error.message : "unknown error"}` };
   }
