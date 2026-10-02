@@ -43,6 +43,12 @@ async function productionRun(
   listedAt: number,
 ): Promise<void> {
   const indexed = await indexTranscriptSources(sources, { complete });
+  try {
+    const { refreshMemoryIndex } = await import("@/lib/memory/service");
+    await refreshMemoryIndex();
+  } catch {
+    console.error("[memory search] refresh failed; the next scan retries");
+  }
   /* The activity record reads the same inventory right after (its own
      failures never fail the index). */
   try {
