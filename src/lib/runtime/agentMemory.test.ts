@@ -182,6 +182,42 @@ test("a per-agent watchdog kill satisfies the shared budget without killing a he
   finally { for (const cell of cells) cell.close(); }
 });
 
+test("the shared budget drops a native subtree that vanished during per-agent cleanup", () => {
+  const signals: number[] = [];
+  const identities = new Map([[123, "123:wrapper"], [124, "124:native"], [125, "125:tool"], [200, "200:healthy"]]);
+  const alive = new Set(identities.keys());
+  const runaway = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null,
+    limitBytes: 100, budgetBytes: 151 }, {
+    identity: (pid) => alive.has(pid) ? identities.get(pid) ?? null : null,
+    readPpid: (pid) => pid === 124 ? 123 : pid === 125 ? 124 : null,
+    sample: () => [
+      { pid: 123, identity: "123:wrapper", rss: 1, name: "wrapper" },
+      { pid: 124, identity: "124:native", rss: 60, name: "native-agent" },
+      { pid: 125, identity: "125:tool", rss: 50, name: "tool" },
+    ],
+    kill: (pid) => {
+      signals.push(pid);
+      if (pid === 125) { alive.delete(125); alive.delete(124); }
+      else alive.delete(pid);
+    },
+  });
+  const healthy = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null,
+    limitBytes: 100, budgetBytes: 151 }, {
+    identity: (pid) => alive.has(pid) ? identities.get(pid) ?? null : null,
+    sample: () => [{ pid: 200, identity: "200:healthy", rss: 100, name: "healthy-agent" }],
+    kill: (pid) => { signals.push(pid); alive.delete(pid); },
+  });
+  try {
+    runaway.attach(123);
+    healthy.attach(200);
+    tickAgentMemoryWatchdogs([runaway, healthy]);
+    expect(signals).toEqual([125]);
+    expect(alive.has(200)).toBeTrue();
+    expect(runaway.snapshot().lastKill?.limit).toBe("agent");
+    expect(runaway.snapshot().kills).toBe(1);
+  } finally { runaway.close(); healthy.close(); }
+});
+
 test("separate OOM and kill notifications retain the agent limit witness", () => {
   const fixture = fakeCell();
   try {

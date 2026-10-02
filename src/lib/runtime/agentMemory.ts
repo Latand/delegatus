@@ -213,7 +213,10 @@ export function tickAgentMemoryWatchdogs(cells: Iterable<AgentMemoryCell> = watc
     }
   }
   const budget = list[0]?.plan.budgetBytes ?? Infinity;
-  const survivors = all.filter(({ cell, sample }) => !cell.killedThisTick.has(sample.pid));
+  // Per-agent cleanup can reap a native process or a whole descendant subtree
+  // after this tick's initial samples. Never charge that stale RSS to the
+  // shared budget (or let a recycled PID stand in for the old process).
+  const survivors = all.filter(({ cell, sample }) => !cell.killedThisTick.has(sample.pid) && cell.ownsCurrentSample(sample));
   if (survivors.reduce((sum, item) => sum + item.sample.rss, 0) > budget) {
     const victim = survivors.sort((a,b) => b.sample.rss - a.sample.rss)[0];
     if (victim) victim.cell.killSample(victim.sample, "shared");
@@ -367,6 +370,9 @@ export class AgentMemoryCell {
       : (pid: number) => portableWatchdogParents.get(pid) ?? null);
     return identities.get(victim.pid) === victim.identity && verifiedTreeMember(this.pid, victim.pid, identities, identity, readPpid);
   }
+  ownsCurrentSample(sample: MemorySample): boolean {
+    return (this.ports.identity ?? procBackend.processIdentity)(sample.pid) === sample.identity && this.canSignal(sample);
+  }
   killSample(victim: MemorySample, limit: AgentMemoryKill["limit"]): void {
     if ((this.ports.identity ?? procBackend.processIdentity)(victim.pid) !== victim.identity) return;
     const target = this.plan.platform === "linux" ? victim : this.lastSample.find((sample) => sample.pid === this.pid);
@@ -394,16 +400,28 @@ export class AgentMemoryCell {
         }
         return current === target.pid ? [{ sample, depth }] : [];
       }).sort((left, right) => right.depth - left.depth);
+      let signalledDescendant = false;
       for (const { sample } of descendants) {
         if (this.killedThisTick.has(sample.pid) || !this.canSignal(target)
           || !verifiedTreeMember(target.pid, sample.pid, identities, identity, readPpid)
           || !this.canSignal(sample)) continue;
         if (identity(sample.pid) !== sample.identity) continue;
         this.killedThisTick.add(sample.pid);
-        try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { /* Already gone. */ }
+        try {
+          (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid);
+          signalledDescendant = true;
+        } catch { /* Already gone. */ }
       }
       // A descendant signal may race with a root exit or PID reuse.
-      if (!this.canSignal(target)) return;
+      if (!this.canSignal(target)) {
+        // Keep evidence for the memory kill when the selected native process
+        // exits as a consequence of containing its verified subtree.
+        if (signalledDescendant) {
+          this.recordKill(limit, target.pid === this.pid, victim.name, 1, false);
+          this.notify();
+        }
+        return;
+      }
     }
     // Do not run listeners between the final ownership check and the signal.
     this.recordKill(limit, target.pid === this.pid, victim.name, 1, false);
