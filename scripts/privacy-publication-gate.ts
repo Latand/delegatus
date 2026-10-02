@@ -614,9 +614,22 @@ const numericVersionDomain = /^[0-9]+(?:\.[0-9]+)+(?:-[A-Z0-9-]+(?:\.[A-Z0-9-]+)
 function hasIdnaDomainContinuation(domain: string, text: string, end: number): boolean {
   const followingCodePoint = text.codePointAt(end);
   const following = followingCodePoint === undefined ? undefined : String.fromCodePoint(followingCodePoint);
-  // ASCII domain characters and separators are already consumed by
-  // emailDomain. ASCII punctuation such as `+` starts semver build metadata.
-  if (following === undefined || /^[\x00-\x7f]$/.test(following)) return false;
+  if (following === undefined) return false;
+  // A recognized ASCII separator can still precede an IDNA-valid label that
+  // the mailbox regex cannot spell (for example `.🄰`, which IDNA maps to `.a`).
+  // Check that whole continuation; a bare sentence-ending period has no label.
+  if (following === "." || /^[\u3002\uFF0E\uFF61]$/u.test(following)) {
+    const suffix = text.slice(end).match(/^[^\s/@<>"'`()\[\]{};,!?]+/u)?.[0] ?? "";
+    const label = suffix.replace(/^[.\u3002\uFF0E\uFF61]+/u, "");
+    if (!label) return false;
+    try {
+      return Boolean(domainToASCII(`${domain}${suffix}x`));
+    } catch {
+      return false;
+    }
+  }
+  // Other ASCII punctuation such as `+` starts semver build metadata.
+  if (/^[\x00-\x7f]$/.test(following)) return false;
   try {
     return Boolean(domainToASCII(`${domain}${following}x`));
   } catch {
