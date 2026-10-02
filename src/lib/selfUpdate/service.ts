@@ -209,7 +209,12 @@ export class SelfUpdateService {
   /** Called only by the release-owning web process after its fence is active. */
   startAuto(): void {
     if (this.autoTimer) return;
-    if (this.auto.enabled) this.ensureChecked();
+    if (this.auto.enabled) {
+      // A cold recovery can outlive the raw lease. Restore durable admission
+      // before startup hands pending stages or seats to their controllers.
+      this.refreshDrain();
+      this.ensureChecked();
+    }
     this.autoTimer = setInterval(() => { void this.autoTick(); }, 60_000);
     this.autoTimer.unref?.();
     void this.autoTick();
@@ -328,6 +333,13 @@ export class SelfUpdateService {
   /** Re-read durable facts on every pass. A web restart replaces this object
       between the two restart requests, so no in-memory phase is authoritative. */
   async autoTick(): Promise<void> {
+    // Timer ticks keep admission held even while an earlier GitHub or host
+    // observation waits. Its asynchronous work must not consume the lease.
+    try { if (this.auto.enabled) this.refreshDrain(); }
+    catch (error) {
+      console.error("[self-update] drain renewal failed", error instanceof Error ? error.name : "unknown");
+      return;
+    }
     if (this.autoRunning) return;
     this.autoRunning = true;
     try { await this.runAutoTick(); }

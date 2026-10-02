@@ -23,6 +23,8 @@ import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
+import { readAuto } from "@/lib/selfUpdate/auto";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 /*
  * The Viewer's node-side startup runtime. This module (and everything it pulls
@@ -408,6 +410,17 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[roles] mapping retirement failed", error instanceof Error ? error.name : "unknown");
   }
+  // Restore a durable update hold before any autonomous launch admission.
+  try {
+    const selfUpdate = await loaders.loadSelfUpdateAuto?.();
+    await selfUpdate?.startSelfUpdateAuto();
+  } catch (error) {
+    console.error("[self-update] auto start failed", error instanceof Error ? error.name : "unknown");
+    const auto = readAuto(statePath("self-update", "auto.json"));
+    // An expired raw lease still has durable custody during recovery. Refuse
+    // autonomous startup until its owner can renew or release that custody.
+    if (activeDrain() || (auto.enabled && auto.drain && !auto.drain.overranAt)) throw error;
+  }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();
   /* The shared Telegram connector dies with the viewer container it is a child
@@ -527,12 +540,6 @@ export async function startCurrentReleaseControllers(
     linkedBoards?.startLinkedBoardSync();
   } catch (error) {
     console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
-  }
-  try {
-    const selfUpdate = await loaders.loadSelfUpdateAuto?.();
-    await selfUpdate?.startSelfUpdateAuto();
-  } catch (error) {
-    console.error("[self-update] auto start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

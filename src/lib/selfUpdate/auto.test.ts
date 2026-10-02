@@ -9,7 +9,8 @@ import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { activeRestartGate, endRestartGate, restartGateFile } from "./restartGate";
-import { activeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS } from "./drain";
+import { activeDrain, writeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS, DRAIN_LEASE_MS } from "./drain";
+import { startCurrentReleaseControllers } from "../viewerInstrumentation";
 import { GreenReader } from "./green";
 import { proxy } from "../../proxy";
 import { POST as postPresence } from "../../app/api/view/presence/route";
@@ -487,4 +488,47 @@ test("a disabled drain releases after a crash between switch persistence and lea
   expect(readAuto(file).drain).toBeNull();
   expect(wakes).toBe(1);
   service.stop();
+});
+
+test("cold recovery renews an expired drain before autonomous controllers start", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  const at = new Date(h.deps.now()).toISOString();
+  const file = join(h.dir, "auto-drain.json");
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), waitingSince: at,
+    drain: { id: "cold-drain", target: { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" }, since: at, overranAt: null, blockers: null } });
+  writeDrain(file, { id: "cold-drain", target: TARGET, since: at, until: h.deps.now() - 1 });
+  const service = h.service();
+  const heldAtAdmission: boolean[] = [];
+  try {
+    await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, {
+      loadSelfUpdateAuto: async () => ({ startSelfUpdateAuto: () => service.startAuto() }),
+      loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { heldAtAdmission.push(!!activeDrain(file, h.deps.now())); } }),
+      loadSeatTick: async () => ({ startSeatTick: () => { heldAtAdmission.push(!!activeDrain(file, h.deps.now())); return true; } }),
+      loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    });
+    expect(heldAtAdmission).toEqual([true, true]);
+  } finally { service.stop(); }
+});
+
+test("timer ticks renew the drain while an earlier observation is still waiting", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  const service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  const snapshot = service.snapshot.bind(service);
+  let resume!: () => void;
+  let entered!: () => void;
+  const observing = new Promise<void>((resolve) => { entered = resolve; });
+  const paused = new Promise<void>((resolve) => { resume = resolve; });
+  service.snapshot = async () => { entered(); await paused; return snapshot(); };
+  const firstTick = service.autoTick();
+  try {
+    await observing;
+    h.advance(DRAIN_LEASE_MS + 1);
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  } finally { resume(); await firstTick; service.stop(); }
 });
