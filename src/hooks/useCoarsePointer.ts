@@ -4,6 +4,13 @@ import { useSyncExternalStore } from "react";
 
 const QUERY = "(pointer: coarse)";
 
+/* Module-level, so the snapshot keeps its identity across renders: a new
+   function each render makes React re-register the store on every commit, once
+   for every row of a feed that calls this hook. */
+function matches(): boolean {
+  return window.matchMedia(QUERY).matches;
+}
+
 function subscribe(onChange: () => void) {
   const mq = window.matchMedia(QUERY);
   mq.addEventListener("change", onChange);
@@ -17,7 +24,7 @@ function subscribe(onChange: () => void) {
 export function useCoarsePointer(): boolean {
   return useSyncExternalStore(
     subscribe,
-    () => window.matchMedia(QUERY).matches,
+    matches,
     () => false,
   );
 }

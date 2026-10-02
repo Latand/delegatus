@@ -17,6 +17,19 @@ function interpolate(text: string, params?: Record<string, string | number>): st
   );
 }
 
+const pluralRulesByLocale = new Map<Locale, Intl.PluralRules>();
+
+/** One rule set per locale: constructing it is the expensive part, and a feed
+    translates a plural for most rows it draws. */
+function pluralRules(locale: Locale): Intl.PluralRules {
+  let rules = pluralRulesByLocale.get(locale);
+  if (!rules) {
+    rules = new Intl.PluralRules(locale === "uk" ? "uk-UA" : "en-US");
+    pluralRulesByLocale.set(locale, rules);
+  }
+  return rules;
+}
+
 /** Pure lookup shared by server callers and the client locale hook. */
 export function translate(
   locale: Locale,
@@ -29,7 +42,7 @@ export function translate(
     text = entry;
   } else {
     const count = typeof params?.count === "number" ? params.count : 0;
-    const form = new Intl.PluralRules(locale === "uk" ? "uk-UA" : "en-US").select(count);
+    const form = pluralRules(locale).select(count);
     text = entry[form] ?? entry.other ?? entry.one ?? "";
   }
   return interpolate(text, params);

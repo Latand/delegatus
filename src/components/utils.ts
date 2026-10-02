@@ -24,11 +24,23 @@ export function fmtAgeSeconds(s: number): string {
   return translate(locale, "time.agoDay", { n: Math.round(s / 86400) });
 }
 
+/* One formatter per locale: building an `Intl.DateTimeFormat` costs far more
+   than formatting with it, and a feed calls `hhmm` once per row. These are the
+   defaults `toLocaleTimeString` applies (hour, minute, second), so the output
+   is the same. */
+const clockFormats = new Map<string, Intl.DateTimeFormat>();
+
 export function hhmm(ts: unknown): string {
   if (typeof ts !== "string" && typeof ts !== "number") return "";
   const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
   const bcp47 = getLocale() === "uk" ? "uk-UA" : "en-US";
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString(bcp47, { hour12: false });
+  let format = clockFormats.get(bcp47);
+  if (!format) {
+    format = new Intl.DateTimeFormat(bcp47, { hour: "numeric", minute: "numeric", second: "numeric", hour12: false });
+    clockFormats.set(bcp47, format);
+  }
+  return format.format(d);
 }
 
 /** Same activity encoding everywhere: green pulse, amber, red, gray. */
