@@ -32,12 +32,14 @@ class MemoryDeliveryLedger implements ClaudeDeliveryLedger {
     this.states.set(sessionId, states);
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): "accepted" | "refused" {
     const state = this.states.get(sessionId)?.find((candidate) => candidate.entry.id === entryId);
     if (state) {
       state.delivered = true;
       state.engineMessageId = engineMessageId;
+      return "accepted";
     }
+    return "refused";
   }
 }
 

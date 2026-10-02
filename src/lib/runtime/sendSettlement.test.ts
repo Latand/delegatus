@@ -1546,13 +1546,29 @@ for (const evidence of ["echo", "transcript", "startup"] as const) {
       active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
       active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
       const uuid = "canonical-user-turn";
-      if (evidence !== "transcript") ledger.confirmDelivered(active.generationId, operationId, uuid);
+      if (evidence === "echo") ledger.confirmDelivered(active.generationId, operationId, uuid);
       fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid, timestamp: new Date().toISOString(), message: { role: "user", content: text } }) + "\n");
       const reopened = new AgentRegistry(active.registryPath);
       if (evidence === "startup") {
         const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
         await bindStructuredDeliveryQueue([], { registry: reopened, client: active.client });
         expect(sendReceiptFor(reopened.readOnlySnapshot(), operationId)?.state).toBe("delivered");
+        expect(new FileClaudeDeliveryLedger().load(active.generationId).find((state) => state.entry.id === operationId))
+          .toMatchObject({ delivered: true, engineMessageId: uuid, confirmation: "inferred" });
+
+        const laterOperationId = "op_after_startup";
+        const laterReservation = active.registry.holdDelivery(active.conversationId, text, "after-startup", "text", [], null, {
+          operationId: laterOperationId,
+          kind: "send",
+          policy: "queue",
+        });
+        if (laterReservation.state !== "assigned") throw new Error("later fixture delivery was not assigned");
+        expect(active.registry.beginDeliveryAttempt(laterReservation.id, active.generationId)).not.toBeNull();
+        ledger.recordQueued(active.generationId, { id: laterOperationId, text }, "turn-started");
+        active.registry.recordDeliveryOutcome(laterReservation.id, "failed", SEND_UNVERIFIED_REASON, "unverified");
+        fs.appendFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid: "canonical-user-turn-B", timestamp: new Date(Date.now() + 10).toISOString(), message: { role: "user", content: text } }) + "\n");
+        expect(await resolveSendReceipt(laterOperationId, { registry: reopened, client: null }))
+          .toMatchObject({ state: "delivered", resend: "not-needed" });
         await bindStructuredDeliveryQueue([], { registry: reopened, client: null });
       }
       const answer = await resolveSendReceipt(operationId, { registry: reopened, client: active.client });

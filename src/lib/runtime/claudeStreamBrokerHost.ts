@@ -94,10 +94,12 @@ export interface ClaudeDeliveryState {
   confirmation?: "operation-bound" | "inferred" | "unverified";
 }
 
+export type ClaudeDeliveryConfirmation = "accepted" | "already-confirmed" | "refused";
+
 export interface ClaudeDeliveryLedger {
   load(sessionId: string): ClaudeDeliveryState[];
   recordQueued(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"]): void;
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation?: "operation-bound" | "inferred"): void;
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation?: "operation-bound" | "inferred"): ClaudeDeliveryConfirmation;
 }
 
 type ClaudeDeliveryRecord =
@@ -146,13 +148,17 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     this.append(sessionId, { kind: "queued", entry: normalized, disposition, queuedAt: new Date().toISOString() });
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): ClaudeDeliveryConfirmation {
     const state = this.load(sessionId).find((candidate) => candidate.entry.id === entryId);
-    if (!state || (state.delivered && state.confirmation !== "unverified")) return;
-    if (state.delivered && state.engineMessageId !== engineMessageId) return;
+    if (!state) return "refused";
+    if (state.delivered && state.confirmation !== "unverified") {
+      return state.engineMessageId === engineMessageId ? "already-confirmed" : "refused";
+    }
+    if (state.delivered && state.engineMessageId !== engineMessageId) return "refused";
     if (engineMessageId && this.load(sessionId).some((candidate) => candidate.delivered
-      && candidate.engineMessageId === engineMessageId && candidate.entry.id !== entryId)) return;
+      && candidate.engineMessageId === engineMessageId && candidate.entry.id !== entryId)) return "refused";
     this.append(sessionId, { kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(), confirmation });
+    return "accepted";
   }
 
   private readRecords(sessionId: string): ClaudeDeliveryRecord[] {
@@ -1235,7 +1241,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const competingDeliveries = this.deliveries.filter((candidate) => (!candidate.delivered || candidate.confirmation === "unverified")
         && candidatesFor(candidate).some((match) => match.uuid === user?.uuid));
       if (competingDeliveries.length !== 1) continue;
-      this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null, "inferred");
+      const confirmation = this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null, "inferred");
+      if (confirmation === "refused") continue;
       delivery.delivered = true;
       delivery.engineMessageId = user?.uuid ?? null;
       delivery.confirmation = "inferred";
@@ -1336,7 +1343,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const delivery = directMatches.length === 1 ? directMatches[0] : undefined;
       if (delivery) {
         try {
-          this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, stringField(message, "uuid"), "inferred");
+          const confirmation = this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, stringField(message, "uuid"), "inferred");
+          if (confirmation === "refused") {
+            this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed" });
+            return;
+          }
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
           delivery.confirmation = "inferred";

@@ -421,7 +421,7 @@ async function reconcileTerminalDeliveries(
     const outcomes = (await Promise.all(page.map(async (delivery) => {
       try {
         if (delivery.error !== "delivery-discarded"
-          && await confirmedSend(snapshot, delivery.command.operationId)) {
+          && await confirmedSend(snapshot, delivery.command.operationId, true)) {
           return {
             conversationId: delivery.conversationId,
             operationId: delivery.command.operationId,
