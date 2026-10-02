@@ -363,6 +363,20 @@ test("a builder fix round carries the apply-fixes guidance", () => {
   expect(plain.value.prompt).toContain(BUILDER_FINISH_LINE);
 });
 
+test.each(["general", "frontend", "docs"])("%s fixers repair their own discoveries and leave grading to reviewers", (domain) => {
+  const fix = resolveRole("builder", { mode: "apply-fixes", domain });
+  if (!fix.ok) throw new Error("builder did not resolve");
+  expect(fix.value.prompt).toContain("Fix every handed finding and anything you notice yourself within the pinned specification");
+  expect(fix.value.prompt).toContain("Do not grade your own work");
+  expect(fix.value.prompt).toContain("Return fail only when you are blocked");
+  expect(fix.value.prompt).toContain("Set blocked:true only when you cannot proceed");
+  expect(fix.value.prompt).toContain("blockedReason");
+  expect(fix.value.prompt).not.toContain("using Blocked: in the summary");
+  expect(fix.value.prompt).toContain("Notes");
+  expect(fix.value.prompt).not.toContain("Review your own diff before you finish");
+  expect(fix.value.prompt).not.toContain("finish with fail so the orchestrator can re-plan");
+});
+
 /* §2.2: a spawned role agent has no stage to report to, so it ends in a
    Verdict line; the orchestrator reports outcomes and gets none. */
 test("a role spawn ends with the verdict line, and a seat or a role-less spawn does not", () => {

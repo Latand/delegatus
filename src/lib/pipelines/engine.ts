@@ -2847,10 +2847,14 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
   const detail = pipeline.stateDetail;
   // Older engines passed the accepted attempt to park() on HEAD verification
   // failure, so its pass verdict survived with a needs_decision state.
-  return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
+  return pipeline.cursor?.state === "committing" && attempt !== null && stageHeadAccepted(attempt)
     && (detail?.startsWith("publishing the passed stage:") === true
       || ((attempt.state === "passed" || attempt.state === "needs_decision") && (detail?.startsWith("the worktree moved to ") === true
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
+}
+
+function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
+  return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
 function retryTerminalStagePublication(
@@ -3185,6 +3189,19 @@ function settleStageVerdict(
     return;
   }
   attempt.verdict = parsed.verdict;
+  /* A fixer repairs discoveries; its next reviewer owns the verdict. Admit
+     only an already committed, clean head through the normal acceptance and
+     publication path. Blocked work and other roles retain fail routing. */
+  if (fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports)) {
+    attempt.acceptedForReview = true;
+    attempt.output = [parsed.output, "Fixer notes for the reviewer:", ...(parsed.verdict.findings ?? []).map((finding) => `- ${finding}`)]
+      .filter(Boolean).join("\n\n");
+    attempt.state = "committing";
+    setCursorState(pipeline, stage.id, "committing");
+    persist();
+    commitPassedStage(pipeline, stage, attempt, ports);
+    return;
+  }
   if (parsed.verdict.status !== "pass") {
     attempt.state = parsed.verdict.status === "fail" ? "failed" : "needs_decision";
     attempt.completedAt = ports.now();
@@ -3211,6 +3228,10 @@ function settleStageVerdict(
        and parks under `park`. After that last fix `advance` moves on or
        re-checks a terminal gate before completion (#2247); `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
+    if (parsed.verdict.blocked === true) {
+      park(pipeline, parsed.verdict.blockedReason!, attempt);
+      return;
+    }
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -3234,6 +3255,23 @@ function settleStageVerdict(
   setCursorState(pipeline, stage.id, "committing");
   persist();
   commitPassedStage(pipeline, stage, attempt, ports);
+}
+
+function fixerSelfFailCanGoToReview(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  parsed: ParsedStageVerdict,
+  ports: PipelinePorts,
+): boolean {
+  const definition = attemptStage(stage, attempt);
+  const next = pipeline.stages.find((candidate) => candidate.id === stage.next);
+  if (parsed.verdict.status !== "fail" || parsed.verdict.blocked === true
+    || stage.kind !== "run" || attempt.effectiveRole.roleId !== "builder"
+    || attempt.effectiveRole.access !== "read-write" || definition.role?.params?.mode !== "apply-fixes"
+    || !next || !(next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer")) return false;
+  const head = currentPipelineBranchHead(pipeline, ports.exec);
+  return head.ok && head.sha !== pipeline.lastPassedCommit;
 }
 
 function updateAttemptIdentity(pipeline: Pipeline, attempt: PipelineStageAttempt, entries: FileEntry[], ports: PipelinePorts): void {
@@ -4489,7 +4527,8 @@ async function tickRunStage(
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
-    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse) ?? fenced;
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt, durable.reportProse)
+      ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -4602,7 +4641,8 @@ async function tickRunStage(
     return;
   }
   const fenced = parsePipelineStageVerdict(message.text);
-  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse) ?? fenced;
+  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt, durable?.reportProse)
+    ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(
@@ -6209,7 +6249,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
             || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
-        if (pipeline.state === "needs_decision" && passed?.verdict?.status === "pass"
+        if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
           passed.error = null;
