@@ -13172,7 +13172,7 @@ test("a failed staged read-write startup keeps dirty work and automatically rela
   const recoveryEvents = projectPipelineEvents(loadPipelines()).filter((event) =>
     event.type === "stage_waiting" || event.type === "stage_relaunched");
   expect(recoveryEvents.map((event) => event.type)).toEqual(["stage_waiting", "stage_relaunched"]);
-  expect(recoveryEvents.every((event) => event.summary.includes("failed startup"))).toBe(true);
+  expect(recoveryEvents.every((event) => event.summary?.includes("failed startup") === true)).toBe(true);
   const recoveryKeys = recoveryEvents.map((event) => event.key);
   h.advanceWallClock(5_000);
   await tickPipelines([], h.ports);
