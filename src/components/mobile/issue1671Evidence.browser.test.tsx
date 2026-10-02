@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -5915,4 +5915,13 @@ describe("tool call context tokens", () => {
     fs.writeFileSync("evidence/tool-call-tokens/rows.json", `${JSON.stringify({ readings }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 120_000);
+});
+
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try { await captureSeatMandateHandover(browser, base, true); }
+    finally { await browser.close(); stop(); }
+  }, 180_000);
 });

@@ -64,6 +64,7 @@ Object.assign(globalThis, {
 });
 
 let tailLines: string[] = [];
+let tailStart = 0;
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualLogTail = await import("@/hooks/useLogTail");
@@ -82,7 +83,7 @@ mock.module("@/hooks/useLogTail", () => ({
   ...actualLogTail,
   useLogTail: () => ({
     lines: tailLines,
-    linesStart: 0,
+    linesStart: tailStart,
     size: tailLines.length,
     loading: false,
     error: null,
@@ -109,6 +110,9 @@ const { seatMandateDelivery, seatProvisionalFile } = await import("./orchestrato
 const { resetHeldMandatesForTests } = await import("./conversation/heldMandate");
 const { resetMessageProvenanceCacheForTests } = await import("./feed/messageProvenance");
 const { messageTextDigest } = await import("@/lib/runtime/messageTextDigest");
+const { orchestratorMandateForDelivery } = await import("@/lib/orchestrator/prompt");
+const { resolveRole, roleSpawnPrompt } = await import("@/lib/roles/registry");
+const { ROLE_DEFAULTS } = await import("@/lib/roles/defaults");
 
 /* The launch was admitted at T0; the host journals the first record eight
    seconds later. A timer anchored on that record would read eight seconds
@@ -177,6 +181,7 @@ beforeEach(() => {
   globalThis.clearInterval = (() => undefined) as typeof clearInterval;
   setLocale("en");
   tailLines = [];
+  tailStart = 0;
   dom.sessionStorage.clear();
   resetOutboxForTests();
   resetHeldMandatesForTests();
@@ -335,7 +340,8 @@ function rerender(root: Root, file: FileEntry): void {
 /** Every rendering of the prompt the window can show: the optimistic launch
     bubble, the transcript's relay card, a transcript user bubble. */
 function promptRenderings(host: HTMLElement): number {
-  return host.querySelectorAll('[data-outbox-entry], [data-feed-kind="tmsg"], [data-feed-kind="user"]').length;
+  return [...host.querySelectorAll('[data-outbox-entry], [data-feed-kind="tmsg"], [data-feed-kind="user"]')]
+    .filter((row) => !row.parentElement?.closest('[data-outbox-entry], [data-feed-kind="tmsg"], [data-feed-kind="user"]')).length;
 }
 
 function footerTimer(host: HTMLElement): string | null {
@@ -361,15 +367,13 @@ test("issue 1398: the stage's INTERNAL prompt renders exactly once before and af
 
   /* The host journals the prompt (twice, as the rollout does) while the board
      still projects the reconciling placeholder: the durable transcript row
-     wins and the optimistic bubble retires: one INTERNAL card. */
+     wins: one message row. The legacy unsigned marker in this fixture does
+     not prove agent authorship to the current parser. */
   tailLines = transcriptRecords;
   now = T0 + 53_000;
   rerender(root, placeholder(conversationId, launchId));
-  const internalCards = host.querySelectorAll('[data-feed-kind="tmsg"]');
-  expect(internalCards).toHaveLength(1);
-  expect(internalCards[0]?.textContent).toContain("internal");
-  expect(internalCards[0]?.textContent).toContain("builder");
-  expect(host.querySelectorAll("[data-outbox-entry]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-message-row]")).toHaveLength(1);
+  expect(host.querySelector("[data-message-row]")!.textContent).toContain(PROMPT);
   expect(promptRenderings(host)).toBe(1);
 
   /* The scanned transcript adopts the launch: still exactly one. */
@@ -452,7 +456,7 @@ test("a seat's mandate in the launch window is Delegatus's collapsed card, never
   const conversationId = "conversation_seat_mandate";
   const launchId = "launch_seat_mandate";
   const base = placeholder(conversationId, launchId);
-  const seat = { ...base, spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 } }) } as FileEntry;
+  const seat = { ...base, spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: OPERATOR_PROMPT, promptEcho: OPERATOR_PROMPT }) } as FileEntry;
   const { host, root } = render(seat);
 
   expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
@@ -475,12 +479,12 @@ test("a seat's mandate in the launch window is Delegatus's collapsed card, never
   expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
   expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
 
-  /* Evidence that never names a mandate cannot hide the row for good: the
-     agent's first prose releases it. */
+  /* A reply alone cannot change the launch-proven mandate into an operator
+     bubble while its delivery evidence is still unread. */
   tailLines = operatorAnswered;
   rerender(root, answered(conversationId, launchId));
-  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
-  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
 });
 
 test("an ordinary operator launch keeps its own bubble and shows no mandate card", () => {
@@ -718,7 +722,7 @@ test("seat confirm: the mandate is one card from the first paint and never the o
 
   /* The tail's first row lands before the delivery evidence has answered: the
      card stays and the row is not painted as the operator's bubble. */
-  tailLines = operatorRecords;
+  tailLines = operatorRecords.map((line) => line.replace(JSON.stringify(OPERATOR_PROMPT), JSON.stringify(MANDATE)));
   now = RECORD_AT + 1_000;
   rerender(root, adopted(conversationId, launchId));
   assertCleanFirstMessage(host);
@@ -896,6 +900,223 @@ test("seat confirm: a mandate opened before the hand-over is still open on the t
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+for (const composition of ["verbatim", "server-composed"] as const)
+test(`seat hand-over: the opened mandate survives the answered row with instant evidence (${composition})`, async () => {
+  const conversationId = `conversation_first_seat_answered_open_${composition}`;
+  const launchId = `launch_first_seat_answered_open_${composition}`;
+  const engineId = `engine_message_seat_answered_open_${composition}`;
+  const deliveredText = composition === "server-composed" ? orchestratorMandateForDelivery(MANDATE) : MANDATE;
+  const sdkRecords = [
+    JSON.stringify({
+      type: "user",
+      uuid: engineId,
+      promptSource: "sdk",
+      timestamp: new Date(RECORD_AT).toISOString(),
+      message: { role: "user", content: deliveredText },
+    }),
+  ];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ messages: { [engineId]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] }),
+  }) as Response) as unknown as typeof fetch;
+  try {
+    resetMessageProvenanceCacheForTests();
+    const { host, root } = render({
+      ...placeholder(conversationId, launchId),
+      engine: "claude",
+      fmt: "claude",
+      spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+    } as FileEntry);
+    const heldDetails = host.querySelector("[data-mandate-card] details") as HTMLDetailsElement;
+    flushSync(() => {
+      heldDetails.open = true;
+      heldDetails.dispatchEvent(new Event("toggle"));
+    });
+    expect(host.querySelector("[data-mandate-card] details")!.hasAttribute("open")).toBe(true);
+    expect(host.querySelector("[data-mandate-card]")!.textContent).toContain("Pinned mandate");
+
+    const openedText = heldDetails.textContent;
+    tailLines = [...sdkRecords, JSON.stringify({ type: "assistant", uuid: "opened_reply", timestamp: new Date(ANSWER_AT).toISOString(), message: { role: "assistant", content: [{ type: "text", text: "The seat is working." }] } })];
+    now = RECORD_AT + 1_000;
+    rerender(root, { ...answered(conversationId, launchId), engine: "claude", fmt: "claude", root: "claude-projects" } as FileEntry);
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    const handedOver = host.querySelector('[data-feed-kind="sysmsg"] [data-mandate-card]');
+    expect(handedOver).not.toBeNull();
+    expect(handedOver!.querySelector("details")!.hasAttribute("open")).toBe(true);
+    expect(handedOver!.textContent).toContain("Pinned mandate");
+    expect(handedOver!.querySelector("details")!.textContent).toBe(openedText);
+    if (composition === "server-composed") {
+      const details = handedOver!.querySelector("details") as HTMLDetailsElement;
+      flushSync(() => { details.open = false; details.dispatchEvent(new Event("toggle")); });
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(details.open).toBe(false);
+      flushSync(() => { details.open = true; details.dispatchEvent(new Event("toggle")); });
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(details.textContent).toContain("Role table");
+      expect(details.textContent!.length).toBeGreaterThan(openedText!.length);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+for (const engine of ["claude", "codex"] as const) for (const handover of ["answered", "adopted"] as const)
+  for (const composition of ["verbatim", "server-composed", "role-scaffolded"] as const) {
+  test(`seat hand-over: ${engine} ${handover} ${composition} holds the mandate in its record slot until evidence answers last`, async () => {
+    const conversationId = `conversation_seat_${engine}_${handover}_${composition}`;
+    const composed = orchestratorMandateForDelivery(MANDATE);
+    const resolvedRole = resolveRole("orchestrator", {}, {}, [...ROLE_DEFAULTS]);
+    if (!resolvedRole.ok) throw new Error(resolvedRole.error);
+    const deliveredText = composition === "role-scaffolded"
+      ? roleSpawnPrompt({ role: "orchestrator", scaffold: resolvedRole.value.prompt }, composed)
+      : composition === "server-composed" ? composed : MANDATE;
+    const launchId = `launch_seat_${engine}_${handover}`;
+    const engineId = `message_seat_${engine}_${handover}`;
+    const records = engine === "claude" ? [
+      JSON.stringify({ type: "user", uuid: engineId, promptSource: "sdk", timestamp: new Date(RECORD_AT).toISOString(), message: { role: "user", content: deliveredText } }),
+      JSON.stringify({ type: "assistant", uuid: "seat_reply", timestamp: new Date(ANSWER_AT).toISOString(), message: { role: "assistant", content: [{ type: "text", text: "The seat is working." }] } }),
+    ] : [
+      JSON.stringify({ timestamp: new Date(RECORD_AT).toISOString(), type: "response_item", payload: { type: "message", id: engineId, role: "user", content: [{ type: "input_text", text: deliveredText }] } }),
+      JSON.stringify({ timestamp: new Date(ANSWER_AT).toISOString(), type: "response_item", payload: { type: "message", id: "seat_reply", role: "assistant", content: [{ type: "output_text", text: "The seat is working." }] } }),
+    ];
+    const realFetch = globalThis.fetch;
+    let answerEvidence: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { answerEvidence = resolve; });
+    globalThis.fetch = (async () => {
+      await gate;
+      return { ok: true, status: 200, json: async () => ({
+        messages: { [engineId]: { origin: "agent", mandate: { kind: "version", version: 1 } } },
+        occurrences: [{ textDigest: messageTextDigest(deliveredText), deliveredAt: new Date(RECORD_AT).toISOString(), origin: "agent", mandate: { kind: "version", version: 1 } }],
+      }) } as Response;
+    }) as unknown as typeof fetch;
+    try {
+      resetMessageProvenanceCacheForTests();
+      const { host, root } = render({
+        ...placeholder(conversationId, launchId), engine, fmt: engine,
+        spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+      } as FileEntry);
+      const assertCard = () => {
+        expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+        const outside = host.cloneNode(true) as HTMLElement;
+        outside.querySelectorAll("[data-mandate-card]").forEach((card) => card.remove());
+        expect(outside.textContent).not.toContain("Pinned mandate");
+        expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+        assertCleanFirstMessage(host);
+      };
+      assertCard();
+      const next = { ...(handover === "answered" ? answered(conversationId, launchId) : adopted(conversationId, launchId)), engine, fmt: engine } as FileEntry;
+      // The file poll arrives before its tail, with every launch fact retired.
+      rerender(root, next);
+      assertCard();
+      expect(host.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("items");
+      expect(host.textContent).not.toContain(translate("en", "feed.noOutput"));
+      tailLines = records;
+      now = ANSWER_AT;
+      rerender(root, next);
+      assertCard();
+      const slot = host.querySelector("[data-mandate-card]")!.closest("[data-feed-kind]");
+      expect(slot).not.toBeNull();
+      expect(slot!.nextElementSibling?.textContent).toContain("The seat is working.");
+      answerEvidence();
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      assertCard();
+      expect(host.querySelector("[data-mandate-card]")!.closest("[data-feed-kind]")).toBe(slot);
+    } finally {
+      answerEvidence();
+      globalThis.fetch = realFetch;
+    }
+  });
+}
+
+test("seat hand-over: distinct mandate deliveries keep their own opened text after remount", async () => {
+  const conversationId = "conversation_seat_two_mandates";
+  const launchId = "launch_seat_two_mandates";
+  const secondText = "A different mandate for the same conversation.";
+  const record = (id: string, text: string, at: number) => JSON.stringify({
+    type: "user", uuid: id, promptSource: "sdk", timestamp: new Date(at).toISOString(),
+    message: { role: "user", content: text },
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({
+    messages: {
+      first_mandate: { origin: "agent", mandate: { kind: "version", version: 1 } },
+      second_mandate: { origin: "agent", mandate: { kind: "custom" } },
+    }, occurrences: [],
+  }) } as Response)) as unknown as typeof fetch;
+  try {
+    resetMessageProvenanceCacheForTests();
+    tailLines = [record("first_mandate", MANDATE, RECORD_AT)];
+    const file = { ...answered(conversationId, launchId), engine: "claude", fmt: "claude" } as FileEntry;
+    const { host, root } = render(file);
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    const first = host.querySelector("[data-mandate-card] details") as HTMLDetailsElement;
+    flushSync(() => { first.open = true; first.dispatchEvent(new Event("toggle")); });
+    tailLines = [...tailLines, record("second_mandate", secondText, ANSWER_AT)];
+    rerender(root, { ...file, size: 4 });
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    const cards = host.querySelectorAll("[data-mandate-card]");
+    expect(cards).toHaveLength(2);
+    const second = cards[1]!.querySelector("details") as HTMLDetailsElement;
+    expect(second.open).toBe(false);
+    flushSync(() => { second.open = true; second.dispatchEvent(new Event("toggle")); });
+    expect(second.textContent).toContain(secondText);
+    expect(second.textContent).not.toContain("Pinned mandate");
+    flushSync(() => root.unmount());
+    roots.delete(root);
+    const remounted = render({ ...file, size: 4 }).host.querySelectorAll("[data-mandate-card] details");
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remounted).toHaveLength(2);
+    expect(remounted[0]!.textContent).toContain("Pinned mandate");
+    expect(remounted[1]!.textContent).toContain(secondText);
+    // The same second delivery at the beginning of a capped tail must never
+    // become the conversation's initial delivery just because it loads first.
+    tailStart = 1;
+    tailLines = [record("second_mandate", secondText, ANSWER_AT)];
+    const cropped = render({ ...file, size: 4 }).host;
+    for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    const croppedDetails = cropped.querySelector("[data-mandate-card] details") as HTMLDetailsElement;
+    if (!croppedDetails.open) flushSync(() => { croppedDetails.open = true; croppedDetails.dispatchEvent(new Event("toggle")); });
+    expect(croppedDetails.textContent).toContain(secondText);
+    expect(croppedDetails.textContent).not.toContain("Pinned mandate");
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("seat hand-over: a remounted cropped tail preserves the later operator message", () => {
+  const conversationId = "conversation_seat_cropped_tail";
+  const launchId = "launch_seat_cropped_tail";
+  const first = render({
+    ...placeholder(conversationId, launchId),
+    spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+  } as FileEntry);
+  flushSync(() => first.root.unmount());
+  roots.delete(first.root);
+  // The capped tail now begins after the original mandate record.
+  tailLines = operatorAnswered;
+  const { host } = render(answered(conversationId, launchId));
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+  expect(host.textContent).toContain(OPERATOR_FIRST_LINE);
+});
+
+test("seat hand-over: a cropped operator paste of the mandate stays the operator's message", () => {
+  const conversationId = "conversation_seat_cropped_paste";
+  const launchId = "launch_seat_cropped_paste";
+  const first = render({
+    ...placeholder(conversationId, launchId),
+    spawn: launchFacts(conversationId, launchId, { mandate: { kind: "version", version: 1 }, prompt: MANDATE, promptEcho: MANDATE }),
+  } as FileEntry);
+  flushSync(() => first.root.unmount());
+  roots.delete(first.root);
+  tailStart = 500;
+  tailLines = operatorRecords.map((line) => line.replace(JSON.stringify(OPERATOR_PROMPT), JSON.stringify(MANDATE)));
+  const { host } = render(answered(conversationId, launchId));
+  expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+  expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+  expect(host.textContent).toContain("Pinned mandate");
 });
 
 test("seat confirm without a version names the card unqualified until the poll says more", () => {

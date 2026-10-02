@@ -1,3 +1,4 @@
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
@@ -13,7 +14,7 @@ import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
+import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
@@ -424,9 +425,18 @@ if (SEAT_NOISE) {
    The raw recovery envelope rides in `error` on every pending step on purpose: the window must not print it. The
    window is the orchestrator's, whose LogFeed is the one every conversation renders. */
 const FM_PROMPT = "Fix the failing export test. The pinned task is in the card.";
+// A hand-over case deliberately delivers the reply before its provenance.
+const FM_HANDOVER = new URLSearchParams(location.search).get("handover");
+const FM_ENGINE = new URLSearchParams(location.search).get("engine") === "codex" ? "codex" : "claude";
+let releaseFirstMessageEvidence: () => void = () => undefined;
+const fmEvidenceGate = new Promise<void>((resolve) => { releaseFirstMessageEvidence = resolve; });
 const FM_LAUNCH_ID = "launch-first-message";
 const FM_CONVERSATION_ID = "conversation_first_message";
 const fmText = () => (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
+// Include the runtime role prefix; the DOM suite composes its resolved role.
+const fmDeliveredText = () => FM_HANDOVER
+  ? `${ROLE_DEFAULTS.find((role) => role.id === "orchestrator")!.promptScaffold}\n\n${orchestratorMandateForDelivery(fmText())}`
+  : fmText();
 const fm = { step: 0, confirmed: false, posts: [] as Array<Record<string, unknown>> };
 function fmApply() {
   const launch = (over: Record<string, unknown>) => seatLaunch({
@@ -434,12 +444,14 @@ function fmApply() {
     ...(FM_SEAT ? {} : { mandate: undefined }), ...over,
   });
   const window_ = (facts: Record<string, unknown>) => Object.assign(orchestrator, {
-    engine: "claude", fmt: "claude", root: "claude-projects", model: "opus", effort: "high", conversationId: FM_CONVERSATION_ID, generation: 1, spawnOrigin: "viewer", launch: undefined,
+    engine: FM_ENGINE, fmt: FM_ENGINE, root: FM_ENGINE === "codex" ? "codex-sessions" : "claude-projects", model: FM_ENGINE === "codex" ? "gpt-6.1" : "opus", effort: "high", conversationId: FM_CONVERSATION_ID, generation: 1, spawnOrigin: "viewer", launch: undefined,
     path: `spawn:${FM_LAUNCH_ID}`, name: `spawn:${FM_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling", spawn: facts,
   });
   /* The scanned row: the server's live-adoption signal is `launch`, the spawn placeholder is gone. */
   const adopted = (facts: Record<string, unknown> | undefined) => Object.assign(orchestrator, {
     path: "/repo/first-message.jsonl", name: "first-message.jsonl", size: 2_048, activityReason: undefined, spawn: undefined, launch: facts,
+    lastAssistantMessageAt: fm.step >= (FM_HANDOVER ? 2 : 3) ? (now - 20) * 1_000 : null,
+    sessionStartedAt: iso(60), lastTurn: { startedAt: (now - 60) * 1_000, endedAt: null },
   });
   if (FM_CASE === "f") {
     window_(launch({ state: "failed", initialMessage: "failed", retrySafe: true, error: "runtime host unavailable" }));
@@ -448,6 +460,7 @@ function fmApply() {
   const retired = { prompt: undefined, promptAt: undefined, promptImages: undefined, mandate: undefined };
   if (fm.step === 0) window_(launch({}));
   else if (fm.step === 1) window_(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now() }));
+  else if (fm.step === 2 && FM_HANDOVER === "answered") adopted(undefined);
   else if (fm.step === 2) adopted(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now(), ...retired }));
   else adopted(undefined);
 }
@@ -1732,7 +1745,13 @@ function transcriptOf(pathname: string): string {
   }
   if (FIRST_MESSAGE && file === orchestrator) {
     if (String(file.path).startsWith("spawn:")) return "";
-    return `${[FM_SEAT ? delivered(60, fmText()) : asked(60, fmText()), ...(fm.step >= 3 ? [said(20, "Looking at the export test.")] : [])].join("\n")}\n`;
+    const user = FM_ENGINE === "codex"
+      ? line(60, { type: "response_item", payload: { type: "message", id: FM_SEAT_UUID, role: "user", content: [{ type: "input_text", text: fmDeliveredText() }] } })
+      : FM_SEAT ? delivered(60, fmDeliveredText()) : asked(60, fmDeliveredText());
+    const answer = FM_ENGINE === "codex"
+      ? line(20, { type: "response_item", payload: { type: "message", id: "seat_answer", role: "assistant", content: [{ type: "output_text", text: "Looking at the export test." }] } })
+      : said(20, "Looking at the export test.");
+    return `${[user, ...(fm.step >= (FM_HANDOVER ? 2 : 3) ? [answer] : [])].join("\n")}\n`;
   }
   if (SEAT_NOISE && file === orchestrator) {
     if (file.spawn) return "";
@@ -1848,6 +1867,7 @@ const evidence = {
   /* The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session, as the panel's own refresh does. */
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
   /* The first-message cases: move the same window Pending -> Delivered -> Transcript arrived -> Answered. */
+  releaseFirstMessageEvidence,
   advanceFirstMessage() {
     fm.step += 1;
     fmApply();
@@ -2588,7 +2608,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
      record of it renders as the mandate card, never as the operator's bubble. */
   if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
-    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] });
+    if (FM_HANDOVER) await fmEvidenceGate;
+    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });

@@ -1,3 +1,6 @@
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 /*
  * The page `issue1671Evidence.browser.test.tsx` drives: the real Viewer over an
  * invented phone board — ten lanes waiting on a decision, one running
@@ -192,11 +195,20 @@ if (SEAT_NOISE !== null) {
 /* The first-message cases. The raw recovery envelope rides in `error` on every pending step on purpose: the window
    must not print it. */
 const FM_PROMPT = "Fix the failing export test. The pinned task is in the card.";
+// A hand-over case deliberately delivers the reply before its provenance.
+const FM_HANDOVER = new URLSearchParams(location.search).get("handover");
+const FM_ENGINE = new URLSearchParams(location.search).get("engine") === "codex" ? "codex" : "claude";
+let releaseFirstMessageEvidence: () => void = () => undefined;
+const fmEvidenceGate = new Promise<void>((resolve) => { releaseFirstMessageEvidence = resolve; });
 const FM_LAUNCH_ID = "launch-first-message";
 const FM_SEAT = FIRST_MESSAGE === "s";
 const FM_CONVERSATION_ID = FM_SEAT ? "conversation_first_message" : "conversation_running";
 const FM_SEAT_PATH = "/repo/first-message.jsonl";
 const fmText = () => (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
+// Include the runtime role prefix; the DOM suite composes its resolved role.
+const fmDeliveredText = () => FM_HANDOVER
+  ? `${ROLE_DEFAULTS.find((role) => role.id === "orchestrator")!.promptScaffold}\n\n${orchestratorMandateForDelivery(fmText())}`
+  : fmText();
 /* `&step=<n>` opens the page on that state: the phone's focus view re-resolves the conversation when its path
    flips, so each state of the plain cases is a first paint of its own. */
 const fm = { step: Number(new URLSearchParams(location.search).get("step") ?? 0), confirmed: false, posts: [] as Array<Record<string, unknown>> };
@@ -211,7 +223,7 @@ function fmApply() {
     ...(FM_SEAT ? { mandate: { kind: "version", version: 1 } } : {}), ...over,
   });
   const window_ = (facts: Record<string, unknown>) => Object.assign(target, {
-    engine: "claude", fmt: "claude", root: "claude-projects", model: "opus", effort: "high", conversationId: FM_CONVERSATION_ID,
+    engine: FM_ENGINE, fmt: FM_ENGINE, root: FM_ENGINE === "codex" ? "codex-sessions" : "claude-projects", model: FM_ENGINE === "codex" ? "gpt-6.1" : "opus", effort: "high", conversationId: FM_CONVERSATION_ID,
     generation: 1, spawnOrigin: "viewer", launch: undefined,
     path: `spawn:${FM_LAUNCH_ID}`, name: `spawn:${FM_LAUNCH_ID}`, size: 0, activityReason: "structured_spawn_reconciling", spawn: facts,
   });
@@ -219,6 +231,8 @@ function fmApply() {
   const adopted = (facts: Record<string, unknown> | undefined) => Object.assign(target, {
     path: FM_SEAT ? FM_SEAT_PATH : RUNNING_PATH, name: FM_SEAT ? "first-message.jsonl" : "running.jsonl", size: 2_048,
     activityReason: undefined, spawn: undefined, launch: facts,
+    lastAssistantMessageAt: fm.step >= (FM_HANDOVER ? 2 : 3) ? (now - 20) * 1_000 : null,
+    sessionStartedAt: iso(60), lastTurn: { startedAt: (now - 60) * 1_000, endedAt: null },
   });
   if (FIRST_MESSAGE === "f") {
     window_(launch({ state: "failed", initialMessage: "failed", retrySafe: true, error: "runtime host unavailable" }));
@@ -227,6 +241,7 @@ function fmApply() {
   const retired = { prompt: undefined, promptAt: undefined, promptImages: undefined, mandate: undefined };
   if (fm.step === 0) window_(launch({}));
   else if (fm.step === 1) window_(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now() }));
+  else if (fm.step === 2 && FM_HANDOVER === "answered") adopted(undefined);
   else if (fm.step === 2) adopted(launch({ state: "recovered", initialMessage: "delivered", deliveredAt: Date.now(), ...retired }));
   else adopted(undefined);
 }
@@ -234,10 +249,12 @@ function fmApply() {
 const FM_SEAT_UUID = "engine_message_seat_mandate";
 function fmTranscript(): string {
   const user = JSON.stringify(FM_SEAT
-    ? { type: "user", uuid: FM_SEAT_UUID, timestamp: iso(60), message: { role: "user", content: fmText() }, promptSource: "sdk" }
-    : { type: "user", timestamp: iso(60), message: { role: "user", content: fmText() }, promptSource: "typed", origin: { kind: "human" } });
+    ? { type: "user", uuid: FM_SEAT_UUID, timestamp: iso(60), message: { role: "user", content: fmDeliveredText() }, promptSource: "sdk" }
+    : { type: "user", timestamp: iso(60), message: { role: "user", content: fmDeliveredText() }, promptSource: "typed", origin: { kind: "human" } });
   const answer = JSON.stringify({ type: "assistant", timestamp: iso(20), message: { role: "assistant", content: [{ type: "text", text: "Looking at the export test." }] } });
-  return `${[user, ...(fm.step >= 3 ? [answer] : [])].join("\n")}\n`;
+  const codexUser = JSON.stringify({ timestamp: iso(60), type: "response_item", payload: { type: "message", id: FM_SEAT_UUID, role: "user", content: [{ type: "input_text", text: fmDeliveredText() }] } });
+  const codexAnswer = JSON.stringify({ timestamp: iso(20), type: "response_item", payload: { type: "message", id: "seat_answer", role: "assistant", content: [{ type: "output_text", text: "Looking at the export test." }] } });
+  return `${[FM_ENGINE === "codex" ? codexUser : user, ...(fm.step >= (FM_HANDOVER ? 2 : 3) ? [FM_ENGINE === "codex" ? codexAnswer : answer] : [])].join("\n")}\n`;
 }
 if (FIRST_MESSAGE !== null && !FM_SEAT) {
   files[0]!.title = "Builder";
@@ -342,6 +359,7 @@ const evidence = {
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
   /* The first-message cases: move the same window Pending -> Delivered -> Transcript arrived -> Answered. */
+  releaseFirstMessageEvidence,
   advanceFirstMessage() {
     fm.step += 1;
     fmApply();
@@ -1140,7 +1158,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
      record of it renders as the mandate card, never as the operator's bubble. */
   if (url.pathname === "/api/log/provenance" && FM_SEAT) {
-    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [] });
+    if (FM_HANDOVER) await fmEvidenceGate;
+    return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
   }
   if (url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;

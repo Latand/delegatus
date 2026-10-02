@@ -11,7 +11,7 @@ import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
-import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -14390,4 +14390,14 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+// The focused common-path case shares its assertions with the phone driver.
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 1440 in en and uk", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/seat-handover/desktop-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    try { await captureSeatMandateHandover(browser, server.base, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
