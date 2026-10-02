@@ -88,3 +88,38 @@ test("an unrelated render does not animate; interrupted motion cleans up immedia
   expect(root.querySelector(".kb-layout-copy")).toBeNull();
   expect(calls.every((call) => call.cancelled)).toBe(true);
 });
+
+test("actual column and ancestor scroll interrupts copies; restored scroll does not", async () => {
+  for (const container of ["body", "outside", "page"]) {
+    const { root, column, body, calls, layout } = mount();
+    const page = document.createElement("div");
+    page.className = "kb-page";
+    page.append(root.querySelector(".board")!);
+    root.append(page);
+    body.scrollTop = 75;
+    layout.prepare();
+    column.dataset.wide = "1";
+    body.scrollTop = 95;
+    await mutations();
+    // Browsers deliver the helper's own restoration as a later scroll event.
+    body.dispatchEvent(new dom.Event("scroll") as unknown as Event);
+    expect(root.querySelector(".kb-layout-copy")).not.toBeNull();
+    const scroller = container === "outside" ? document.body : container === "page" ? page : body;
+    scroller.scrollTop += 80;
+    scroller.dispatchEvent(new dom.Event("scroll") as unknown as Event);
+    expect(root.querySelector(".kb-layout-copy") === null).toBe(true);
+    expect(calls.every((call) => call.cancelled)).toBe(true);
+    layout.dispose();
+    root.remove();
+  }
+});
+
+test("preparing a control that keeps the width does not freeze an active transition", async () => {
+  const { root, column, layout } = mount();
+  layout.prepare();
+  column.dataset.wide = "1";
+  await mutations();
+  layout.prepare();
+  await new Promise((resolve) => dom.setTimeout(resolve, COLUMN_LAYOUT_MS + 80));
+  expect(root.querySelector(".kb-layout-copy") === null).toBe(true);
+});
