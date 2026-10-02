@@ -59,6 +59,13 @@ const packageVersionSamples = [
 const versionLookingRealAddresses = [
   [["pkg", "1.2.3"].join("@"), String.raw`\x0a`, ["probe", "b.io"].join("@")].join(""),
   [["probe", "1.2.3"].join("@"), String.raw`\x61.com`].join(""),
+  ...[
+    String.raw`1.2.3\u0061.com`,
+    String.raw`1.2.3\u002ecom`,
+    String.raw`1.2.3\uFF0Ecom`,
+    String.raw`1.2.3\u{61}.com`,
+    String.raw`1.2.3\u{2e}com`,
+  ].map((domain) => ["probe", domain].join("@")),
   ...[".com", ".\u{1F130}.com", ".%F0%9F%84%B0.com", ".&#x1F130;.com"]
     .flatMap((suffix) => [
       `\`${["probe", "1.2.3"].join("@")}\`${suffix}`,

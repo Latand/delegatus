@@ -641,6 +641,17 @@ const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z
 const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:\\])`;
 
 const rawPackageVersion = new RegExp(`${packageVersionSource}${packageVersionBoundary}`, "y");
+
+function isEscapedAsciiControlBoundary(text: string, offset: number): boolean {
+  if (offset + 1 === text.length) return true;
+  const escape = /^\\(?:([bfnrtv])|x([0-9a-f]{2})|u([0-9a-f]{4})|u\{([0-9a-f]{1,6})\})/i.exec(text.slice(offset));
+  if (!escape) return false;
+  const simpleEscapes: Record<string, number> = { b: 0x08, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
+  const codePoint = escape[1]
+    ? simpleEscapes[escape[1].toLowerCase()]
+    : Number.parseInt(escape[2] ?? escape[3] ?? escape[4], 16);
+  return codePoint <= 0x20 || codePoint === 0x7f;
+}
 const packageVersionFollowing = /^[\x09-\x0d "'`)\],;:\\]$/;
 
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
@@ -729,11 +740,7 @@ function rawPackageVersionEnd(text: string, domainStart: number, source?: EmailT
   }
   const following = text[end];
   if (following === "\\") {
-    const hexEscape = /^\\x([0-9a-f]{2})/i.exec(text.slice(end));
-    const escapedCodePoint = hexEscape ? Number.parseInt(hexEscape[1], 16) : undefined;
-    if (escapedCodePoint !== undefined && escapedCodePoint > 0x20 && escapedCodePoint !== 0x7f) {
-      return undefined;
-    }
+    if (!isEscapedAsciiControlBoundary(text, end)) return undefined;
   } else if (following !== undefined && !packageVersionFollowing.test(following)
     && !(following === "." && (text[end + 1] === undefined || /^[\x09-\x0d ]$/.test(text[end + 1])))) {
     return undefined;
