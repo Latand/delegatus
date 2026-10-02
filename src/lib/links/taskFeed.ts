@@ -6,7 +6,14 @@
  * A page stops at 200 rows or 512 KB of encoded rows.
  */
 import { taskFeedSource, TASKS_FILE } from "@/lib/tasks/store";
+import fs from "node:fs";
+import { statePath } from "@/lib/configDir";
 import type { BoardTask } from "@/lib/tasks/types";
+import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
+import { lastScannedFiles } from "@/lib/scanner/scanCache";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
+import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 
 import { encodeTask, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -58,14 +65,144 @@ function encoded(task: BoardTask, filter: FeedFilter) {
   return { row, bytes, stub: "withheld" in row };
 }
 
+type OmittedTask = { id: string; project: string };
+const omittedSeed = {
+  collection: "task_export_omissions", schemaVersion: 1, migrationId: "done-export-eligibility",
+  key: (row: OmittedTask) => row.id, loadRecords: (): OmittedTask[] => [],
+};
+const omittedCollections = new Map<string, SqliteStateCollection<OmittedTask>>();
+type EligibilitySweep = {
+  taskRevision: number;
+  omissionRevision: number;
+  files: ReturnType<typeof lastScannedFiles>;
+  pipelineRevision: number | null;
+  seats: string;
+  after: string | null;
+};
+const eligibilitySweeps = new Map<string, Map<string, EligibilitySweep>>();
+type EligibilityRevisions = Pick<EligibilitySweep, "taskRevision" | "omissionRevision" | "pipelineRevision">;
+const eligibilityRevisions = new Map<string, { signature: string; pipelineSignature: string; revisions: EligibilityRevisions }>();
+
+/** Opening a read-only connection on every idle page costs more than the
+ * sync budget. Observe WAL writes too, and read the revision only on change. */
+function readEligibilityRevisions(source: NonNullable<ReturnType<typeof taskFeedSource>>, omissions: SqliteStateCollection<OmittedTask>): EligibilityRevisions {
+  const pipelineDatabase = statePath("state.sqlite");
+  const signature = stateDatabaseSignature(source.database);
+  const pipelineSignature = pipelineDatabase === source.database ? signature : stateDatabaseSignature(pipelineDatabase);
+  const held = eligibilityRevisions.get(source.database);
+  if (held?.signature === signature && held.pipelineSignature === pipelineSignature) return held.revisions;
+  const revisions = { taskRevision: source.revision(), omissionRevision: omissions.revision(),
+    pipelineRevision: readStateCollectionRevision(pipelineDatabase, "pipelines") };
+  // Cache the signature read before the query: a concurrent write after it
+  // must invalidate the result on the next call.
+  eligibilityRevisions.set(source.database, { signature, pipelineSignature, revisions });
+  return revisions;
+}
+
+function seatSignature(): string {
+  try {
+    const stat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
+    if (!stat) return "absent";
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw error;
+  }
+}
+function omittedTasks(database: string, create = false): SqliteStateCollection<OmittedTask> | null {
+  const held = omittedCollections.get(database);
+  if (held) return held;
+  if (!create && !stateCollectionsInitialized(database, [omittedSeed])) return null;
+  if (create) initializeStateCollections(database, [omittedSeed]);
+  const collection = new SqliteStateCollection<OmittedTask>(database, {
+    collection: omittedSeed.collection, schemaVersion: 1, busyMessage: "task export eligibility busy",
+    key: omittedSeed.key, clone: structuredClone,
+    decode: (value) => {
+      if (!value || typeof value !== "object") return null;
+      const row = value as Partial<OmittedTask>;
+      return typeof row.id === "string" && typeof row.project === "string" ? row as OmittedTask : null;
+    }, strictDecode: true,
+  });
+  omittedCollections.set(database, collection);
+  return collection;
+}
+
+/** Remember exclusions across restarts. When external state makes one eligible
+ * again, append its unchanged row to the normal log before reading the cursor.
+ * Requeue commits before removing the marker, so a crash can only replay it. */
+function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource>>, filter: FeedFilter, eligible: (task: BoardTask) => boolean): number {
+  const omissions = omittedTasks(source.database);
+  if (!omissions) return source.revision();
+  const context = {
+    ...readEligibilityRevisions(source, omissions), files: lastScannedFiles(), seats: seatSignature(),
+  };
+  let sweeps = eligibilitySweeps.get(source.database);
+  if (!sweeps) eligibilitySweeps.set(source.database, sweeps = new Map());
+  const scope = JSON.stringify([filter.self.id, [...filter.projects].sort()]);
+  let sweep = sweeps.get(scope);
+  // Snapshot identities and store revisions are constant-time idle checks.
+  // Finish a started sweep before observing newer context, so frequent scans
+  // cannot keep restarting at the first omission and starve the later keys.
+  if (!sweep || sweep.after === null) {
+    if (sweep && sweep.taskRevision === context.taskRevision && sweep.omissionRevision === context.omissionRevision
+      && sweep.files === context.files && sweep.pipelineRevision === context.pipelineRevision && sweep.seats === context.seats) return context.taskRevision;
+    sweep = { ...context, after: "" };
+    sweeps.set(scope, sweep);
+  }
+  const batch = omissions.keyRange(sweep.after!, "\uffff", SCAN_BATCH);
+  const resumed: string[] = [];
+  const removed: string[] = [];
+  for (const row of batch) {
+    if (!filter.projects.has(row.project)) continue;
+    const task = source.get(row.id);
+    if (!task) removed.push(row.id);
+    else if (eligible(task)) resumed.push(row.id);
+  }
+  if (resumed.length) source.requeue(resumed);
+  const deleted = [...resumed, ...removed];
+  if (deleted.length) omissions.boundedPatch(deleted.length, (tx) => { for (const id of deleted) tx.delete(id); });
+  sweep.after = batch.length < SCAN_BATCH ? null : batch.at(-1)!.id;
+  return resumed.length ? source.revision() : context.taskRevision;
+}
+
+function trackOmission(task: BoardTask, database: string, eligible: (task: BoardTask) => boolean): boolean {
+  if (eligible(task)) return true;
+  const omissions = omittedTasks(database, true)!;
+  if (omissions.get(task.id)?.project !== task.project) omissions.boundedPatch(1, (tx) => tx.put({ id: task.id, project: task.project }));
+  return false;
+}
+
+/** Only the owner can age a task out of export: replicas retain their rows and
+ * do not have the owner's admissions or completion time. Passing hasMembers
+ * keeps manual board preferences out of sync policy; the done expiry still
+ * uses the board's exact predicate, including resurfacing and seat exceptions.
+ * Context is read lazily, once per page, only when an expired row needs it. */
+function exportableTasks(filter: FeedFilter): (task: BoardTask) => boolean {
+  let holdsSeat: ReturnType<typeof taskSeatHoldingSnapshot> | undefined;
+  let files: ReturnType<typeof lastScannedFiles> | undefined;
+  let pipelines: ReturnType<typeof loadPipelinesForList> | undefined;
+  const now = Date.now();
+  return (task) => task.status !== "done" || (!!task.machine && task.machine !== filter.self.id) || taskShowsOnBoard(task, true, {
+    now,
+    get holdsSeat() { return (holdsSeat ??= taskSeatHoldingSnapshot())(task) === "holds"; },
+    get members() {
+      files ??= lastScannedFiles() ?? [];
+      return files.filter((file) => task.assignments.some((assignment) =>
+        (assignment.conversationId && assignment.conversationId === file.conversationId) || assignment.path === file.path));
+    },
+    get pipelines() { return pipelines ??= loadPipelinesForList(); },
+  });
+}
+
 /** One log page after `after`, or `resync` when the log no longer reaches
     back that far (or the position is from another store). */
 export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   const source = taskFeedSource(filter.filePath ?? TASKS_FILE);
   if (!source) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
+  const exportable = exportableTasks(filter);
+  const current = resumeOmittedTasks(source, filter, exportable);
   const [revision, key = ""] = after;
-  // The idle answer: one cached revision read, no row read.
-  const current = source.revision();
+  // Unchanged eligibility context leaves omissions off the idle read path.
   if (revision > current) return { kind: "resync" };
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
   const tombstones = tombstoneCollection(source.database, false);
@@ -86,7 +223,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
           // A key changed again later reappears at its later pair.
           if (entry.valueJson !== null && entry.rowRevision === entry.revision) {
             const task = source.parse(entry.valueJson);
-            if (task && filter.projects.has(task.project) && task.sync?.o !== filter.skipPrefix) row = { ...encoded(task, filter), id };
+            if (task && filter.projects.has(task.project) && task.sync?.o !== filter.skipPrefix && trackOmission(task, source.database, exportable)) row = { ...encoded(task, filter), id };
           }
         } else {
           const tomb = tombstones?.get(tombstoneKey(id));
@@ -130,6 +267,7 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
   const source = taskFeedSource(filter.filePath ?? TASKS_FILE);
   if (!source) return { rows: [], next: null, withheld: [] };
   const page = new Page();
+  const exportable = exportableTasks(filter);
   let cursor = after;
   let read = 0;
   if (!cursor.startsWith("g:")) {
@@ -138,7 +276,7 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
       const batch = source.keyRange(from, "t:\uffff", SCAN_BATCH);
       for (const task of batch) {
         read++;
-        if (filter.projects.has(task.project)) {
+        if (filter.projects.has(task.project) && trackOmission(task, source.database, exportable)) {
           const row = encoded(task, filter);
           if (!page.add(row.row, row.bytes, task.id, row.stub)) return { rows: page.rows, next: cursor, withheld: page.withheld };
         }
