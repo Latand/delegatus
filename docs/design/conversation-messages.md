@@ -125,7 +125,7 @@ Name stays `conversation_messages`; nothing in the issue argues for another.
 
 | Parameter | Type | Default | Clamp / validation |
 | --- | --- | --- | --- |
-| `clientRequestId` | string | required | as every tool |
+| `clientRequestId` | string | omitted | fresh read when omitted; explicit keys replay the same observation |
 | `conversationId` | string | — | `conversation_…` id; one of the three identity forms is required |
 | `transcriptPath` | string | — | must lie under a scanner root (`pathAllowed`, root containment) |
 | `selectedContext` | `selectedContextSchema` | — | same acceptance and refusals as `get_conversation` |
@@ -135,6 +135,8 @@ Name stays `conversation_messages`; nothing in the issue argues for another.
 | `limit` | integer | 20 | 1..200, clamped via `MCP_BOUNDED_NUMERIC_ARGS` |
 | `maxChars` | integer | 4 000 | 1..16 000, clamped via `MCP_BOUNDED_NUMERIC_ARGS` |
 | `cursor` | string | — | opaque token from the previous page; wrong scope or stale → refusal |
+| `includeMetadata` | boolean | false | includes transcript path, engine, last-record time and scan diagnostics |
+| `full` | boolean | false | includes the same diagnostic metadata |
 
 `limit` and `maxChars` are registered in `MCP_BOUNDED_NUMERIC_ARGS` so
 `schemaParity.test.ts` checks the clamps automatically; `kinds`, `roles` and
@@ -157,6 +159,12 @@ normalized, filtered, paged messages use conversation_messages." — and its
 parameters and responses do not change.
 
 ### Response
+
+The default response retains conversation identity, records, authors, truncation,
+pagination and selected context. `includeMetadata:true` or `full:true` restores
+all metadata in the example below. A capped scan always returns `scanned`, even
+when metadata was omitted. An omitted read key returns `clientRequestId:null`
+and `replayed:false` in the service envelope; mutations still require keys.
 
 ```jsonc
 {
