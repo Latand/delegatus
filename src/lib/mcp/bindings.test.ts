@@ -3249,7 +3249,7 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
 test("seat_tick_settings refuses only the change that would leave no reason behind", async () => {
   const { bindings, store } = tickSettingsBindings();
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-no-reason", enabled: false }))
-    .rejects.toThrow("a reason is required");
+    .rejects.toThrow("instructions (reason) are required");
   expect(store.size).toBe(0);
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-empty" })).resolves.toMatchObject({ changed: false });
 });

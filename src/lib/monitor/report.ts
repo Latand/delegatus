@@ -114,9 +114,8 @@ const SEAT_TICK_MESSAGE_LIMIT = 4_000;
  * The least the agenda is left, whatever the reserved half costs.
  *
  * The subtraction in {@link boundedSeatTickMessage} cannot reach this today:
- * the reserved half is the contract pointer plus a prompt preview capped at
- * {@link SEAT_TICK_PROMPT_PREVIEW_LIMIT}, which together are well under half
- * the limit.
+ * the reserved half includes bounded operator instructions, the contract
+ * pointer and a prompt preview capped at {@link SEAT_TICK_PROMPT_PREVIEW_LIMIT}.
  * It is here so a future growth of either can only shorten the
  * agenda, never produce a nonsense budget. And it floors the agenda while
  * leaving the total free, deliberately: a wake missing part of its contract is
@@ -252,6 +251,8 @@ export function seatTickWakeMessage(input: {
       without it, and the seat is told what is missing from the picture rather
       than left to act on a partial one it cannot see the edges of. */
   gaps?: readonly SeatTickEvidenceGap[];
+  /** Panel instructions, delivered in full on every scheduler wake. */
+  operatorInstructions?: string | null;
   /** The project's own monitor prompt (#1280), or nothing. */
   monitorPrompt?: string | null;
   /** The seat's last landed wake already showed this exact note (#2030). */
@@ -307,6 +308,7 @@ export function seatTickWakeMessage(input: {
   }
   return boundedSeatTickMessage(lines, [
     ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
+    ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);
@@ -327,6 +329,8 @@ export function seatTickProposalMessage(input: {
   signals: readonly SeatTickSignalInput[];
   items: number;
   slot: string;
+  /** Panel instructions, delivered in full on every scheduler wake. */
+  operatorInstructions?: string | null;
   /** The project's own monitor prompt (#1280), or nothing. The proposal slot is
       a scheduler-fired wake like any other, so a note about what this project's
       monitor should look at is owed here too — a prompt that silently went
@@ -360,6 +364,7 @@ export function seatTickProposalMessage(input: {
     "Rank by what actually matters now: what is blocking, what is cheap and finishes something, what has been waiting longest.",
     `Put this exact line at the foot of the card so the next tick recognizes it: ${MONITOR_REF_PREFIX} ${seatTickProposalRef(input.slot)}`,
     "Open no GitHub issue and start no pipeline from this — the operator moves a card to assigned when they want it, and the next tick starts it.",
+    ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);

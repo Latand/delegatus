@@ -40,6 +40,7 @@ import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
 import { EngineBadge } from "./EngineMark";
 import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fileModelLabel, fmtAge } from "./utils";
+import { isLaunchedConversation } from "./launchedConversations";
 
 const noop = () => undefined;
 
@@ -456,6 +457,8 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
             for navigation to the live successor plus the explicit fork. */}
         {superseded ? <SupersededBanner file={file} /> : null}
         {relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
+        {/* A launch's task arrives a poll after its pane: the strip's row is held, so the feed does not move when it lands. */}
+        {!relatedTasks?.length && onOpenTask && isLaunchedConversation(file) ? <div aria-hidden data-task-relations-slot className="min-h-9 shrink-0 pointer-coarse:min-h-[53px]" /> : null}
         {tasks.length ? (
           <FlipRow className="shrink-0 border-b border-border bg-sunken" enter="fade">
             {tasks.map((task) => (

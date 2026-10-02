@@ -1207,7 +1207,7 @@ test("settings back at their default resolve the card instead of leaving it stan
     ref: "seat-tick-settings",
     kind: "tick-settings",
     state: "resolved",
-    settings: { enabled: true, wakeIntervalMs: 60 * MINUTE, reason: null, until: null, setBy: null, updatedAt: "2026-08-28T11:30:00.000Z" },
+    settings: { enabled: true, wakeIntervalMs: 60 * MINUTE, reason: "the draft is gone, ticking as normal again", until: null, setBy: null, updatedAt: "2026-08-28T11:30:00.000Z" },
     detail: "this project is on the default tick settings",
   }]);
 });
