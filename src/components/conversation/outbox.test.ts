@@ -2442,7 +2442,7 @@ describe("readOperationShared", () => {
     }
   });
 
-  test("an unknown-fate answer backs off to the ceiling instead of being asked again every interval", async () => {
+  test("a readable unknown-fate answer is checked every 30 seconds for late canonical evidence", async () => {
     let answer: RuntimeReceipt = { ...delivered("op-unknown"), status: "failed", resend: "verify-first" };
     const { requests, fetchImpl } = server(() => Response.json({ receipt: answer }));
     let at = now;
@@ -2456,7 +2456,7 @@ describe("readOperationShared", () => {
       spacings.push(next - at);
       at = next;
     }
-    expect(spacings).toEqual([60_000, 120_000, 240_000, 300_000, 300_000, 300_000]);
+    expect(spacings).toEqual([30_000, 30_000, 30_000, 30_000, 30_000, 30_000]);
     expect(requests).toHaveLength(6);
     // An arrival resets the spacing; the row then leaves the candidates anyway.
     answer = delivered("op-unknown");

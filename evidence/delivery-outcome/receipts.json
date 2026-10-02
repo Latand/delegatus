@@ -1,0 +1,30 @@
+{
+  "390-uk": {
+    "width": 275,
+    "scrollWidth": 275,
+    "clientWidth": 275,
+    "overflowX": 0,
+    "text": "Не доставлено — надіслати ще раз"
+  },
+  "390-en": {
+    "width": 275,
+    "scrollWidth": 275,
+    "clientWidth": 275,
+    "overflowX": 0,
+    "text": "Not delivered — send again"
+  },
+  "1440-uk": {
+    "width": 1321,
+    "scrollWidth": 1321,
+    "clientWidth": 1321,
+    "overflowX": 0,
+    "text": "Не доставлено — надіслати ще раз"
+  },
+  "1440-en": {
+    "width": 1321,
+    "scrollWidth": 1321,
+    "clientWidth": 1321,
+    "overflowX": 0,
+    "text": "Not delivered — send again"
+  }
+}
