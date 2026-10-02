@@ -7,6 +7,7 @@ import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity"
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
 import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
 import type { Pipeline } from "./types";
@@ -520,6 +521,51 @@ async function changedWorktreePaths(
   return { ok: true, paths: [...new Set(paths)] };
 }
 
+type StageCommitReceipt = { version: 1; id: string; parent: string; tree: string; paths: string[] };
+
+/** The controller flushes ownership before Git writes. Recovery must prove the
+    exact parent, tree, nonce and declared paths; a familiar commit title alone
+    never grants a read-only stage permission to have created a commit. */
+async function recoverStageCommit(
+  receiptFile: string,
+  parent: string,
+  head: string,
+  declaredOutputs: readonly string[],
+  exec: ExecPort,
+  cwd: string,
+): Promise<PipelineGitResult | null> {
+  let receipt: StageCommitReceipt;
+  try {
+    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
+    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    if (!value || typeof value !== "object") throw new Error("invalid receipt");
+    receipt = value as StageCommitReceipt;
+    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
+      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
+      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
+      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
+      throw new Error("invalid receipt");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
+  }
+  const proof = await exec("git", ["show", "-s", "--format=%P%x00%T%x00%B", head], cwd);
+  if (proof.code !== 0) return failure("verifying the owned stage commit", proof);
+  const [parents, tree, body] = proof.stdout.split("\0");
+  if (parents !== receipt.parent || tree !== receipt.tree
+    || !body?.split("\n").includes(`Delegatus-Stage-Commit: ${receipt.id}`)) return null;
+  const committed = await exec("git", ["diff", "--name-only", "--no-renames", "-z", parent, head, "--"], cwd);
+  if (committed.code !== 0) return failure("verifying owned stage output paths", committed);
+  const paths = committed.stdout.split("\0").filter(Boolean);
+  if (paths.length !== new Set(receipt.paths).size
+    || paths.some((file) => !receipt.paths.includes(file) || !pathIsDeclaredOutput(file, declaredOutputs))) return null;
+  const remaining = await changedWorktreePaths(exec, cwd, declaredOutputs);
+  if (!remaining.ok) return remaining;
+  if (remaining.paths.length) return { ok: false, error: "the owned stage commit has newer worktree changes; preserve them before recovery" };
+  return { ok: true, sha: head };
+}
+
 export async function commitPipelineStage(
   pipeline: Pipeline,
   stageId: string,
@@ -527,12 +573,17 @@ export async function commitPipelineStage(
   exec: ExecPort,
   declaredOutputs: readonly string[] = [],
   protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
+  receiptFile?: string,
 ): Promise<PipelineGitResult> {
   const status = (await exec("git", ["status", "--porcelain"], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (initialHead.code !== 0 || !initialHead.stdout.trim()) return failure("recording the passed stage commit", initialHead);
   if (protectedHead !== null && initialHead.stdout.trim() !== protectedHead) {
+    if (!allowCommit && receiptFile && declaredOutputs.length) {
+      const recovered = await recoverStageCommit(receiptFile, protectedHead, initialHead.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir);
+      if (recovered) return recovered;
+    }
     return { ok: false, error: `read-only stage ${stageId} created a commit` };
   }
   let changedOutputPaths: string[] = [];
@@ -569,10 +620,22 @@ export async function commitPipelineStage(
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
-  const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
+  let receipt: StageCommitReceipt | undefined;
+  if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
+    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+    if (tree.code !== 0 || !/^[0-9a-f]{40}$/.test(tree.stdout.trim())) return failure("recording the stage commit tree", tree);
+    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
+    writeJsonDurably(receiptFile, receipt);
+  }
+  const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
+    ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
   if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
+  if (receipt && receiptFile) {
+    return await recoverStageCommit(receiptFile, receipt.parent, head.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir)
+      ?? { ok: false, error: "the stage commit differs from its durable ownership receipt; preserve the checkout and receipt" };
+  }
   if (!allowCommit) {
     const committed = (await exec(
       "git",

@@ -197,6 +197,8 @@ export interface PipelinePorts {
   exec: ExecPort;
   /** Controller-only: committing-stage Git settles after its lease is released. */
   deferStageGit?: boolean;
+  /** Private durable ownership proof for an off-lease declared-output commit. */
+  stageCommitReceiptFile?: string;
   reviewIngressHead?: (pipeline: Pipeline) => import("./git").PipelineGitResult | null;
   reviewFlowGit?: (pipeline: Pipeline) => PreparedFlowGit | null;
   /** Asynchronous Git used only by the provisioning pre-pass. */
@@ -2945,7 +2947,7 @@ async function commitPassedStage(
   if (ports.deferStageGit) return;
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
-  let result = (await commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead));
+  let result = (await commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile));
   if (!result.ok) {
     park(pipeline, result.error, attempt);
     return;
@@ -6211,7 +6213,13 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
     const candidateAttempt = currentAttempt(candidate, candidateStage.id)!;
-    const outside = { ...ports, exec, deferStageGit: false };
+    const receiptKey = crypto.createHash("sha256").update(JSON.stringify({
+      stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId,
+      startedAt: attempt.startedAt, worktreeDir: preview.worktreeDir, branch: preview.branch,
+      parent: preview.lastPassedCommit, access: attempt.effectiveRole.access, outputs: attemptStage(stage, attempt).outputs,
+    })).digest("hex");
+    const outside = { ...ports, exec, deferStageGit: false,
+      stageCommitReceiptFile: path.join(pipelineArtifactsDir(preview.id), `stage-commit-${receiptKey}.json`) };
     try {
       revalidate();
       if (abort.signal.aborted) continue;

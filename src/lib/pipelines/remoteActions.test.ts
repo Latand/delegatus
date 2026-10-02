@@ -24,6 +24,57 @@ afterAll(() => {
 });
 const HEAD = "a".repeat(40);
 
+test.each(["pause", "lost-reply"] as const)("a controller output commit survives %s before durable adoption", async (interruption) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owned-stage-commit-"));
+  const repo = path.join(root, "source"); fs.mkdirSync(repo);
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const base = git("rev-parse", "HEAD");
+  const lane = pipelineCorpus(2, 1)[1]!;
+  lane.repoDir = repo; lane.worktreeDir = `${repo}-pipeline-${lane.id}`;
+  git("worktree", "add", "-q", "-b", lane.branch, lane.worktreeDir, base);
+  lane.state = "running"; lane.closedAt = null; lane.publication = "internal";
+  lane.lastPassedCommit = base; lane.baseRef = base; lane.baseBranch = "main";
+  lane.cursor = { stageId: "build", state: "committing", input: null, activatedBy: null };
+  lane.stages[0]!.effectiveRole.access = "read-only"; lane.stages[0]!.outputs = ["report.md"];
+  lane.runs[0]!.attempts[0]!.effectiveRole.access = "read-only";
+  lane.runs[0]!.attempts[0]!.state = "committing";
+  savePipelines([lane]); fs.writeFileSync(path.join(lane.worktreeDir, "report.md"), "owned output\n");
+  const basePorts = { ...defaultPipelinePorts(), exec: realExec, getFlow: () => null,
+    stageHostResident: async () => false, stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    conversationAgentActive: async () => false, paneAgentAlive: async () => false };
+  let wrote = false;
+  const ports = { ...basePorts, exec: async (...args: Parameters<typeof realExec>) => {
+    const result = await realExec(...args);
+    if (args[1][0] === "commit" && result.code === 0 && !wrote) {
+      wrote = true;
+      if (interruption === "lost-reply") throw new Error("owned commit reply lost");
+      expect((await patchPipeline(lane.id, { action: "pause" }, basePorts)).error).toBeUndefined();
+    }
+    return result;
+  } };
+  try {
+    if (interruption === "lost-reply") await expect(settlePendingStageGit(ports)).rejects.toThrow("owned commit reply lost");
+    else await settlePendingStageGit(ports);
+    const head = (await realExec("git", ["rev-parse", "HEAD"], lane.worktreeDir)).stdout.trim();
+    expect(head).not.toBe(base);
+    expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(base);
+    if (interruption === "pause") {
+      expect(findPipelineRecord(lane.id)!.state).toBe("paused");
+      expect((await patchPipeline(lane.id, { action: "resume" }, basePorts)).error).toBeUndefined();
+    }
+    await settlePendingStageGit(basePorts);
+    expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(head);
+    expect(findPipelineRecord(lane.id)!.stateDetail ?? "").not.toContain("created a commit");
+    expect(fs.readFileSync(path.join(lane.worktreeDir, "report.md"), "utf8")).toBe("owned output\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test.each(["unsupported", "unopenable"] as const)("an accepted publication settles a %s locking refusal in the controller and journal", async (failure) => {
   const h = setupRetry(); h.lane.state = "paused";
   h.lane.delivery = { target: { repository: "unsupported-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },

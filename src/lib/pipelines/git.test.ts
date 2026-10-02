@@ -989,6 +989,33 @@ test("pass commits a dirty stage and retry resets plus cleans", async () => {
   expect(calls).toContain("git clean -fd");
 });
 
+test.each(["missing", "malformed", "nonce", "tree", "newer-changes"] as const)("owned output recovery refuses %s proof and preserves the checkout", async (change) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline(); subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "report.md"), "owned output\n");
+    const receiptFile = path.join(box.root, "stage-commit.json");
+    const committed = await commitPipelineStage(subject, "audit", false, box.exec, ["report.md"], subject.lastPassedCommit, receiptFile);
+    expect(committed.ok).toBe(true);
+    if (change === "missing") fs.unlinkSync(receiptFile);
+    if (change === "malformed") fs.writeFileSync(receiptFile, "{torn receipt");
+    const identity = ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid"];
+    if (change === "nonce") await box.run(...identity, "commit", "--amend", "-m", "unowned replacement");
+    if (change === "tree") {
+      fs.writeFileSync(path.join(box.repo, "report.md"), "different output\n");
+      await box.run("add", "report.md"); await box.run(...identity, "commit", "--amend", "--no-edit");
+    }
+    if (change === "newer-changes") fs.writeFileSync(path.join(box.repo, "report.md"), "newer output\n");
+    const head = await box.run("rev-parse", "HEAD");
+    const content = fs.readFileSync(path.join(box.repo, "report.md"), "utf8");
+    expect(await commitPipelineStage(subject, "audit", false, box.exec, ["report.md"], subject.lastPassedCommit, receiptFile)).toMatchObject({ ok: false });
+    expect(await box.run("rev-parse", "HEAD")).toBe(head);
+    expect(fs.readFileSync(path.join(box.repo, "report.md"), "utf8")).toBe(content);
+    if (change === "malformed") expect(fs.readFileSync(receiptFile, "utf8")).toBe("{torn receipt");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test("read-only declared output commits with no host Git identity and leaves config untouched", async () => {
   const box = (await isolatedIdentityRepo());
   try {
