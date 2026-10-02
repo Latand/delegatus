@@ -138,6 +138,9 @@ export function samplePrompts(messages: Message[], limit: number) {
  * attachments or whether the message can stand alone. */
 export function machineMessage(text: string, operatorOrigin = false): boolean {
   const body = cleanEnvelope(text);
+  // Same tag-boundary recognizer as the feed's isCodexHarnessUserText.
+  // Codex injects this notice even when the enclosing turn has operator origin.
+  if (/^<turn_aborted\b/.test(body)) return true;
   // Historic recovery and pipeline protocol messages can carry operator-origin
   // markers. These exact control envelopes remain machine messages; ordinary
   // operator prose must never be classified by tool names or urgency wording.

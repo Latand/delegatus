@@ -3,9 +3,9 @@
   "collectedAt": "2026-10-02T17:57:06.719Z",
   "counts": {
     "messages": 4497,
-    "machine": 3894,
+    "machine": 3902,
     "copies": 18,
-    "eligible": 585,
+    "eligible": 577,
     "requested": 100,
     "sampled": 100,
     "conversations": 1467,
@@ -59,7 +59,7 @@
       "project": "project-4",
       "engine": "codex",
       "indexed": 1705,
-      "operator": 299,
+      "operator": 291,
       "sampled": 20
     },
     {

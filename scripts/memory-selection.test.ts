@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { Database } from "bun:sqlite";
 import { en } from "../src/lib/i18n/en";
 import { uk } from "../src/lib/i18n/uk";
@@ -20,6 +21,26 @@ const c: Case = { id: "p01", prompt: "Investigate failures while writing to a cl
 const sample: Sample = { version: 1, seed: "test", collectedAt: "2026-01-01", counts: {}, cases: [c] };
 const labels: Labels = { rule: "A fact changes the next action.", cases: [{ id: "p01", prompt: c.prompt, candidates: c.candidates.map(m => ({ id: m.id, helpful: m.id === "c4", summary: m.summary, reason: "Fixture relevance" })) }] };
 const message = (body: string, index = 0, transcript = "one"): Message => ({ body, message_index: index, transcript_path: transcript, engine: "codex", project: "project-a", timestamp: 1 });
+
+test("Codex interruption envelopes are machine text regardless of operator provenance", () => {
+  const notice = "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>";
+  for (const operatorOrigin of [false, true]) {
+    for (const body of [notice, `  \n${notice}`, `<!-- llv:structured-user origin=operator -->\n${notice}`]) {
+      expect(machineMessage(body, operatorOrigin)).toBeTrue();
+      const sampled = sampleOperatorPrompts([
+        { ...message(body, 0), operatorOrigin },
+        { ...message("Please resume the interrupted work.", 1), operatorOrigin },
+      ]);
+      expect(sampled.counts).toMatchObject({ messages: 2, machine: 1, eligible: 1, sampled: 1 });
+      expect(sampled.population[0].operator).toBe(1);
+      expect(sampled.rows[0].message_index).toBe(1);
+    }
+    for (const body of ["The user interrupted the previous turn on purpose; please investigate.",
+      "Explain the <turn_aborted> notice.", "<turn_aborted_example>Operator example</turn_aborted_example>"]) {
+      expect(machineMessage(body, operatorOrigin)).toBeFalse();
+    }
+  }
+});
 
 test("UI continuation and handoff templates require an operator suffix in both languages", () => {
   for (const dictionary of [en, uk]) {
@@ -399,6 +420,17 @@ test("all-turn public evidence independently reproduces every confidence arm and
   expect(results.counts.sampled).toBe(100);
   expect(results.population!.reduce((n, p) => n + p.operator, 0)).toBe(results.counts.eligible);
   expect(results.counts.messages).toBe(results.counts.machine + results.counts.copies + results.counts.eligible);
+  const audit = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.interruption-audit.json", import.meta.url), "utf8"));
+  expect(audit.counts).toEqual(results.counts);
+  expect(audit.population).toEqual(results.population);
+  expect(audit).toMatchObject({ removedInterruptionNotices: 8, sampledIdentitiesUnchanged: 100,
+    casesUnchanged: true, labelsUnchanged: true, requestBodiesUnchanged: 400,
+    reusedScoredRequests: 344, receiptsUnchanged: 358, newPaidCalls: 0,
+    networkDisabled: true, originalInputsByteUnchanged: true, reproducedArms: 48 });
+  expect(results.counts.eligible).toBe(577);
+  expect(results.population!.find(p => p.project === "project-4" && p.engine === "codex")!.operator).toBe(291);
+  expect(crypto.createHash("sha256").update(JSON.stringify(results.calls)).digest("hex")).toBe(audit.receiptsSha256);
+  expect(results.spendUsd).toBe(audit.spendUsd);
   for (const arm of results.arms) {
     const rows = results.cases.map((c, i) => {
       const graph = results.graph.cases.find(g => g.id === c.id)!.scores;
