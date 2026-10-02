@@ -37,6 +37,11 @@ Tailwind now starts discovery at `src/`, relative to `src/app/globals.css`.
 Repository prose, hooks and unrelated workflow files no longer affect app CSS.
 Docker's copied directories, manifests, patches, runtime scripts and Next's
 repository-wide TypeScript and imported JS/JSON inputs remain covered.
+JS/JSON outside the copied directories is listed explicitly; a regression
+compares admission with the installed TypeScript program's dependency graph.
+Unused evidence JSON and documentation JS/JSON skip the build. Root `.env`,
+`.env.local`, `.env.production` and `.env.production.local` are inputs because
+Next loads them during the production build.
 
 The broad trigger is retained for compatibility with #2452 and to avoid GitHub's
 300-file trigger-filter limit. A three-minute, read-only `scope` job evaluates
@@ -92,6 +97,11 @@ actual Git history before/after a main merge, deletion via a rename, more than
 the real installed Tailwind/PostCSS compiler: a utility in `src/` is emitted;
 adding a unique utility to README leaves CSS byte-identical. The baseline
 directive emits that README utility, proving the regression's red path.
+The Git fixture also evaluates individual unused JS/JSON, imported data and
+each production environment file. A separate installed Next loader probe proves
+that all four admitted environment files are consumed. These regressions fail
+against the pre-fix filter for unused evidence JSON and production environment
+files, then pass with the explicit dependency and environment inputs.
 
 The current actionlint v1.7.12 schema rejects the newer `concurrency.queue` key.
 Its remaining checks pass with only that exact schema diagnostic ignored;

@@ -2,10 +2,17 @@ const { execFileSync } = require("node:child_process");
 
 // Dockerfile COPY/install/build inputs. next build also checks TypeScript
 // outside src/ and its imported JS/JSON. Tailwind scans src/ (globals.css).
+// Keep external JS/JSON dependencies explicit: the test checks this list
+// against the installed TypeScript program so new imports cannot drift.
 const files = new Set([
   "Dockerfile", ".dockerignore", "package.json", "bun.lock", "bunfig.toml",
   "tsconfig.json", ".github/workflows/docker-image.yml",
   "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
+  "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs",
+  "scripts/npm-package-smoke.mjs", "scripts/docker-image-scope.cjs",
+  "scripts/fixtures/usage-metrics/recorded.json", "landing/site/demo/taskIcons.json",
+  // Docker copies these root files; Next loads them with NODE_ENV=production.
+  ".env", ".env.local", ".env.production", ".env.production.local",
 ]);
 const directories = ["src/", "public/", "bin/", "patches/", "vendor/"];
 
@@ -13,7 +20,7 @@ function isImageInput(file) {
   return files.has(file)
     || directories.some(directory => file.startsWith(directory))
     || /^(next|postcss)\.config\./.test(file)
-    || /\.(?:[cm]?ts|tsx|[cm]?js|jsx|json)$/.test(file)
+    || /\.(?:[cm]?ts|tsx)$/.test(file)
     || /(^|\/)\.gitignore$/.test(file);
 }
 

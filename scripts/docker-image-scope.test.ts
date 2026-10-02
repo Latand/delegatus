@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
+import ts from "typescript";
 import { isImageInput } from "./docker-image-scope.cjs";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -30,13 +31,54 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     "scripts/build-mcp.ts", "scripts/whisper_transcribe.py", "scripts/runtime-host-viewer-adapter.ts",
     "scripts/runtime-host-healthcheck.ts", "scripts/published-image-entrypoint.sh",
     "landing/site/demo/taskIcons.json", "evals/probe.ts", "spikes/probe.mts", "test-preload.ts",
-    "external/imported.cjs", ".gitignore", "src/components/.gitignore", ".github/workflows/docker-image.yml",
+    "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
+    "scripts/fixtures/usage-metrics/recorded.json", "scripts/docker-image-scope.cjs",
+    ".env", ".env.local", ".env.production", ".env.production.local",
+    ".gitignore", "src/components/.gitignore", ".github/workflows/docker-image.yml",
   ]) expect(isImageInput(file), file).toBe(true);
   for (const file of [
     "README.md", "CONTRIBUTING.md", "docs/docker.md", "docs/guide.md", "evidence/report.txt",
     ".github/workflows/privacy-publication.yml", ".githooks/pre-push", "scripts/audit-with-retry.sh",
     "landing/site/index.html", "docker-compose.yml",
+    "evidence/docker-image/incident.json", "docs/unused.json", "docs/unused.js",
+    "external/unused.cjs", "external/unused.mjs", "external/unused.jsx",
+    ".env.development", ".env.test", ".env.example", "docs/.env.production",
   ]) expect(isImageInput(file), file).toBe(false);
+});
+
+test("the admission list covers every repository JS/JSON dependency in the TypeScript program", () => {
+  const configPath = path.join(root, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  expect(config.error).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+  expect(parsed.errors).toEqual([]);
+  const program = ts.createProgram(parsed.fileNames, parsed.options);
+  const dependencies = program.getSourceFiles()
+    .map(source => path.relative(root, source.fileName).split(path.sep).join("/"))
+    .filter(file => !file.startsWith("node_modules/") && /\.(?:[cm]?js|jsx|json)$/.test(file));
+  expect(dependencies).toContain("landing/site/demo/taskIcons.json");
+  expect(dependencies.filter(file => !isImageInput(file))).toEqual([]);
+}, 20_000);
+
+test("each admitted root production env file is read by the installed Next loader", () => {
+  const loader = require.resolve("@next/env");
+  for (const file of [".env", ".env.local", ".env.production", ".env.production.local"]) {
+    const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-env-"));
+    try {
+      writeFileSync(path.join(cwd, file), "DOCKER_SCOPE_ENV_PROBE=loaded\n");
+      const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "production" };
+      delete env.DOCKER_SCOPE_ENV_PROBE;
+      delete env.__NEXT_PROCESSED_ENV;
+      const result = spawnSync("node", ["-e", `
+        const { loadEnvConfig } = require(${JSON.stringify(loader)});
+        const { combinedEnv, loadedEnvFiles } = loadEnvConfig(process.cwd(), false);
+        console.log(JSON.stringify({ value: combinedEnv.DOCKER_SCOPE_ENV_PROBE, files: loadedEnvFiles.map(f => f.path) }));
+      `], { cwd, env, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ value: "loaded", files: [file] });
+      expect(isImageInput(file), file).toBe(true);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  }
 });
 
 test("workflow gates Docker steps and reserves capacity across different refs", () => {
@@ -90,9 +132,27 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\n");
     git("merge", "-qm", "Merge fixture main", "main");
     expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\n");
+    // Evaluate each change on its own, through the workflow's real CLI.
+    let previous = git("rev-parse", "HEAD");
+    for (const [file, build] of [
+      ["evidence/docker-image/incident.json", false], ["docs/unused.json", false],
+      ["docs/unused.js", false], ["external/unused.cjs", false],
+      ["external/unused.mjs", false], ["external/unused.jsx", false],
+      ["landing/site/demo/taskIcons.json", true],
+      ["scripts/demo-capture-browser.cjs", true],
+      [".env", true], [".env.local", true],
+      [".env.production", true], [".env.production.local", true],
+    ] as const) {
+      write(file, file.startsWith(".env") ? "LLV_STANDALONE=1\n" : "{}");
+      const current = commit();
+      const result = run(previous, current);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout, file).toBe(`build=${build}\n`);
+      previous = current;
+    }
     git("mv", "src/old.ts", "docs/old.txt"); const moved = commit();
-    expect(run(main, moved).stdout).toBe("build=true\n");
-    expect(git("diff", "--name-only", "--no-renames", main, moved)).toContain("src/old.ts");
+    expect(run(previous, moved).stdout).toBe("build=true\n");
+    expect(git("diff", "--name-only", "--no-renames", previous, moved)).toContain("src/old.ts");
     for (let i = 0; i < 305; i++) write(`docs/${i}.md`);
     write("src/late\ninput.ts"); const large = commit();
     expect(run(moved, large).stdout).toBe("build=true\n");
