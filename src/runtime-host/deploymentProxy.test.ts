@@ -128,6 +128,43 @@ test("deployment proxy forwards an immediate request through a real TCP connecti
   }
 });
 
+test("deployment proxy answers 503 when the active deployment refuses the connection", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
+  const targetFile = path.join(directory, "viewer-release.json");
+  const stoppedViewer = net.createServer();
+  const refusedPort = await listen(stoppedViewer);
+  await close(stoppedViewer);
+  await fs.writeFile(targetFile, JSON.stringify({
+    revision: "dead123", image: "viewer:test", container: "viewer-stopped",
+    endpoint: `http://127.0.0.1:${refusedPort}`,
+  }));
+  const proxy = serveViewerDeploymentProxy(targetFile, 0);
+  const sockets = ownAccepted(proxy);
+  await once(proxy, "listening");
+  const address = proxy.address();
+  if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+
+  try {
+    const accepted = once(proxy, "connection") as Promise<[net.Socket]>;
+    const response = await request(address.port);
+    expect(response).toStartWith("HTTP/1.1 503 Service Unavailable\r\n");
+    const [headers, body] = response.split("\r\n\r\n");
+    expect(headers).toContain("Connection: close");
+    expect(headers).toContain("Content-Type: text/plain; charset=utf-8");
+    expect(headers).toContain(`Content-Length: ${Buffer.byteLength(body)}`);
+    expect(body).toContain("Delegatus Viewer unavailable");
+    expect(body).toContain("viewer-stopped");
+    expect(body).toContain("dead123");
+    const [downstream] = await accepted;
+    expect(await destroyedWithin(downstream)).toBe(true);
+    await closesWithin(proxy);
+  } finally {
+    sockets.destroyAll();
+    await close(proxy);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("deployment proxy disposes a 503 socket after its response flushes", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
   const proxy = serveViewerDeploymentProxy(path.join(directory, "missing-release.json"), 0);
@@ -153,6 +190,123 @@ test("deployment proxy disposes a 503 socket after its response flushes", async 
   } finally {
     sockets.destroyAll();
     await close(proxy);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+for (const responseStarted of [false, true]) {
+  const behaviour = responseStarted ? "preserves a partial response after" : "answers 503 on";
+  test(`deployment proxy ${behaviour} an upstream reset`, async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
+    const targetFile = path.join(directory, "viewer-release.json");
+    const partialResponse = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nfirst chunk";
+    let viewerSocket: net.Socket | undefined;
+    const viewer = net.createServer((socket) => {
+      viewerSocket = socket;
+      socket.on("error", () => undefined);
+      socket.once("data", () => {
+        if (responseStarted) socket.write(partialResponse);
+        else socket.resetAndDestroy();
+      });
+    });
+    const viewerSockets = ownAccepted(viewer);
+    const viewerPort = await listen(viewer);
+    await fs.writeFile(targetFile, JSON.stringify({
+      revision: "reset123", image: "viewer:test", container: "viewer-reset",
+      endpoint: `http://127.0.0.1:${viewerPort}`,
+    }));
+    const proxy = serveViewerDeploymentProxy(targetFile, 0);
+    const proxySockets = ownAccepted(proxy);
+    await once(proxy, "listening");
+    const address = proxy.address();
+    if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+    const client = net.createConnection(address.port, "127.0.0.1");
+    let response = "";
+    client.on("error", () => undefined);
+    client.on("data", (chunk) => {
+      response += chunk.toString();
+      // Reset only once the client has received the upstream bytes, so the
+      // mid-response case cannot accidentally exercise a pre-response reset.
+      if (responseStarted && !viewerSocket?.destroyed) viewerSocket?.resetAndDestroy();
+    });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const clientClosed = new Promise<void>((resolve, reject) => {
+      client.once("close", resolve);
+      timeout = setTimeout(() => reject(new Error("proxy retained a reset connection")), 2000);
+    });
+    try {
+      client.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+      await clientClosed;
+      if (responseStarted) {
+        expect(response).toBe(partialResponse);
+        expect(response).not.toContain("503 Service Unavailable");
+      } else {
+        expect(response).toStartWith("HTTP/1.1 503 Service Unavailable\r\n");
+        expect(response).toContain("viewer-reset");
+      }
+      await closesWithin(proxy);
+    } finally {
+      clearTimeout(timeout);
+      client.destroy();
+      proxySockets.destroyAll();
+      viewerSockets.destroyAll();
+      await close(proxy);
+      await close(viewer);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("deployment proxy answers 503 when the Viewer ends before sending response bytes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
+  const targetFile = path.join(directory, "viewer-release.json");
+  const viewer = net.createServer((socket) => {
+    let request = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      request += chunk;
+      if (request.includes("\r\n\r\n")) socket.end();
+    });
+  });
+  const viewerSockets = ownAccepted(viewer);
+  const viewerPort = await listen(viewer);
+  await fs.writeFile(targetFile, JSON.stringify({
+    revision: "eof123", image: "viewer:test", container: "viewer-eof",
+    endpoint: `http://127.0.0.1:${viewerPort}`,
+  }));
+  const proxy = serveViewerDeploymentProxy(targetFile, 0);
+  const proxySockets = ownAccepted(proxy);
+  await once(proxy, "listening");
+  const address = proxy.address();
+  if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+
+  const accepted = once(proxy, "connection") as Promise<[net.Socket]>;
+  const client = net.createConnection(address.port, "127.0.0.1");
+  let response = "";
+  client.on("error", () => undefined);
+  client.on("data", (chunk) => { response += chunk.toString(); });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const clientClosed = new Promise<void>((resolve, reject) => {
+    client.once("close", resolve);
+    timeout = setTimeout(() => reject(new Error("proxy retained an EOF connection")), 2000);
+  });
+  try {
+    client.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    await clientClosed;
+    expect(response).toStartWith("HTTP/1.1 503 Service Unavailable\r\n");
+    expect(response).toContain("Delegatus Viewer unavailable");
+    expect(response).toContain("viewer-eof");
+    expect(response).toContain("eof123");
+    const [downstream] = await accepted;
+    expect(await destroyedWithin(downstream)).toBe(true);
+    await closesWithin(proxy);
+  } finally {
+    clearTimeout(timeout);
+    client.destroy();
+    proxySockets.destroyAll();
+    viewerSockets.destroyAll();
+    await close(proxy);
+    await close(viewer);
     await fs.rm(directory, { recursive: true, force: true });
   }
 });

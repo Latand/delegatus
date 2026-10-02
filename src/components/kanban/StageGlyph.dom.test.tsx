@@ -81,7 +81,7 @@ test("a stage pane's header draws the glyph named, or its tone dot for a model w
     </>,
   );
   const glyph = host.querySelector<HTMLElement>('[data-case="glyph"] .mglyph')!;
-  expect([glyph.dataset.glyph, glyph.getAttribute("role"), glyph.getAttribute("aria-label"), glyph.title]).toEqual(["haiku", "img", "Haiku: running", "Running"]);
+  expect([glyph.dataset.glyph, glyph.getAttribute("role"), glyph.getAttribute("aria-label"), glyph.title]).toEqual(["haiku", "img", "Haiku 4.5: running", "Running"]);
   const dot = host.querySelector<HTMLElement>('[data-case="dot"] span')!;
   expect(dot.className).toContain("animate-pulse");
   expect([dot.style.backgroundColor, dot.title]).toEqual(["var(--color-accent)", "Running"]);

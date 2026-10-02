@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, viewerMcpHttpUrl, viewerMcpServerEnv, viewerMcpTransport, viewerMcpTransportForLaunch, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
@@ -20,6 +21,25 @@ function home(): string {
   homes.push(directory);
   return directory;
 }
+
+test.each([[false, false], [false, true], [true, false], [true, true]] as const)("Claude publication settings override inherited settings env (account: %s, configured: %s)", (accountSettings, configured) => {
+  const accountHome = home();
+  const sourcePath = path.join(accountSettings ? accountHome : home(), "settings.json");
+  const original = JSON.stringify({ env: { EXTRA: "kept", GIT_AUTHOR_NAME: "Inherited", GIT_AUTHOR_EMAIL: ["personal", "example.invalid"].join("@") } });
+  fs.writeFileSync(sourcePath, original);
+  const publicationEnv: NodeJS.ProcessEnv = configured ? {
+    NODE_ENV: "test", DELEGATUS_PUBLICATION_NAME: "Build Agent",
+    DELEGATUS_PUBLICATION_EMAIL: ["no-reply", "build.example.invalid"].join("@"),
+  } : { NODE_ENV: "test" };
+  const installed = applyClaudeSpawnPolicy(accountHome, { baseSettingsPath: sourcePath, publicationEnv });
+  const settings = JSON.parse(fs.readFileSync(installed.settingsPath, "utf8"));
+  expect(settings.env).toMatchObject(configured ? {
+    GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+    GIT_AUTHOR_EMAIL: publicationEnv.DELEGATUS_PUBLICATION_EMAIL,
+    GIT_COMMITTER_EMAIL: publicationEnv.DELEGATUS_PUBLICATION_EMAIL,
+  } : controllerCommitIdentityEnv());
+  expect(fs.readFileSync(sourcePath, "utf8")).toBe(original);
+});
 
 test("Claude spawn policy installs a multi-agent deny hook with Viewer lineage guidance", async () => {
   const accountHome = home();
@@ -120,7 +140,7 @@ test("Claude spawn policy seeds a fresh account from the shared user settings sn
   };
 
   expect(settings.model).toBe("shared-model");
-  expect(settings.env).toEqual({ SHARED: "kept" });
+  expect(settings.env).toEqual({ SHARED: "kept", ...controllerCommitIdentityEnv() });
   expect(settings.hooks.PreToolUse).toHaveLength(1);
 });
 

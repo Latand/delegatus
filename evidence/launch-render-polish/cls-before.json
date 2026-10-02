@@ -1,0 +1,98 @@
+{
+  "label": "before",
+  "limit": 0.1,
+  "readings": [
+    {
+      "viewport": "desktop-1440",
+      "cls": 0.3386,
+      "shifts": 8,
+      "largest": [
+        {
+          "at": 929,
+          "value": 0.193,
+          "sources": [
+            "SECTION.column.agent[assigned]",
+            "ARTICLE.card.work",
+            "ARTICLE.card.work"
+          ]
+        },
+        {
+          "at": 830,
+          "value": 0.1067,
+          "sources": [
+            "DIV.scroll-wrap"
+          ]
+        },
+        {
+          "at": 7910,
+          "value": 0.0146,
+          "sources": [
+            "ARTICLE.card.work",
+            "DIV.foot"
+          ]
+        },
+        {
+          "at": 7944,
+          "value": 0.0107,
+          "sources": [
+            "FORM.flex.shrink-0",
+            "DIV.",
+            "DIV.flex.shrink-0"
+          ]
+        },
+        {
+          "at": 7939,
+          "value": 0.0104,
+          "sources": [
+            "FORM.flex.shrink-0",
+            "DIV.",
+            "DIV.flex.shrink-0"
+          ]
+        },
+        {
+          "at": 10078,
+          "value": 0.0018,
+          "sources": [
+            "DIV.",
+            "FORM.flex.shrink-0",
+            "DIV.flex.shrink-0"
+          ]
+        },
+        {
+          "at": 938,
+          "value": 0.0008,
+          "sources": [
+            "SPAN.inline-flex.max-w-full"
+          ]
+        },
+        {
+          "at": 846,
+          "value": 0.0006,
+          "sources": [
+            "DIV.",
+            "DIV.flex.shrink-0",
+            "FORM.flex.shrink-0"
+          ]
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "viewport": "phone-390",
+      "cls": 0.2479,
+      "shifts": 1,
+      "largest": [
+        {
+          "at": 785,
+          "value": 0.2479,
+          "sources": [
+            "DIV.relative.flex",
+            "SPAN.inline-flex.max-w-full",
+            "SPAN.max-w-[45%].shrink-0"
+          ]
+        }
+      ],
+      "pageErrors": []
+    }
+  ]
+}

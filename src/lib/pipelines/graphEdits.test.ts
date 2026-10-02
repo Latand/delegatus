@@ -104,7 +104,7 @@ const stage = (id: string, next: string | null, extra: Record<string, unknown> =
 
 async function started(ports: PipelinePorts, stages: unknown[]): Promise<string> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Graph slice", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Graph slice", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl", publication: "internal" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn the entry stage
@@ -167,7 +167,7 @@ test("pass edges decide execution; reordering the array alone changes nothing th
   const id = await started(h.ports, [stage("one", "two"), stage("two", null)]);
 
   /* During one's open turn: append three (two → three), then move two to the end of the array. */
-  const added = await patchPipeline(id, { action: "add-stage", stage: stage("three", null) as never }, h.ports, AGENT);
+  const added = await patchPipeline(id, { action: "add-stage", after: "two", stage: stage("three", null) as never }, h.ports, AGENT);
   expect(added.error).toBeUndefined();
   const moved = await patchPipeline(id, { action: "reorder-stage", stageId: "two", toIndex: 2 }, h.ports, AGENT);
   expect(moved.error).toBeUndefined();
@@ -233,7 +233,7 @@ test("add-stage may not insert before a started stage, and inserting after the r
   expect(current().runs).toEqual(before.runs);
   expect(current().graphEdits).toEqual(before.graphEdits);
 
-  const after = await patchPipeline(id, { action: "add-stage", index: 1, stage: stage("between", null) as never }, h.ports, AGENT);
+  const after = await patchPipeline(id, { action: "add-stage", after: "one", index: 1, stage: stage("between", null) as never }, h.ports, AGENT);
   expect(after.error).toBeUndefined();
   expect(current().stages.map((item) => [item.id, item.next])).toEqual([["one", "between"], ["between", "two"], ["two", null]]);
 
