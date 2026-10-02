@@ -491,8 +491,8 @@ export function evaluateLiveness(input: {
   if (input.turnState === "busy" && input.providerRetryAt && !progressSupersedesThrottle) {
     return { lifecycle: "waiting", reason: "provider_throttled", retryAt: input.providerRetryAt };
   }
-  if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
   if (input.turnState === "idle") return { lifecycle: "waiting", reason: "host_alive_turn_idle" };
+  if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
   return { lifecycle: "running", reason: "host_alive_turn_active" };
 }
 

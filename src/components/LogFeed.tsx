@@ -17,7 +17,7 @@ import type { FileEntry } from "@/lib/types";
 import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 
 import { LaunchChips } from "./conversation/LaunchChips";
-import { MandateCard } from "./feed/cards/MandateCard";
+import { MandateCard, MandateConversationContext } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
 import { LiveTurnRows } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
@@ -51,9 +51,10 @@ import {
   type OutboxOwner,
 } from "./conversation/outbox";
 import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/submissionJoin";
-import { createFeedSession, type FeedSession, type FeedSnapshot } from "./feed/parse";
+import { createFeedSession, rawUserTextFor, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
-import { FeedItem } from "./feed/FeedItem";
+import { FeedItem, resolveDeliveredItem } from "./feed/FeedItem";
+import { heldMandateFor, heldMandateMatches, holdMandate } from "./conversation/heldMandate";
 import { useConversationGallery } from "./feed/imageGallery";
 import { GalleryOwnerProvider, ImageGalleryProvider } from "./feed/Lightbox";
 import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed/messageProvenance";
@@ -328,17 +329,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       && paneLaunchOwner.conversationId === launchOwner.conversationId
       && paneLaunchOwner.generation === launchOwner.generation,
   );
-  /* A materialized `file.launch` is the server's live-adoption signal. Retire
-     the starting-window bubble at that hand-off even when an image-only launch
-     has no text echo and its delivery receipt still reads queued/delivering. */
-  useEffect(() => {
-    if (!memoryKey || !file?.launch || !launchOwnsThisPane || !launchOwner) return;
-    retireLaunchOutboxOnAdoption(memoryKey, {
-      id: file.launch.launchId,
-      adoptedAt: nowMs(),
-      owner: launchOwner,
-    });
-  }, [memoryKey, file?.launch?.launchId, launchOwner, launchOwnsThisPane]);
   /* The transcript the launch CREATED is an adoption signal of its own (issue
      #1793). The server's launch facts are the bubble's only carrier of the
      delivery receipt, and they retire on the row's first assistant turn — a
@@ -1038,6 +1028,53 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
     return newest;
   }, [feed.items]);
+  /* A materialized `file.launch` is the server's live-adoption signal. Retire
+     the starting-window bubble at that hand-off even when an image-only launch
+     has no text echo and its delivery receipt still reads queued/delivering.
+     The hand-off waits for the transcript's first row: the scanned row is
+     published a poll before its tail is read, and a bubble retired in that gap
+     leaves the window with no first message at all until the tail lands. */
+  const transcriptAttached = feed.items.length > 0;
+  /* The conversation survives retirement of every launch fact, including on
+     a remounted phone feed. Keep the last mandate under that same identity. */
+  useLayoutEffect(() => {
+    if (memoryKey && launch?.mandate && launch.prompt) {
+      holdMandate({ conversationKey: memoryKey, text: launch.prompt, echoText: launch.promptEcho, ts: launch.promptAt, mandate: launch.mandate });
+    }
+  }, [memoryKey, launch?.prompt, launch?.promptEcho, launch?.promptAt, launch?.mandate]);
+  const heldMandate = heldMandateFor(memoryKey);
+  /* A reply can arrive before the provenance read. Until the record resolves
+     as a mandate, its slot draws the card we already know from the launch.
+     Only the unfiltered transcript beginning can own that fallback: a cropped
+     tail or a filtered view can start at a later operator paste of the words. */
+  const firstMandateEntry = useMemo(() => feed.items.find(({ item }) =>
+    item.kind === "user"
+    || (item.kind === "tmsg" && item.internal)
+    || (item.kind === "sysmsg" && item.deliveredMessage)) ?? null, [feed.items]);
+  const firstMandateRecord = firstMandateEntry?.item ?? null;
+  const holdsMandate = Boolean(
+    heldMandate !== null
+      && tail.linesStart <= 0 && !tail.hasMore && !lf
+      && (!firstMandateRecord || (
+        "text" in firstMandateRecord
+        && heldMandateMatches(heldMandate, rawUserTextFor(firstMandateRecord) ?? firstMandateRecord.text)
+        && !provenanceLookup.forItem(firstMandateRecord)
+        && resolveDeliveredItem(firstMandateRecord, provenanceLookup).kind !== "mandate"
+      )),
+  );
+  const mandateCard = !firstMandateRecord && tail.linesStart <= 0 && !tail.hasMore && !lf
+    ? launch?.mandate && launch.prompt
+      ? { text: launch.prompt, ts: launch.promptAt, mandate: launch.mandate }
+      : heldMandate
+    : null;
+  useEffect(() => {
+    if (!memoryKey || !file?.launch || !launchOwnsThisPane || !launchOwner || !transcriptAttached) return;
+    retireLaunchOutboxOnAdoption(memoryKey, {
+      id: file.launch.launchId,
+      adoptedAt: nowMs(),
+      owner: launchOwner,
+    });
+  }, [memoryKey, file?.launch?.launchId, launchOwner, launchOwnsThisPane, transcriptAttached]);
   /* ── One message, one row (send-latency slice 3) ──────────────────────────
      Which submitted message each transcript echo belongs to. The operator's
      row is keyed on the SUBMISSION — its idempotency key — from the instant
@@ -1093,7 +1130,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     : transcriptWorking;
   /* Anything the window shows below the transcript. While it is present an
      empty transcript is not "no output" — it is a conversation mid-launch. */
-  const windowTail = visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch);
+  const windowTail = visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
 
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
@@ -1195,6 +1232,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     });
     const rows: ConversationRow[] = visibleItems.flatMap(({ anchorKey, key, item, responseDurationMs, submissionDedup }, visibleIndex) => {
       if (submissionDedup && withheldRecords.has(submissionDedup)) return [];
+      if (holdsMandate && heldMandate && item === firstMandateRecord) return [{
+        kind: "item", key, anchorKey,
+        item: { kind: "mandate", text: heldMandate.text, ts: heldMandate.ts, mandate: heldMandate.mandate },
+      } as ConversationRow];
       if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId
         && withheldNativeRecords.has(item.deliveredMessage.engineMessageId)) return [];
       const answer = answerFor(visibleStartIndex + visibleIndex);
@@ -1328,17 +1369,30 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const merged = interleaveDeputyBlocks<ConversationRow, ConversationRow>(rows, placements, (id) => ({ kind: "deputy", key: `deputy:${id}`, deputy: byId.get(id)! }));
       rows.splice(0, rows.length, ...merged);
     }
+    /* The launch's own prompt is the conversation's first message, and the
+       launch chips are the status line under it: the bubble sits above them
+       from the first paint, which is where the transcript's record of it puts
+       the row once it lands, so the hand-off moves nothing. */
+    const launchPrompt = (entry: OutboxEntry) => Boolean(launch && entry.launchOwned);
+    const tailMessage = (entry: OutboxEntry): ConversationRow[] => (
+      adopted.has(entry.id) || hoisted.has(entry.id) ? [] : [{ kind: "message", key: `msg:${entry.id}`, entry, canonical: null }]
+    );
+    /* With launch facts retired and the tail still unread, the conversation
+       keeps its first card instead of showing an empty window. */
+    if (mandateCard && !launch) rows.unshift({
+      kind: "item", key: "held-mandate",
+      item: { kind: "mandate", text: mandateCard.text, ts: mandateCard.ts, mandate: mandateCard.mandate },
+    });
     for (const section of orderedConversationTail({
       launch: Boolean(launch),
       outbox: Boolean(memoryKey && pendingOutbox.length),
       delta: visibleLiveTurnItems.length > 0,
     })) {
-      if (section === "launch") rows.push({ kind: "launch", key: "launch" });
-      else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
-      else for (const entry of pendingOutbox) {
-        if (adopted.has(entry.id) || hoisted.has(entry.id)) continue;
-        rows.push({ kind: "message", key: `msg:${entry.id}`, entry, canonical: null });
-      }
+      if (section === "launch") {
+        if (memoryKey) rows.push(...pendingOutbox.filter(launchPrompt).flatMap(tailMessage));
+        rows.push({ kind: "launch", key: "launch" });
+      } else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
+      else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
     }
     /* A block splits the seat's own answer, so the first seat row after one
        names the seat head it continues (docs/design/ghost-seat.md §6.1). */
@@ -1361,7 +1415,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems, visibleStartIndex, echoBindings, boundSubmissions, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies]);
+    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the
@@ -1419,6 +1473,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     <RawLineProvider value={getRawLine}>
     <MessageProvenanceProvider value={provenanceLookup}>
     <ImageGalleryProvider value={gallery}>
+    <MandateConversationContext.Provider value={memoryKey}>
     <div className="flex min-h-0 flex-1 flex-col">
     {/* The live-tail pill anchors to the scroller wrapper — NOT the pane
         column — so the pinned status bar below is structurally outside its
@@ -1621,8 +1676,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               if (row.kind === "launch") {
                 return (
                   <div key="launch">
-                    {launch!.mandate && launch!.prompt ? (
-                      <MandateCard item={{ kind: "mandate", ts: launch!.promptAt, text: launch!.prompt, mandate: launch!.mandate }} />
+                    {mandateCard ? (
+                      <MandateCard item={{ kind: "mandate", ts: mandateCard.ts, text: mandateCard.text, mandate: mandateCard.mandate }} />
                     ) : null}
                     <LaunchChips launch={launch!} onRetry={onLaunchRetry} />
                   </div>
@@ -1684,7 +1739,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>
+                    {/* The first delivery keeps the launch's conversation identity;
+                        later mandates in the same transcript have their own row. */}
+                    <MandateConversationContext.Provider value={memoryKey && row.key !== "held-mandate"
+                      && !(tail.linesStart <= 0 && !tail.hasMore && row.key === firstMandateEntry?.key)
+                      ? `${memoryKey}\0${row.key}` : memoryKey}>
                     <SpeechScope.Provider value={file.path}><FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} /></SpeechScope.Provider>
+                    </MandateConversationContext.Provider>
                   </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>
@@ -1794,6 +1855,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       <TurnStatusBar file={file} workingLabel={working.label} workingIcon={working.icon} compact={compact} />
     ) : null}
     </div>
+    </MandateConversationContext.Provider>
     </ImageGalleryProvider>
     </MessageProvenanceProvider>
     </RawLineProvider>
