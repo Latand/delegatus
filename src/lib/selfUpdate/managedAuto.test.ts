@@ -326,6 +326,32 @@ test("a busy managed install holds immediately and retains its cohort through si
   } finally { service.stop(); }
 });
 
+test.each(["red", "pending", "unknown"] as const)("a newly pending managed update holds admission before its first %s result", async state => {
+  const h = scenario(); h.setGreen(state);
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_original", sessionKey: { engine: "codex" }, host: "hosted", turn: "running" }] }) as never;
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const hold = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+    expect(hold).not.toBeNull();
+    h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    expect((await service.snapshot()).auto?.decision).toMatchObject({ id: hold!.id, blockers: { turnList: [{ conversationId: "conversation_original" }] } });
+    expect(h.requests).toHaveLength(0);
+  } finally { service.stop(); }
+});
+
+test("admission is already held while the first managed green lookup awaits", async () => {
+  const h = scenario();
+  let reading = false, release = () => {};
+  h.deps.green = { read: () => { reading = true; return new Promise(resolve => { release = () => resolve({ state: "pending" }); }); } } as unknown as ServiceDeps["green"];
+  const service = h.service(); const tick = service.autoTick();
+  try {
+    for (let i = 0; i < 100 && !reading; i++) await Bun.sleep(1);
+    expect(reading).toBe(true);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  } finally { release(); await tick; service.stop(); }
+});
+
 test.each(["enabled", "switch-off"] as const)("cold recovery reconciles a hold published before its owner checkpoint: %s", async mode => {
   const h = scenario(); h.setTurns(1);
   const since = new Date(h.deps.now()).toISOString();

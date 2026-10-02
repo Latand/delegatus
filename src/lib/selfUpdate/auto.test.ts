@@ -186,6 +186,22 @@ test("six hours names blockers for an operator decision while admission remains 
   } finally { service.stop(); }
 });
 
+test.each(["red", "pending", "unknown"] as const)("a pending checkout update holds admission before its first %s result", async state => {
+  const h = scenario(); h.setGreen(state); h.setTurn(true);
+  const file = join(h.dir, "auto.json");
+  writeAuto(file, { ...readAuto(file), green: {} });
+  const service = h.service();
+  try {
+    await service.autoTick();
+    const hold = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+    expect(hold).not.toBeNull();
+    h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    expect(readAuto(file).drain?.overranAt).not.toBeNull();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(hold!.id);
+    expect(h.pending()).toBeNull();
+  } finally { service.stop(); }
+});
+
 test.each(["red", "pending", "unknown"] as const)("six-hour cohort notice survives %s checks in checkout mode", async state => {
   const h = scenario();
   h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_original", engine: "codex", host: "hosted", turn: "running" }] }) as never;

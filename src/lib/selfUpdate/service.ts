@@ -447,12 +447,24 @@ export class SelfUpdateService {
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
     const target = this.auto.drain ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
+    const serves = (revision: Revision | null) => revision?.sha === target.sha || revision?.short === target.short;
+    if (snapshot.installed.sha === target.sha && observedHealthy && serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
+      if (this.auto.waitingSince) {
+        this.endDrain();
+        const rollback = this.auto.rollbackPointer;
+        this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
+        this.saveAuto();
+        try { await (this.deps.prune ?? pruneReleaseWorktrees)(record, rollback); }
+        catch (error) { console.error("[self-update] release cleanup failed", error instanceof Error ? error.name : "unknown"); }
+      }
+      return;
+    }
+    const cohortQuiet = await this.waitForAutoQuiet(existsSync(record.requestFile) ? { ...snapshot, busy: "restart-web" } : snapshot, target.sha, now);
     let green = await this.autoGreen(target.sha, record.checkout!, now);
     if (green.state !== "green") return;
     if (snapshot.installed.sha !== target.sha) {
       // Pending updates fence new work before building too: otherwise busy
       // agents can keep consuming the resources the candidate build needs.
-      await this.waitForAutoQuiet(snapshot, target.sha, now);
       if (!this.auto.enabled && !this.hasAutoCustody()) return;
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
@@ -467,20 +479,8 @@ export class SelfUpdateService {
         .finally(() => this.afterUpdate());
       return;
     }
-    const serves = (revision: Revision | null) => revision?.sha === target.sha || revision?.short === target.short;
-    if (observedHealthy && serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
-      if (this.auto.waitingSince) {
-        this.endDrain();
-        const rollback = this.auto.rollbackPointer;
-        this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
-        this.saveAuto();
-        try { await (this.deps.prune ?? pruneReleaseWorktrees)(record, rollback); }
-        catch (error) { console.error("[self-update] release cleanup failed", error instanceof Error ? error.name : "unknown"); }
-      }
-      return;
-    }
     const quiet = this.deps.quiet;
-    if (!quiet || !await this.waitForAutoQuiet(existsSync(record.requestFile) ? { ...snapshot, busy: "restart-web" } : snapshot, target.sha, now)) return;
+    if (!quiet || !cohortQuiet) return;
     const gateFile = restartGateFile(record.requestFile);
     const gateId = beginRestartGate(gateFile);
     if (!gateId) return;
@@ -679,10 +679,10 @@ export class SelfUpdateService {
       || snapshot.installed.sha === target.sha
       || this.managed?.phase === "succeeded" && this.managed.target === target.sha) return;
     const now = this.deps.now();
+    const cohortQuiet = await this.waitForAutoQuiet(snapshot, target.sha, now);
     const repo = await this.deps.prepareCheckRepo();
     let green = await this.autoGreen(target.sha, repo, now);
-    if (green.state !== "green") return;
-    if (!await this.waitForAutoQuiet(snapshot, target.sha, now)) return;
+    if (green.state !== "green" || !cohortQuiet) return;
     green = await this.refreshGreen(target.sha, repo, green);
     if (green.state !== "green") { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); return; }
     const finalSnapshot = await this.snapshot();
