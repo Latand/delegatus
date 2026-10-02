@@ -606,6 +606,7 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   const operation = delivery.operation;
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
+    && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 

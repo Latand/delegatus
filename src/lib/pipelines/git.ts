@@ -1100,15 +1100,15 @@ async function withPublicationFileLock<T>(lock: string, operation: () => Promise
   finally { releasePublicationFileLock(descriptor); }
 }
 
-function publicationFence(pipeline: Pipeline): string {
+export function pipelinePublicationFence(pipeline: Pipeline): string {
   const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
   const delivery = pipeline.delivery;
-  return JSON.stringify({ state: pipeline.state, closed: pipeline.closedAt, hidden: pipeline.hiddenAt,
+  return crypto.createHash("sha256").update(JSON.stringify({ state: pipeline.state, closed: pipeline.closedAt, hidden: pipeline.hiddenAt,
     cursor: pipeline.cursor, stages: pipeline.stages, head: pipeline.lastPassedCommit,
     branch: pipeline.branch, worktree: pipeline.worktreeDir,
     attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
     delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
-      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null });
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null })).digest("hex");
 }
 
 /**
@@ -1166,6 +1166,13 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
+      if (previous?.state === "pending" && ((previous.fence && previous.fence !== pipelinePublicationFence(current))
+        || (!previous.fence && current.state === "paused"))) {
+        const error = "publication admission superseded before execution";
+        current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        deliveryJournal(current, "recovery", error); tx.put(current);
+        return { error };
+      }
       if (current.state === "closed" || current.closedAt || current.hiddenAt) {
         const error = "publication superseded by lane closure";
         if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
@@ -1182,10 +1189,10 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (reservation.waiting) return reservation.waiting;
     if (!reservation.pipeline) return { ok: false, error: reservation.error! };
     reserved = true;
-    const fence = publicationFence(reservation.pipeline);
+    const fence = pipelinePublicationFence(reservation.pipeline);
     const abort = new AbortController();
     let writeStarted = false;
-    const matches = (current: Pipeline | null) => current !== null && publicationFence(current) === fence;
+    const matches = (current: Pipeline | null) => current !== null && pipelinePublicationFence(current) === fence;
     const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
     const superseded = (): PipelinePublishResult => writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,

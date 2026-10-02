@@ -386,7 +386,8 @@ export class SelfUpdateService {
       }
       return;
     }
-    if (!this.auto.enabled || (await this.autoAvailability(decision)) !== "available") return;
+    if (!this.auto.enabled) return;
+    if ((await this.autoAvailability(decision)) !== "available" || !this.auto.enabled || this.auto.pending) return;
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
     const target = this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
@@ -395,7 +396,9 @@ export class SelfUpdateService {
     if (snapshot.installed.sha !== target.sha) {
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
-      if (green.state !== "green") return;
+      const admissionSnapshot = await this.snapshot();
+      if (green.state !== "green" || !this.auto.enabled || this.auto.pending || this.slice.available?.sha !== target.sha
+        || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
         this.auto = { ...this.auto, rollbackPointer: existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null, rollbackCaptured: true };
@@ -452,6 +455,17 @@ export class SelfUpdateService {
       if (current.mode !== "checkout" || current.record?.launcher.autoAdmission !== 1
         || current.record.launcher.pid !== record.launcher.pid
         || current.record.launcher.startIdentity !== record.launcher.startIdentity) return;
+      const admissionSnapshot = await this.snapshot();
+      const admissionProbe = await probeQuiet(admissionSnapshot, quiet, this.deps.now());
+      this.autoBlockers = admissionProbe.blockers;
+      const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
+      const admissionRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
+      if (!this.auto.enabled || this.auto.pending || activeRestartGate(gateFile) !== gateId || !admissionProbe.quiet
+        || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== record.launcher.pid
+        || admissionRecord.launcher.startIdentity !== record.launcher.startIdentity || admissionRecord.requestFile !== record.requestFile
+        || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
+        || admissionSnapshot.serving.web?.sha !== finalSnapshot.serving.web?.sha
+        || admissionSnapshot.serving.runtimeHost?.sha !== finalSnapshot.serving.runtimeHost?.sha) return;
       this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
       requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
         this.auto = { ...this.auto, pending: request };
@@ -575,7 +589,8 @@ export class SelfUpdateService {
         pending = null;
       }
     }
-    if (!this.auto.enabled || (await this.autoAvailability(decision)) !== "available" || managedActive(this.managed)
+    if (!this.auto.enabled) return;
+    if ((await this.autoAvailability(decision)) !== "available" || !this.auto.enabled || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
     const target = pending?.target ?? this.slice.available;
     if (this.slice.check.state !== "update-available" || !target?.sha || this.slice.available?.sha !== target.sha

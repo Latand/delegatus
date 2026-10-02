@@ -15,6 +15,121 @@ const restore = registerPipelineTick(async () => {});
 afterAll(() => { restore(); fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); });
 const HEAD = "a".repeat(40);
 
+test("a queued publication is superseded by a pause before execution", async () => {
+  const h = setupRetry(); h.lane.state = "running";
+  h.lane.delivery = { target: { repository: "pause-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  let pushes = 0;
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    if (args[0] === "push") pushes++;
+    return { code: 0, stdout: args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? h.lane.branch
+      : args.includes("ls-remote") && pushes ? `${HEAD}\trefs/heads/${h.lane.branch}\n` : "", stderr: "" };
+  } };
+  await patchPipeline(h.lane.id, { action: "publish" }, ports);
+  await patchPipeline(h.lane.id, { action: "pause" }, ports);
+  const result = await publishPipelineBranch(findPipelineRecord(h.lane.id)!, ports.exec, { acceptedSha: HEAD });
+  expect(result).toMatchObject({ ok: false, error: expect.stringContaining("superseded") });
+  expect(pushes).toBe(0);
+  expect(findPipelineRecord(h.lane.id)!.state).toBe("paused");
+});
+
+test("review retry records pending intent before flow teardown and yields its lease", async () => {
+  const h = setupRetry(); h.attempt.flowId = "cleanup-flow"; savePipelines([h.lane]);
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const ports = { ...h.ports, getFlow: () => ({ id: "cleanup-flow", state: "needs_decision" }) as never,
+    closeFlow: async () => { enter(); await held; return {}; } };
+  const retry = patchPipeline(h.lane.id, { action: "retry-stage" }, ports);
+  let settlement: Promise<void> | undefined, pause: ReturnType<typeof patchPipeline> | undefined;
+  try {
+    const answer = await Promise.race([retry, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(findPipelineRecord(h.lane.id)!.remoteAction!.state).toBe("pending");
+    settlement = settlePendingRemoteActions(ports); await entered;
+    pause = patchPipeline(h.lane.id, { action: "pause" }, ports);
+    expect(await Promise.race([pause, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))])).not.toBeNull();
+    release(); await settlement;
+    expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "paused", remoteAction: { state: "settled", error: "remote action superseded" } });
+  } finally { release(); await retry; await settlement; await pause; }
+});
+
+test("a cancelled takeover preserves a newer pause and its detail", async () => {
+  const [owner, lane] = pipelineCorpus(2, 1);
+  for (const item of [owner!, lane!]) { item.state = "needs_decision"; item.closedAt = null; item.lastPassedCommit = HEAD; item.cursor = { stageId: "review", state: "reviewing", input: null, activatedBy: null }; }
+  const target = { repository: "takeover-repo", remote: "origin", branch: "refs/heads/shared" };
+  const lock = path.join(process.env.LLV_STATE_DIR!, "cancelled-publisher.lock"); fs.writeFileSync(lock, "");
+  const stat = fs.statSync(lock);
+  owner!.delivery = { target, disposition: "owner", publish: "enabled", ownerId: owner!.id, epoch: 1, active: true, journal: [],
+    operation: { id: "interrupted-publication", epoch: 1, sha: HEAD, state: "running", executor: { pid: 1, identity: null, lock, lockIdentity: `${stat.dev}:${stat.ino}` } } };
+  lane!.delivery = { target, disposition: "comparison", publish: "disabled", ownerId: owner!.id, epoch: 1, active: false, journal: [] };
+  savePipelines([owner!, lane!]);
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const ports = { ...defaultPipelinePorts(), exec: async (_command: string, _args: string[], _cwd: string, _env: unknown, options?: import("@/lib/workflows/provision").ExecOptions) => {
+    enter(); await new Promise<void>((resolve) => options!.signal!.addEventListener("abort", () => resolve(), { once: true }));
+    return { code: null, stdout: "", stderr: "command cancelled" };
+  } };
+  expect((await patchPipeline(lane!.id, { action: "takeover", expectedOwner: owner!.id, expectedEpoch: 1, reason: "Recover publication" }, ports)).error).toBeUndefined();
+  const settlement = settlePendingRemoteActions(ports); await entered;
+  await withPipelineMutation((lanes, persist) => { const current = lanes.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; persist([current]); });
+  await settlement;
+  expect(findPipelineRecord(lane!.id)).toMatchObject({ state: "paused", stateDetail: "new operator pause", remoteAction: { state: "settled", error: "remote action superseded" } });
+});
+
+test("approved-review backoff keeps its wait detail and schedules no immediate tick", async () => {
+  const h = setupRetry(); const now = Date.now(); h.lane.state = "running";
+  h.lane.runs[0]!.attempts[0]!.agentPath = "/sandbox/implementer.jsonl";
+  h.attempt.state = "reviewing"; h.attempt.verdict = null; h.attempt.flowId = "backoff-flow";
+  h.attempt.expectedReviewHeadSha = HEAD; h.attempt.reviewHeadSha = HEAD;
+  h.attempt.remoteHeadWait = { startedAt: new Date(now).toISOString(), rounds: 1, retryAfter: new Date(now + 60_000).toISOString(), budgetMs: 120_000, retryMaxMs: 60_000 };
+  const detail = `approved review flow waiting for the remote pipeline head: timeout; retry at ${h.attempt.remoteHeadWait.retryAfter}`;
+  h.lane.stateDetail = detail;
+  h.lane.delivery = { target: { repository: "backoff-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` }, disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  const flow = { id: "backoff-flow", state: "approved", rounds: [{ n: 1, reviewHeadSha: HEAD }], targetSha: HEAD, revision: 0, stateDetail: null, implementerPath: "/sandbox/implementer.jsonl", implementerConversationId: null, hostClaim: null, createdAt: new Date(now).toISOString(), closedAt: null };
+  savePipelines([h.lane]); let wakes = 0, commands = 0;
+  const restoreTick = registerPipelineTick(async () => { wakes++; });
+  const ports = { ...h.ports, now: () => new Date(now).toISOString(), getFlow: () => flow as never,
+    stageHostResident: async () => false, stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    exec: async () => { commands++; return { code: 0, stdout: HEAD, stderr: "" }; } };
+  try {
+    for (let i = 0; i < 3; i++) { await tickPipelines([], ports); await Bun.sleep(0); }
+    expect(commands).toBe(0); expect(wakes).toBe(0);
+    expect(findPipelineRecord(h.lane.id)!.stateDetail).toBe(detail);
+  } finally { restoreTick(); registerPipelineTick(async () => {}); }
+});
+
+test.each(["probe", "push"] as const)("explicit publication retries a settled %s failure and preserves pending admission", async (failure) => {
+  const h = setupRetry();
+  h.lane.state = "paused";
+  h.lane.delivery = { target: { repository: "retry-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  let repaired = false, probes = 0;
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    if (args.includes("ls-remote")) {
+      probes++;
+      return { code: !repaired && failure === "probe" ? 1 : 0, stdout: repaired ? `${HEAD}\trefs/heads/${h.lane.branch}\n` : "", stderr: "remote unavailable" };
+    }
+    if (args[0] === "push") return { code: 1, stdout: "", stderr: "write refused" };
+    return { code: 0, stdout: args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? h.lane.branch : "", stderr: "" };
+  } };
+  expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+  const first = findPipelineRecord(h.lane.id)!;
+  await publishPipelineBranch(first, ports.exec, { acceptedSha: HEAD });
+  expect(findPipelineRecord(h.lane.id)!.delivery!.operation!.state).toBe("settled");
+  repaired = true;
+  expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+  const retry = findPipelineRecord(h.lane.id)!;
+  expect(retry.delivery!.operation!.state).toBe("pending");
+  expect(retry.delivery!.operation!.id).not.toBe(first.delivery!.operation!.id);
+  expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+  expect(findPipelineRecord(h.lane.id)!.delivery!.operation!.id).toBe(retry.delivery!.operation!.id);
+  expect(await publishPipelineBranch(retry, ports.exec, { acceptedSha: HEAD })).toMatchObject({ ok: true, remote: "published" });
+  expect(probes).toBe(2);
+});
+
 test("legacy publication records acceptance before observing its missing delivery claim", async () => {
   const h = setupRetry();
   delete h.lane.delivery;

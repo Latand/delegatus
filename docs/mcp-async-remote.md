@@ -10,6 +10,8 @@ Review retries and delivery takeovers record a durable `remoteAction`. The contr
 
 Retrying a passed stage retains its accepted attempt and records pending head verification on its committing cursor. A legacy publication request records a pending repository admission before reading Git identity. Publication rechecks the lane and delivery owner before every command and during execution, and checks them again when settling. Cancellation after a remote write began retains an unknown outcome for reconciliation. Automatic restart admission rechecks the enabled switch, pending request, launcher identity and admission gate after Git observations, with its quiet-work check last.
 
+Publication also retains its original admission fence, so a pause before execution supersedes queued work. A fresh explicit publication may retry a settled failure while replaying pending or running work. Review retry teardown runs in the continuation outside the request lease. A cancelled takeover preserves the newer lane state and detail. Review-head backoff keeps its durable wait and uses a delayed tick; a held settlement lock also schedules a delayed retry. Automatic build and restart-request admission recheck the enabled switch after asynchronous observations.
+
 `request_attention` retains its default browser-arrival contract. `waitFor: "accepted"` returns after durable acceptance with `accepted: true`, a current arrival state and `handoff: null`; callers can inspect the attention receipt for arrival later.
 
 ## Measurement

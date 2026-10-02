@@ -69,7 +69,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -2763,7 +2763,7 @@ function keepPassedStageUnpublished(
     committing cursor becomes a publication retry seam, so later ticks never
     rerun or reset stage work. An internal pipeline has nothing to wait for:
     a pass an older build left waiting here closes on its own record. */
-function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: { acceptedSha: string; publishedSha?: string | null }): import("./git").PipelinePublishResult {
+function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: { acceptedSha: string; publishedSha?: string | null }, recheckSettled = false): import("./git").PipelinePublishResult {
   if (!pipeline.delivery) {
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "awaiting durable delivery admission" };
   }
@@ -2773,10 +2773,12 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   if (error) return { ok: false, error };
   const operation = delivery.operation;
   if (operation?.state === "running") return pipelinePublicationInFlight(pipeline);
-  if (operation?.sha === request.acceptedSha && operation.requestKey === requestKey && operation.epoch === delivery.epoch && operation.state === "settled" && operation.result) {
-    return operation.result as import("./git").PipelinePublishResult;
+  if (operation?.sha === request.acceptedSha && operation.requestKey === requestKey && operation.epoch === delivery.epoch) {
+    if (operation.state === "pending" && (operation.fence || !recheckSettled)) return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
+    if (!recheckSettled && operation.state === "settled" && operation.result) return operation.result as import("./git").PipelinePublishResult;
   }
   delivery.operation = { id: crypto.randomUUID(), epoch: delivery.epoch, sha: request.acceptedSha, requestKey, state: "pending" };
+  delivery.operation.fence = pipelinePublicationFence(pipeline);
   return { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: "Viewer publication reserved for execution outside the mutation lease" };
 }
 
@@ -2981,6 +2983,8 @@ async function commitPassedStage(
      pipeline 2ae14391 parked for over seven hours. Publication failure is its
      own recoverable class: the commit is already durable in
      `lastPassedCommit`, so nothing is lost while the operator resolves it. */
+  attempt.state = "passed";
+  attempt.completedAt = ports.now();
   const published = queuePipelinePublication(pipeline, ports.exec, {
     acceptedSha: result.sha,
     publishedSha: pipeline.publishedCommit ?? null,
@@ -2990,8 +2994,6 @@ async function commitPassedStage(
     return;
   }
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
-  attempt.state = "passed";
-  attempt.completedAt = ports.now();
   if (published.remote !== "published") {
     keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
       ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
@@ -5073,13 +5075,16 @@ async function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt
  * budget is spent, with the retries it made.
  */
 async function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<boolean> {
+  const now = ports.now();
+  const wait = attempt.remoteHeadWait;
+  if (wait && unixMs(wait.retryAfter) > unixMs(now)) {
+    ports.scheduleTick?.(unixMs(wait.retryAfter) - unixMs(now));
+    return false;
+  }
   if (ports.deferStageGit) {
     pipeline.stateDetail = "approved review head verification pending";
     return false;
   }
-  const now = ports.now();
-  const wait = attempt.remoteHeadWait;
-  if (wait && unixMs(wait.retryAfter) > unixMs(now)) return false;
   const fence = (await reviewHeadFence(pipeline, attempt, ports));
   if (!fence) {
     delete attempt.remoteHeadWait;
@@ -5955,7 +5960,7 @@ function remoteActionFence(pipeline: Pipeline): string {
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   return crypto.createHash("sha256").update(JSON.stringify({
     state: pipeline.state, cursor: pipeline.cursor, stages: pipeline.stages,
-    attempt: attempt ? { n: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId, state: attempt.state } : null,
+    attempt: attempt ? { n: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId, state: attempt.state, flowId: attempt.flowId } : null,
     head: pipeline.lastPassedCommit, branch: pipeline.branch, worktree: pipeline.worktreeDir,
     hidden: pipeline.hiddenAt, closed: pipeline.closedAt,
     delivery: pipeline.delivery ? { target: pipeline.delivery.target, epoch: pipeline.delivery.epoch, owner: pipeline.delivery.ownerId, active: pipeline.delivery.active, operation: pipeline.delivery.operation?.id } : null,
@@ -5986,8 +5991,9 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     }
     if (descriptor === null) continue;
     const abort = new AbortController();
+    let settlementFence = action.fence;
     const matches = (pipeline: Pipeline | null) => pipeline?.remoteAction?.id === action.id
-      && pipeline.remoteAction.state === "pending" && remoteActionFence(pipeline) === action.fence;
+      && pipeline.remoteAction.state === "pending" && remoteActionFence(pipeline) === settlementFence;
     const receiptMatches = () => {
       if (!action.retryReceipt) return true;
       const state = ports.spawnReceiptState ? ports.spawnReceiptState(action.retryReceipt.launchId) : ports.spawnReceipt(action.retryReceipt.launchId)?.state;
@@ -6004,9 +6010,17 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     let result: import("./git").PipelineGitResult = { ok: false, error: "remote action superseded" };
     try {
       revalidate();
-      if (action.retryReceipt?.claimId && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed") abort.abort();
       if (!abort.signal.aborted && action.action === "retry-stage") {
-        result = publishesRemoteBranch(preview) ? await synchronizePipelineRetryHead(preview, exec) : await currentPipelineBranchHead(preview, exec);
+        const stage = currentStage(preview);
+        const attempt = stage ? currentAttempt(preview, stage.id) : null;
+        let cleanupError = (await orphanAgentPane(attempt, ports))?.error;
+        revalidate();
+        const flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
+        if (!abort.signal.aborted && !cleanupError && flow && flow.state !== "closed") cleanupError = (await ports.closeFlow(flow.id))?.error;
+        revalidate();
+        if (!abort.signal.aborted && action.retryReceipt?.claimId && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed") abort.abort();
+        if (cleanupError) result = { ok: false, error: cleanupError };
+        else if (!abort.signal.aborted) result = publishesRemoteBranch(preview) ? await synchronizePipelineRetryHead(preview, exec) : await currentPipelineBranchHead(preview, exec);
         // Re-read local work after the remote probe, before committing a cursor.
         if (result.ok) {
           const local = await currentPipelineBranchHead(preview, exec);
@@ -6021,6 +6035,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
           revalidate();
           if (!abort.signal.aborted) {
             const taken = await takeoverPipelineDelivery(preview.id, request.expectedOwner, request.expectedEpoch, request.reason, conversationId, matches);
+            if (taken.pipeline) settlementFence = remoteActionFence(taken.pipeline);
             result = taken.pipeline ? { ok: true, sha: taken.pipeline.lastPassedCommit } : { ok: false, error: taken.error ?? "takeover refused" };
           }
         }
@@ -6030,8 +6045,8 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     await withPipelineMutation((pipelines, persist) => {
       const pipeline = pipelines.find((item) => item.id === preview.id);
       if (!pipeline || pipeline.remoteAction?.id !== action.id || pipeline.remoteAction.state !== "pending") return;
-      const stale = action.action === "retry-stage" && (!matches(pipeline) || !receiptMatches()
-        || (action.retryReceipt?.claimId !== undefined && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed"));
+      const stale = !matches(pipeline) || !receiptMatches()
+        || (action.retryReceipt?.claimId !== undefined && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed");
       pipeline.remoteAction = { ...action, state: "settled", settledAt: ports.now(), ...(!result.ok || stale ? { error: stale ? "remote action superseded" : (result as { error: string }).error } : {}) };
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", stale ? `${action.action} remote verification superseded`
         : result.ok ? `${action.action} remote verification settled` : `${action.action} remote verification failed: ${result.error}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
@@ -6041,14 +6056,14 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
         const stage = currentStage(pipeline)!;
         if (pipeline.delivery?.operation?.state === "settled") { delete pipeline.delivery.operation; pipeline.publishedCommit = null; }
         pipeline.lastPassedCommit = result.sha;
+        pipeline.state = "running";
+        pipeline.pausedState = null;
+        setCursorState(pipeline, stage.id, "pending");
         if (publishesRemoteBranch(pipeline)) {
           const reserved = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: result.sha, publishedSha: pipeline.publishedCommit ?? null });
           if (!reserved.ok) { pipeline.stateDetail = reserved.error; persist(); return; }
           pipeline.publishedCommit = reserved.remote === "published" ? reserved.sha : null;
         }
-        pipeline.state = "running";
-        pipeline.pausedState = null;
-        setCursorState(pipeline, stage.id, "pending");
       }
       if (action.action === "retry-stage" || pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
       persist();
@@ -6094,7 +6109,7 @@ async function collectReviewIngressHeads(ports: PipelinePorts) {
 /** The committing cursor is the durable intent. Git, including commit hooks
     and approved-review probes, runs without the shared mutation lease. Only an
     unchanged lane and flow may adopt the result; children retain the lane lock. */
-export async function settlePendingStageGit(ports: PipelinePorts = defaultPipelinePorts()): Promise<boolean> {
+export async function settlePendingStageGit(ports: PipelinePorts = defaultPipelinePorts(), settledIds?: Set<string>): Promise<boolean> {
   let changed = false;
   for (const preview of loadPipelines()) {
     if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
@@ -6121,7 +6136,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       });
       continue;
     }
-    if (descriptor === null) continue;
+    if (descriptor === null) { ports.scheduleTick?.(250); continue; }
     const abort = new AbortController();
     const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
     const watch = setInterval(revalidate, 50);
@@ -6150,13 +6165,14 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside);
       }
       revalidate();
-      if (!abort.signal.aborted) await withPipelineMutation((pipelines, persist) => {
+      if (!abort.signal.aborted && JSON.stringify(candidate) !== fingerprint) await withPipelineMutation((pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
         Object.assign(current, candidate);
         for (const effect of effects) effect();
         persist([current]);
         changed = true;
+        settledIds?.add(current.id);
       });
     } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); releasePublicationFileLock(descriptor); }
   }
@@ -6322,7 +6338,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       }, { batchSize: 4, timeBudgetMs: 16 });
       return { pipelines, changed };
     });
-    result.changed = await settlePendingStageGit(ports) || result.changed;
+    const settledGitIds = new Set<string>();
+    result.changed = await settlePendingStageGit(ports, settledGitIds) || result.changed;
     await drainStageActivations(ports);
     result.pipelines = loadPipelines();
     /* A pass that ends on a pending cursor (a stage just passed and advanced,
@@ -6338,8 +6355,9 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
-      && (pipeline.cursor?.state === "pending" || pipeline.cursor?.state === "committing"
-        || pipeline.stateDetail === "approved review head verification pending")
+      && (pipeline.cursor?.state === "pending" || (settledGitIds.has(pipeline.id)
+        && (pipeline.cursor?.state === "committing" || pipeline.stateDetail === "approved review head verification pending")
+        && unixMs(currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.remoteHeadWait?.retryAfter ?? "") <= followUpAt))
       && !stageActivationIsWaiting(pipeline, followUpAt));
     return result;
   } catch (error) {
@@ -8281,7 +8299,7 @@ export async function patchPipeline(
         persist(); requestPipelineTick();
         return { pipeline: current };
       }
-      const reserved = queuePipelinePublication(current, ports.exec, { acceptedSha });
+      const reserved = queuePipelinePublication(current, ports.exec, { acceptedSha }, true);
       if (!reserved.ok) return { error: reserved.error, status: 409 };
       if (current.stateDetail === null && reserved.remote !== "published") current.stateDetail = "publication accepted; remote verification pending";
       persist();
@@ -8771,6 +8789,16 @@ export async function patchPipeline(
       if (attempt && settleNeverStartedLaunch(pipeline, attempt, ports)) persist();
       const initialReceipt = validateRetryReceipt();
       if (initialReceipt.conflict) return initialReceipt.conflict;
+      if (stage?.kind === "review-loop") {
+        pipeline.remoteAction = { id: crypto.randomUUID(), action: "retry-stage", state: "pending",
+          fence: remoteActionFence(pipeline), at: ports.now(), actor,
+          ...(receiptRetry ? { retryReceipt: { launchId: retryLaunchId!, state: (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId!) : ports.spawnReceipt(retryLaunchId!)?.state)!,
+            ...(initialReceipt.claimRequired ? { claimId: `${pipeline.id}:${retryStageId}:${retryLaunchId}` } : {}) } } : {}) };
+        pipeline.stateDetail = "review retry accepted; cleanup, checkout and remote verification pending";
+        if (pipeline.delivery) deliveryJournal(pipeline, "recovery", pipeline.stateDetail, actor?.kind === "agent" ? actor.conversationId : null);
+        persist(); requestPipelineTick();
+        return { pipeline };
+      }
       const orphan = await orphanAgentPane(attempt, ports);
       if (orphan) return orphan;
       if (flow && flow.state !== "closed") {
@@ -8798,17 +8826,6 @@ export async function patchPipeline(
             status: 409,
           };
         }
-      }
-      if (stage?.kind === "review-loop") {
-        pipeline.remoteAction = { id: crypto.randomUUID(), action: "retry-stage", state: "pending",
-          fence: remoteActionFence(pipeline), at: ports.now(), actor,
-          ...(receiptRetry ? { retryReceipt: { launchId: retryLaunchId!, state: (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId!) : ports.spawnReceipt(retryLaunchId!)?.state)!,
-            ...(settledReceipt.claimRequired ? { claimId: `${pipeline.id}:${retryStageId}:${retryLaunchId}` } : {}) } } : {}) };
-        pipeline.stateDetail = "review retry accepted; checkout and remote verification pending";
-        if (pipeline.delivery) deliveryJournal(pipeline, "recovery", pipeline.stateDetail, actor?.kind === "agent" ? actor.conversationId : null);
-        persist();
-        requestPipelineTick();
-        return { pipeline };
       }
       /* An internal review retries on the clean local head it holds; only a
          `remote-branch` pipeline takes a remote repair or republishes. */
@@ -8870,6 +8887,9 @@ export async function patchPipeline(
           : "Skipped by operator.";
       }
       if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== carried.sha) {
+        pipeline.state = "running";
+        pipeline.pausedState = null;
+        setCursorState(pipeline, stage.id, "committing");
         const published = queuePipelinePublication(pipeline, ports.exec, {
           acceptedSha: carried.sha, publishedSha: pipeline.publishedCommit ?? null,
         });

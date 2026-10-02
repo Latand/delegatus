@@ -121,6 +121,54 @@ test.each(["disable", "work-starts"] as const)("final launcher admission recheck
   }
 });
 
+test.each(["build", "restart"] as const)("disabling auto during Git prevents a new automatic %s", async (action) => {
+  const h = scenario();
+  const checkout = join(h.dir, "tick-checkout"); mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha: OLD, dir: checkout }));
+  writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [TARGET]: { state: "green" } }, rollbackCaptured: false });
+  const revision = { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" };
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), available: revision }, update: null, autoPending: null }));
+  let starts = 0;
+  h.deps.buildEnv = () => ({});
+  h.deps.createRunner = () => ({ state: idleUpdate(), start: async () => { starts++; }, retry: async () => {}, restore: () => {}, logPath: () => "" }) as ReturnType<ServiceDeps["createRunner"]>;
+  const service = h.service();
+  const snapshot = service.snapshot;
+  if (action === "build") service.snapshot = async () => ({ ...await snapshot(), installed: { ...revision, sha, short: sha.slice(0, 7) } });
+  (service as unknown as { buildSnapshot: () => Promise<Snapshot> }).buildSnapshot = service.snapshot;
+  if (action === "restart") { await service.autoTick(); h.advance(60_000); }
+  const bin = join(h.dir, "tick-bin"); mkdirSync(bin);
+  const entered = join(bin, "entered"), released = join(bin, "released"), count = join(bin, "count");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$TICK_COUNT" ] || n=$(cat "$TICK_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$TICK_COUNT"\nif [ "$n" = "$TICK_HOLD" ]; then touch "$TICK_ENTERED"; while [ ! -f "$TICK_RELEASED" ]; do sleep 0.01; done; fi\nexec "$TICK_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, TICK_ENTERED: process.env.TICK_ENTERED, TICK_RELEASED: process.env.TICK_RELEASED, TICK_COUNT: process.env.TICK_COUNT, TICK_HOLD: process.env.TICK_HOLD, TICK_GIT: process.env.TICK_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, TICK_ENTERED: entered, TICK_RELEASED: released, TICK_COUNT: count, TICK_HOLD: action === "build" ? "1" : "2", TICK_GIT: git });
+  let tick: ReturnType<SelfUpdateService["autoTick"]> | undefined;
+  try {
+    tick = service.autoTick();
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    expect(await service.setAuto(false)).toMatchObject({ ok: true });
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    writeFileSync(released, ""); await tick;
+    expect(starts).toBe(0);
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(h.pending()).toBeNull();
+  } finally {
+    writeFileSync(released, ""); await tick; service.stop();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
 test("a delayed final Git observation cannot let an older switch overwrite a newer disable", async () => {
   const h = scenario();
   const checkout = join(h.dir, "checkout");

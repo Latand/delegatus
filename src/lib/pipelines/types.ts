@@ -702,6 +702,8 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
+    /** Admission snapshot, checked before an asynchronous publisher starts. */
+    fence?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
     result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
