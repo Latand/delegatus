@@ -80,22 +80,26 @@ function TurnStatusProbe({ now, pinnedPath }: { now: number; pinnedPath?: string
   </>;
 }
 
-for (const engine of ["claude", "codex"] as const) {
-  test(`${engine}: recorded turn end settles every status surface while the scan remains live`, async () => {
+const turnEndReplays = (["claude", "codex"] as const)
+  .flatMap((engine) => [false, true].map((coalesced) => ({ engine, coalesced })));
+for (const { engine, coalesced } of turnEndReplays) {
+  test(`${engine}: ${coalesced ? "coalesced start and" : "recorded"} turn end settles every status surface while the scan remains live`, async () => {
     // Recorded QA transcript boundaries with identities and prose removed.
     // Replay their canonical lifecycle into the bus; the catalog stays
     // at the preceding open turn, as it did during the five-minute scan window.
     const conversationId = "conversation_turn-end";
     const artifactPath = `/sessions/${engine}-turn-end.jsonl`;
     let source: EventSourceLike | null = null;
+    let recovered = false;
     testRuntimeBus = createTestRuntimeBus({
       fetch: async () => new Response(JSON.stringify({
-        schemaVersion: 1, snapshotSeq: 100, retentionFloorSeq: 0,
+        schemaVersion: 1, snapshotSeq: recovered ? 102 : 100, retentionFloorSeq: 0,
         runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
         sessions: [{ conversationId, sessionKey: { engine, sessionId: "session-turn-end" },
           artifactPath, hostKind: engine === "claude" ? "claude-broker" : "codex-app-server",
-          host: "hosted", turn: "running", provenance: "structured", revision: 1,
-          attentionIds: [], recentReceipts: [], activeTurnId: "turn-end", capabilities: {} }],
+          host: "hosted", turn: recovered ? "idle" : coalesced ? "unknown" : "running",
+          provenance: "structured", revision: recovered ? 3 : 1,
+          attentionIds: [], recentReceipts: [], activeTurnId: coalesced ? null : "turn-end", capabilities: {} }],
         attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [],
       })),
       createEventSource: () => source = {
@@ -131,20 +135,33 @@ for (const engine of ["claude", "codex"] as const) {
       const ended = recordedTurnEnd[engine];
       const turn = turnStateFromRecords([ended], engine);
       expect(turn).toBe("done");
+      // Deliver both lifecycle events within the bus's 16 ms subscriber batch.
+      const offset = coalesced ? 1 : 0;
+      if (coalesced) source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 101, eventId: `${engine}-start`,
+        scope: { type: "session", id: conversationId }, revision: 2, kind: "turn-started",
+        payload: { conversationId, turnId: "turn-end" },
+      }) });
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 101, eventId: `${engine}-end`,
-        scope: { type: "session", id: conversationId }, revision: 2, kind: turn === "done" ? "turn-ended" : "item",
+        schemaVersion: 1, seq: 101 + offset, eventId: `${engine}-end`,
+        scope: { type: "session", id: conversationId }, revision: 2 + offset, kind: turn === "done" ? "turn-ended" : "item",
         occurredAt: ended.timestamp,
         payload: { conversationId, turnId: "turn-end", outcome: "completed" },
       }) });
+      if (coalesced) {
+        // A snapshot replacement before the first batched render must retain
+        // the terminal identity too; the wire snapshot has no active turn.
+        recovered = true;
+        expect(await testRuntimeBus.refresh()).toBe(true);
+      }
       await Bun.sleep(60);
       expect(testRuntimeBus.getState().store.sessions[conversationId]?.turn).toBe("idle");
       expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
       expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
       expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 102, eventId: "host-after-end",
-        scope: { type: "session", id: conversationId }, revision: 3, kind: "session-status",
+        schemaVersion: 1, seq: 102 + offset, eventId: "host-after-end",
+        scope: { type: "session", id: conversationId }, revision: 3 + offset, kind: "session-status",
         payload: { conversationId, host: "dead", turn: "unknown" },
       }) });
       await Bun.sleep(60);
@@ -156,8 +173,8 @@ for (const engine of ["claude", "codex"] as const) {
       // A same-turn status snapshot can arrive after the terminal event while
       // the host still reports the last activeTurnId. It must preserve idle.
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 104, eventId: "late-same-turn-status",
-        scope: { type: "session", id: conversationId }, revision: 4, kind: "session-status",
+        schemaVersion: 1, seq: 104 + offset, eventId: "late-same-turn-status",
+        scope: { type: "session", id: conversationId }, revision: 4 + offset, kind: "session-status",
         payload: { conversationId, host: "hosted", turn: "running", activeTurnId: "turn-end" },
       }) });
       await Bun.sleep(60);
@@ -176,13 +193,13 @@ for (const engine of ["claude", "codex"] as const) {
       // Recovery first reports unknown, then proves that a different turn
       // started. This transition must invalidate the retained idle overlay.
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 105, eventId: "unknown-after-end",
-        scope: { type: "session", id: conversationId }, revision: 5, kind: "session-status",
+        schemaVersion: 1, seq: 105 + offset, eventId: "unknown-after-end",
+        scope: { type: "session", id: conversationId }, revision: 5 + offset, kind: "session-status",
         payload: { conversationId, host: "dead", turn: "unknown", activeTurnId: null },
       }) });
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 106, eventId: "next-turn-started",
-        scope: { type: "session", id: conversationId }, revision: 6, kind: "session-status",
+        schemaVersion: 1, seq: 106 + offset, eventId: "next-turn-started",
+        scope: { type: "session", id: conversationId }, revision: 6 + offset, kind: "session-status",
         payload: { conversationId, host: "hosted", turn: "running", activeTurnId: "turn-next" },
       }) });
       await Bun.sleep(60);
@@ -192,7 +209,7 @@ for (const engine of ["claude", "codex"] as const) {
       // A late catalog answer still containing the pre-terminal row cannot
       // bring working back after the runtime end has already reached the DOM.
       source!.onmessage?.({ data: JSON.stringify({
-        schemaVersion: 1, seq: 107, eventId: "files-after-end",
+        schemaVersion: 1, seq: 107 + offset, eventId: "files-after-end",
         scope: { type: "system", id: "files" }, kind: "files.revision", payload: { filesRevision: 2 },
       }) });
       await Bun.sleep(500);

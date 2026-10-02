@@ -3,7 +3,7 @@ import type { RuntimeBusState } from "@/hooks/runtimeBus";
 import type { FilesData } from "@/hooks/useFiles";
 import type { FileEntry } from "@/lib/types";
 
-type Status = Pick<RuntimeSession, "conversationId" | "sessionKey" | "artifactPath" | "turn" | "activeTurnId">
+type Status = Pick<RuntimeSession, "conversationId" | "sessionKey" | "artifactPath" | "turn" | "activeTurnId" | "settledTurnId">
   & { hasAttention: boolean; observedTurn: boolean };
 type Settlement = {
   conversationId: string;
@@ -65,7 +65,8 @@ export function createRuntimeFilesStatusProjection() {
         // the broker clears activeTurnId. Retire the overlay only when runtime
         // identifies a different active turn.
         for (const [key, settlement] of settlements) {
-          if (settlement.path === session.artifactPath && settlement.engine === session.sessionKey.engine
+          if ((settlement.path.startsWith("spawn:") || settlement.path === session.artifactPath)
+            && settlement.engine === session.sessionKey.engine
             && settlement.conversationId === session.conversationId
             && session.activeTurnId !== null && session.activeTurnId !== settlement.settledTurnId) {
             settlements.delete(key);
@@ -76,8 +77,10 @@ export function createRuntimeFilesStatusProjection() {
     }
     const statuses = sessions.filter((session) => session.turn === "idle").map((session) => ({
       conversationId: session.conversationId, sessionKey: session.sessionKey, artifactPath: session.artifactPath,
-      turn: session.turn, activeTurnId: session.activeTurnId, hasAttention: session.attentionIds.length > 0,
-      observedTurn: observedTurns.has(identity(session)) || Boolean(session.liveTurn?.text || session.liveTurn?.items?.length),
+      turn: session.turn, activeTurnId: session.activeTurnId, settledTurnId: session.settledTurnId,
+      hasAttention: session.attentionIds.length > 0,
+      observedTurn: Boolean(session.settledTurnId) || observedTurns.has(identity(session))
+        || Boolean(session.liveTurn?.text || session.liveTurn?.items?.length),
     }));
     // Keep running and unknown transitions in the signature too. In
     // particular, unknown -> running can retire a settlement without ever
@@ -162,7 +165,7 @@ export function createRuntimeFilesStatusProjection() {
         conversationId: status.conversationId,
         path: file.path,
         engine: file.engine,
-        settledTurnId: status.activeTurnId ?? activeTurnIds.get(identity(status)) ?? null,
+        settledTurnId: status.settledTurnId ?? status.activeTurnId ?? activeTurnIds.get(identity(status)) ?? null,
         authoritativeTurn: file.authoritativeTurn?.state === "terminal" ? file.authoritativeTurn
           : { state: "idle", source: "lifecycle", terminalAt: null },
         clearAttention: !status.hasAttention,

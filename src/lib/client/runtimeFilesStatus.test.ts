@@ -160,6 +160,56 @@ test("a late running status for the settled turn stays idle, while a different t
   } finally { cache.dispose(); }
 });
 
+test("terminal identity settles a batched completion without observing its running frame", async () => {
+  const cache = await catalog({ ...file, launch: { initialMessage: "queued" } as NonNullable<FileEntry["launch"]> });
+  try {
+    const raw = cache.read();
+    const project = createRuntimeFilesStatusProjection();
+    expect(project(raw, runtime({ turn: "unknown" }))).toBe(raw);
+    const ended = project(raw, runtime({ settledTurnId: "t1" }));
+    expect(ended.files[0]?.activity).toBe("idle");
+    expect(project(raw, runtime({ turn: "running", settledTurnId: "t1", activeTurnId: "t1" })).files[0]).toBe(ended.files[0]);
+    expect(project(raw, runtime({ turn: "running", settledTurnId: null, activeTurnId: "t2" }))).toBe(raw);
+  } finally { cache.dispose(); }
+});
+
+test("retained terminal identity in unknown or late running status cannot settle a newer scanner turn", async () => {
+  const cache = await catalog();
+  try {
+    const raw = cache.read();
+    const project = createRuntimeFilesStatusProjection();
+    const settled = project(raw, runtime({ settledTurnId: "t1" }));
+    const newer = { ...raw, files: [{ ...raw.files[0]!, lastTurn: { startedAt: 100_000, endedAt: null } }] };
+    for (const turn of ["unknown", "running"] as const) {
+      const recovery = runtime({ turn, settledTurnId: "t1", activeTurnId: turn === "running" ? "t1" : null });
+      expect(project(raw, recovery).files[0]).toEqual(settled.files[0]);
+      expect(project(newer, recovery)).toBe(newer);
+      expect(newer.files[0]?.activity).toBe("live");
+    }
+  } finally { cache.dispose(); }
+});
+
+test("a different turn retires a provisional settlement by its conversation and engine", async () => {
+  const cache = await catalog({ ...file, path: "spawn:launch-one",
+    launch: { initialMessage: "queued" } as NonNullable<FileEntry["launch"]> });
+  try {
+    const raw = cache.read();
+    for (const artifactPath of [null, file.path]) {
+      const project = createRuntimeFilesStatusProjection();
+      const ended = project(raw, runtime({ artifactPath, settledTurnId: "t1" }));
+      expect(ended.files[0]?.activity).toBe("idle");
+      expect(project(raw, runtime({ artifactPath, turn: "running", activeTurnId: "t1", settledTurnId: "t1" }))
+        .files[0]?.activity).toBe("idle");
+      // A successor engine or conversation cannot retire this row's evidence.
+      expect(project(raw, runtime({ artifactPath, turn: "running", activeTurnId: "t2",
+        settledTurnId: null, sessionKey: { engine: "codex", sessionId: "current" } })).files[0]?.activity).toBe("idle");
+      expect(project(raw, runtime({ artifactPath, conversationId: "conversation_other", turn: "running",
+        activeTurnId: "t2", settledTurnId: null })).files[0]?.activity).toBe("idle");
+      expect(project(raw, runtime({ artifactPath: file.path, turn: "running", activeTurnId: "t2", settledTurnId: null }))).toBe(raw);
+    }
+  } finally { cache.dispose(); }
+});
+
 test("a late metadata-only replacement keeps its matching turn settlement while offline", async () => {
   let releaseLate!: (response: Response) => void;
   let requests = 0;
