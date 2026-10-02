@@ -45,7 +45,7 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(remote.code).toBe(0);
       expect(remote.stdout).toContain(head);
       expect(findPipelineRecord(box.subject.id)!.delivery!.operation!.state).toBe("running");
-      expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.detail).toContain("reconcile");
+      expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
     fs.writeFileSync(released, ""); await pending;
