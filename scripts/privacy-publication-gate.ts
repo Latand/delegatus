@@ -97,7 +97,11 @@ const approvedPublicValuePattern = new RegExp(
 function approvedPublicBoundaryView(text: string, marker: string): { error: boolean; text: string } {
   const enclosingTag = new RegExp(`<\\s*(["'\\x60]?)(${marker}\\d+${marker})\\1\\s*>`, "g");
   const enclosingParenthesis = new RegExp(`\\(\\s*(${marker}\\d+${marker})\\s*\\)`, "g");
-  let projected = text.normalize("NFKC");
+  // NFKC folds NBSP and other Unicode spacing characters into ASCII spaces.
+  // Preserve their concealed-continuation ownership in this boundary-only
+  // view; the generic and known-value inspection views retain their input.
+  let projected = text.replaceAll(/[^\S ]/gu, (whitespace) =>
+    whitespace.normalize("NFKC") === " " ? "\t" : whitespace).normalize("NFKC");
   // These projections only remove syntax. Repeating them handles nested
   // wrappers, while the bound fails closed for pathological nesting.
   for (let pass = 0; pass < 16; pass += 1) {
@@ -143,7 +147,7 @@ function maskApprovedPublicValues(text: string): string {
     return undefined;
   }
   type OperandGroup = { attached: boolean; indexed?: boolean; parent?: OperandGroup };
-  const candidates: Array<{ start: number; end: number; allowed: boolean; opensComment: boolean; closesComment: boolean; sourceColonValue: boolean; propertyKey: boolean; sourceCommentTail: boolean; group?: OperandGroup }> = [];
+  const candidates: Array<{ start: number; end: number; allowed: boolean; opensComment: boolean; closesComment: boolean; sourceColonValue: boolean; propertyKey: boolean; sourceCommentTail: boolean; sourceOptionalCall: boolean; sourceOptionalIndex: boolean; group?: OperandGroup }> = [];
   // Delimiters such as '=' or '(' inside a string do not end its URI.
   // Treat '#' in member access or a private declaration as syntax.
   // Unclosed block comments and quoted tokens consume their remaining span once;
@@ -333,6 +337,8 @@ function maskApprovedPublicValues(text: string): string {
     const tailStart = (expressionTail[0] ?? "").normalize("NFKC");
     const propertyKey = /^\s*:/.test(expressionTail) && /[,{]\s*["']$/.test(prefix);
     const sourceCommentTail = inspectLiteral && /^(?:\s|[)\]}])*(?:\/\*|\/\/)/.test(literalTail);
+    const sourceOptionalCall = inspectLiteral && /\?\.\s*\(\s*$/.test(literalPrefix);
+    const sourceOptionalIndex = inspectLiteral && /^\s*\]\s*\?\.\s*\[/.test(expressionTail);
     const expressionFragment = inspectLiteral && (
       operandGroups.at(-1)?.attached === true
       || (!stringPrefix && /[\p{L}\p{N}_./@$\\)\]}-]/u.test((literalPrefix.at(-1) ?? "").normalize("NFKC")))
@@ -369,7 +375,7 @@ function maskApprovedPublicValues(text: string): string {
       || (/^[\]}>]$/.test(text[end] ?? "") && /^[\p{L}\p{N}_]/u.test(text[end + 1] ?? ""));
     // Bare operands (for example here-doc bodies) also inherit their enclosing
     // attachment; source quotes are not required to retain that ownership.
-    candidates.push({ start, end, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, group: operandGroups.at(-1),
+    candidates.push({ start, end, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, sourceOptionalCall, sourceOptionalIndex, group: operandGroups.at(-1),
       allowed: !unclosedComment && (inComment || (!pendingAttachment && compoundDepth === undefined)) && (quoted
         ? text[end] === delimiter && !uriPrefix && !expressionFragment && (wholeLiteral || interpolatedLiteral || commentLiteral)
         : !continued && !insideLiteral && !uriPrefix) });
@@ -411,19 +417,20 @@ function maskApprovedPublicValues(text: string): string {
     const normalized = view.normalize("NFKC");
     // Keep enclosing schemes across quoted payloads, including JSON. Blank
     // unrelated literal contents without introducing whitespace. A quoted
-    // fragment joined to another payload by concealed whitespace retains its
-    // contents, so decoded quotes cannot erase a scheme or mailbox prefix.
+    // fragment joined to another payload directly or by concealed whitespace
+    // retains its contents, so decoded quotes cannot erase a scheme or mailbox prefix.
     const markerOrCharacter = new RegExp(`${marker}\\d+${marker}|[\\s\\S]`, "g");
     let uriContext = normalized.replaceAll(/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`/g,
       (value, offset: number) => {
         let next = offset + value.length;
         let concealed = false;
         while (/[)\]}>]/.test(normalized[next] ?? "")) next += 1;
+        const afterWrapper = next;
         while (next < normalized.length && /\s/.test(normalized[next])) {
           concealed ||= /[^\S ]/.test(normalized[next]);
           next += 1;
         }
-        if (concealed && !value.includes(marker)
+        if ((next === afterWrapper || concealed) && !value.includes(marker)
           && (normalized[next] === marker || /["'`([{<]/.test(normalized[next] ?? ""))) return value.slice(1, -1);
         return value.replaceAll(markerOrCharacter, (part) => part.startsWith(marker) ? part : "\0");
       });
@@ -452,8 +459,8 @@ function maskApprovedPublicValues(text: string): string {
       const start = occurrence.index;
       const end = start + occurrence[0].length;
       // Look through the candidate's own quote and neighbouring quoted
-      // fragments only across concealed whitespace. Source terminators and
-      // ordinary prose whitespace retain their existing boundaries.
+      // fragments at direct adjacency or across concealed whitespace. Source
+      // terminators and ordinary prose whitespace retain their existing boundaries.
       const ownQuote = /["'`]/.test(normalized[start - 1] ?? "") && normalized[start - 1] === normalized[end];
       let fragmentBefore = start - (ownQuote ? 2 : 1);
       let fragmentAfter = end + (ownQuote ? 1 : 0);
@@ -479,10 +486,14 @@ function maskApprovedPublicValues(text: string): string {
       while (fragmentAfter < normalized.length && /\s/.test(normalized[fragmentAfter])) fragmentAfter += 1;
       const concealedBefore = /[^\S ]/.test(normalized.slice(fragmentBefore + 1, beforeQuote + 1));
       const concealedAfter = /[^\S ]/.test(normalized.slice(afterQuote, fragmentAfter));
-      if (concealedBefore) {
+      // Ignorable removal can leave no whitespace at all. Expanded source
+      // quotes and wrappers must still expose the surrounding ownership.
+      const joinedBefore = fragmentBefore === beforeQuote || concealedBefore;
+      const joinedAfter = fragmentAfter === afterQuote || concealedAfter;
+      if (joinedBefore) {
         while (/[\s"'`)\]}>]/.test(normalized[fragmentBefore] ?? "")) fragmentBefore -= 1;
       }
-      const quotedSuffix = concealedAfter && /["'`([{<]/.test(normalized[fragmentAfter] ?? "");
+      const quotedSuffix = joinedAfter && /["'`([{<]/.test(normalized[fragmentAfter] ?? "");
       if (quotedSuffix) {
         while (/[\s"'`([{<]/.test(normalized[fragmentAfter] ?? "")) fragmentAfter += 1;
       }
@@ -496,11 +507,18 @@ function maskApprovedPublicValues(text: string): string {
         || (fragmentSuffixRun > fragmentAfter && /[\p{L}\p{N}]/u.test(normalized[fragmentSuffixRun] ?? ""));
       const sourceSuffixBoundary = candidates[Number(occurrence[1])].closesComment
         || (normalized[fragmentAfter] === ":" && candidates[Number(occurrence[1])].propertyKey)
-        || (normalized[fragmentAfter] === "/" && candidates[Number(occurrence[1])].sourceCommentTail);
-      if ((concealedBefore && (/[.@/]/.test(normalized[fragmentBefore] ?? "")
+        || (normalized[fragmentAfter] === "/" && candidates[Number(occurrence[1])].sourceCommentTail)
+        || (normalized.slice(fragmentAfter, fragmentAfter + 2) === "?."
+          && candidates[Number(occurrence[1])].sourceOptionalIndex);
+      // Verified optional-call/index syntax keeps standalone operands valid.
+      // Decoded punctuation cannot introduce these source-only boundaries.
+      const sourcePrefixBoundary = normalized[fragmentBefore] === "."
+        && normalized[fragmentBefore - 1] === "?" && candidates[Number(occurrence[1])].sourceOptionalCall;
+      if ((joinedBefore && (/[.@/]/.test(normalized[fragmentBefore] ?? "")
         || (fragmentPrefixRun < fragmentBefore && /[\p{L}\p{N}]/u.test(normalized[fragmentPrefixRun] ?? "")))
-        && !(normalized[fragmentBefore] === "/" && candidates[Number(occurrence[1])].opensComment))
-        || (concealedAfter && uriSuffix && !sourceSuffixBoundary)) {
+        && !(normalized[fragmentBefore] === "/" && candidates[Number(occurrence[1])].opensComment)
+        && !sourcePrefixBoundary)
+        || (joinedAfter && uriSuffix && !sourceSuffixBoundary)) {
         candidates[Number(occurrence[1])].allowed = false;
       }
       // Non-space whitespace can split an email/host/URI, including decoded

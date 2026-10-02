@@ -167,6 +167,10 @@ Opaque URI schemes such as `data:` and whitespace-split schemes retain their
 prefix ownership, so they cannot turn the approved host into another URI.
 Decoded views retain that ownership across quoted and JSON payloads. A source
 property or type colon cannot erase an earlier enclosing URI scheme.
+Removing zero-width characters still checks direct adjacency outside quotes and
+wrappers. Unicode whitespace that NFKC folds to ASCII space retains concealed
+continuation ownership; ordinary source whitespace and terminators keep their
+boundaries around standalone literals.
 Verified opening and closing block-comment delimiters around a standalone public
 value provide source boundaries; actual email and URI continuations remain checked.
 JSON Unicode and string escapes are decoded in an additional inspection view;

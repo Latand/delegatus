@@ -1225,6 +1225,38 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         ];
       }),
       { name: "review shell bare prefix", text: `relay=other"${host}"`, pass: false },
+      ...[0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0xad].flatMap((code) => {
+        const invisible = String.fromCharCode(code);
+        return [
+          { name: `review Unicode zero-width shell prefix ${code}`, text: `relay=other.${invisible}"${host}";`, pass: false },
+          { name: `review Unicode zero-width shell suffix ${code}`, text: `relay="${origin}"${invisible}/private;`, pass: false },
+          { name: `review Unicode zero-width quoted prefix ${code}`, text: `relay="other."${invisible}"${host}";`, pass: false },
+          { name: `review Unicode zero-width quoted suffix ${code}`, text: `relay="${origin}"${invisible}"/private";`, pass: false },
+        ];
+      }),
+      ...[0xa0, ...Array.from({ length: 11 }, (_, index) => 0x2000 + index), 0x202f, 0x205f, 0x3000].flatMap((code) => {
+        const whitespace = String.fromCharCode(code);
+        return [
+          { name: `review Unicode NFKC shell prefix ${code}`, text: `relay=other.${whitespace}"${host}";`, pass: false },
+          { name: `review Unicode NFKC shell suffix ${code}`, text: `relay="${origin}"${whitespace}/private;`, pass: false },
+          { name: `review Unicode NFKC source whitespace ${code}`, text: [host, origin, discovery]
+            .map((value) => `const relay =${whitespace}"${value}";${whitespace}`).join("\n"), pass: true },
+        ];
+      }),
+      ...["\u200b", "\u00a0"].flatMap((separator, index) => [
+        { name: `review Unicode wrapper prefix ${index}`, text: `relay=other.${separator}("${host}");`, pass: false },
+        { name: `review Unicode wrapper suffix ${index}`, text: `relay=("${origin}")${separator}/private;`, pass: false },
+        { name: `review Unicode percent suffix ${index}`, text: `relay="${origin}"${encodeURIComponent(separator)}/private;`, pass: false },
+        { name: `review Unicode entity suffix ${index}`, text: `relay="${origin}"${entities(separator)}/private;`, pass: false },
+        { name: `review Unicode JSON suffix ${index}`, text: `relay="${origin}"${unicode(separator)}/private;`, pass: false },
+      ]),
+      ...[0xa0, 0x2009].flatMap((code) => {
+        const whitespace = String.fromCharCode(code);
+        return [
+          { name: `review Unicode standalone optional call ${code}`, text: `const relay = String?.${whitespace}("${host}");`, pass: true },
+          { name: `review Unicode standalone optional index ${code}`, text: `const relay = ["${host}"]${whitespace}?.[0];`, pass: true },
+        ];
+      }),
       { name: "review shell continued bare prefix", text: `relay=other${String.fromCharCode(92)}
 "${host}"`, pass: false },
       { name: "review shell escaped opening quote", text: `relay=${String.fromCharCode(92)}"${host}"`, pass: false },
