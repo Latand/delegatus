@@ -89,7 +89,7 @@ describe("linked boards M3 remote agents", () => {
     fs.mkdirSync(out, { recursive: true });
     const project = `repo-${"a".repeat(32)}`;
     const server = await serveEvidenceFixture(out, undefined, {
-      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false }] },
+      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false, asOf: Date.now() }] },
     });
     const browser = await chromium.launch(LAUNCH);
     try {
@@ -117,9 +117,9 @@ describe("linked boards M3 remote agents", () => {
     const now = Date.now();
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/links/agents": { agents: [
-        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: false,
+        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: true, asOf: now,
           pl: { id: "pipeline-1", state: "running", stage: "review", stageState: "running" } },
-        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: true, asOf: now - 960_000 },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: false, asOf: now - 960_000 },
       ] },
     });
     const browser = await chromium.launch(LAUNCH);
@@ -135,6 +135,7 @@ describe("linked boards M3 remote agents", () => {
           expect(await bound.locator("[data-remote-agent]").isVisible()).toBe(false);
           await bound.locator("summary").click();
           expect(await bound.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await bound.locator('[data-stale="true"]').count()).toBe(0);
           expect(await bound.locator("button, a, input").count()).toBe(0);
           const geometry = await bound.evaluate((node) => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth > node.clientWidth + 1 }));
           expect(geometry.width).toBeLessThanOrEqual(width);
@@ -13853,6 +13854,145 @@ describe("Codex service tier rendered evidence", () => {
   }, 120_000);
 });
 
+describe("linked board sync health", () => {
+  browserTest("open links show waiting, successful sync and honest failure in both directions", async () => {
+    const out = path.resolve(".artifacts/linked-board-sync-health");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {};
+    try {
+      for (const [width, locale] of [[1440, "en"], [1440, "uk"], [390, "en"], [390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        let phase = "waiting";
+        try {
+          await page.clock.install();
+          const status = () => ({ lastCall: phase === "waiting" ? null : Date.now() - (phase === "stale" ? 20 * 60_000 : 10_000), state: phase === "failing" ? "failing" : "active", error: phase === "failing" ? "malformed" : null });
+          await page.route("**/api/links/peers", (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", ...status(), ...(phase === "revoked" ? { state: "revoked", error: "revoked", lastCall: Date.now() - 60_000 } : {}) }] } }));
+          await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: [{ id: "grant", label: "Machine A", today: 3, sevenDays: 12, ...status() }] } }));
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+          await page.locator('[data-linked-sync="waiting"]').first().waitFor();
+          expect(await page.locator('[data-linked-sync="waiting"]').count()).toBe(2);
+          // An operator who opens the dialog to check sync sees a sync line without scrolling.
+          const firstTop = await page.locator("[data-linked-sync]").first().evaluate((node) => node.getBoundingClientRect().bottom);
+          expect(firstTop).toBeLessThan(await page.evaluate(() => innerHeight));
+          const reading: Record<string, { colour: string; text: string }> = {};
+          for (const next of ["synced", "stale", "failing"]) {
+            phase = next;
+            await page.clock.fastForward(5000);
+            await page.locator(`[data-linked-sync="${next}"]`).first().waitFor();
+            expect(await page.locator(`[data-linked-sync="${next}"]`).count()).toBe(2);
+            reading[next] = await page.locator(`[data-linked-sync="${next}"]`).first().evaluate((node) => ({ colour: getComputedStyle(node).color, text: node.textContent ?? "" }));
+            if (next !== "failing") expect(reading[next].text).not.toMatch(/\d{1,2}[/.]\d{1,2}[/.]\d{4}|\b[AP]M\b/);
+            if (locale === "uk") expect(reading[next].text).toMatch(/[А-Яа-яІіЇїЄє]/);
+            if (next === "failing") {
+              expect(await page.locator('[data-linked-peer-error="malformed"]').count()).toBe(1);
+              expect(await page.locator('[data-linked-grant-error="malformed"]').count()).toBe(1);
+            }
+          }
+          // Fresh, stale and failing differ in both computed colour and wording.
+          expect(new Set(Object.values(reading).map((entry) => entry.colour)).size).toBe(3);
+          expect(new Set(Object.values(reading).map((entry) => entry.text)).size).toBe(3);
+          await page.locator('[data-linked-grant]').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-${locale}.png`) });
+          phase = "revoked";
+          await page.clock.fastForward(5000);
+          const revokedLine = page.locator('[data-linked-peer="revoked"] [data-linked-sync]');
+          await revokedLine.waitFor();
+          expect(await revokedLine.getAttribute("data-linked-sync")).toBe("failing");
+          const revoked = await revokedLine.evaluate((node) => ({ colour: getComputedStyle(node).color, text: node.textContent ?? "" }));
+          expect(revoked.colour).toBe(reading.failing.colour);
+          expect(revoked.colour).not.toBe(reading.synced.colour);
+          expect(revoked.text).toBe(translate(locale, "links.syncFailing", { ago: locale === "uk" ? "1 хвилину тому" : "1 minute ago" }));
+          await revokedLine.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-revoked.png`) });
+          evidence[`${width}-${locale}`] = { reading, revoked, firstSyncBottom: firstTop, statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/linked-board-sync-health", { recursive: true });
+      fs.writeFileSync("evidence/linked-board-sync-health/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("board host chips distinguish fresh, stale and failing sync on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/linked-board-sync-health");
+    fs.mkdirSync(out, { recursive: true });
+    const self = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+    const stage = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const [width, locale] of [[1440, "en"], [1440, "uk"], [390, "en"], [390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=synced-task`, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        let phase = "synced";
+        let lastCall: number | null = Date.now() - 60_000;
+        try {
+          await page.route("**/api/links/agents**", (route) => route.fulfill({ json: {
+            agents: [], lanes: [], self, hosts: { [stage]: { label: "Stage", linked: phase !== "offline", state: phase === "failing" ? "failing" : "active",
+              lastCall } },
+          } }));
+          await page.evaluate(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [`repo-${"a".repeat(32)}`]: true }, placement: "top", width: null })));
+          const readings: Record<string, { text: string; colour: string; clipped: boolean }> = {};
+          for (const next of ["synced", "stale", "failing", "waiting", "offline"]) {
+            phase = next;
+            lastCall = next === "waiting" ? null : Date.now() - (next === "stale" ? 1_200_000 : next === "failing" ? 7_200_000 : 60_000);
+            await page.reload();
+            if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            const chip = page.locator(width === 390 ? '[data-phone-card-host]' : '.host-chip').first();
+            await chip.waitFor();
+            await chip.scrollIntoViewIfNeeded();
+            if (next === "offline") {
+              expect(await chip.textContent()).toBe(translate(locale, "kanban.remote.notLinked", { host: "Stage" }));
+            } else {
+              const cue = chip.locator(`span[data-remote-sync="${next}"]`);
+              await cue.waitFor();
+              readings[next] = await cue.evaluate((node) => ({ text: node.textContent ?? "", colour: getComputedStyle(node).color,
+                clipped: node.parentElement!.scrollWidth > node.parentElement!.clientWidth + 1 }));
+              const expectedTone = next === "synced" ? "success" : next === "stale" ? "warning" : next === "failing" ? "danger" : "muted";
+              const toneColour = await page.evaluate((tone) => {
+                const probe = document.createElement("span");
+                probe.style.color = `var(--color-${tone})`;
+                document.body.append(probe);
+                const colour = getComputedStyle(probe).color;
+                probe.remove();
+                return colour;
+              }, expectedTone);
+              expect(readings[next].colour).toBe(toneColour);
+              expect(readings[next].text).toContain("Stage");
+              expect(readings[next].clipped).toBe(false);
+              if (locale === "uk") expect(readings[next].text).toMatch(/[А-Яа-яІіЇїЄє]/);
+            }
+            expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+            await page.screenshot({ path: path.join(out, `board-${width}-${locale}-${next}.png`) });
+          }
+          // A cached success ages even if subsequent local feed reads fail.
+          phase = "synced";
+          lastCall = Date.now() - 60_000;
+          await page.reload();
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('span[data-remote-sync="synced"]').first().waitFor();
+          await page.route("**/api/links/agents**", (route) => route.fulfill({ status: 503, json: { error: "unavailable" } }));
+          await page.clock.install();
+          await page.clock.fastForward(900_000);
+          await page.locator('span[data-remote-sync="stale"]').first().waitFor();
+          expect(await page.locator('span[data-remote-sync="synced"]').count()).toBe(0);
+          expect(new Set(["synced", "stale", "failing"].map((state) => readings[state].text)).size).toBe(3);
+          expect(new Set(["synced", "stale", "failing"].map((state) => readings[state].colour)).size).toBe(3);
+          expect(pageErrors).toEqual([]);
+          cases.push({ width, locale, readings, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/linked-board-sync-health", { recursive: true });
+      fs.writeFileSync("evidence/linked-board-sync-health/board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+});
 /*
  * A task another machine runs (docs/design/synced-task-card.md §5-§7): the
  * remote look, the host chip where "+ Agent" was, the owner's lanes drawn by
@@ -14396,6 +14536,45 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+describe("state writes disk-full alert", () => {
+  browserTest("desktop alert stays clear of header and composer in both schemes and locales", async () => {
+    const out = path.resolve(".artifacts/self-update-reload/state-writes");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?state-disk-full=1`, VIEWPORT, scheme, locale, "reduce");
+        try {
+          const alert = page.locator("[data-state-writes-alert]");
+          await alert.waitFor();
+          expect(await alert.count()).toBe(1);
+          const geometry = await alert.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const overlaps = [...document.querySelectorAll('header, [data-mobile2-bar], textarea')].filter((other) => {
+              const b = other.getBoundingClientRect();
+              return b.width && b.height && box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top;
+            }).length;
+            return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom, overlaps, clipped: el.scrollHeight > el.clientHeight };
+          });
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.y).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(VIEWPORT.width);
+          expect(geometry.bottom).toBeLessThanOrEqual(VIEWPORT.height);
+          expect(geometry.overlaps).toBe(0);
+          expect(geometry.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `desktop-${scheme}-${locale}.png`) });
+          readings.push({ scheme, locale, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/state-lease-recovery", { recursive: true });
+      fs.writeFileSync("evidence/state-lease-recovery/desktop.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });
 
 /*

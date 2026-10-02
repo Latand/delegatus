@@ -683,6 +683,15 @@ export function taskFeedSource(filePath = TASKS_FILE) {
   return {
     database: legacyDatabasePath(filePath),
     revision: () => collection.revision(),
+    get: (id: string) => coerceTask(collection.get(`t:${id}`)),
+    /** Eligibility can change in scanner/pipeline state without a task edit.
+        Requeue the current persisted row without changing its data or stamps. */
+    requeue: (ids: readonly string[]) => collection.boundedPatch(ids.length * 2, (tx) => {
+      for (const id of ids) {
+        const row = tx.get(`t:${id}`);
+        if (row) tx.put(row);
+      }
+    }),
     changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
     /** Task rows with keys in `(after, through]`, in key order. */
     keyRange: (after: string, through: string, limit: number) => collection.keyRange(after, through, limit).map((row) => {
