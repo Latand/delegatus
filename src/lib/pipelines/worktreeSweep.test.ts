@@ -764,3 +764,112 @@ async function listInFreshProcess(roots: Record<RootKey, string>): Promise<{ fil
   if (exitCode !== 0) throw new Error(`fresh listing process failed (${exitCode}): ${error}`);
   return JSON.parse(output);
 }
+
+function cacheLane() {
+  const root = repository();
+  const { dir } = lane(root, path.join(caseDir, "widgets-pipeline-cache"), "pipeline/cache");
+  fs.mkdirSync(path.join(dir, ".next/cache"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".next/cache/x"), "cache");
+  fs.writeFileSync(path.join(dir, ".env"), "private fixture");
+  fs.writeFileSync(path.join(dir, "untracked"), "keep");
+  const owner = pipeline({ id: "cache", state: "closed", repoDir: root, worktreeDir: dir, branch: "pipeline/cache" });
+  return { root, dir, owner };
+}
+test("a settled lane trims only its own build cache without a merged PR", async () => {
+  const { dir, owner } = cacheLane();
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner] }));
+  expect(report.trimmed).toEqual([{ path: path.join(dir, ".next"), bytes: expect.any(Number), pipelineId: "cache" }]);
+  expect(report.trimmedBytes).toBeGreaterThan(0);
+  expect(fs.existsSync(path.join(dir, ".next"))).toBe(false);
+  for (const name of [".env", "untracked", ".git", "node_modules"]) expect(fs.existsSync(path.join(dir, name))).toBe(true);
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "no-merged-pr" }));
+});
+test.each(["nested-worktree", "lock", "prunable", "unreadable"])("cache trim refreshes Git guards after measurement: %s", async (guard) => {
+  const { root, dir, owner } = cacheLane();
+  const next = path.join(dir, ".next");
+  const privateFile = path.join(next, "checkout", "private-work");
+  let measured = false;
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [owner],
+    measure: async () => {
+      if (guard === "nested-worktree") {
+        git(["worktree", "add", "-q", "-b", "private", path.dirname(privateFile), "main"], root);
+        fs.writeFileSync(privateFile, "keep private work");
+      }
+      if (guard === "lock") git(["worktree", "lock", dir], root);
+      measured = true;
+      return 100;
+    },
+    git: async (args, cwd) => {
+      if (measured && args[0] === "worktree" && args[1] === "list") {
+        if (guard === "unreadable") return { code: 1, stdout: "", stderr: "metadata unavailable" };
+        if (guard === "prunable") return { code: 0, stdout: `worktree ${root}\0HEAD abc\0\0worktree ${dir}\0HEAD abc\0prunable metadata missing\0\0`, stderr: "" };
+      }
+      return realGit(args, cwd);
+    },
+  }));
+  expect(measured).toBe(true);
+  expect(report.trimmed).toEqual([]);
+  expect(fs.readFileSync(path.join(next, "cache/x"), "utf8")).toBe("cache");
+  if (guard === "nested-worktree") {
+    expect(fs.readFileSync(privateFile, "utf8")).toBe("keep private work");
+    expect(fs.existsSync(path.join(path.dirname(privateFile), ".git"))).toBe(true);
+  }
+});
+test.each(["open", "shared-open", "process", "conversation", "main", "unowned", "wrong-name", "registered", "locked", "late-process"])("build-cache guard: %s", async (guard) => {
+  const { root, dir, owner } = cacheLane();
+  let scans = 0;
+  const processScan = { ...NO_PROCESSES, processes: [{ pid: 123, paths: [path.join(dir, "nested")] }] } as ProcessScan;
+  const options = ports({ pipelines: [owner] });
+  if (guard === "open") owner.state = "running";
+  if (guard === "shared-open") options.pipelines = [owner, { ...owner, id: "other", state: "running" }];
+  if (guard === "process") options.scan = () => processScan;
+  if (guard === "late-process") options.scan = () => ++scans > 1 ? processScan : NO_PROCESSES;
+  if (guard === "conversation") options.conversationCwds = () => [path.join(dir, "nested")];
+  if (guard === "main") owner.worktreeDir = root;
+  if (guard === "unowned") { options.pipelines = []; options.repositories = [root]; }
+  if (guard === "wrong-name") owner.id = "different";
+  if (guard === "registered") options.repositories = [root, dir];
+  if (guard === "locked") git(["worktree", "lock", dir], root);
+  const report = await sweepMergedWorktrees(options);
+  expect(report.trimmed).toEqual([]);
+  expect(fs.existsSync(path.join(dir, ".next/cache/x"))).toBe(true);
+});
+test("build cache symlink is skipped; nested symlinks never lose their target", async () => {
+  const { dir, owner } = cacheLane();
+  const outside = path.join(caseDir, "outside");
+  fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, "keep"), "keep");
+  fs.rmSync(path.join(dir, ".next"), { recursive: true });
+  fs.symlinkSync(outside, path.join(dir, ".next"));
+  expect((await sweepMergedWorktrees(ports({ pipelines: [owner] }))).trimmed).toEqual([]);
+  expect(fs.readFileSync(path.join(outside, "keep"), "utf8")).toBe("keep");
+  fs.unlinkSync(path.join(dir, ".next")); fs.mkdirSync(path.join(dir, ".next"));
+  fs.symlinkSync(outside, path.join(dir, ".next/link"));
+  expect((await sweepMergedWorktrees(ports({ pipelines: [owner] }))).trimmed).toHaveLength(1);
+  expect(fs.readFileSync(path.join(outside, "keep"), "utf8")).toBe("keep");
+});
+test("dry-run reports build cache bytes and keeps the files", async () => {
+  const { dir, owner } = cacheLane();
+  const report = await sweepMergedWorktrees(ports({ mode: "dry-run", pipelines: [owner] }));
+  expect(report.trimmed).toHaveLength(1);
+  expect(fs.existsSync(path.join(dir, ".next/cache/x"))).toBe(true);
+});
+
+test("an archived settled owner still trims when the live list no longer contains it", async () => {
+  const { dir, owner } = cacheLane();
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], currentPipelines: () => [] }));
+  expect(report.trimmed).toHaveLength(1);
+  expect(fs.existsSync(path.join(dir, ".next"))).toBe(false);
+});
+test("a settled lane created from a linked checkout trims its own cache", async () => {
+  const root = repository();
+  const source = lane(root, path.join(caseDir, "widgets-linked"), "source/linked").dir;
+  const dir = lane(root, `${source}-pipeline-cache`, "pipeline/cache").dir;
+  fs.mkdirSync(path.join(dir, ".next/cache"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".next/cache/x"), "cache");
+  const owner = pipeline({ id: "cache", state: "closed", repoDir: source, worktreeDir: dir, branch: "pipeline/cache" });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner] }));
+  expect(report.trimmed).toHaveLength(1);
+  expect(fs.existsSync(path.join(dir, ".next"))).toBe(false);
+  expect(fs.existsSync(source)).toBe(true);
+});
