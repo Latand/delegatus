@@ -272,7 +272,7 @@ test("the exact npm package is built before a narrow hermetic release gate", () 
   expect(workflow).toContain("package/dist/standalone/server.js");
   expect(workflow).toContain('node "$extract_dir/package/bin/cli.mjs" --version');
   expect(workflow).toContain(
-    "bun test bin/server-runtime.test.ts bin/mcp-server.test.ts docs/media/issue-626/evidence.test.ts",
+    "bun test ./bin/server-runtime.test.ts ./bin/mcp-server.test.ts ./docs/media/issue-626/evidence.test.ts",
   );
   expect(workflow).not.toMatch(/^\s*- run: bun test\s*$/m);
   expect(workflow).not.toContain("deepen-to-evidence-revision.sh");

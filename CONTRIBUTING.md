@@ -57,3 +57,50 @@ mailbox whose local part is exactly `noreply` or `no-reply`. Personal mailboxes,
 the forge's merge composer mailbox, empty values and malformed identities
 refuse the launch with an error that withholds the configured values. These
 settings apply to newly launched agents after the next deploy.
+
+## Local hooks
+
+Enable once in each clone (linked worktrees inherit the setting):
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Pre-commit checks staged whitespace, privacy using the committed known-value
+fingerprints, and eslint on staged source files. These checks read working-tree
+content, including unstaged edits in a partially staged file. Pre-push checks
+publication including commit messages and identities, incremental TypeScript,
+changed-file lint, and touched test files. Tests run by explicit file path under
+an isolated home, config, state and temp root. Git repository variables exported
+to hooks are removed from child checks so fixture repositories remain isolated.
+On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
+a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
+capture drivers and are not selected by the hook.
+
+The pre-push gate reuses the platform import closure to scope Linux tests,
+Viewer and runtime-host verification under the Dockerfile's Bun pin, and the
+supported native Codex fixtures. Bun and Codex fixtures are cached under
+`${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
+also run the shared supply-chain check; CI audits weekly and by dispatch.
+
+Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
+`LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
+(default `8G`), and a default Node heap of 6144 MB. Without a user systemd
+manager, commands run directly; without flock (macOS), the slot lock is omitted.
+`LLV_GATE_LOCK_DIR=/var/tmp` joins the existing machine gate's lock files.
+Otherwise locks live in a `delegatus-gate` directory under the runtime/temp root.
+An existing `NODE_OPTIONS` is preserved.
+
+`LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
+the last `origin/main`; a missing merge base fails the push. The hook warns
+when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
+CI OCR. The two required privacy checks remain strict and unchanged; local
+hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
+jobs with timeouts, and Bun verification remains available by dispatch.
+Docker PR builds are limited to image inputs, with a 45-minute timeout and
+cancellation of superseded runs. Main and v* tag image publishing are preserved,
+as are npm publishing and the in-image candidate rehearsal.
+
+After this workflow switch, a merge already waiting on a removed check name
+may need to be re-armed once. Branch protection needs no change: keep exactly
+`privacy-publication` and `privacy-tracker-audit`, with strict updates enabled.
