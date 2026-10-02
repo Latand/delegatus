@@ -1,32 +1,17 @@
 "use client";
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+
+import { installColumnLayoutAnimation } from "./columnLayoutAnimation";
 
 import type { TaskStatus } from "@/lib/tasks/types";
 
-/**
- * A narrow column widens when the mouse rests in it.
- *
- * The countdown starts when the pointer comes to rest inside a column that
- * may widen. After a short grace the column carries `data-dwell`, which the
- * stylesheet draws as the cue; when the pointer has stayed within the jitter
- * tolerance for the whole dwell, the column widens. Moving further, scrolling
- * or a key restarts the count; leaving the column, a press or anything that
- * holds the pointer's attention (a drag, a menu, a dialog, a selection)
- * cancels it. A press inside a column also keeps it from arming again until
- * the pointer leaves it, so a column the operator has just narrowed by its
- * button does not widen again under the resting pointer.
- *
- * Only a mouse dwells: touch and pen never start a countdown. The cue is set
- * on the column element itself, so no pointer move re-renders the board.
- */
-
-/** Stillness until the column widens. */
-export const DWELL_MS = 1300;
-/** Stillness before the cue shows, so a pointer passing through draws nothing. */
-export const DWELL_CUE_MS = 350;
-/** How far the pointer may drift from where it came to rest and still be resting. */
-export const DWELL_JITTER_PX = 8;
+/** A mouse accumulates presence in a column, moving or resting. Short gap
+ * crossings pause the count; a press latches the column until it is left.
+ * Timers set the cue on the element without rendering on pointer moves. */
+export const DWELL_MS = 1000;
+export const DWELL_CUE_MS = 250;
+export const DWELL_EXIT_MS = 150;
 
 export interface ColumnDwellOptions {
   /** The board draws width controls (columns mode, a project board). */
@@ -70,14 +55,18 @@ function held(): boolean {
 
 export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: ColumnDwellOptions): void {
   const optionsRef = useRef(options);
-  optionsRef.current = options;
+  useLayoutEffect(() => { optionsRef.current = options; });
   const { enabled } = options;
 
   useEffect(() => {
     const root = rootRef.current;
     if (!enabled || !root) return;
     let armed: HTMLElement | null = null;
-    let anchor = { x: 0, y: 0 };
+    const layout = installColumnLayoutAnimation(root);
+    let elapsed = 0;
+    let enteredAt = 0;
+    let present = false;
+    let exitTimer: ReturnType<typeof setTimeout> | null = null;
     let cueTimer: ReturnType<typeof setTimeout> | null = null;
     let widenTimer: ReturnType<typeof setTimeout> | null = null;
     /* The column a press landed in: it does not arm again until the pointer leaves it. */
@@ -88,38 +77,66 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     const eligible = (column: HTMLElement) => column.isConnected && optionsRef.current.canWiden(statusOf(column));
     const may = (column: HTMLElement) => eligible(column) && !optionsRef.current.busy() && !held();
 
-    const cancel = () => {
+    const stopTimers = () => {
       if (cueTimer) clearTimeout(cueTimer);
       if (widenTimer) clearTimeout(widenTimer);
       cueTimer = widenTimer = null;
+    };
+    const clearCue = () => {
       if (armed) {
         delete armed.dataset.dwell;
         armed.style.removeProperty("--kb-dwell");
       }
-      armed = null;
     };
-    const arm = (column: HTMLElement, x: number, y: number) => {
-      cancel();
-      if (!eligible(column)) return;
-      armed = column;
-      anchor = { x, y };
-      cueTimer = setTimeout(() => {
+    const cancel = () => {
+      stopTimers();
+      if (exitTimer) clearTimeout(exitTimer);
+      exitTimer = null;
+      clearCue();
+      armed = null;
+      elapsed = 0;
+      present = false;
+    };
+    const resume = (column: HTMLElement) => {
+      if (exitTimer) clearTimeout(exitTimer);
+      exitTimer = null;
+      if (present) return;
+      present = true;
+      enteredAt = Date.now();
+      const cue = () => {
         cueTimer = null;
-        if (armed !== column) return;
+        if (armed !== column || !present) return;
         if (!may(column)) return cancel();
-        /* The sweep runs for exactly what is left of the dwell. */
-        column.style.setProperty("--kb-dwell", `${DWELL_MS - DWELL_CUE_MS}ms`);
+        column.style.setProperty("--kb-dwell", `${DWELL_MS - elapsed - (Date.now() - enteredAt)}ms`);
         column.dataset.dwell = "";
-      }, DWELL_CUE_MS);
+      };
+      if (elapsed >= DWELL_CUE_MS) cue();
+      else cueTimer = setTimeout(cue, DWELL_CUE_MS - elapsed);
+      if (armed !== column) return;
       widenTimer = setTimeout(() => {
         widenTimer = null;
-        if (armed !== column) return;
+        if (armed !== column || !present) return;
         const widen = may(column);
         cancel();
         if (!widen) return;
         latched = column;
+        layout.prepare();
         optionsRef.current.widen(statusOf(column));
-      }, DWELL_MS);
+      }, DWELL_MS - elapsed);
+    };
+    const arm = (column: HTMLElement) => {
+      cancel();
+      if (!eligible(column)) return;
+      armed = column;
+      resume(column);
+    };
+    const pause = () => {
+      if (!armed || !present) return;
+      elapsed += Date.now() - enteredAt;
+      present = false;
+      stopTimers();
+      clearCue();
+      exitTimer = setTimeout(cancel, DWELL_EXIT_MS);
     };
     const columnAt = (target: EventTarget | null) => {
       const node = target as Element | null;
@@ -128,26 +145,27 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     };
 
     const onMove = (event: PointerEvent) => {
-      if (event.pointerType !== "mouse") return cancel();
+      if (event.pointerType !== "mouse" || event.buttons !== 0 || optionsRef.current.busy()) return cancel();
       const column = columnAt(event.target);
       if (latched && latched !== column) latched = null;
-      if (!column || column === latched) return cancel();
-      /* A held button is a drag or a selection in progress. */
-      if (event.buttons !== 0) return cancel();
-      if (armed === column && Math.hypot(event.clientX - anchor.x, event.clientY - anchor.y) <= DWELL_JITTER_PX) return;
-      arm(column, event.clientX, event.clientY);
+      if (column === latched && column) return cancel();
+      if (!column) return pause();
+      if (armed === column) return resume(column);
+      arm(column);
     };
     const onLeave = () => {
       latched = null;
-      cancel();
+      pause();
     };
+    const onBlur = () => { latched = null; cancel(); };
     const onDown = (event: PointerEvent) => {
       latched = columnAt(event.target);
       cancel();
     };
     /* Scrolling a column is reading it: the count starts again from where it stopped. */
     const onWheel = () => {
-      if (armed) arm(armed, anchor.x, anchor.y);
+      if (armed && present) arm(armed);
+      else cancel();
     };
     const onKey = () => cancel();
 
@@ -156,15 +174,16 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     root.addEventListener("pointerdown", onDown, true);
     root.addEventListener("wheel", onWheel, { passive: true });
     document.addEventListener("keydown", onKey, true);
-    window.addEventListener("blur", onLeave);
+    window.addEventListener("blur", onBlur);
     return () => {
       cancel();
+      layout.dispose();
       root.removeEventListener("pointermove", onMove);
       root.removeEventListener("pointerleave", onLeave);
       root.removeEventListener("pointerdown", onDown, true);
       root.removeEventListener("wheel", onWheel);
       document.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("blur", onLeave);
+      window.removeEventListener("blur", onBlur);
     };
   }, [enabled, rootRef]);
 }

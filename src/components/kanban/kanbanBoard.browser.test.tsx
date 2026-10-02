@@ -11159,6 +11159,138 @@ describe("the board scrolls on the compositor at a device pixel ratio of 1", () 
   }, 300_000);
 });
 
+describe("column dwell smooth", () => {
+  browserTest("moving hover widens at one second and cards FLIP smoothly at CPU x4", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth");
+    const evidenceDir = "evidence/column-dwell-smooth";
+    const videoPath = ".artifacts/column-dwell-smooth/hover-narrow.webm";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const motion of ["no-preference", "reduce"] as const) for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", locale, motion);
+        const frames: { data: string; time: number }[] = [];
+        const cdp = await context.newCDPSession(page);
+        const record = motion === "no-preference" && locale === "en";
+        const cpu = record ? 4 : 1;
+        try {
+          await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+          await page.reload();
+          await page.locator('[data-rail-hide]').click();
+          await page.waitForFunction(() => !document.querySelector('[data-seat-collapse][aria-expanded="true"]'));
+          await page.mouse.move(700, 10);
+          await page.waitForTimeout(700);
+          const fixture = await page.evaluate(() => {
+            const cards = [...document.querySelectorAll<HTMLElement>('[data-board] .card[data-id]')];
+            return { cards: cards.length, heights: [...new Set(cards.map((node) => Math.round(node.getBoundingClientRect().height)))] };
+          });
+          expect(fixture.cards).toBeGreaterThanOrEqual(15);
+          expect(fixture.heights.length).toBeGreaterThanOrEqual(3);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+          if (record) {
+            cdp.on("Page.screencastFrame", (event) => {
+              frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
+              void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => { /* A final in-flight frame may arrive after context cleanup. */ });
+            });
+            await cdp.send("Page.startScreencast", { format: "png", maxWidth: 1440, maxHeight: 900, everyNthFrame: 1 });
+          }
+          await page.evaluate(() => {
+            const column = document.querySelector<HTMLElement>('[data-board] .column[data-status="inbox"]')!;
+            const board = document.querySelector<HTMLElement>('[data-board]')!;
+            const body = document.querySelector<HTMLElement>('[data-board] .column[data-status="assigned"] .col-body')!;
+            body.scrollTop = 60;
+            const samples: { at: number; gap: number; wide: string; animated: boolean; left: number; width: number; height: number; scroll: number; neighbourLeft: number; neighbourWidth: number; neighbourHeight: number }[] = [];
+            const marks: { name: string; at: number }[] = [];
+            const target = column.querySelector<HTMLElement>('.card[data-id]')!;
+            const neighbour = document.querySelector<HTMLElement>('[data-board] .column[data-status="assigned"] .card[data-id]')!;
+            let previous = performance.now();
+            let stopped = false;
+            const tick = (now: number) => {
+              const box = target.getBoundingClientRect();
+              const beside = neighbour.getBoundingClientRect();
+              samples.push({ at: performance.timeOrigin + now, gap: now - previous, wide: column.dataset.wide!, animated: [...board.querySelectorAll("[data-layout-animating]")].some((node) => node.getAnimations().some((animation) => animation.playState === "running" && animation.effect?.getTiming().duration === 240)), left: box.left, width: box.width, height: box.height, scroll: body.scrollTop, neighbourLeft: beside.left, neighbourWidth: beside.width, neighbourHeight: beside.height });
+              previous = now;
+              if (!stopped) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+            Object.assign(window, { dwellVideo: { samples, marks, mark: (name: string) => marks.push({ name, at: Date.now() }), stop: () => { stopped = true; } } });
+          });
+          const target = await page.locator('[data-board] .column[data-status="inbox"] .col-body').boundingBox();
+          expect(target).not.toBeNull();
+          const x = target!.x + target!.width / 2;
+          const y = target!.y + 70;
+          await page.evaluate(() => (window as unknown as { dwellVideo: { mark(name: string): void } }).dwellVideo.mark("hover"));
+          await page.mouse.move(x, y);
+          for (let i = 1; i <= 12; i++) {
+            await page.waitForTimeout(70);
+            await page.mouse.move(x + (i % 2 ? 35 : -35), y + i * 8);
+          }
+          try { await page.waitForFunction(() => document.querySelector('[data-board] .column[data-status="inbox"][data-wide="1"]'), undefined, { timeout: 4000 }); }
+          catch (error) { await page.screenshot({ path: path.join(out, "hover-failed.png") }); throw error; }
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(out, `${locale}-${motion}-wide.png`) });
+          await page.evaluate(() => (window as unknown as { dwellVideo: { mark(name: string): void } }).dwellVideo.mark("narrow"));
+          await page.locator('[data-col-width="inbox"][data-col-width-action="narrow"]').click();
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(out, `${locale}-${motion}-narrow.png`) });
+          /* A just-narrowed column remains narrow under the same pointer. */
+          await page.waitForTimeout(1100);
+          expect(await page.locator('[data-board] .column[data-status="inbox"]').getAttribute("data-wide")).toBe("0");
+          const measurement = await page.evaluate(() => {
+            const video = (window as unknown as { dwellVideo: { samples: { at: number; gap: number; wide: string; animated: boolean; left: number; width: number; height: number; scroll: number; neighbourLeft: number; neighbourWidth: number; neighbourHeight: number }[]; marks: { name: string; at: number }[]; stop(): void } }).dwellVideo;
+            video.stop();
+            const windows = video.samples.filter((sample, i) => sample.animated || video.samples[i - 1]?.animated);
+            return { samples: video.samples, marks: video.marks, maxAnimationFrameMs: Math.max(0, ...windows.map((sample) => sample.gap)), animationFrames: windows.length, scrollValues: [...new Set(video.samples.map((sample) => sample.scroll))], copiesLeft: document.querySelectorAll('.kb-layout-copy').length };
+          });
+          if (record) {
+            await cdp.send("Page.stopScreencast");
+            const frameDir = path.join(out, "frames");
+            fs.mkdirSync(frameDir, { recursive: true });
+            frames.forEach((frame, i) => fs.writeFileSync(path.join(frameDir, `${i}.png`), Buffer.from(frame.data, "base64")));
+            const manifest = frames.map((frame, i) => `file '${i}.png'\noption framerate 1000\nduration ${Math.max(0.001, ((frames[i + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
+            fs.writeFileSync(path.join(frameDir, "frames.txt"), manifest + "\n");
+            execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", path.join(frameDir, "frames.txt"), "-fps_mode", "passthrough", "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", path.resolve(videoPath)]);
+            const firstWide = measurement.samples.find((sample) => sample.wide === "1" && sample.animated)!;
+            const transitions = [
+              { name: "hover-widen", start: firstWide.at, end: firstWide.at + 240 },
+              { name: "button-narrow", start: measurement.samples.find((sample) => sample.at > measurement.marks[1]!.at && sample.wide === "0" && sample.animated)!.at, end: 0 },
+            ];
+            transitions[1]!.end = transitions[1]!.start + 240;
+            const frameWindows = transitions.map((transition) => ({ name: transition.name, frames: frames.flatMap((frame, i) => frame.time >= transition.start - 50 && frame.time <= transition.end + 50 ? [i] : []), maxCaptureFrameMs: Math.max(0, ...frames.flatMap((frame, i) => i > 0 && frame.time >= transition.start && frame.time <= transition.end ? [frame.time - frames[i - 1]!.time] : [])) }));
+            for (const window of frameWindows) {
+              expect(window.frames.length).toBeGreaterThan(5);
+              expect(window.maxCaptureFrameMs).toBeLessThanOrEqual(50);
+            }
+            const decodedFrames = Number(execFileSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", path.resolve(videoPath)], { encoding: "utf8" }).trim());
+            expect(decodedFrames).toBe(frames.length);
+            cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement, video: videoPath, frameCount: frames.length, frameWindows });
+          } else cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement });
+          expect(measurement.maxAnimationFrameMs).toBeLessThanOrEqual(50);
+          if (motion === "no-preference") {
+            const widths = measurement.samples.map((sample) => sample.width);
+            const positions = measurement.samples.map((sample) => sample.neighbourLeft);
+            expect(widths.some((width) => width > Math.min(...widths) + 15 && width < Math.max(...widths) - 15)).toBe(true);
+            expect(positions.some((left) => left > Math.min(...positions) + 15 && left < Math.max(...positions) - 15)).toBe(true);
+          }
+          expect(measurement.copiesLeft).toBe(0);
+          expect(measurement.scrollValues).toHaveLength(1);
+          expect(motion === "reduce" ? measurement.animationFrames === 0 : measurement.animationFrames > 5).toBe(true);
+          const firstWide = measurement.samples.find((sample) => sample.wide === "1")!;
+          expect(firstWide.at - measurement.marks[0]!.at).toBeGreaterThanOrEqual(990);
+          expect(firstWide.at - measurement.marks[0]!.at).toBeLessThan(1200);
+          expect(pageErrors).toEqual([]);
+        } finally { await cdp.detach(); await context.close(); }
+      }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync(`${evidenceDir}/frames.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", frameNumbering: "zero-based decoded video frames", cases }, null, 2) + "\n");
+    }
+  }, 180_000);
+});
+
 describe("a column widens itself: the agent focused from the rail, the mouse resting on it", () => {
   /*
    * The `stages` scenario at 1440×900 with five of its conversations open,
