@@ -33,6 +33,8 @@ export type LifecycleState = typeof LIFECYCLE_STATES[number];
 export type LifecycleTurnState = "busy" | "idle" | "unknown";
 
 export const LIFECYCLE_EVENT_TYPES = [
+  "stage_waiting",
+  "stage_relaunched",
   "stage_started",
   "stage_resumed",
   "stage_paused",
@@ -70,6 +72,8 @@ export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
 /** Every event type maps onto exactly one lifecycle state — that mapping is the
     reason there is only one vocabulary rather than two parallel ones. */
 export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleState> = {
+  stage_waiting: "waiting",
+  stage_relaunched: "running",
   stage_started: "running",
   stage_resumed: "running",
   stage_paused: "waiting",
