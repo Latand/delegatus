@@ -193,7 +193,31 @@
 .kb .column.drop { box-shadow: inset 0 0 0 2px var(--color-accent); }
 /* The wide share (#1841): a widened shelf takes the workspace's dot grid and
    Assigned the shelf's fill, and the swap animates. */
-.kb .board:not(.scroll):not(.tabs) { transition: grid-template-columns var(--motion-base) var(--ease-standard); }
+/* The layout helper owns the visible width transition. Reflowing tracks on
+   every frame repeatedly wraps every card on the board. */
+.kb .board:not(.scroll):not(.tabs) { transition: none; }
+.kb .board, .kb .col-body { overflow-anchor: none; }
+.kb [data-layout-animating="card"] { transform-origin: top left; will-change: transform, opacity; }
+.kb .kb-layout-copy:is(.column, .card, .col-head, .divider, .empty) {
+  position: fixed; z-index: 5; margin: 0; pointer-events: none;
+  transform-origin: top left; content-visibility: visible; overflow: hidden;
+  box-sizing: border-box; will-change: transform, opacity;
+}
+/* Live SVG glyphs animate on the main thread. The board's layout motion holds
+   their pose until its own compositor animation has finished. */
+.kb .kb-page[data-layout-animating="page"] .mglyph[data-live="1"]::before,
+.kb .kb-page[data-layout-animating="page"] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase) { animation-play-state: paused !important; }
+.kb .kb-layout-copy .mglyph::before { animation: none !important; }
+.kb .kb-layout-copy * { animation: none !important; transition: none !important; }
+.kb .kb-layout-copy.kb-layout-shell { z-index: 3; }
+.kb .kb-layout-copy.kb-layout-destination { z-index: 4; }
+.kb .kb-layout-copy.kb-layout-frame { z-index: 1; }
+.kb .column[data-layout-animating="frame"] { background: transparent !important; border-color: transparent !important; transition: none; }
+.kb .kb-page[data-layout-animating="page"] { z-index: 2; }
+.kb .column[data-layout-animating="frame"] > .col-body { position: relative; z-index: 2; }
+@media (prefers-reduced-motion: reduce) {
+  .kb .kb-layout-copy:is(.column, .card, .col-head, .divider, .empty) { display: none; }
+}
 .kb .column.wide {
   background-color: var(--surface-canvas);
   background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px);

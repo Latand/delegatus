@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { TaskStatus } from "@/lib/tasks/types";
 
-import { DWELL_CUE_MS, DWELL_JITTER_PX, DWELL_MS, useColumnDwell, type ColumnDwellOptions } from "./useColumnDwell";
+import { DWELL_CUE_MS, DWELL_EXIT_MS, DWELL_MS, useColumnDwell, type ColumnDwellOptions } from "./useColumnDwell";
 
 /* The dwell hook over a bare board of columns, under fake timers. Only the
    hook is exercised; the board's own wiring is covered in KanbanBoard.dom. */
@@ -80,9 +80,9 @@ const move = (target: Element, x: number, y: number, extra?: { pointerType?: str
 const wait = (ms: number) => jest.advanceTimersByTime(ms);
 
 test("the thresholds are the ones the pull request states", () => {
-  expect(DWELL_MS).toBe(1300);
-  expect(DWELL_CUE_MS).toBe(350);
-  expect(DWELL_JITTER_PX).toBe(8);
+  expect(DWELL_MS).toBe(1000);
+  expect(DWELL_CUE_MS).toBe(250);
+  expect(DWELL_EXIT_MS).toBe(150);
 });
 
 test("resting in a narrow column shows the cue after the grace and widens it at the threshold", () => {
@@ -102,21 +102,44 @@ test("resting in a narrow column shows the cue after the grace and widens it at 
   expect(column(host, "done").style.getPropertyValue("--kb-dwell")).toBe("");
 });
 
-test("drift within the jitter tolerance keeps the count; a move past it restarts it and drops the cue", () => {
+test("movement throughout the column keeps counting from its first entry", () => {
   const { host, widened } = mount();
   const card = inside(host, "blocked");
   move(card, 400, 300);
-  wait(800);
-  move(card, 400 + 5, 300 + 5);
+  for (let i = 1; i <= 9; i++) { wait(100); move(card, 400 + i * 20, 300 + i * 25); }
   expect(cued(host)).toEqual(["blocked"]);
-  wait(DWELL_MS - 800 - 100);
-  /* A real move 100 ms before the threshold: the cue goes and the count starts over. */
-  move(card, 400 + DWELL_JITTER_PX + 4, 300);
-  expect(cued(host)).toEqual([]);
+  wait(99);
+  expect(widened).toEqual([]);
+  wait(1);
+  expect(widened).toEqual(["blocked"]);
+});
+
+test("a brief gap pauses presence without resetting it or counting time outside", () => {
+  const { host, widened } = mount();
+  move(inside(host, "blocked"), 500, 300);
+  wait(800);
+  move(host.querySelector(".rail")!, 20, 300);
+  wait(DWELL_EXIT_MS - 1);
+  expect(widened).toEqual([]);
+  move(inside(host, "blocked"), 550, 350);
+  wait(199);
+  expect(widened).toEqual([]);
+  wait(1);
+  expect(widened).toEqual(["blocked"]);
+});
+
+test("a gap at the grace threshold resets; a blur cancels immediately", () => {
+  const { host, widened } = mount();
+  move(inside(host, "blocked"), 500, 300);
+  wait(800);
+  pointer(host.querySelector(".kb")!, "pointerleave", 0, 0);
+  wait(DWELL_EXIT_MS);
+  move(inside(host, "blocked"), 550, 350);
   wait(200);
   expect(widened).toEqual([]);
-  wait(DWELL_MS - 200);
-  expect(widened).toEqual(["blocked"]);
+  window.dispatchEvent(new dom.Event("blur") as unknown as Event);
+  wait(DWELL_MS);
+  expect(widened).toEqual([]);
 });
 
 test("leaving the column cancels, into another column or off the board", () => {
