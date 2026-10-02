@@ -1334,6 +1334,40 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test.each(["given", "real"])("resume through a symlink reconciles a transcript encoded from the %s cwd", async (form) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-symlink-resume-"));
+    let host: ClaudeStreamBrokerHost | undefined;
+    try {
+      const real = path.join(directory, "disk", "repository-pipeline");
+      const link = path.join(directory, "Projects");
+      fs.mkdirSync(real, { recursive: true });
+      fs.symlinkSync(path.dirname(real), link, "junction");
+      const cwd = path.join(link, "repository-pipeline");
+      const projects = path.join(directory, "home", ".claude", "projects");
+      const sessionId = "symlink-resume-session";
+      const recorded = form === "real" ? fs.realpathSync.native(cwd) : cwd;
+      const transcript = path.join(projects, recorded.replace(/[^A-Za-z0-9]/g, "-"), `${sessionId}.jsonl`);
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      fs.writeFileSync(transcript, JSON.stringify({
+        type: "user", cwd: recorded, uuid: "delivered-user", timestamp: "2026-09-30T18:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "already delivered" }] },
+      }) + "\n");
+      const ledger = new RecordingDeliveryLedger();
+      ledger.recordQueued(sessionId, { id: "pending-entry", text: "already delivered" }, "turn-started");
+      const child = new FakeClaude(ledger);
+      host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+        cwd, claudeProjectsDir: projects, deliveryLedger: ledger, eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(child, {}),
+      });
+      expect(ledger.load(sessionId).filter((delivery) => delivery.delivered)).toHaveLength(1);
+      expect(child.inputs).toHaveLength(0);
+    } finally {
+      await host?.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("adopts a resume successor whose transcript carries a tool-result user turn with a pending delivery", async () => {
     /* Production #389: the real Claude transcript for any tool-using turn ends
        with a `user` role message that carries only a `tool_result` block — no
