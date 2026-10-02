@@ -4089,20 +4089,24 @@ async function tickRunStage(
         text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
     : null;
   if (!heldForDeployCut && (notice || attempt.providerWait)) {
+    const newerNormalTurn = !notice && attempt.providerWait && durable?.turn === "terminal"
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
+    const newerOutputBeforeHostLoss = !notice && hostUnavailablePastGrace && attempt.providerWait && durable?.message
+      && durable.message.ts > attempt.providerWait.turnTs;
     const providerHostLost = hostUnavailablePastGrace && attempt.providerWait?.actionAt
       && (!notice || notice.ts <= attempt.providerWait.turnTs);
-    if (providerHostLost) {
+    if (newerNormalTurn || newerOutputBeforeHostLoss) {
+      delete attempt.providerWait;
+    } else if (providerHostLost) {
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
         text: "stage host died before producing output after its continuation", ts: Math.max(unixMs(ports.now()), attempt.providerWait!.turnTs + 1), resetsAt: null }, ports, persist);
       return;
     }
-    else if (!notice && durable?.turn === "terminal" && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait!.turnTs) {
-      delete attempt.providerWait;
-    } else if (!providerHostLost && await recoverProviderCut(pipeline, stage, attempt, notice, ports, persist)) return;
+    else if (await recoverProviderCut(pipeline, stage, attempt, notice, ports, persist)) return;
   }
   const silentDeath = unregisteredHostDeath || ((hostUnavailablePastGrace || structuredActive === false)
     && durable && (!durable.message || durable.message.ts <= unixMs(attempt.startedAt)));
-  if (silentDeath && !heldForDeployCut && !durable?.message) {
+  if (silentDeath && !heldForDeployCut) {
     if (await recoverProviderCut(pipeline, stage, attempt, {
       condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
       text: "stage host died without output", ts: unixMs(attempt.startedAt) + 1, resetsAt: null,

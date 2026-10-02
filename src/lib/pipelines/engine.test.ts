@@ -13244,7 +13244,7 @@ test("a read-write launch the deploy handover failed after staging waits and rel
 
   const waiting = loadPipelines()[0]!;
   expect(waiting.state).toBe("running");
-  expect(waiting.stateDetail).toStartWith("stage spawn deferred: ");
+  expect(waiting.stateDetail).toStartWith("waiting to relaunch after failed startup: ");
   expect(waiting.runs[0]!.attempts[0]).toMatchObject({
     state: "pending",
     launchId: null,
@@ -15647,13 +15647,14 @@ test("three delayed auth race continuations exhaust with the provider cause", as
   expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race after 3 tries");
 });
 
-test("a silent dead read-write host relaunches with WIP and parks on its second death", async () => {
+test.each([false, true])("a silent dead read-write host relaunches with WIP and parks on its second death, inherited=%s", async (inherited) => {
   const h = harness();
   await runningStructuredStage(h);
   h.setConversationActive(false);
   let now = Date.parse(h.ports.now());
   h.ports.now = () => new Date(now).toISOString();
-  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, launchOnly: true });
+  const inheritedMessage = inherited ? { text: "Earlier stage output", ts: now - 60_000 } : null;
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: inheritedMessage, launchOnly: !inherited });
   const launchId = loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId;
   const stoppedLaunches: Array<string | null | undefined> = [];
   h.ports.stopStageAgent = async (target) => {
@@ -15801,6 +15802,25 @@ test("a resumed provider-cut host that dies before new output relaunches with WI
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+});
+
+test("a newer completed verdict wins over host loss after a provider continuation", async () => {
+  const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  f.advance(1_000);
+  f.h.durableTurns.set("/codex/stage-1.jsonl", {
+    turn: "terminal", message: { text: PASS_TEXT, ts: f.now() }, lastRecordAt: f.now(),
+  });
+  f.h.ports.conversationHostUnavailableSince = async () => new Date(f.now() - 5 * 60_000).toISOString();
+  await tickPipelines([], f.h.ports);
+  const settled = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(settled.state).toBe("passed");
+  expect(settled.providerWait).toBeUndefined();
+  expect(settled.verdictRequest).toBeUndefined();
+  expect(f.h.spawnInputs).toHaveLength(1);
 });
 
 for (const reason of ["structured stage ended before its session was discovered", "stage agent exited before its session was discovered"]) {
