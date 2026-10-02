@@ -123,7 +123,8 @@ const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
 const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
+const RUNTIME_PERF = new URLSearchParams(location.search).get("runtime") === "perf";
+const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -325,7 +326,13 @@ class QuietEventSource {
   removeEventListener() {}
   close() {}
 }
-Object.assign(window, { EventSource: QuietEventSource });
+const NativeEventSource = window.EventSource;
+Object.assign(window, { EventSource: RUNTIME_PERF ? class extends QuietEventSource {
+  constructor(url: string) {
+    super();
+    if (new URL(url, location.origin).pathname === "/api/runtime/stream") return new NativeEventSource(url) as unknown as QuietEventSource;
+  }
+} : QuietEventSource });
 
 /** The account future launches use; a select moves it, as on the server. */
 let activeAccount = ACCOUNT;
@@ -1000,6 +1007,7 @@ const mergeSetting = { enabled: true };
 const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
+  if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/view/presence" && method === "POST" && SELF_UPDATE_RELOAD) {
     evidence.presenceReplies += 1;

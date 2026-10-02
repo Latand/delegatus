@@ -16,6 +16,8 @@ import { measureStageChain, stageChainFailures, type StageChainLane } from "@/co
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { runtimeScope } from "@/lib/runtime/contracts";
 
 /*
  * The phone's browser evidence driver: the real Viewer at phone width, in
@@ -45,6 +47,110 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("runtime idle performance", () => {
+  browserTest("limits keep the phone stream joined without snapshot refetches", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-phone-perf-"));
+    const journal = new RuntimeJournal(path.join(directory, "journal.sqlite"));
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let stopFixture = () => {};
+    let browser: Awaited<ReturnType<typeof launchChromium>> | null = null;
+    const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+    try {
+      const scope = runtimeScope("session", "conversation_running");
+      for (let i = 0; i < 120; i++) {
+        const sessionScope = i === 0 ? scope : runtimeScope("session", `conversation-perf-${i}`);
+        journal.append({ scope: sessionScope, kind: "session-status", payload: { host: "hosted", turn: "running", activeTurnId: "perf-turn", artifactPath: i === 0 ? RUNNING_PATH : `/sessions/perf-${i}.jsonl` } });
+        journal.append({ scope: sessionScope, kind: "delta", payload: { turnId: "perf-turn", text: "Measured idle runtime state. ".repeat(170) } });
+      }
+      const limits = () => journal.append({ scope, kind: "limits", payload: { snapshot: { remaining: 80 } } });
+      limits();
+      const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+      let reads = 0;
+      interval = setInterval(() => {
+        const bytes = encode(limits());
+        for (const client of clients) client.enqueue(bytes);
+      }, 1000);
+      const snapshotBytes = Buffer.byteLength(JSON.stringify(journal.snapshot()));
+      expect(snapshotBytes).toBeGreaterThanOrEqual(1_200_000);
+      expect(snapshotBytes).toBeLessThanOrEqual(1_500_000);
+      const { base, stop } = await serveFixture({
+        "/api/runtime/snapshot": () => { reads++; return Response.json({ ...journal.snapshot(), structuredHostsEnabled: true }); },
+        "/api/runtime/stream": (request: Request) => {
+          let controller: ReadableStreamDefaultController<Uint8Array>;
+          const body = new ReadableStream<Uint8Array>({
+            start(next) {
+              controller = next;
+              clients.add(next);
+              const after = Number(new URL(request.url).searchParams.get("after"));
+              for (const event of journal.replay(after).events) next.enqueue(encode(event));
+            },
+            cancel() { clients.delete(controller); },
+          });
+          request.signal.addEventListener("abort", () => { clients.delete(controller); }, { once: true });
+          return new Response(body, { headers: { "content-type": "text/event-stream" } });
+        },
+      });
+      stopFixture = stop;
+      browser = await launchChromium();
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+      const page = await context.newPage();
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+      await page.addInitScript(() => {
+        const tasks: Array<{ start: number; duration: number }> = [];
+        Object.assign(window, { runtimePerfTasks: tasks });
+        new PerformanceObserver(list => {
+          for (const entry of list.getEntries()) tasks.push({ start: entry.startTime, duration: entry.duration });
+        }).observe({ type: "longtask", buffered: true });
+      });
+      await page.goto(`${base}/?runtime=perf`);
+      await page.locator("[data-phone-card]").first().waitFor();
+      // Same TTI definition as the production audit: last long task before 2s quiet.
+      let interactiveMs: number | null = null;
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const reading = await page.evaluate(() => {
+          const tasks = (window as typeof window & { runtimePerfTasks: Array<{ start: number; duration: number }> }).runtimePerfTasks;
+          const last = Math.max(0, ...tasks.map(task => task.start + task.duration));
+          return { last, quiet: performance.now() - last >= 2000 };
+        });
+        if (reading.quiet) { interactiveMs = Math.round(reading.last); break; }
+        await page.waitForTimeout(250);
+      }
+      const before = reads;
+      const frames = await page.evaluate(async () => {
+        const start = performance.now();
+        let count = 0;
+        return new Promise<{ count: number; durationMs: number; fps: number }>(resolve => {
+          const frame = () => {
+            count++;
+            const durationMs = performance.now() - start;
+            if (durationMs >= 60_000) resolve({ count, durationMs: Math.round(durationMs), fps: Number((count * 1000 / durationMs).toFixed(1)) });
+            else requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        });
+      });
+      const result = { snapshotBytes, cpuThrottle: 4, viewport: "390x844", locale: "uk", interactiveMs, idleSnapshotFetches: reads - before, ...frames };
+      fs.mkdirSync("evidence/runtime-idle", { recursive: true });
+      const label = process.env.LLV_RUNTIME_PERF_LABEL === "before" ? "before" : "after";
+      fs.writeFileSync(`evidence/runtime-idle/${label}.json`, JSON.stringify(result, null, 2) + "\n");
+      console.log("runtime idle performance", JSON.stringify(result));
+      await context.close();
+      expect(result.idleSnapshotFetches).toBe(0);
+      expect(interactiveMs).not.toBeNull();
+    } finally {
+      await browser?.close();
+      stopFixture();
+      if (interval) clearInterval(interval);
+      clients.clear();
+      journal.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
 
 describe("self-update reload notice", () => {
   browserTest("a phone page open across a release switch offers a visible reload button", async () => {
