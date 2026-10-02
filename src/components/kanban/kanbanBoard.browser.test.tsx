@@ -15477,3 +15477,110 @@ describe("passive task status note", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+
+describe("conversation feed continuity and errors", () => {
+  browserTest("answers keep their node and position through completion, reconnect and echo; failures stay readable", async () => {
+    const out = path.resolve(".artifacts/conversation-feed/continuity");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${server.base}?scenario=feed-continuity#c=conversation_search-ver-2`,
+          { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const answer = locale === "en" ? "The answer stays here while the transcript catches up." : "Відповідь залишається тут, поки запис розмови наздоганяє її.";
+          const row = page.locator("[data-live-turn]").filter({ hasText: answer });
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          await row.evaluate(node => { Object.assign(window, { continuityNode: node }); });
+          let settledY: number | null = null;
+          let echoShift = 0;
+          for (let step = 1; step <= 3; step++) {
+            await page.evaluate(() => (window as unknown as { evidence: { advanceFeedContinuity(): Promise<void> } }).evidence.advanceFeedContinuity());
+            if (step === 1) await page.getByText(locale === "en" ? "Please continue with the next step." : "Продовжуй наступний крок, будь ласка.", { exact: true }).waitFor();
+            if (step === 3) await page.locator('[data-feed-kind="prose"][data-feed-source-id="continuity-answer"]').waitFor();
+            expect(await page.evaluate(text => {
+              const node = (window as unknown as { continuityNode: HTMLElement }).continuityNode;
+              return node.isConnected && node.textContent?.includes(text);
+            }, answer)).toBe(true);
+            const y = await page.evaluate(() => (window as unknown as { continuityNode: HTMLElement }).continuityNode.getBoundingClientRect().top);
+            if (step === 1) {
+              await page.screenshot({ path: path.join(out, `${locale}-${width}-before-echo.png`) });
+              settledY = await page.evaluate(() => (window as unknown as { continuityNode: HTMLElement }).continuityNode.getBoundingClientRect().top);
+            }
+            if (step === 3) {
+              await page.screenshot({ path: path.join(out, `${locale}-${width}-echo.png`) });
+              echoShift = Math.abs(y - settledY!); expect(echoShift).toBeLessThanOrEqual(1); }
+          }
+          const canonical = page.locator('[data-feed-kind="prose"][data-feed-source-id="continuity-answer"]');
+          expect(await canonical.count()).toBe(1);
+          expect(await canonical.evaluate(node => node === (window as unknown as { continuityNode: HTMLElement }).continuityNode)).toBe(true);
+          await canonical.scrollIntoViewIfNeeded();
+          expect(await page.getByText(locale === "en" ? "Please check the result." : "Перевір результат, будь ласка.", { exact: true }).count()).toBe(1);
+          expect(await page.getByText(locale === "en" ? "Please continue with the next step." : "Продовжуй наступний крок, будь ласка.", { exact: true }).count()).toBe(1);
+          const position = await canonical.boundingBox();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-answer.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ locale, width, retainedNode: true, answerRows: 1, echoShift, position });
+        } finally { await context.close(); }
+        const errors = await openFixture(browser, `${server.base}?scenario=feed-failures#c=conversation_search-ver-2`,
+          { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          await errors.page.locator("[data-processing-error]").waitFor();
+          await errors.page.locator("[data-turn-error]").waitFor();
+          await errors.page.evaluate(() => (window as unknown as { evidence: { failFeedDelivery(): void } }).evidence.failFeedDelivery());
+          const failed = errors.page.locator("[data-message-row]").filter({ hasText: locale === "en" ? "Send this follow-up." : "Надішли це уточнення." });
+          await failed.waitFor();
+          await failed.scrollIntoViewIfNeeded();
+          expect((await failed.textContent())?.toLowerCase()).toContain(locale === "en" ? "not delivered" : "не доставлено");
+          const overflow = await errors.page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(errors.pageErrors).toEqual([]);
+          await errors.page.screenshot({ path: path.join(out, `${locale}-${width}-errors.png`) });
+          readings.push({ locale, width, processingError: true, turnError: true, deliveryError: true, overflow });
+        } finally { await errors.context.close(); }
+      }
+      fs.writeFileSync("evidence/conversation-feed/continuity.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("conversation feed delayed launch echo", () => {
+  browserTest("compacted launch retires on echo at desktop and 390px in both languages", async () => {
+    const out = path.resolve(".artifacts/conversation-feed/rendered");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${server.base}?scenario=feed-recovery#c=conversation_search-ver-2`,
+          { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator("[data-feed-state]").first().waitFor();
+          expect(await page.evaluate(() => (window as unknown as { evidence: { seedDelayedLaunch(): string } }).evidence.seedDelayedLaunch())).toBe("delivered");
+          const row = page.locator("[data-message-row]").filter({ hasText: locale === "en" ? "Keep this message until its transcript arrives." : "Збережи повідомлення до появи запису в розмові." });
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-pending.png`) });
+          await page.evaluate(() => (window as unknown as { evidence: { publishDelayedLaunch(): void } }).evidence.publishDelayedLaunch());
+          await page.waitForFunction(() => (window as unknown as { evidence: { delayedLaunchRetired(): boolean } }).evidence.delayedLaunchRetired(), undefined, { timeout: 15_000 });
+          expect(await row.count()).toBe(1);
+          await row.scrollIntoViewIfNeeded();
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-retired.png`) });
+          readings.push({ locale, width, rows: await row.count(), retired: true, overflow, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/conversation-feed", { recursive: true });
+      fs.writeFileSync("evidence/conversation-feed/delayed-launch.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});

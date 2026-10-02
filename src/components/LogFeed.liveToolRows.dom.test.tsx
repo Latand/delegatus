@@ -4,6 +4,8 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
+import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
+import { enqueueOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setLocale } from "@/lib/i18n";
 import { appendRuntimeLiveTurnDelta, projectRuntimeLiveTurnItem, type RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
 import { applyEvent, emptyStore, type RuntimeSession, type RuntimeEnvelope } from "@/components/runtime/runtimeModel";
@@ -122,6 +124,13 @@ const sessionState = { session };
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualLogTail = await import("@/hooks/useLogTail");
 const actualToolCues = await import("@/hooks/useToolActivityCues");
+const actualDeputy = await import("./conversation/DeputyBlock");
+const actualMobile = await import("@/hooks/useIsMobile");
+let phone = false;
+mock.module("@/hooks/useIsMobile", () => ({ ...actualMobile, useIsMobile: () => phone }));
+mock.module("./conversation/DeputyBlock", () => ({ ...actualDeputy,
+  DeputyBlock: () => <div data-deputy-block="fixture">Deputy answer</div>,
+}));
 const inertRuntime = { enabled: true, connection: "live" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
@@ -167,8 +176,10 @@ const { resetCanonicalAssistantClaimsForTests } = await import("./conversation/l
 
 const roots = new Set<Root>();
 beforeEach(() => {
+  phone = false;
   setLocale("en");
   dom.sessionStorage.clear();
+  resetOutboxForTests();
   resetCanonicalAssistantClaimsForTests();
   tailState.lines = [];
   sessionState.session = session;
@@ -182,6 +193,8 @@ afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
   mock.module("@/hooks/useLogTail", () => actualLogTail);
   mock.module("@/hooks/useToolActivityCues", () => actualToolCues);
+  mock.module("./conversation/DeputyBlock", () => actualDeputy);
+  mock.module("@/hooks/useIsMobile", () => actualMobile);
 });
 
 const file: FileEntry = {
@@ -205,7 +218,7 @@ const file: FileEntry = {
   conversationId: CONVERSATION_ID,
 } as FileEntry;
 
-function render(): { host: HTMLElement; root: Root } {
+function render(deputies?: SeatDeputyView[]): { host: HTMLElement; root: Root; paint: () => void } {
   const host = dom.document.createElement("div");
   dom.document.body.append(host);
   const root = createRoot(host as unknown as HTMLElement);
@@ -214,6 +227,7 @@ function render(): { host: HTMLElement; root: Root } {
     root.render(
       <LogFeed
         file={file}
+        deputies={deputies}
         showSvc={false}
         lineFilter=""
         onStatus={() => undefined}
@@ -224,7 +238,7 @@ function render(): { host: HTMLElement; root: Root } {
     );
   });
   paint();
-  return { host: host as unknown as HTMLElement, root };
+  return { host: host as unknown as HTMLElement, root, paint };
 }
 
 function liveRows(host: HTMLElement): string[] {
@@ -331,4 +345,145 @@ test("issue 1565: streamed old tools leave the tail when a later turn owns the t
   const { host } = render();
   expect(host.textContent).toContain("Later turn response");
   expect([...host.querySelectorAll("[data-live-turn-item-id]")].map(row => row.getAttribute("data-live-turn-item-id"))).toEqual(["current-command"]);
+});
+
+
+test("completed answer and reconnect retain the same DOM row until its delayed echo", () => {
+  const answer = "An answer that stays visible.";
+  const pending = { itemId: null, text: answer, phase: "streaming" as const, startedAt: AT(0), completedAt: null };
+  sessionState.session = { ...session, liveTurn: { turnId: "delayed-turn", text: answer, items: [pending] } };
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.textContent).toContain(answer);
+  sessionState.session = { ...session, turn: "idle", liveTurn: { turnId: "delayed-turn", text: answer,
+    items: [{ ...pending, itemId: "delayed-answer", phase: "awaiting-echo", completedAt: AT(1) }] } };
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(5), message: { content: "Next request" } })];
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  sessionState.session = { ...session, turn: "unknown", liveTurn: null };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  tailState.lines = [...tailState.lines, JSON.stringify({ type: "assistant", uuid: "delayed-answer", timestamp: AT(1),
+    message: { content: [{ type: "text", text: answer }] } })];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="delayed-answer"]')).toBe(row);
+  expect(host.querySelectorAll('[data-feed-source-id="delayed-answer"]')).toHaveLength(1);
+  expect(row.textContent).toContain(answer);
+  const following = host.querySelector('[data-feed-kind="user"]')!;
+  expect(row.compareDocumentPosition(following) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+
+test("composer follow-up stays after the answer while both echoes are pending", () => {
+  const answer = "Answer before follow-up";
+  sessionState.session = { ...session, liveTurn: { turnId: "before-follow-up", text: answer, items: [{
+    itemId: "before-follow-up", text: answer, phase: "awaiting-echo", startedAt: AT(0), completedAt: AT(1), omittedChars: 42,
+  }] } };
+  enqueueOutbox(CONVERSATION_ID, { id: "follow-up", text: "My next request", images: 0, at: Date.parse(AT(5)) });
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.querySelector("[data-live-turn-omitted-chars]")?.textContent).toContain("42");
+  const followUp = host.querySelector("[data-message-row]")!.closest("[data-feed-kind]")!;
+  expect(row.compareDocumentPosition(followUp) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  tailState.lines = [JSON.stringify({ type: "assistant", uuid: "before-follow-up", timestamp: AT(1),
+    message: { content: [{ type: "text", text: answer }] } })];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="before-follow-up"]')).toBe(row);
+  expect(row.querySelector("[data-live-turn-omitted-chars]")).toBeNull();
+  expect(row.compareDocumentPosition(followUp) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("one host message keeps prose before its same-timestamp tool", () => {
+  const liveTurn = projectRuntimeLiveTurnItem(null, "one-message", {
+    type: "assistant", uuid: "one-message-prose", message: { content: [
+      { type: "text", text: "First the explanation." },
+      { type: "tool_use", id: "one-message-tool", name: "Bash", input: { command: "pwd" } },
+    ] },
+  }, "completed", AT(1));
+  sessionState.session = { ...session, liveTurn };
+  expect(liveRows(render().host)).toEqual(["prose:one-message-prose", "tool:one-message-tool:run"]);
+});
+
+test("an idle broker's stranded draft leaves the rendered feed once the transcript advances", () => {
+  sessionState.session = { ...session, liveTurn: { turnId: "stranded", text: "Partial draft", items: [{
+    itemId: null, text: "Partial draft", phase: "streaming", startedAt: AT(0), completedAt: null,
+  }] } };
+  const { host, paint } = render();
+  expect(host.querySelector("[data-live-turn-caret]")).not.toBeNull();
+  sessionState.session = { ...sessionState.session, turn: "idle", liveTurn: null };
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(5), message: { content: "Later request" } })];
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBeNull();
+  expect(host.querySelector("[data-live-turn-caret]")).toBeNull();
+});
+
+test("canonical text-tool-text fragments retain their source order at handoff", () => {
+  const record = { type: "assistant", uuid: "fragmented-answer", timestamp: AT(1), message: { content: [
+    { type: "text", text: "Before call" },
+    { type: "tool_use", id: "fragmented-tool", name: "Bash", input: { command: "pwd" } },
+    { type: "text", text: "After call" },
+  ] } };
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(null, "fragments", record, "completed", AT(1)) };
+  const { host, paint } = render();
+  tailState.lines = [JSON.stringify(record)];
+  paint();
+  expect([...host.querySelectorAll<HTMLElement>("[data-feed-kind]")].map(row => row.dataset.feedKind === "tool" ? "tool" : row.textContent?.includes("Before call") ? "before" : "after"))
+    .toEqual(["before", "tool", "after"]);
+});
+
+test("the shared live tail bounds prose and tools while retaining older replies", () => {
+  sessionState.session = { ...session, liveTurn: { turnId: "bounded", text: "Reply 39", items: Array.from({ length: 40 }, (_, i) => ({
+    itemId: `bounded-${i}`, text: `Reply ${i}`, phase: "awaiting-echo" as const, startedAt: AT(i), completedAt: AT(i),
+  })) } };
+  const { host } = render();
+  expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(8);
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("32");
+});
+
+test("streaming markdown holds unfinished fences and tables until completion", () => {
+  const partial = "Patch:\n\n```ts\nconst x = 1;";
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "markdown", partial, AT(1)) };
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.textContent).toContain("const x = 1;");
+  expect(row.querySelector("pre")).toBeNull();
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(sessionState.session.liveTurn, "markdown", "\n```\n\n| Name | Value |", AT(2)) };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(row.querySelector("pre")).not.toBeNull();
+  expect(row.querySelector("table")).toBeNull();
+  const complete = `${partial}\n\`\`\`\n\n| Name | Value |\n| --- | --- |\n| x | 1 |`;
+  const record = { type: "assistant", uuid: "markdown-answer", timestamp: AT(3), message: { content: [{ type: "text", text: complete }] } };
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(sessionState.session.liveTurn, "markdown", record, "completed", AT(3)) };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(row.querySelector("table")).not.toBeNull();
+  tailState.lines = [JSON.stringify(record)];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="markdown-answer"]')).toBe(row);
+});
+
+test.each([false, true])("pending replies retain the seat continuation after a deputy (phone=%s)", (mobile) => {
+  phone = mobile;
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(0), message: { content: "Original request" } })];
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "after-deputy", "Seat resumes", AT(2)) };
+  const { host, paint } = render([{ askId: "deputy", startedAt: AT(1), state: "ended" } as SeatDeputyView]);
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.querySelector('[data-seat-speaker="resumes"]')?.textContent).toContain("Original request");
+  const record = { type: "assistant", uuid: "seat-reply", timestamp: AT(3), message: { content: [{ type: "text", text: "Seat resumes" }] } };
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(sessionState.session.liveTurn, "after-deputy", record, "completed", AT(3)) };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(row.querySelector('[data-seat-speaker="resumes"]')?.textContent).toContain("Original request");
+  tailState.lines = [...tailState.lines, JSON.stringify(record)];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="seat-reply"]')).toBe(row);
+  expect(row.querySelectorAll('[data-seat-speaker="resumes"]')).toHaveLength(1);
+});
+
+test("a pending seat reply keeps the live speaker lead while a deputy is active", () => {
+  tailState.lines = [0, 2].map(second => JSON.stringify({ type: "user", timestamp: AT(second), message: { content: `Request ${second}` } }));
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "active-deputy", "Seat reply", AT(3)) };
+  const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "active" } as SeatDeputyView]);
+  expect(host.querySelector('[data-live-turn] [data-seat-speaker="live"]')).not.toBeNull();
 });

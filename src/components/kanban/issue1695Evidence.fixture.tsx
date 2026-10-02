@@ -1,3 +1,4 @@
+import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
 import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -96,8 +97,26 @@ const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
 const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
+const FEED_CONTINUITY = SCENARIO === "feed-continuity";
+const FEED_FAILURES = SCENARIO === "feed-failures";
+let feedContinuityStep = 0;
+const continuousAnswer = L("The answer stays here while the transcript catches up.", "Відповідь залишається тут, поки запис розмови наздоганяє її.");
+if (FEED_FAILURES) {
+  const parse = JSON.parse;
+  JSON.parse = function (text, reviver) {
+    const value = parse(text, reviver);
+    if (value?.fixtureToolArgs) Object.defineProperty(value, "cmd", {
+      enumerable: false,
+      get() { throw new Error("Fixture record processing failure"); },
+    });
+    return value;
+  };
+}
+const FEED_RECOVERY = SCENARIO === "feed-recovery";
+let feedRecoveryEcho = false;
+const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE;
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -337,6 +356,7 @@ const searchRev = add(conversation("search-rev", "Review the warm-up gate", { mt
 const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s after the swap", { mtime: now - 90 * MIN }));
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
+if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
 let snapshotReads = 0;
 function structuredSnapshot() {
@@ -345,7 +365,12 @@ function structuredSnapshot() {
     schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
     sessions: [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      turn: FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
+      ...(FEED_CONTINUITY ? { liveTurn: feedContinuityStep === 2 ? null : {
+        turnId: "continuity-turn", text: continuousAnswer, items: [{ itemId: feedContinuityStep ? "continuity-answer" : null,
+          text: continuousAnswer, phase: feedContinuityStep ? "awaiting-echo" : "streaming",
+          startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null }],
+      } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
     }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
@@ -1765,6 +1790,16 @@ function transcriptOf(pathname: string): string {
   if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
+  if (FEED_CONTINUITY && file === searchVer2) return `${[
+    asked(120, L("Please check the result.", "Перевір результат, будь ласка.")),
+    ...(feedContinuityStep >= 1 ? [asked(30, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка."))] : []),
+    ...(feedContinuityStep >= 3 ? [line(60, { type: "assistant", uuid: "continuity-answer", message: { content: [{ type: "text", text: continuousAnswer }] } })] : []),
+  ].join("\n")}\n`;
+  if (FEED_FAILURES && file === searchVer2) return `${[
+    line(60, { type: "event_msg", payload: { type: "task_complete", error: { message: "fixture provider failure", codex_error_info: "unauthorized" } } }),
+    line(30, { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "fixture-failed-tool", arguments: JSON.stringify({ fixtureToolArgs: true, cmd: "pwd" }) } }),
+  ].join("\n")}\n`;
+  if (FEED_RECOVERY && file === searchVer2) return `${[said(120, L("Ready for the next request.", "Готовий до наступного запиту.")), ...(feedRecoveryEcho ? [asked(0, delayedLaunchText)] : [])].join("\n")}\n`;
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
@@ -1861,7 +1896,32 @@ let board = {
   },
 } as unknown as BoardProjectStateV1;
 
+if (FEED_RECOVERY) searchVer2.generation = 1;
+
 const evidence = {
+  advanceFeedContinuity() { feedContinuityStep += 1; return getRuntimeBus().refresh(); },
+  failFeedDelivery() {
+    const id = "fixture-failed-delivery";
+    enqueueOutbox(searchVer2.conversationId!, { id, text: L("Send this follow-up.", "Надішли це уточнення."), images: 0, at: Date.now() });
+    updateOutbox(searchVer2.conversationId!, id, { state: "failed", error: "Fixture delivery refused", settledAt: Date.now() });
+  },
+  seedDelayedLaunch() {
+    const card = searchVer2.conversationId!;
+    const at = Date.now();
+    const seed = { id: "delayed-launch", text: delayedLaunchText, images: 0, at,
+      owner: { conversationId: card, generation: 1 } };
+    seedLaunchOutbox(card, seed);
+    updateOutbox(card, seed.id, { state: "delivered", settledAt: at });
+    for (let i = 0; i < OUTBOX_LIMIT; i++) {
+      const id = `settled-filler-${i}`;
+      enqueueOutbox(card, { id, text: `Settled filler ${i}`, images: 0, at: at + i + 1 });
+      updateOutbox(card, id, { state: "delivered", settledAt: at, responseStartedAt: at });
+    }
+    seedLaunchOutbox(card, seed);
+    return readOutbox(card).find(entry => entry.id === seed.id)?.state;
+  },
+  publishDelayedLaunch() { feedRecoveryEcho = true; },
+  delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
@@ -2770,7 +2830,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if (FIRST_MESSAGE && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }

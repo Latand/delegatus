@@ -312,7 +312,7 @@ export type Item = (
      or an internal relay card. Without evidence it renders as this system row. */
   | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
-  | { kind: "raw"; text: string; err: boolean }
+  | { kind: "raw"; text: string; err: boolean; processingError?: { recordType: string; line: number; message: string } }
 ) & { structuredUserRef?: string };
 
 /* The wire text can begin with marker-shaped literal content. Keep it outside
@@ -3467,25 +3467,38 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return;
     }
     if (jsonl) {
+      let obj: unknown;
       try {
-        const obj = JSON.parse(line);
+        obj = JSON.parse(line);
+      } catch {
+        addRecord(null, "malformed_record", { source: line });
+        return;
+      }
+      try {
         if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          const record = obj as Record<string, unknown>;
           const tracksTurns = cfg.fmt === "claude" || cfg.fmt === "codex";
-          const facts = tracksTurns ? classifyTurnRecord(obj, cfg.fmt === "codex") : null;
+          const facts = tracksTurns ? classifyTurnRecord(record, cfg.fmt === "codex") : null;
           if (facts) {
             latestTurnTimestamp = facts.timestampMs ?? latestTurnTimestamp;
             if (facts.starts) beginTurn(facts.timestampMs);
             else if (facts.assistantRecord && !facts.fails && turnFailed) recoverFailedTurn();
           }
-          if (cfg.fmt === "claude") renderClaude(obj);
-          else if (cfg.fmt === "openclaw") renderOpenclaw(obj);
-          else if (cfg.fmt === "copilot") renderCopilot(obj);
-          else renderCodex(obj);
+          if (cfg.fmt === "claude") renderClaude(record);
+          else if (cfg.fmt === "openclaw") renderOpenclaw(record);
+          else if (cfg.fmt === "copilot") renderCopilot(record);
+          else renderCodex(record);
           if (facts?.fails) finishTurn(true);
           else if (facts?.closes) finishTurn(false);
         } else addRecord(null, "malformed_record", { value: obj });
-      } catch {
-        addRecord(null, "malformed_record", { source: line });
+      } catch (error) {
+        const recordType = redactSecrets(textPart(rec(obj).type)).slice(0, 120) || "unknown";
+        const message = redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 1000);
+        const processingError = { recordType, line: curSrc + 1, message };
+        // Do not call translation or tool-card code again in its failure path.
+        // The raw fallback also stays readable outside the conversation surface.
+        push({ kind: "raw", err: true, processingError,
+          text: `Record processing failed (${recordType}, line ${curSrc + 1}): ${message}` });
       }
     } else renderPlain(line);
   };
