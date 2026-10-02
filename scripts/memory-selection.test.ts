@@ -470,3 +470,19 @@ test("native Claude queued human provenance outranks the generic meta flag", () 
   expect(result.counts).toMatchObject({ messages: 5, machine: 1, eligible: 4, sampled: 4 });
   expect(result.cases.map(c => c.prompt).sort()).toEqual(records.slice(0, 4).map(r => r.message.content));
 });
+
+
+test("native subsecond events survive while mirrored event copies are folded", () => {
+  const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite"), transcript = path.join(dir, "native.jsonl");
+  memoryDb(mp).close();
+  const lines = [".100Z", ".900Z", ".100Z"].map(fraction => JSON.stringify({ type: "response_item", timestamp: "2026-01-01T00:00:00" + fraction,
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Please continue." }] } }) + "\n");
+  fs.writeFileSync(transcript, lines.join(""));
+  const db = new Database(tp);
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
+  db.query("INSERT INTO transcript_files VALUES (?,?,?)").run(transcript, "codex", "project-a");
+  let offset = 0;
+  lines.forEach((line, i) => { db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,?)").run(transcript, i, "Please continue.", 1, "user", offset); offset += Buffer.byteLength(line); });
+  db.close();
+  expect(collect(tp, mp).counts).toMatchObject({ messages: 3, copies: 1, eligible: 2, sampled: 2 });
+});

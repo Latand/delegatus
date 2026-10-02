@@ -279,7 +279,13 @@ export function collect(transcripts: string, memories: string, limit = SAMPLE_LI
         // and the exact control-envelope exclusions still take precedence.
         message.machineOrigin = origin === "agent" || (!nativeHuman && (record.isMeta === true || record.promptSource === "system"));
         message.operatorOrigin = origin === "operator" || nativeHuman;
-        message.eventId = record.uuid ?? hash(message.engine + ":" + message.timestamp + ":" + message.body);
+        const nativeId = record.uuid ?? record.payload?.id ?? record.id;
+        // The index floors timestamps to seconds. Keep the source precision
+        // so independent repeated replies within a second cannot collapse.
+        message.eventId = typeof nativeId === "string" ? `${message.engine}:${nativeId}`
+          : typeof record.timestamp === "string" || typeof record.timestamp === "number"
+            ? hash(message.engine + ":" + record.timestamp + ":" + message.body)
+            : `${message.transcript_path}:${message.message_index}`;
       } catch { throw new Error("Indexed transcript provenance unavailable; collection refused"); }
       finally { if (fd !== undefined) fs.closeSync(fd); }
     }
