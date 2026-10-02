@@ -31,6 +31,9 @@ let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
   probePageAndChunk, selfUpdatePaths, watchRestartRequests;
 let probeHeadersFrom, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
+let createRelaunch, relaunch;
+let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
+let lockLauncherStartup;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -60,6 +63,8 @@ const RESTART_READINESS_TIMEOUT_MS = 90_000;
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
 const LAUNCHER_HANDOFF_PROTOCOL = "delegatus-checkout-launcher-v2";
+// Viewer can inspect a release before loading its first capable launcher.
+const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
 const launcherCheckout = process.env.LLV_LAUNCHER_REEXEC === "1" ? process.env.LLV_LAUNCHER_CHECKOUT : undefined;
 
 /* Dependency-free CLI localization: English by default, Ukrainian when
@@ -234,6 +239,7 @@ function usage() {
 }
 
 function fail(message) {
+  if (relaunch?.hasTrial()) throw new Error(message);
   startupOutput.release();
   console.error(message);
   process.exit(1);
@@ -497,7 +503,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
     if (state.stopping || state.restarting) {
       return;
     }
-    launch.onUnexpectedExit?.(child);
+    if (launch.onUnexpectedExit?.(child) === true) return;
 
     // The server dying on its own (crash, EADDRINUSE) still leaves `tailscale
     // serve` running as our child; stop it through the bounded path (SIGTERM,
@@ -754,10 +760,6 @@ function probe(url) {
   });
 }
 
-async function portAlreadyResponds(port) {
-  return probe(`http://127.0.0.1:${port}/api/files`);
-}
-
 /* `processHandle`, when given, is the child the readiness belongs to: its exit
    ends the wait at once, since a port answered by anyone else is no proof. */
 async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processHandle = null) {
@@ -1004,6 +1006,41 @@ async function main() {
     return;
   }
 
+  const runtimeHostConfig = cliRuntimeHostConfig(packageRoot);
+  const selfUpdate = selfUpdatePaths({
+    stateDirectory: runtimeHostConfig.stateDirectory,
+    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
+    installId: runtimeHostConfig.installId,
+  });
+  const checkout = isGitCheckout(packageRoot);
+  const releaseNow = () => (checkout
+    ? installedRelease(selfUpdate.releasePointer, packageRoot)
+    : { dir: packageRoot, sha: null, published: false });
+  // A rejected competing startup must never load or roll back the owner's
+  // shared trial. Claim startup custody before creating its controller.
+  const startupLock = lockLauncherStartup(selfUpdate.record);
+  assertLauncherAvailable(selfUpdate);
+  let record = null;
+  let runtimeHostSupervisor = null;
+  const tailscaleProcessRef = { current: null };
+  const serverRef = { current: null, release: releaseNow() };
+  let webRestartTimer = null;
+  let webRecovery = null;
+  let webRestartFailures = 0;
+  let recoverWeb = null;
+  const pauseWebRecovery = () => {
+    if (webRestartTimer) clearTimeout(webRestartTimer);
+    webRestartTimer = null;
+  };
+  relaunch = createRelaunch({ paths: selfUpdate, installRoot: packageRoot, entry: cliPath,
+    release: serverRef.release, servingRelease: () => serverRef.release, record: {
+      set: (...input) => record?.set(...input), remove: () => record?.remove(),
+    },
+    stop: () => {
+      recoverWeb = null;
+      pauseWebRecovery();
+      return stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
+    } });
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);
@@ -1027,9 +1064,9 @@ async function main() {
     throw error;
   }
 
-  if (await portAlreadyResponds(options.port)) {
-    console.error(m.portBusy(options.port));
-    process.exit(1);
+  assertLauncherAvailable(selfUpdate);
+  if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
+    fail(m.portBusy(options.port));
   }
 
   // Snapshot who holds each non-loopback address before the Viewer exists, so
@@ -1046,7 +1083,6 @@ async function main() {
     }
   }
 
-  const runtimeHostConfig = cliRuntimeHostConfig(packageRoot);
   const runtimeHostEnvironment = cliRuntimeHostEnvironment(process.env, runtimeHostConfig);
 
   /* Self-update (#2007). A git checkout starts each child from the release
@@ -1054,16 +1090,11 @@ async function main() {
      records what it started, and restarts one child when the surface asks.
      A packaged install records its children too, and the surface reads the
      record's missing checkout as "updates come from the package manager". */
-  const checkout = isGitCheckout(packageRoot);
-  const selfUpdate = selfUpdatePaths({
-    stateDirectory: runtimeHostConfig.stateDirectory,
-    cacheDirectory: process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"),
-    installId: runtimeHostConfig.installId,
-  });
-  const releaseNow = () => (checkout
-    ? installedRelease(selfUpdate.releasePointer, packageRoot)
-    : { dir: packageRoot, sha: null, published: false });
-  const record = createLauncherRecord(selfUpdate.record, {
+  await takeOverOrphanHost(selfUpdate, runtimeHostConfig);
+  const launcherRevision = headRevision(dirname(cliDir));
+  // Adoption and bind checks yielded: verify custody once more before writing.
+  assertLauncherAvailable(selfUpdate);
+  record = createLauncherRecord(selfUpdate.record, {
     checkout: checkout ? packageRoot : null,
     releasesDir: selfUpdate.releasesDir,
     releasePointer: selfUpdate.releasePointer,
@@ -1071,8 +1102,9 @@ async function main() {
     port: options.port,
     socket: runtimeHostConfig.socketPath,
   });
+  record.set("launcher", { revision: launcherRevision, protocol: LAUNCHER_RELAUNCH_PROTOCOL });
 
-  const runtimeHostSupervisor = createRuntimeHostSupervisor(
+  runtimeHostSupervisor = createRuntimeHostSupervisor(
     runtimeHostConfig,
     viewerServerBunRuntime(),
     runtimeHostEnvironment,
@@ -1093,12 +1125,10 @@ async function main() {
     await runtimeHostSupervisor.start();
   } catch (error) {
     await runtimeHostSupervisor.stop();
-    record.remove();
+    if (!relaunch.hasTrial()) record.remove();
     fail(m.runtimeHostStartFail(error instanceof Error ? error.message : String(error)));
   }
 
-  const tailscaleProcessRef = { current: null };
-  const serverRef = { current: null, release: releaseNow() };
   const launchWeb = (release, restarting) => {
     const handle = startServer(
       resolveServer(release.dir, options.hostname),
@@ -1111,7 +1141,15 @@ async function main() {
       {
         restarting,
         extraEnv: { LLV_SELF_UPDATE_RECORD: selfUpdate.record },
-        onUnexpectedExit: (child) => record.set("web", { state: "failed", error: exitError(child, handle.startedAt) }),
+        onUnexpectedExit: (child) => {
+          record.set("web", { state: "failed", error: exitError(child, handle.startedAt) });
+          if (recoverWeb) {
+            if (Date.now() - handle.startedAt >= RUNTIME_HOST_STABLE_UPTIME_MS) webRestartFailures = 0;
+            recoverWeb();
+            return true;
+          }
+          return false;
+        },
       },
     );
     handle.startedAt = Date.now();
@@ -1120,9 +1158,11 @@ async function main() {
     record.started("web", handle.child, release);
     return handle;
   };
-  const serverProcess = launchWeb(serverRef.release, false);
+  const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
   let restartRequests = null;
   installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
+    recoverWeb = null;
+    pauseWebRecovery();
     restartRequests?.stop();
     record.remove();
   });
@@ -1135,7 +1175,11 @@ async function main() {
   }
 
   try {
-    await waitForReadiness(options.port);
+    await waitForReadiness(options.port, relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess);
+    if (relaunch.hasTrial()) {
+      const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
+      if (page) throw new Error(page);
+    }
   } catch (error) {
     await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
     fail(error instanceof Error ? error.message : m.serverNotReady());
@@ -1170,41 +1214,86 @@ async function main() {
     serverProcess.child.exitCode !== null ||
     serverProcess.child.signalCode !== null
   ) {
+    if (relaunch.hasTrial()) throw new Error("The replacement Viewer exited as it became ready.");
     process.exit(serverProcess.state.sawAddressInUse ? 1 : (serverProcess.child.exitCode ?? 1));
   }
   record.set("web", { state: "healthy", error: null });
+  // Rotation is a one-shot operator action. Recovery and restart keep the
+  // capability established by this first successful Viewer startup.
+  options.newOperatorToken = false;
+  delete runtimeHostEnvironment.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
+  delete process.env.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
+  serverProcess.state.restarting = false;
+  relaunch.succeeded();
+  startupLock.release();
 
   /* Restart requests are taken only once startup has finished, and only from
      a checkout: a packaged install is updated by its package manager. */
   if (checkout) {
+    const attemptWeb = async (release, verifyPage = true) => {
+      if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
+        return "port-in-use";
+      }
+      if (!recoverWeb) return "shutdown";
+      const handle = launchWeb(release, true);
+      try {
+        await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
+        if (verifyPage) {
+          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
+          if (page) throw new Error(page);
+        }
+        handle.state.restarting = false;
+        if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
+        return null;
+      } catch (error) {
+        await stopChild(handle);
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+    const scheduleWebRecovery = (release = serverRef.release) => {
+      if (webRestartTimer) return;
+      webRestartFailures += 1;
+      const delay = Math.min(RUNTIME_HOST_RESTART_BASE_MS * 2 ** Math.min(webRestartFailures - 1, 5), RUNTIME_HOST_RESTART_MAX_MS);
+      webRestartTimer = setTimeout(() => {
+        webRestartTimer = null;
+        webRecovery = attemptWeb(release, false).then(failure => {
+          if (!recoverWeb) return;
+          if (failure === null) {
+            record.set("web", { state: "healthy", error: null });
+          } else {
+            record.set("web", { state: "failed", error: failure === "port-in-use"
+              ? { kind: "port-in-use", port: options.port } : { kind: "message", text: failure } });
+            scheduleWebRecovery(release);
+          }
+        }).catch(error => {
+          if (!recoverWeb) return;
+          record.set("web", { state: "failed", error: { kind: "message", text: error instanceof Error ? error.message : String(error) } });
+          scheduleWebRecovery(release);
+        }).finally(() => { webRecovery = null; });
+      }, delay);
+    };
+    recoverWeb = () => scheduleWebRecovery();
     const restartWeb = async () => {
+      pauseWebRecovery();
       const previous = serverRef.current;
       const previousRelease = serverRef.release;
       record.set("web", { state: "stopping" });
       await stopChild(previous);
-      const attempt = async (release) => {
-        const handle = launchWeb(release, true);
-        try {
-          await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
-          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
-          if (page) throw new Error(page);
-          handle.state.restarting = false;
-          if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
-          return null;
-        } catch (error) {
-          await stopChild(handle);
-          return error instanceof Error ? error.message : String(error);
-        }
-      };
+      if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
+        record.set("web", { state: "failed", error: { kind: "port-in-use", port: options.port } });
+        scheduleWebRecovery(previousRelease);
+        return;
+      }
       const next = releaseNow();
-      const failure = await attempt(next);
+      const failure = await attemptWeb(next);
       if (failure === null) {
+        webRestartFailures = 0;
         record.set("web", { state: "healthy", error: null });
         return;
       }
       /* The web process is the page the operator restarts from: a release
          that does not come up gives way to the one it replaced. */
-      const fallbackFailure = await attempt(previousRelease);
+      const fallbackFailure = await attemptWeb(previousRelease, false);
       if (fallbackFailure === null) {
         record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail: failure } });
         return;
@@ -1214,6 +1303,7 @@ async function main() {
          next web restart request is still taken. */
       record.set("web", { state: "failed", error: { kind: "message", text: fallbackFailure } });
       console.error(m.webRestartFailed(fallbackFailure));
+      scheduleWebRecovery(previousRelease);
     };
     const restartHost = async () => {
       try {
@@ -1225,7 +1315,24 @@ async function main() {
         record.set("runtimeHost", { state: "failed", error: { kind: "message", text: error instanceof Error ? error.message : String(error) } });
       }
     };
-    restartRequests = watchRestartRequests(selfUpdate.request, async ({ requestId, role }) => {
+    restartRequests = watchRestartRequests(selfUpdate.request, async (request) => {
+      const { requestId, role } = request;
+      if (role !== "runtime-host") {
+        pauseWebRecovery();
+        if (webRecovery) await webRecovery;
+        pauseWebRecovery();
+      }
+      if (role === "relaunch") {
+        try { await relaunch.begin(request, releaseNow()); }
+        catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          if (relaunch.hasTrial()) await relaunch.failed(detail);
+          record.set("launcher", { state: "healthy", requestId, error: { kind: "message", text: detail } });
+        } finally {
+          if (recoverWeb && record.read().web.state !== "healthy") recoverWeb();
+        }
+        return;
+      }
       const key = role === "web" ? "web" : "runtimeHost";
       record.set(key, { requestId });
       if (role === "web") await restartWeb();
@@ -1395,6 +1502,9 @@ async function checkoutLauncher() {
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));
   ({ linkSkills } = await import("./skillLinks.mjs"));
+  ({ createRelaunch } = await import("./launcher-relaunch.mjs"));
+  ({ assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost } = await import("./launcher-adoption.mjs"));
+  ({ lockLauncherStartup } = await import("./launcher-lock.mjs"));
   delete process.env.LLV_LAUNCHER_REEXEC;
   delete process.env.LLV_LAUNCHER_CHECKOUT;
   await main();
@@ -1404,5 +1514,6 @@ const selectedLauncher = releaseLauncher();
 try {
   if (!selectedLauncher || !(await handOffLauncher(selectedLauncher))) await checkoutLauncher();
 } catch (error) {
+  if (relaunch?.hasTrial()) await relaunch.failed(error instanceof Error ? error.message : String(error));
   fail(error instanceof Error ? error.message : String(error));
 }

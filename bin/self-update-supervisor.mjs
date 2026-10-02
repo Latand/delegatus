@@ -36,7 +36,7 @@ import { dirname, join } from "node:path";
 import { appDirIn } from "./appDir.mjs";
 
 export const RECORD_VERSION = 1;
-const REQUEST_ROLES = new Set(["web", "runtime-host"]);
+const REQUEST_ROLES = new Set(["web", "runtime-host", "relaunch"]);
 
 /**
  * @param {{ stateDirectory: string, cacheDirectory: string, installId: string }} input
@@ -47,6 +47,8 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
     record: join(base, `launcher-${installId}.json`),
     request: join(base, `request-${installId}.json`),
     releasePointer: join(base, `release-${installId}.json`),
+    trial: join(base, `trial-${installId}.json`),
+    adopt: join(base, `adopt-${installId}.json`),
     /* Each release holds its own node_modules and .next (well over a
        gigabyte), so they live in the cache, not in the state directory. */
     releasesDir: join(appDirIn(cacheDirectory), "self-update", installId, "releases"),
@@ -125,7 +127,9 @@ function emptyProcess() {
 export function createLauncherRecord(file, base, clock = () => Date.now()) {
   const record = {
     version: RECORD_VERSION,
-    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1 },
+    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1,
+      ...(process.platform !== "win32" && typeof process.execve === "function" ? { relaunch: 1 } : {}),
+      revision: null, requestId: null, state: "starting", error: null },
     ...base,
     web: emptyProcess(),
     runtimeHost: emptyProcess(),
@@ -144,7 +148,7 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
   return {
     file,
     read: () => record,
-    /** @param {"web" | "runtimeHost"} role */
+    /** @param {"web" | "runtimeHost" | "launcher"} role */
     set(role, patch) {
       record[role] = { ...record[role], ...patch };
       flush();
@@ -164,7 +168,13 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
       flush();
     },
     remove() {
-      rmSync(file, { force: true });
+      try {
+        const current = JSON.parse(readFileSync(file, "utf8"));
+        if (current?.launcher?.pid === record.launcher.pid
+          && current?.launcher?.startIdentity === record.launcher.startIdentity) rmSync(file, { force: true });
+      } catch (error) {
+        if (error.code !== "ENOENT") console.error("[self-update] could not remove the owned launcher record.");
+      }
     },
   };
 }
@@ -176,8 +186,8 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
  * mid-restart never replays it.
  *
  * @param {string} requestFile
- * @param {(request: { requestId: string, role: "web" | "runtime-host" }) => Promise<void>} handle
- * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host", autoGateId: string }) => Promise<boolean> }} options
+ * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }) => Promise<void>} handle
+ * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean> }} options
  */
 export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false } = {}) {
   let busy = false;
@@ -207,7 +217,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
       rmSync(requestFile, { force: true });
-      await handle({ requestId: request.requestId, role: request.role });
+      await handle(request);
     } catch (error) {
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {

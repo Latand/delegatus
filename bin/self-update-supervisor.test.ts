@@ -95,6 +95,8 @@ describe("paths, entry and identity", () => {
       record: "/s/self-update/launcher-abc.json",
       request: "/s/self-update/request-abc.json",
       releasePointer: "/s/self-update/release-abc.json",
+      trial: "/s/self-update/trial-abc.json",
+      adopt: "/s/self-update/adopt-abc.json",
       releasesDir: "/c/delegatus/self-update/abc/releases",
     });
   });

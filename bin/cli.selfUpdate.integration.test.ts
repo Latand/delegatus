@@ -80,7 +80,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean 
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -192,9 +192,9 @@ async function served(port: number): Promise<string> {
   return (await fetch(`http://127.0.0.1:${port}/`)).text();
 }
 
-async function start(fixture: ReturnType<typeof install>) {
+async function start(fixture: ReturnType<typeof install>, args: string[] = []) {
   const port = await availablePort();
-  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], {
+  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port), ...args], {
     cwd: fixture.checkout,
     env: fixture.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -221,6 +221,260 @@ function socketAnswers(socketPath: string): Promise<boolean> {
 function request(record: LauncherRecord, role: "web" | "runtime-host", requestId: string): void {
   writeFileSync(record.requestFile, JSON.stringify({ requestId, role }));
 }
+
+test("relaunch replaces launcher, web and host under the same supervisor PID", async () => {
+  const fixture = install();
+  const { port, child } = await start(fixture);
+  const before = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  const next = release(fixture, "whole-install");
+  writeFileSync(before.releasePointer, JSON.stringify({ sha: next.sha, dir: next.dir, checkoutHead: fixture.first }));
+  writeFileSync(before.requestFile, JSON.stringify({ requestId: "whole-install", role: "relaunch", target: next.sha }));
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    const launcher = record.launcher as typeof record.launcher & { requestId?: string; revision?: string; state?: string };
+    return launcher.requestId === "whole-install" && launcher.state === "healthy" && launcher.revision === next.sha
+      && record.web.state === "healthy" && record.web.revision === next.sha.slice(0, 7)
+      && record.runtimeHost.state === "healthy" && record.runtimeHost.revision === next.sha.slice(0, 7) ? record : null;
+  });
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(readlinkSync(`/proc/${after.launcher.pid}/cwd`)).toBe(next.dir);
+  expect(after.web.pid).not.toBe(before.web.pid);
+  expect(after.runtimeHost.pid).not.toBe(before.runtimeHost.pid);
+  expect(after.web.revision).toBe(next.sha.slice(0, 7));
+  expect(after.runtimeHost.revision).toBe(next.sha.slice(0, 7));
+  expect(existsSync(`/proc/${before.web.pid}`)).toBe(false);
+  expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(false);
+  expect(await served(port)).toBe(next.dir);
+  expect(child.exitCode).toBeNull();
+}, 30_000);
+
+test("a competing startup preserves the owner's in-flight relaunch trial", async () => {
+  const fixture = install();
+  const { port, child } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  const next = release(fixture, "slow-trial");
+  writeFileSync(path.join(next.dir, "node_modules", ".bin", "next"), "await Bun.sleep(4000);\n" + STUB_NEXT(false));
+  const pointer = JSON.stringify({ ...next, checkoutHead: fixture.first });
+  writeFileSync(before.releasePointer, pointer);
+  writeFileSync(before.requestFile, JSON.stringify({ role: "relaunch", requestId: "owned-trial", target: next.sha, rollbackPointer: null }));
+  const trialFile = before.requestFile.replace("request-", "trial-");
+  await until(() => existsSync(trialFile) && readRecord(fixture.state).web.state === "starting");
+  const intent = readFileSync(trialFile, "utf8");
+  const competitor = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(await availablePort())], {
+    cwd: fixture.checkout, env: fixture.env, stdio: "ignore",
+  });
+  children.add(competitor);
+  await until(() => competitor.exitCode !== null);
+  expect(competitor.exitCode).toBe(1);
+  expect(existsSync(before.releasePointer)).toBe(true);
+  expect(readFileSync(before.releasePointer, "utf8")).toBe(pointer);
+  expect(readFileSync(trialFile, "utf8")).toBe(intent);
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.web.revision === next.sha.slice(0, 7)
+      && !existsSync(trialFile) ? record : null;
+  });
+  expect(after.launcher.pid).toBe(child.pid!);
+  expect(after.runtimeHost.revision).toBe(next.sha.slice(0, 7));
+  expect(await served(port)).toBe(next.dir);
+}, 30_000);
+
+test("a trial persistence failure leaves the serving processes untouched", async () => {
+  const fixture = install();
+  const { child, port } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  const next = release(fixture, "unwritable-trial");
+  writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+  mkdirSync(before.requestFile.replace("request-", "trial-"));
+  writeFileSync(before.requestFile, JSON.stringify({ requestId: "unwritable-trial", role: "relaunch", target: next.sha, rollbackPointer: null }));
+  await until(() => !existsSync(before.requestFile));
+  await Bun.sleep(250);
+  expect(existsSync(`/proc/${before.web.pid}`)).toBe(true);
+  expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(true);
+  expect(readRecord(fixture.state).launcher.pid).toBe(before.launcher.pid);
+  expect(await served(port)).toBe(fixture.checkout);
+  expect(child.exitCode).toBeNull();
+}, 30_000);
+
+for (const failure of ["web", "host", "launcher", "startup"] as const) {
+  test(`relaunch rolls back ${failure} failure and restores the exact pointer`, async () => {
+    const fixture = install();
+    const old = release(fixture, "serving");
+    const rawPointer = `${JSON.stringify({ ...old, checkoutHead: fixture.first }, null, 3)}\n`;
+    mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+    writeFileSync(pointerFile(fixture), rawPointer);
+    const { port, child } = await start(fixture);
+    const before = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+    });
+    const next = release(fixture, "broken-trial", {
+      broken: failure === "web", brokenHost: failure === "host",
+      ...(failure === "launcher" ? { launcher: 'throw new Error("fixture load failure");' } : {}),
+    });
+    // --version loads successfully; normal startup reaches this module later.
+    if (failure === "startup") rmSync(path.join(next.dir, "bin", "oomPolicy.mjs"));
+    writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+    writeFileSync(before.requestFile, JSON.stringify({ requestId: `rollback-${failure}`, role: "relaunch", target: next.sha, rollbackPointer: rawPointer }));
+    const after = await until(() => {
+      const record = readRecord(fixture.state);
+      const launcher = record.launcher as typeof record.launcher & { requestId?: string; error?: { kind: string } };
+      return launcher.requestId === `rollback-${failure}` && launcher.error?.kind === "fell-back"
+        && record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+    });
+    expect(readFileSync(before.releasePointer, "utf8")).toBe(rawPointer);
+    expect(after.launcher.pid).toBe(before.launcher.pid);
+    expect(after.web.revision).toBe(old.sha.slice(0, 7));
+    expect(after.runtimeHost.revision).toBe(old.sha.slice(0, 7));
+    expect(await served(port)).toBe(old.dir);
+    if (failure === "launcher") {
+      expect(after.web.pid).toBe(before.web.pid);
+      expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+    }
+    expect(child.exitCode).toBeNull();
+  }, 40_000);
+}
+
+test("relaunch without a saved pointer rolls back to the release currently serving web", async () => {
+  const fixture = install();
+  const { port, child } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  const serving = release(fixture, "web-already-updated");
+  writeFileSync(before.releasePointer, JSON.stringify({ ...serving, checkoutHead: fixture.first }));
+  request(before, "web", "web-before-relaunch");
+  await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.web.revision === serving.sha.slice(0, 7);
+  });
+  const next = release(fixture, "failed-followup", { broken: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+  writeFileSync(before.requestFile, JSON.stringify({ requestId: "followup-relaunch", role: "relaunch", target: next.sha }));
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    const launcher = record.launcher as typeof record.launcher & { requestId?: string; error?: { kind: string } };
+    return launcher.requestId === "followup-relaunch" && launcher.error?.kind === "fell-back"
+      && record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  expect(existsSync(before.releasePointer)).toBe(true);
+  expect(JSON.parse(readFileSync(before.releasePointer, "utf8"))).toEqual({ sha: serving.sha, dir: serving.dir });
+  expect(after.web.revision).toBe(serving.sha.slice(0, 7));
+  expect(after.runtimeHost.revision).toBe(serving.sha.slice(0, 7));
+  expect(await served(port)).toBe(serving.dir);
+  expect(child.exitCode).toBeNull();
+}, 30_000);
+
+test("rollback retains the cold-restart readiness budget for the previous release", async () => {
+  const fixture = install();
+  writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"),
+    'if (process.env.LLV_LAUNCHER_TRIAL) await Bun.sleep(16000);\n' + STUB_NEXT(false));
+  git(fixture.checkout, "add", "-f", ".");
+  git(fixture.checkout, "commit", "-m", "cold rollback fixture");
+  fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  const old = release(fixture, "cold-serving");
+  const rawPointer = JSON.stringify({ ...old, checkoutHead: fixture.first });
+  mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+  writeFileSync(pointerFile(fixture), rawPointer);
+  const { child, port } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  const next = release(fixture, "cold-broken", { broken: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+  writeFileSync(before.requestFile, JSON.stringify({ requestId: "cold-rollback", role: "relaunch", target: next.sha, rollbackPointer: rawPointer }));
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    const launcher = record.launcher as typeof record.launcher & { requestId?: string; error?: { kind: string } };
+    return launcher.requestId === "cold-rollback" && launcher.error?.kind === "fell-back" && record.web.state === "healthy" ? record : null;
+  }, 25_000);
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(after.web.revision).toBe(old.sha.slice(0, 7));
+  expect(readFileSync(before.releasePointer, "utf8")).toBe(rawPointer);
+  expect(await served(port)).toBe(old.dir);
+  expect(child.exitCode).toBeNull();
+}, 30_000);
+
+for (const matchingIdentity of [true, false]) {
+test(`a recovery Viewer takeover requires its start identity, matching=${matchingIdentity}`, async () => {
+  const fixture = install();
+  const port = await availablePort();
+  const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
+  const socket = path.join(fixture.state, `runtime-host-${installId}.sock`);
+  const orphan = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "node_modules", ".bin", "next")], {
+    cwd: fixture.checkout, env: { ...fixture.env, PORT: String(port), LLV_RUNTIME_HOST_SOCKET: socket }, stdio: "ignore",
+  });
+  children.add(orphan);
+  await until(() => orphan.pid && existsSync(`/proc/${orphan.pid}/stat`));
+  await Bun.sleep(200);
+  expect(await served(port)).toBe(fixture.checkout);
+  const stat = readFileSync(`/proc/${orphan.pid}/stat`, "utf8");
+  const startIdentity = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  const base = path.join(fixture.state, "self-update");
+  mkdirSync(base, { recursive: true });
+  writeFileSync(path.join(base, `adopt-${installId}.json`), JSON.stringify({ pid: orphan.pid, startIdentity: matchingIdentity ? startIdentity : "0", port, socket }));
+  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], {
+    cwd: fixture.checkout, env: fixture.env, stdio: "ignore",
+  });
+  children.add(child);
+  if (!matchingIdentity) {
+    await until(() => child.exitCode !== null);
+    expect(child.exitCode).toBe(1);
+    expect(orphan.exitCode).toBeNull();
+    expect(await served(port)).toBe(fixture.checkout);
+    return;
+  }
+  const record = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  expect(record.web.pid).not.toBe(orphan.pid);
+  expect(orphan.signalCode).toBeNull();
+  expect(orphan.exitCode).toBe(0);
+  expect(await served(port)).toBe(fixture.checkout);
+}, 30_000);
+}
+
+test("overlapping starts retain one launcher while recovery adoption waits", async () => {
+  const fixture = install();
+  const port = await availablePort();
+  const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
+  const socket = path.join(fixture.state, `runtime-host-${installId}.sock`);
+  const stopping = path.join(fixture.root, "orphan-stopping");
+  const orphanEntry = path.join(fixture.root, "orphan.mjs");
+  writeFileSync(orphanEntry, 'import { writeFileSync } from "node:fs";\n' + STUB_NEXT(false).replace(
+    'const stop = () => { server.stop(true); process.exit(0); };',
+    `const stop = () => { writeFileSync(${JSON.stringify(stopping)}, "stopping"); setTimeout(() => { server.stop(true); process.exit(0); }, 1500); };`));
+  const orphan = spawn(process.execPath, ["--bun", orphanEntry], {
+    cwd: fixture.checkout, env: { ...fixture.env, PORT: String(port), LLV_RUNTIME_HOST_SOCKET: socket }, stdio: "ignore",
+  });
+  children.add(orphan);
+  await Bun.sleep(200);
+  expect(await served(port)).toBe(fixture.checkout);
+  const stat = readFileSync(`/proc/${orphan.pid}/stat`, "utf8");
+  const startIdentity = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  const base = path.join(fixture.state, "self-update");
+  mkdirSync(base, { recursive: true });
+  writeFileSync(path.join(base, `adopt-${installId}.json`), JSON.stringify({ pid: orphan.pid, startIdentity, port, socket }));
+  const launch = (onPort: number) => {
+    const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(onPort)], {
+      cwd: fixture.checkout, env: fixture.env, stdio: "ignore",
+    });
+    children.add(child);
+    return child;
+  };
+  const first = launch(port);
+  await until(() => existsSync(stopping));
+  const second = launch(await availablePort());
+  await until(() => second.exitCode !== null);
+  expect(second.exitCode).toBe(1);
+  const record = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  expect(record.launcher.pid).toBe(first.pid!);
+  expect(first.exitCode).toBeNull();
+  expect(await served(port)).toBe(fixture.checkout);
+}, 30_000);
 
 test("one service restart runs the installed launcher and its admission-capable supervisor while checkout HEAD stays old", async () => {
   const fixture = install({ oldSupervisor: true });
@@ -521,6 +775,99 @@ test("a web restart whose new and previous releases both fail leaves the web fai
   expect(child.exitCode).toBeNull();
 }, 60_000);
 
+test("the serving web is recovered with backoff after an unexpected exit", async () => {
+  const fixture = install();
+  const { port, child } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  // Signal exactly the child recorded by this test's own launcher.
+  process.kill(before.web.pid!, "SIGTERM");
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.web.pid !== before.web.pid ? record : null;
+  });
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+  expect(await served(port)).toBe(fixture.checkout);
+  expect(child.exitCode).toBeNull();
+}, 30_000);
+
+for (const intervening of ["none", "runtime-host", "relaunch"] as const) {
+test(`a foreign port owner is left alone and recovery survives ${intervening}`, async () => {
+  const fixture = install();
+  const { port, child } = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  process.kill(before.web.pid!, "SIGTERM");
+  await until(() => !existsSync(`/proc/${before.web.pid}`));
+  const foreign = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("foreign") });
+  try {
+    request(before, "web", "foreign-port");
+    const refused = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.requestId === "foreign-port" && record.web.error?.kind === "port-in-use" ? record : null;
+    });
+    expect(refused.runtimeHost.pid).toBe(before.runtimeHost.pid);
+    expect(await served(port)).toBe("foreign");
+    expect(child.exitCode).toBeNull();
+    if (intervening === "runtime-host") {
+      request(before, "runtime-host", "intervening-host");
+      await until(() => {
+        const record = readRecord(fixture.state);
+        return record.runtimeHost.requestId === "intervening-host" && record.runtimeHost.state === "healthy";
+      });
+    }
+    if (intervening === "relaunch") {
+      const next = release(fixture, "failed-preflight", { launcher: 'throw new Error("fixture preflight failure");' });
+      writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+      writeFileSync(before.requestFile, JSON.stringify({ role: "relaunch", requestId: "intervening-relaunch", target: next.sha }));
+      await until(() => {
+        const record = readRecord(fixture.state);
+        const launcher = record.launcher as typeof record.launcher & { requestId?: string; error?: { kind: string } };
+        return launcher.requestId === "intervening-relaunch" && launcher.error?.kind === "fell-back";
+      });
+    }
+  } finally { foreign.stop(true); }
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.web.pid !== before.web.pid ? record : null;
+  });
+  if (intervening !== "runtime-host") expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+  expect(await served(port)).toBe(fixture.checkout);
+}, 30_000);
+}
+
+for (const source of ["argument", "environment"] as const) {
+test(`web recovery consumes operator rotation once from ${source}`, async () => {
+  const fixture = install();
+  const log = path.join(fixture.root, "rotation-log");
+  writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"),
+    `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(log)}, String(process.env.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY) + "\\n");\n` + STUB_NEXT(false));
+  const env = source === "environment" ? { ...fixture.env, LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY: "1" } : fixture.env;
+  const { port } = await start({ ...fixture, env }, source === "argument" ? ["--new-operator-token"] : []);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  process.kill(before.web.pid!, "SIGTERM");
+  await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" && record.web.pid !== before.web.pid ? record : null; });
+  expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["1", "undefined"]);
+  expect(await served(port)).toBe(fixture.checkout);
+}, 30_000);
+}
+
+test("a second launcher preserves the live launcher's record and children", async () => {
+  const fixture = install();
+  const first = await start(fixture);
+  const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+  const second = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(await availablePort())], {
+    cwd: fixture.checkout, env: fixture.env, stdio: "ignore",
+  });
+  children.add(second);
+  await until(() => second.exitCode !== null);
+  expect(second.exitCode).toBe(1);
+  const after = readRecord(fixture.state);
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(after.web.pid).toBe(before.web.pid);
+  expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+  expect(await served(first.port)).toBe(fixture.checkout);
+}, 30_000);
+
 test("a host restart whose new and previous releases both fail is retried by the backoff, never left down", async () => {
   const fixture = install();
   const { child } = await start(fixture);
@@ -534,7 +881,8 @@ test("a host restart whose new and previous releases both fail is retried by the
   request(before, "runtime-host", "restart-host-both-broken");
   const failed = await until(() => {
     const record = readRecord(fixture.state);
-    return record.runtimeHost.requestId === "restart-host-both-broken" && record.runtimeHost.state === "failed" ? record : null;
+    return record.runtimeHost.requestId === "restart-host-both-broken" && record.runtimeHost.state === "failed"
+      && record.runtimeHost.error?.kind === "message" ? record : null;
   });
   /* The restart's own summary: both releases were tried. */
   expect(failed.runtimeHost.error?.kind).toBe("message");

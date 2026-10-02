@@ -1,0 +1,71 @@
+/* Recovery processes are taken over only by their recorded identity and the
+   install socket in their own environment. An occupied port alone owns no PID. */
+import { readFileSync, rmSync } from "node:fs";
+import net from "node:net";
+import { readStartIdentity } from "./self-update-supervisor.mjs";
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+function alive(pid, identity) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[0] !== "Z" && fields[0] !== "X" && fields[19] === identity;
+  } catch { return false; }
+}
+function matchingProcess(candidate, socket, port = null) {
+  if (!Number.isSafeInteger(candidate?.pid) || candidate.pid <= 1 || candidate.pid === process.pid
+    || typeof candidate.startIdentity !== "string" || !alive(candidate.pid, candidate.startIdentity)) return false;
+  try {
+    const env = readFileSync(`/proc/${candidate.pid}/environ`, "utf8").split("\0");
+    return env.includes(`LLV_RUNTIME_HOST_SOCKET=${socket}`) && (port === null || env.includes(`PORT=${port}`));
+  } catch { return false; }
+}
+async function stopRecorded(candidate, socket, port = null) {
+  if (!matchingProcess(candidate, socket, port)) return false;
+  const signal = value => {
+    if (!matchingProcess(candidate, socket, port)) return;
+    try { process.kill(candidate.pid, value); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  };
+  signal("SIGTERM");
+  const deadline = Date.now() + 10_000;
+  while (alive(candidate.pid, candidate.startIdentity) && Date.now() < deadline) await wait(50);
+  if (alive(candidate.pid, candidate.startIdentity)) signal("SIGKILL");
+  return true;
+}
+function json(file) {
+  try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; }
+}
+export function assertLauncherAvailable(paths) {
+  const other = json(paths.record)?.launcher;
+  if (other && other.pid !== process.pid && alive(other.pid, other.startIdentity)) {
+    throw new Error("A live launcher already supervises this installation.");
+  }
+}
+export function portFree(port, hostname = "127.0.0.1") {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, hostname, () => server.close(() => resolve(true)));
+  });
+}
+export async function ensureWebPortFree(paths, port, socket, hostname = "127.0.0.1") {
+  if (await portFree(port, hostname)) return true;
+  const candidate = json(paths.adopt);
+  if (candidate?.port !== port || candidate?.socket !== socket || !await stopRecorded(candidate, socket, port)) return false;
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (await portFree(port, hostname)) { rmSync(paths.adopt, { force: true }); return true; }
+    await wait(50);
+  }
+  return false;
+}
+export async function takeOverOrphanHost(paths, config) {
+  const other = json(paths.record)?.launcher;
+  // A verified live supervisor retains custody of its host.
+  if (other && alive(other.pid, other.startIdentity)) return false;
+  const fence = json(config.fencePath);
+  if (!fence || typeof fence.startIdentity !== "string") return false;
+  const identity = readStartIdentity(fence.pid);
+  if (identity === null || fence.startIdentity !== `${fence.pid}:${identity}`) return false;
+  return stopRecorded({ pid: fence.pid, startIdentity: identity }, config.socketPath);
+}
