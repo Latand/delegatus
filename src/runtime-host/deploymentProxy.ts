@@ -70,22 +70,23 @@ export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host
     upstream = net.createConnection({ host: endpoint.hostname, port: Number(endpoint.port) });
     let responseStarted = false;
     upstream.on("data", () => { responseStarted = true; });
+    const body = `Delegatus Viewer unavailable.\nDeployment: ${target.container}\nRevision: ${target.revision}\n`;
+    const unavailableResponse = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"
+      + "Content-Type: text/plain; charset=utf-8\r\n"
+      + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
     upstream.on("error", () => {
       if (responseStarted) {
         destroyPeers();
         return;
       }
-      const body = `Delegatus Viewer unavailable.\nDeployment: ${target.container}\nRevision: ${target.revision}\n`;
-      endDownstream("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"
-        + "Content-Type: text/plain; charset=utf-8\r\n"
-        + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+      endDownstream(unavailableResponse);
     });
     downstream.pipe(upstream);
     upstream.pipe(downstream, { end: false });
     let upstreamEnded = false;
     upstream.once("end", () => {
       upstreamEnded = true;
-      endDownstream();
+      endDownstream(responseStarted ? undefined : unavailableResponse);
     });
     upstream.once("close", () => {
       // An upstream error may already be flushing the unavailable response.

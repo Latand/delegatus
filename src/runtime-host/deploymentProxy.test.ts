@@ -257,6 +257,60 @@ for (const responseStarted of [false, true]) {
   });
 }
 
+test("deployment proxy answers 503 when the Viewer ends before sending response bytes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
+  const targetFile = path.join(directory, "viewer-release.json");
+  const viewer = net.createServer((socket) => {
+    let request = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      request += chunk;
+      if (request.includes("\r\n\r\n")) socket.end();
+    });
+  });
+  const viewerSockets = ownAccepted(viewer);
+  const viewerPort = await listen(viewer);
+  await fs.writeFile(targetFile, JSON.stringify({
+    revision: "eof123", image: "viewer:test", container: "viewer-eof",
+    endpoint: `http://127.0.0.1:${viewerPort}`,
+  }));
+  const proxy = serveViewerDeploymentProxy(targetFile, 0);
+  const proxySockets = ownAccepted(proxy);
+  await once(proxy, "listening");
+  const address = proxy.address();
+  if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+
+  const accepted = once(proxy, "connection") as Promise<[net.Socket]>;
+  const client = net.createConnection(address.port, "127.0.0.1");
+  let response = "";
+  client.on("error", () => undefined);
+  client.on("data", (chunk) => { response += chunk.toString(); });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const clientClosed = new Promise<void>((resolve, reject) => {
+    client.once("close", resolve);
+    timeout = setTimeout(() => reject(new Error("proxy retained an EOF connection")), 2000);
+  });
+  try {
+    client.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    await clientClosed;
+    expect(response).toStartWith("HTTP/1.1 503 Service Unavailable\r\n");
+    expect(response).toContain("Delegatus Viewer unavailable");
+    expect(response).toContain("viewer-eof");
+    expect(response).toContain("eof123");
+    const [downstream] = await accepted;
+    expect(await destroyedWithin(downstream)).toBe(true);
+    await closesWithin(proxy);
+  } finally {
+    clearTimeout(timeout);
+    client.destroy();
+    proxySockets.destroyAll();
+    viewerSockets.destroyAll();
+    await close(proxy);
+    await close(viewer);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("deployment proxy server.close completes after clients receive and close", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llv-deployment-proxy-"));
   const proxy = serveViewerDeploymentProxy(path.join(directory, "missing-release.json"), 0);
