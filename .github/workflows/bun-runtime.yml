@@ -234,6 +234,28 @@ jobs:
             exit 1
           fi
 
+      - name: Verify journal startup and handoff against isolated history
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/journal-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/journal-config
+          LLV_STATE_DIR: ${{ runner.temp }}/journal-state
+          TMPDIR: ${{ runner.temp }}/journal-tmp
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          files=(
+            src/runtime-host/journalStartup.test.ts
+            src/runtime-host/runtimeHostStartup.test.ts
+            src/runtime-host/runtimeHostSuccession.process.test.ts
+            src/app/api/runtime/snapshot/route.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+            bun test "$file" 2>&1 | tee "$RUNNER_TEMP/journal-test.log"
+            grep -q "across 1 file" "$RUNNER_TEMP/journal-test.log"
+          done
+
       - name: Enforce MCP answer size budgets on an isolated board
         env:
           HOME: ${{ runner.temp }}/mcp-home
