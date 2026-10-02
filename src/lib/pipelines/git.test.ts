@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 
-import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
@@ -1362,44 +1362,46 @@ function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void, acceptedBo
   return { ...box, accepted, head };
 }
 
-function sameHunkRebaseSandbox() {
+function sameHunkRebaseSandbox(initialPrefixLines = 0, rebasedPrefixLines = 1) {
   const box = publishSandbox();
-  const repeatedComments = ["    # same context", "    # same context", "    # same context", "    # same context"];
+  const repeatedComments = Array.from({ length: 4 }, () => "    # same context");
+  const spacerComments = Array.from({ length: 8 }, () => "    # same context");
   const policy = (first: number, second: number) => [
     "def policy(admin):",
     ...repeatedComments,
     `    value = ${first}`,
-    ...repeatedComments,
-    "    first_result = value",
-    ...repeatedComments,
+    ...spacerComments,
     `    value = ${second}`,
     ...repeatedComments,
-    "    second_result = value",
-    "    return first_result, second_result",
+    "    return value",
     "",
   ].join("\n");
-  fs.writeFileSync(path.join(box.repo, "policy.py"), policy(1, 1));
+  const withPrefix = (first: number, second: number, lines: number) => [
+    ...Array.from({ length: lines }, (_, index) => `# prefix ${index + 1}`),
+    policy(first, second),
+  ].filter(Boolean).join("\n");
+  fs.writeFileSync(path.join(box.repo, "policy.py"), withPrefix(1, 1, initialPrefixLines));
   git(box.repo, "add", "policy.py");
   git(box.repo, "commit", "-m", "add policy functions");
   git(box.repo, "push", "origin", "main");
   git(box.subject.worktreeDir, "fetch", "origin");
   git(box.subject.worktreeDir, "rebase", "origin/main");
 
-  fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), policy(2, 1));
+  fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), policy(1, 2));
   git(box.subject.worktreeDir, "add", "policy.py");
   git(box.subject.worktreeDir, "commit", "-m", "change first policy");
   const accepted = git(box.subject.worktreeDir, "rev-parse", "HEAD");
   box.subject.lastPassedCommit = accepted;
   savePipelines([box.subject]);
 
-  fs.writeFileSync(path.join(box.repo, "policy.py"), `# newer main line\n${policy(1, 1)}`);
+  fs.writeFileSync(path.join(box.repo, "policy.py"), withPrefix(1, 1, rebasedPrefixLines));
   git(box.repo, "add", "policy.py");
   git(box.repo, "commit", "-m", "advance main above policy");
   git(box.repo, "push", "origin", "main");
   git(box.subject.worktreeDir, "fetch", "origin");
   git(box.subject.worktreeDir, "rebase", "origin/main");
   const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
-  return { ...box, accepted, head, policy };
+  return { ...box, accepted, head, policy: (first: number, second: number) => withPrefix(first, second, rebasedPrefixLines) };
 }
 
 test.each(["update", "revert"])("stage reconciliation retains accepted history followed by a builder %s", (operation) => {
@@ -1420,9 +1422,9 @@ test.each(["update", "revert"])("stage reconciliation retains accepted history f
 });
 
 test("stage reconciliation rejects an amended replay moved to an identical hunk in the same function", () => {
-  const box = sameHunkRebaseSandbox();
+  const box = sameHunkRebaseSandbox(0, 11);
   try {
-    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), `# newer main line\n${box.policy(1, 2)}`);
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), box.policy(2, 1));
     git(box.subject.worktreeDir, "add", "policy.py");
     git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
     const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
@@ -1441,8 +1443,31 @@ test("stage reconciliation rejects an amended replay moved to an identical hunk 
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("stage reconciliation matches a location-preserving replay after line shifts and later builder edits", () => {
-  const box = sameHunkRebaseSandbox();
+test.each([
+  ["one-line insertion with omitted new count", "@@ -0,0 +1 @@\n", 13, 12],
+  ["multi-line insertion", "@@ -0,0 +1,11 @@\n", 23, 12],
+  ["one-line deletion with omitted old count", "@@ -3 +2,0 @@\n", 2, 3],
+  ["multi-line deletion", "@@ -12,11 +12,0 @@\n", 12, 23],
+])("replay location mapping handles %s", (_case, diffHunk, replayStart, expectedAcceptedStart) => {
+  const subject = pipeline();
+  const accepted = "a".repeat(40);
+  const replay = "b".repeat(40);
+  const mappingExec: ExecPort = (_command, args) => {
+    if (args[0] === "rev-parse") {
+      return { code: 0, stdout: args[1] === `${accepted}^` ? "c".repeat(40) : "d".repeat(40), stderr: "" };
+    }
+    return { code: 0, stdout: diffHunk, stderr: "" };
+  };
+
+  expect(mapReplayPatchLocation(subject, accepted, replay, { path: "policy.py", start: replayStart }, mappingExec))
+    .toBe(expectedAcceptedStart);
+});
+
+test.each([
+  ["single-line insertion with omitted counts", 0, 1],
+  ["multi-line insertion", 0, 11],
+])("stage reconciliation maps a location-preserving replay after %s and later builder edits", (_case, initialPrefixLines, rebasedPrefixLines) => {
+  const box = sameHunkRebaseSandbox(initialPrefixLines, rebasedPrefixLines);
   try {
     const builderHead = box.commit("builder.txt", "later builder work\n");
     const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");

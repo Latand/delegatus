@@ -793,7 +793,7 @@ function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): E
 /** Map a replay hunk's parent-side line to the accepted commit's parent.
     Changes before the hunk shift its coordinate; a change overlapping the
     hunk start makes the location unprovable and must fail closed. */
-function mapReplayPatchLocation(
+export function mapReplayPatchLocation(
   pipeline: Pipeline,
   acceptedCommit: string,
   replayCommit: string,
@@ -811,9 +811,9 @@ function mapReplayPatchLocation(
   for (const line of diff.stdout.split("\n")) {
     const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (!hunk) continue;
-    const oldCount = Number(hunk[1] ?? 1);
-    const newStart = Number(hunk[2]);
-    const newCount = Number(hunk[3] ?? 1);
+    const oldCount = Number(hunk[2] ?? 1);
+    const newStart = Number(hunk[3]);
+    const newCount = Number(hunk[4] ?? 1);
     if (newCount > 0 && location.start >= newStart && location.start < newStart + newCount) return null;
     if (location.start >= newStart + newCount) delta += oldCount - newCount;
     else if (location.start >= newStart) return null;
