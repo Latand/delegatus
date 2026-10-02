@@ -138,6 +138,9 @@ let incumbentReads: number;
 /** The status read is DOWN: every attempt answers 503, which is what a panel
     reopened against a viewer that has not finished coming back sees (#1182). */
 let incumbentReadDown: boolean;
+/** While set, the seat read waits for it: the durable read that has not landed
+    yet after a Confirm (#2006). */
+let seatReadGate: Promise<void> | null;
 const realFetch = globalThis.fetch;
 
 function answer(queue: { status: number; body: Record<string, unknown> | null; throws?: boolean }[]): Response {
@@ -166,6 +169,7 @@ function installFetch(): void {
       return { ok: true, status: 200, json: async () => (target === "atlas" ? incumbentStatus : { project: target, designated: false, rotation: null, context: null }) } as Response;
     }
     if (url.startsWith("/api/orchestrator/seat?")) {
+      if (seatReadGate) await seatReadGate;
       const target = new URL(url, "http://localhost").searchParams.get("project");
       return { ok: true, status: 200, json: async () => (target === "atlas" ? seatStatus : { seat: null, pending: null, exists: true }) } as Response;
     }
@@ -306,6 +310,7 @@ beforeEach(() => {
   incumbentStatus = { project: "atlas", designated: false, rotation: null, context: null };
   incumbentReads = 0;
   incumbentReadDown = false;
+  seatReadGate = null;
   runtimePlaneOn = false;
   runtimeSession = null;
   runtimeAnswer = null;
@@ -700,6 +705,30 @@ test("a designation that fails leaves the rules folded under the error (#2166)",
   expect((host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
+test("a launched Confirm keeps the panel off the create draft until the durable read has answered (#2006)", async () => {
+  const host = mount();
+  await settle();
+  expect(panelState(host)).toBe("draft");
+
+  /* The POST is accepted and the seat read that follows it is still in flight:
+     `status` is the pre-Confirm read, naming no seat and no pending intent. */
+  let release: () => void = () => undefined;
+  seatReadGate = new Promise<void>((resolve) => { release = resolve; });
+  flushSync(() => confirmButton(host).click());
+  await settle();
+
+  expect(seatPosts).toHaveLength(1);
+  expect(panelState(host)).toBe("creating");
+  expect(host.querySelector("[data-orchestrator-draft]")).toBeNull();
+
+  seatStatus = { seat: activeSeat(), pending: null, exists: true, viewerMcpRegistered: false };
+  seatReadGate = null;
+  release();
+  await settle();
+  expect(panelState(host)).not.toBe("draft");
+  expect(host.querySelector("[data-orchestrator-draft]")).toBeNull();
+});
+
 test("a double-click designates ONCE and a retry after a lost reply replays the same key", async () => {
   seatResponses = [{ status: 0, body: null, throws: true }];
   const host = mount();
@@ -1010,7 +1039,7 @@ test("a cached «alive» nobody is answering for any more never accuses the seat
   /* The reading IS on hand — with no file in the catalog the board contributes
      no context of its own, so the header's model and wear can only be coming
      from the retained reading. */
-  expect(incumbentRow(host)?.textContent).toContain("opus");
+  expect(incumbentRow(host)?.textContent).toContain("Opus 5.5");
   expect(host.querySelector("[data-orchestrator-context]")?.getAttribute("data-orchestrator-context")).toBe("24");
   /* And it is not evidence: the panel keeps waiting instead of reporting a
      fault the server was never asked to confirm. */
@@ -1198,8 +1227,8 @@ test("the header names the incumbent — engine, model, account and context perc
   const row = incumbentRow(host)!;
   expect(row).not.toBeNull();
   expect(row.textContent).toContain("Claude");
-  expect(row.textContent).toContain("opus");
-  expect(row.textContent).toContain("high");
+  expect(row.textContent).toContain("Opus 5.5");
+  expect(row.textContent).toContain(translate("en", "reasoningTier.high"));
   /* The account catalog's own label, resolved from the id the server reports. */
   expect(row.textContent).toContain("spare");
   expect(row.querySelector("[data-orchestrator-context]")?.getAttribute("data-orchestrator-context")).toBe("24");
@@ -1687,7 +1716,7 @@ test("coming back to a project paints its conversation in the first commit, tran
   expect(dock.host.textContent).toContain("Atlas mandate accepted.");
   /* The incumbent header is whole too — the model is read, not degraded to the
      dash a fresh 60s-cadence status read would leave for a minute. */
-  expect(dock.host.textContent).toContain("opus");
+  expect(dock.host.textContent).toContain("Opus 5.5");
 
   /* The poll behind that paint still runs, and lands in place. */
   seatStatus = { seat: activeSeat({ conversationId: "conversation_successor", path: "/transcripts/successor.jsonl" }), pending: null, exists: true };

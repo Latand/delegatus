@@ -134,11 +134,13 @@ describe("the standing tick notice card", () => {
 
   test("the body is written in one language and keeps the ref line that makes it a notice", () => {
     const uk = seatTickSettingsCardText({ ...input, locale: "uk" });
-    expect(uk).toContain("Причина: a release afternoon.");
+    expect(uk).toContain("Вказівки на кожне пробудження: a release afternoon.");
+    expect(uk.indexOf("Пробудження цього проєкту")).toBeLessThan(uk.indexOf("Вказівки на кожне пробудження:"));
     expect(uk).toContain("Змінив(ла): призначений оркестратор (seat-1).");
     expect(uk).not.toContain("Reason given");
     const en = seatTickSettingsCardText({ ...input, locale: "en" });
-    expect(en).toContain("Reason given: a release afternoon.");
+    expect(en).toContain("Instructions for every wake: a release afternoon.");
+    expect(en.indexOf("Wakes for this project")).toBeLessThan(en.indexOf("Instructions for every wake:"));
     expect(en).toContain("Set by the designated seat (seat-1).");
     expect(en).not.toContain("Причина");
     for (const text of [uk, en]) expect(monitorRefIn(text)).toBe("seat-tick-settings");

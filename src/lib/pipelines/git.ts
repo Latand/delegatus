@@ -1,17 +1,21 @@
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
-import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, withDeliveryMutationAsync } from "./store";
+import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
 import type { Pipeline } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 
-export type PipelineGitResult = { ok: true; sha: string; baseBranch?: string } | { ok: false; error: string };
+export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
+export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
+  preservedLocalRef?: PreservedProvisionRef;
+};
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
@@ -109,6 +113,14 @@ export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
+/** Git canonicalizes a worktree's parent path in its registration. */
+function worktreePathMatches(registeredPath: string | undefined, lanePath: string): boolean {
+  if (!registeredPath) return false;
+  if (registeredPath === lanePath) return true;
+  try { return fs.realpathSync(registeredPath) === fs.realpathSync(lanePath); }
+  catch { return false; } // A missing path cannot prove this is the lane's checkout.
+}
+
 /** Provisioning alone uses this asynchronous port; stage Git keeps ExecPort. */
 export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
 
@@ -172,20 +184,66 @@ export async function resolvePipelineBaseAsync(
 }
 
 export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+  const preservation: { value?: PreservedProvisionRef } = {};
+  const result = await provisionPipelineCheckout(pipeline, exec, preservation, signal);
+  return preservation.value ? { ...result, preservedLocalRef: preservation.value } : result;
+}
+
+async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExecPort,
+  preservation: { value?: PreservedProvisionRef }, signal?: AbortSignal): Promise<PipelineGitResult> {
   if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const legacy = await exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${pipeline.branch}`], pipeline.repoDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : pipeline.branch;
-  // A pre-existing pipeline ref identifies an older checkout. New owners use
-  // the delivery ref directly, so no second branch can become a review fence.
-  const branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
+  // Preserve older lane refs. A delivery ref held by another worktree uses a
+  // lane ref too; publication still fences and writes the delivery target.
+  let branch = legacy.code === 0 ? pipeline.branch : deliveryBranch;
   if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
   const localRef = await exec("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], pipeline.repoDir, signal);
   const localSha = localRef.code === 0 ? localRef.stdout.trim() : null;
+  const owner = pipeline.delivery ? pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }) : null;
+  const sameOwner = owner?.id === pipeline.id && owner.createdAt === pipeline.createdAt
+    && owner.worktreeDir === pipeline.worktreeDir && owner.repoDir === pipeline.repoDir
+    && owner.delivery?.target.remote === pipeline.delivery?.target.remote
+    && deliveryOwnerError(pipeline, owner) === null;
+  const operation = sameOwner ? owner?.delivery?.operation : undefined;
+  const resumesPublication = !!operation && operation.epoch === pipeline.delivery?.epoch
+    && operation.sha === localSha && (operation.state === "pending" || operation.state === "running");
+  let ownsCheckout = false;
+  if (deliveryBranch !== pipeline.branch) {
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+    if (listing.code !== 0) return failure("checking ownership of the existing pipeline branch", listing);
+    const entries = listing.stdout.split("\0\0").map((record) => record.split("\0"));
+    ownsCheckout = entries.some((fields) => fields.includes(`branch refs/heads/${branch}`)
+      && worktreePathMatches(fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+    if (legacy.code === 0 && !ownsCheckout && !resumesPublication) {
+      const holder = entries.find((fields) => fields.includes(`branch refs/heads/${pipeline.branch}`));
+      const holdingPath = holder?.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+      const location = holdingPath ? `; it is held by worktree ${holdingPath}` : " and has no registered lane worktree";
+      return { ok: false, error: `pipeline branch ${pipeline.branch} already exists${location}; preserve it and choose a new pipeline branch/worktree or resume its owning lane` };
+    }
+  }
+  const resumesLocal = (ownsCheckout && sameOwner) || resumesPublication;
+  const holdsInitialPin = pipeline.baseRefPinned && localSha === pipeline.baseRef;
+  const backupPrefix = `refs/backup/provision-unpublished/${pipeline.branch}/`;
+  if (legacy.code === 0 && resumesLocal) {
+    // A crash can leave a complete checkout before its outcome is persisted.
+    // The ref itself carries the lane and count needed to replay its evidence.
+    const backups = await exec("git", ["for-each-ref", "--format=%(refname) %(objectname)", backupPrefix], pipeline.repoDir, signal);
+    if (backups.code !== 0) return failure("recovering provisioning backup evidence", backups);
+    for (const record of backups.stdout.trim().split("\n")) {
+      const [ref, sha] = record.split(" ");
+      const match = ref?.startsWith(backupPrefix) ? ref.slice(backupPrefix.length).match(/^([1-9][0-9]*)-([0-9a-f]{40})$/) : null;
+      if (match && sha === match[2] && Number.isSafeInteger(Number(match[1]))) {
+        preservation.value = { ref, sha, unpublishedCommits: Number(match[1]) };
+        break;
+      }
+    }
+  }
   let remoteSha: string | null = null;
-  if (branch !== pipeline.branch && pipeline.delivery?.target.remote) {
+  if (deliveryBranch !== pipeline.branch && pipeline.delivery?.target.remote) {
     const remote = pipeline.delivery.target.remote;
     const ref = pipeline.delivery.target.branch;
     const probe = await exec("git", ["ls-remote", "--heads", remote, ref], pipeline.repoDir, signal);
@@ -200,19 +258,58 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
       if (localSha) {
         const localContainsRemote = await exec("git", ["merge-base", "--is-ancestor", remoteSha, localSha], pipeline.repoDir, signal);
         const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.repoDir, signal);
-        if (localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
+        if (resumesLocal && !holdsInitialPin && localContainsRemote.code !== 0 && remoteContainsLocal.code !== 0) {
           return { ok: false, error: `delivery branch ${branch} has divergent local and remote commits; merge or choose the preserved tip before starting the lane` };
         }
       }
     }
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  const start = localSha ?? remoteSha ?? pipeline.baseRef;
+  const start = resumesLocal ? localSha ?? remoteSha ?? pipeline.baseRef
+    : pipeline.baseRefPinned ? pipeline.baseRef : remoteSha ?? pipeline.baseRef;
+  if (!resumesLocal && localSha && localSha !== start && deliveryBranch !== pipeline.branch) {
+    const count = await exec("git", ["rev-list", "--count", `${remoteSha ?? pipeline.baseRef}..${localSha}`], pipeline.repoDir, signal);
+    if (count.code !== 0) return failure("counting unpublished delivery commits", count);
+    const unpublishedCommits = Number(count.stdout.trim());
+    if (!Number.isSafeInteger(unpublishedCommits) || unpublishedCommits < 0) return { ok: false, error: "invalid unpublished delivery commit count" };
+    if (unpublishedCommits > 0) {
+      // Content-addressed and create-only: retries retain the same backup,
+      // and no provisioning attempt can overwrite an earlier preserved tip.
+      const ref = `${backupPrefix}${unpublishedCommits}-${localSha}`;
+      const backup = await exec("git", ["update-ref", ref, localSha, "0".repeat(40)], pipeline.repoDir, signal);
+      if (backup.code !== 0) {
+        const existing = await exec("git", ["rev-parse", "--verify", ref], pipeline.repoDir, signal);
+        if (existing.code !== 0 || existing.stdout.trim() !== localSha) return failure("preserving unpublished delivery commits", backup);
+      }
+      preservation.value = { ref, sha: localSha, unpublishedCommits };
+    }
+    // Keep the delivery ref and any holder untouched, even when it is free.
+    branch = pipeline.branch;
+  }
+  const reuseLocal = localSha && (resumesLocal || localSha === start) && branch !== pipeline.branch;
   let expectedHead = start;
-  const addArgs = localSha
+  const addArgs = (deliveryBranch === pipeline.branch ? localSha : legacy.code === 0 || reuseLocal)
     ? ["worktree", "add", pipeline.worktreeDir, branch]
     : ["worktree", "add", "-b", branch, pipeline.worktreeDir, start];
-  const add = await exec("git", addArgs, pipeline.repoDir, signal);
+  let add = await exec("git", addArgs, pipeline.repoDir, signal);
+  if (!signal?.aborted && add.code !== 0 && !add.signal && add.code !== null && !killedAtBound(add)) {
+    const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+    if (listing.code !== 0) return failure("checking which worktree holds the pipeline branch", listing);
+    const holder = listing.stdout.split("\0\0").map((record) => record.split("\0"))
+      .find((fields) => fields.includes(`branch refs/heads/${branch}`)
+        && !worktreePathMatches(fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+    if (holder) {
+      const holdingPath = holder.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+      if (branch === pipeline.branch) {
+        return { ok: false, error: `pipeline branch ${branch} is held by worktree ${holdingPath}; choose a new pipeline branch/worktree or resume its owning lane; the holding worktree was left untouched` };
+      }
+      branch = pipeline.branch;
+      if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
+      add = await exec("git", ["worktree", "add", "-b", branch, pipeline.worktreeDir, start], pipeline.repoDir, signal);
+      if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+      if (add.code !== 0) return { ok: false, error: `delivery branch ${deliveryBranch} is held by worktree ${holdingPath}; creating lane branch ${branch} failed; resolve the lane branch/path conflict and retry provisioning: ${(add.stderr || add.stdout).trim()}` };
+    }
+  }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
@@ -241,7 +338,8 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
     if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  if (localSha && remoteSha && localSha !== remoteSha) {
+  if (resumesLocal && localSha && remoteSha && localSha !== remoteSha
+    && !holdsInitialPin) {
     const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
     if (remoteContainsLocal.code === 0) {
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
@@ -252,7 +350,7 @@ export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: P
   const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
-  if (branch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
+  if (deliveryBranch === pipeline.branch && base.stdout.trim() !== pipeline.baseRef) {
     return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   }
   if (base.stdout.trim() !== expectedHead) {
@@ -543,6 +641,344 @@ export function pipelineWorktreeChanges(
     .map((line) => line.slice(3).split(" -> ").at(-1)!.trim())
     .filter((entry) => entry.length > 0);
   return { ok: true, paths: paths.slice(0, limit), truncated: paths.length > limit };
+}
+
+/** Controlled attributes prove containment independently of repository merge
+    drivers. Shadow all merge attributes in a private bare repository that can
+    read the lane's objects but writes only its own temporary proof objects. */
+function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, exec: ExecPort,
+  options: { parents?: string[]; resolvedTree?: string; resolvedCommit?: string; candidate?: string } = {}): ExecResult & { resolutionPaths?: string[]; resolutionPreserved?: boolean } {
+  const objects = exec("git", ["rev-parse", "--git-path", "objects"], pipeline.worktreeDir);
+  if (objects.code !== 0) return objects;
+  let proof: string | undefined;
+  try {
+    proof = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-tree-proof-"));
+    fs.mkdirSync(path.join(proof, "objects", "info"), { recursive: true });
+    fs.mkdirSync(path.join(proof, "refs"));
+    fs.mkdirSync(path.join(proof, "info"));
+    fs.writeFileSync(path.join(proof, "HEAD"), "ref: refs/heads/proof\n");
+    fs.writeFileSync(path.join(proof, "config"), "[core]\n\tbare = true\n");
+    fs.writeFileSync(path.join(proof, "objects", "info", "alternates"), `${JSON.stringify(path.resolve(pipeline.worktreeDir, objects.stdout.trim()))}\n`);
+    fs.writeFileSync(path.join(proof, "info", "attributes"), "* merge=text\n");
+    const env = {
+      GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0", GIT_ATTR_NOSYSTEM: "1",
+      GIT_CONFIG_PARAMETERS: undefined,
+      GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined,
+      GIT_OBJECT_DIRECTORY: undefined, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
+    };
+    const compare = (left: string, right: string) => exec("git", [`--git-dir=${proof}`, "merge-tree", "--write-tree", "--name-only", "-z", "--no-messages",
+      left, right], pipeline.worktreeDir, env);
+    let left = head, right = accepted;
+    let result = compare(left, right);
+    const conflicts = new Set<string>();
+    const collectConflicts = () => {
+      if (result.code === 1) result.stdout.split("\0").slice(1).filter(Boolean).forEach((file) => conflicts.add(file));
+    };
+    collectConflicts();
+    for (const parent of options.parents ?? []) {
+      if (result.code !== 0 && result.code !== 1) return result;
+      // Intermediate commits and trees remain entirely inside the proof repo.
+      const checkpoint = exec("git", [`--git-dir=${proof}`, "commit-tree", result.stdout.split("\0")[0].trim(),
+        "-p", left, "-p", right, "-m", "accepted merge proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+      if (checkpoint.code !== 0) return checkpoint;
+      left = checkpoint.stdout.trim();
+      right = parent;
+      result = compare(left, right);
+      collectConflicts();
+    }
+    if (options.resolvedTree && (result.code === 0 || result.code === 1)) {
+      const changed = exec("git", [`--git-dir=${proof}`, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z",
+        "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", result.stdout.split("\0")[0].trim(), options.resolvedTree], pipeline.worktreeDir, env);
+      if (changed.code !== 0) return changed;
+      const resolutionPaths = [...new Set([...conflicts, ...changed.stdout.split("\0").filter(Boolean)])];
+      let resolutionPreserved = false;
+      if (resolutionPaths.length && options.candidate && options.resolvedCommit) {
+        const automaticTree = result.stdout.split("\0")[0].trim();
+        const diff = ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none"];
+        let comparable = true;
+        for (const file of conflicts) {
+          const delta = exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
+            automaticTree, options.resolvedCommit, "--", file], pipeline.worktreeDir, env);
+          if (delta.code !== 0 && delta.code !== 1) return delta;
+          // A binary/conflict choice can equal Git's provisional tree. It
+          // needs exact evidence, since that tree encodes no resolution delta.
+          if (delta.code === 0) {
+            const exact = exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
+              options.candidate, options.resolvedCommit, "--", file], pipeline.worktreeDir, env);
+            if (exact.code !== 0 && exact.code !== 1) return exact;
+            if (exact.code === 1) { comparable = false; break; }
+          }
+        }
+        if (comparable) {
+          const base = exec("git", [`--git-dir=${proof}`, "commit-tree", automaticTree, "-p", left, "-p", right,
+            "-m", "accepted resolution baseline"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          if (base.code !== 0) return base;
+          const candidateTree = exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.candidate}^{tree}`], pipeline.worktreeDir, env);
+          if (candidateTree.code !== 0) return candidateTree;
+          const resolvedTree = exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.resolvedCommit}^{tree}`], pipeline.worktreeDir, env);
+          if (resolvedTree.code !== 0) return resolvedTree;
+          // Graft both trees onto the private baseline. This also works with
+          // Git 2.39, whose merge-tree has no explicit merge-base option.
+          const candidateProof = exec("git", [`--git-dir=${proof}`, "commit-tree", candidateTree.stdout.trim(), "-p", base.stdout.trim(),
+            "-m", "candidate resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          if (candidateProof.code !== 0) return candidateProof;
+          const resolvedProof = exec("git", [`--git-dir=${proof}`, "commit-tree", resolvedTree.stdout.trim(), "-p", base.stdout.trim(),
+            "-m", "accepted resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          if (resolvedProof.code !== 0) return resolvedProof;
+          const contained = compare(candidateProof.stdout.trim(), resolvedProof.stdout.trim());
+          if (contained.code !== 0 && contained.code !== 1) return contained;
+          resolutionPreserved = contained.code === 0 && contained.stdout.split("\0")[0].trim() === candidateTree.stdout.trim();
+        }
+      }
+      return { ...result, code: conflicts.size ? 1 : result.code, resolutionPaths, resolutionPreserved };
+    }
+    return result;
+  } catch (error) {
+    return { code: 128, stdout: "", stderr: `isolating the accepted content comparison: ${String(error)}` };
+  } finally {
+    if (proof) fs.rmSync(proof, { recursive: true, force: true });
+  }
+}
+
+/** `git cherry` strips whitespace before comparing patch IDs. Keep its fast
+    history scan, then require the changed file paths, modes, hunk section and
+    exact added / removed lines and context to agree before treating a
+    whitespace-insensitive match as retained. Line positions are omitted so a
+    replay still matches after surrounding lines move on a newer base. */
+interface ExactCommitPatch {
+  signature: string;
+  paths: string[];
+  locations: Array<{ path: string; start: number }>;
+}
+
+function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): ExactCommitPatch | null | { error: string } {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-patch-"));
+  const patchPath = path.join(scratch, "patch.diff");
+  try {
+    // Keep arbitrarily large binary patches off spawnSync's bounded stdout
+    // buffer. The comparison needs the full patch, so read Git's file output
+    // only after Git has completed successfully.
+    const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
+      "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", `--output=${patchPath}`, commit], pipeline.worktreeDir);
+    if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
+    const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", commit], pipeline.worktreeDir);
+    if (names.code !== 0) return { error: failure("reading accepted replay paths", names).error };
+    const paths = names.stdout.split("\0").filter(Boolean);
+    const evidence: string[] = [];
+    const locations: ExactCommitPatch["locations"] = [];
+    let fileIndex = -1;
+    let binary = false;
+    let inHunk = false;
+    for (const line of fs.readFileSync(patchPath, "utf8").split("\n")) {
+      if (line.startsWith("diff --git ")) {
+        fileIndex++;
+        evidence.push(line);
+        binary = false;
+        inHunk = false;
+      } else if (binary) {
+        evidence.push(line);
+      } else if (/^(?:old mode|new mode|new file mode|deleted file mode|GIT binary patch|literal |delta )/.test(line)) {
+        evidence.push(line);
+        binary = line === "GIT binary patch";
+      } else if (line.startsWith("@@")) {
+        // Keep Git's function/section label (the text after the closing @@) to
+        // distinguish different areas of a file; retain old-side coordinates separately.
+        const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line);
+        if (!hunk || !paths[fileIndex]) return { error: "reading accepted replay hunk location: malformed Git patch" };
+        locations.push({ path: paths[fileIndex], start: Number(hunk[1]) });
+        evidence.push(`@@${hunk[5]}`);
+        inHunk = true;
+      } else if (inHunk && ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
+        || line.startsWith("\\ No newline"))) {
+        evidence.push(line);
+      }
+    }
+    return evidence.length ? { signature: evidence.join("\n"), paths, locations } : null;
+  } catch (error) {
+    return { error: `reading accepted replay patch: ${String(error)}` };
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** Map a replay hunk's parent-side line to the accepted commit's parent.
+    Changes before the hunk shift its coordinate; a change overlapping the
+    hunk start makes the location unprovable and must fail closed. */
+export function mapReplayPatchLocation(
+  pipeline: Pipeline,
+  acceptedCommit: string,
+  replayCommit: string,
+  location: ExactCommitPatch["locations"][number],
+  exec: ExecPort,
+): number | null | { error: string } {
+  const acceptedParent = exec("git", ["rev-parse", `${acceptedCommit}^`], pipeline.worktreeDir);
+  if (acceptedParent.code !== 0) return { error: failure("reading accepted patch parent", acceptedParent).error };
+  const replayParent = exec("git", ["rev-parse", `${replayCommit}^`], pipeline.worktreeDir);
+  if (replayParent.code !== 0) return { error: failure("reading replay patch parent", replayParent).error };
+  const diff = exec("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
+    acceptedParent.stdout.trim(), replayParent.stdout.trim(), "--", location.path], pipeline.worktreeDir);
+  if (diff.code !== 0) return { error: failure("mapping replay hunk location", diff).error };
+  let delta = 0;
+  for (const line of diff.stdout.split("\n")) {
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!hunk) continue;
+    const oldCount = Number(hunk[2] ?? 1);
+    const newStart = Number(hunk[3]);
+    const newCount = Number(hunk[4] ?? 1);
+    if (newCount > 0 && location.start >= newStart && location.start < newStart + newCount) return null;
+    if (location.start >= newStart + newCount) delta += oldCount - newCount;
+    else if (location.start >= newStart) return null;
+  }
+  return location.start + delta;
+}
+
+/** Retained patch history admits subsequent builder edits just as ordinary
+    ancestry does. Merge commits have no cherry patch-id; unique merge content
+    therefore needs the controlled tree proof. Record the builder's unchanged
+    tree with both parents, then CAS the ref. Delivery still owns publication. */
+export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort): PipelineGitResult {
+  const accepted = pipeline.lastPassedCommit;
+  if (!/^[0-9a-f]{40}$/i.test(head) || !/^[0-9a-f]{40}$/i.test(accepted)) {
+    return { ok: false, error: "reconciling stage history requires exact commit SHAs" };
+  }
+  const local = currentPipelineBranchHead(pipeline, exec);
+  if (!local.ok) return local;
+  if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
+  const branch = exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir);
+  if (branch.code !== 0) return failure("pinning the reconciliation branch", branch);
+  const ref = branch.stdout.trim();
+  const tree = exec("git", ["rev-parse", `${head}^{tree}`], pipeline.worktreeDir);
+  if (tree.code !== 0) return failure("reading the stage tree", tree);
+  const cherry = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", head, accepted], pipeline.worktreeDir);
+  if (cherry.code !== 0) return failure("checking accepted patch history", cherry);
+  const cherryLines = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ") || line.startsWith("- "));
+  const retainedByCherry = cherryLines.filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
+  const replayedPatches: Array<{ commit: string; patch: ExactCommitPatch }> = [];
+  const acceptedPatches = new Map<string, ExactCommitPatch>();
+  for (const acceptedCommit of retainedByCherry) {
+    const patch = exactCommitPatch(pipeline, acceptedCommit, exec);
+    if (patch && "error" in patch) return { ok: false, error: patch.error };
+    if (patch) acceptedPatches.set(acceptedCommit, patch);
+  }
+  if (retainedByCherry.length) {
+    const candidates = exec("git", ["rev-list", "--no-merges", `${accepted}..${head}`], pipeline.worktreeDir);
+    if (candidates.code !== 0) return failure("checking replayed commit patches", candidates);
+    for (const candidate of candidates.stdout.split("\n").filter(Boolean)) {
+      // Main-only commits can contain large unrelated assets. Read their small
+      // path list first and avoid constructing a full patch unless it could
+      // contain one of the accepted changes.
+      const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", candidate], pipeline.worktreeDir);
+      if (names.code !== 0) return failure("reading replay candidate paths", names);
+      const candidatePaths = new Set(names.stdout.split("\0").filter(Boolean));
+      if (![...acceptedPatches.values()].some((patch) => patch.paths.some((file) => candidatePaths.has(file)))) continue;
+      const patch = exactCommitPatch(pipeline, candidate, exec);
+      if (patch && "error" in patch) return { ok: false, error: patch.error };
+      if (patch) replayedPatches.push({ commit: candidate, patch });
+    }
+  }
+  const dropped = cherryLines.filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
+  for (const acceptedCommit of retainedByCherry) {
+    const acceptedPatch = acceptedPatches.get(acceptedCommit);
+    // An empty commit has no patch to preserve. Its SHA need not block a
+    // content-based rebase reconciliation.
+    if (!acceptedPatch) continue;
+    let matched = -1;
+    for (let index = 0; index < replayedPatches.length; index++) {
+      const replay = replayedPatches[index];
+      if (replay.patch.signature !== acceptedPatch.signature
+        || replay.patch.locations.length !== acceptedPatch.locations.length) continue;
+      let sameLocation = true;
+      for (let hunk = 0; hunk < replay.patch.locations.length; hunk++) {
+        const replayLocation = replay.patch.locations[hunk];
+        if (replayLocation.path !== acceptedPatch.locations[hunk].path) {
+          sameLocation = false;
+          break;
+        }
+        const mapped = mapReplayPatchLocation(pipeline, acceptedCommit, replay.commit, replayLocation, exec);
+        if (mapped && typeof mapped === "object") return { ok: false, error: mapped.error };
+        if (mapped === null || mapped !== acceptedPatch.locations[hunk].start) {
+          sameLocation = false;
+          break;
+        }
+      }
+      if (sameLocation) {
+        matched = index;
+        break;
+      }
+    }
+    if (matched === -1) dropped.push(acceptedCommit);
+    else replayedPatches.splice(matched, 1);
+  }
+  const merges = exec("git", ["rev-list", "--min-parents=2", "--parents", `${head}..${accepted}`], pipeline.worktreeDir);
+  if (merges.code !== 0) return failure("checking accepted merge history", merges);
+  let replayedCheckpoints: string[] | undefined;
+  const droppedMerges: string[] = [];
+  for (const line of merges.stdout.trim().split("\n").filter(Boolean)) {
+    const [merge, firstParent, ...otherParents] = line.split(" ");
+    const trees = exec("git", ["rev-parse", `${merge}^{tree}`], pipeline.worktreeDir);
+    if (trees.code !== 0) return failure("checking accepted merge content", trees);
+    const mergeTree = trees.stdout.trim().split("\n")[0];
+    // Compare against all automatically merged parents: a first-parent-only
+    // baseline misses resolutions that exclude side-parent changes.
+    const reconstructed = compareStageTrees(pipeline, firstParent, otherParents[0], exec,
+      { parents: otherParents.slice(1), resolvedTree: mergeTree, resolvedCommit: accepted, candidate: head });
+    if (reconstructed.code !== 0 && reconstructed.code !== 1) return failure("reconstructing accepted merge content", reconstructed);
+    const resolutionPaths = reconstructed.resolutionPaths;
+    if (!resolutionPaths || resolutionPaths.some((file) => file.includes("\uFFFD"))) {
+      return { ok: false, error: "accepted merge resolution paths could not be proven" };
+    }
+    if (resolutionPaths.length === 0 || reconstructed.resolutionPreserved) continue;
+    if (!replayedCheckpoints) {
+      const candidates = exec("git", ["rev-list", `${accepted}..${head}`], pipeline.worktreeDir);
+      if (candidates.code !== 0) return failure("checking replayed merge history", candidates);
+      replayedCheckpoints = candidates.stdout.trim().split("\n").filter((sha) => sha && sha !== head);
+    }
+    // Unique resolutions may survive in linear or merged history before later
+    // builder edits. A checkpoint must already contain the parents' patches;
+    // an older main revision can coincidentally match a later resolution.
+    let preserved = false;
+    for (const replay of [head, ...replayedCheckpoints]) {
+      const compared = exec("git", ["--literal-pathspecs", "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none",
+        replay, accepted, "--", ...resolutionPaths], pipeline.worktreeDir);
+      if (compared.code !== 0 && compared.code !== 1) return failure("comparing replayed merge resolutions", compared);
+      if (compared.code === 0) {
+        if (replay !== head) {
+          const parents = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", replay, merge], pipeline.worktreeDir);
+          if (parents.code !== 0) return failure("checking resolution checkpoint ancestry", parents);
+          if (parents.stdout.split("\n").some((line) => line.startsWith("+ "))) continue;
+        }
+        preserved = true;
+        break;
+      }
+    }
+    if (!preserved) droppedMerges.push(merge);
+  }
+  let missing = droppedMerges.length > 0;
+  if (dropped.length > 0) {
+    // Squashed patches may still be preserved in the final tree. Unique merge
+    // resolutions were checked separately, including exclusions and conflicts.
+    const merged = compareStageTrees(pipeline, head, accepted, exec);
+    if (merged.code !== 0 && merged.code !== 1) return failure("comparing accepted stage content", merged);
+    missing ||= merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim();
+  }
+  if (missing) {
+    return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${[...dropped, ...droppedMerges].join(", ")}; accepted content is missing or conflicts with the stage tree` };
+  }
+  const commit = exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
+    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv());
+  if (commit.code !== 0) return failure("recording the stage reconciliation merge", commit);
+  const sha = commit.stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "reconciliation did not produce an exact commit SHA" };
+  const current = currentPipelineBranchHead(pipeline, exec);
+  if (!current.ok) return current;
+  if (current.sha !== head) return { ok: false, error: "the stage head moved during history reconciliation" };
+  const currentBranch = exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir);
+  if (currentBranch.code !== 0 || currentBranch.stdout.trim() !== ref) {
+    return { ok: false, error: "the stage branch moved during history reconciliation" };
+  }
+  const update = exec("git", ["update-ref", "-m", "pipeline: reconcile rebased stage", ref, sha, head], pipeline.worktreeDir);
+  if (update.code !== 0) return failure("fencing the stage reconciliation merge", update);
+  return { ok: true, sha };
 }
 
 export function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {

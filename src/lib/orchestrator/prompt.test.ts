@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 33, and a v32 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(33);
+test("the default mandate is at version 35, and a v34 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(35);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -109,7 +109,9 @@ test("the default mandate is at version 33, and a v32 seat reads as stale", () =
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
-  expect(orchestratorMandateStale(33)).toBe(false);
+  expect(orchestratorMandateStale(33)).toBe(true);
+  expect(orchestratorMandateStale(34)).toBe(true);
+  expect(orchestratorMandateStale(35)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -149,6 +151,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
   33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
+  34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
+  35: "3a35d3334e259e60d3388454068ab6ce1836fbcf8f87b05c7207e8caf626929b",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -424,6 +428,12 @@ test("the mandate names every attention target and uses the tool schema for shap
 /* #1026 — a fresh seat composed its first pipeline through seven sequential
    validation errors because nothing it had read named the stage shape. The
    mandate now prints that shape as the schema declares it. */
+test("the mandate names explicit graph insertion and verified terminal exhaustion (#2247)", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('fail parks with "budget spent: N findings left"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
+});
+
 test("the mandate carries the pipeline stage shape a first pipeline needs", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('kind: "run"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("role: {roleId, params?}");
@@ -853,4 +863,9 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
   const reviewLoop = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/review-loop/SKILL.md"), "utf8");
   expect(reviewLoop).toContain('"roundLimit": 3');
   expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
+});
+
+test("the versioned mandate asks for a current status note in the operator's language", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("update_task note");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("waiting on whom/what");
 });

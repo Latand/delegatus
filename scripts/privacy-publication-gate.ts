@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
 
 import { decodeHTMLStrict } from "entities";
@@ -775,16 +776,17 @@ function removeDefaultIgnorables(text: string): string {
 
 function decodeJsonStringEscapes(text: string): string {
   const escapes: Record<string, string> = {
-    '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
+    '\"': '\"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
   };
   return text.replaceAll(/\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))/g, (_match, hex: string | undefined, escape: string) =>
     hex === undefined ? escapes[escape] : String.fromCharCode(parseInt(hex, 16)));
 }
 
-export function canonicalSensitiveText(text: string, jsonEscapes = false): { error: boolean; text: string } {
-  let decoded = removeDefaultIgnorables(text);
+function decodeSensitiveText(text: string, preserveDefaultIgnorables: boolean, jsonEscapes = false): { error: boolean; text: string } {
+  const strip = preserveDefaultIgnorables ? (value: string): string => value : removeDefaultIgnorables;
+  let decoded = strip(text);
   for (let pass = 0; pass < 16; pass += 1) {
-    const next = removeDefaultIgnorables(
+    const next = strip(
       decodeCommonMarkEscapes(decodeHtmlEntities(decodePercentEncoding(jsonEscapes ? decodeJsonStringEscapes(decoded) : decoded))),
     );
     if (next === decoded) return { error: false, text: decoded };
@@ -793,15 +795,25 @@ export function canonicalSensitiveText(text: string, jsonEscapes = false): { err
   return { error: true, text: decoded };
 }
 
-function visibleMarkdownText(text: string): string {
+export function canonicalSensitiveText(text: string, jsonEscapes = false): { error: boolean; text: string } {
+  return decodeSensitiveText(text, false, jsonEscapes);
+}
+
+function visibleMarkdownText(text: string, sourceOffsets?: number[]): string {
   let visible = "";
+  const append = (start: number, end: number): void => {
+    visible += text.slice(start, end);
+    if (sourceOffsets) {
+      for (let index = start; index < end; index += 1) sourceOffsets.push(index);
+    }
+  };
   let cursor = 0;
   while (cursor < text.length) {
     const labelStart = text[cursor] === "["
       ? cursor
       : (text[cursor] === "!" && text[cursor + 1] === "[" ? cursor + 1 : -1);
     if (labelStart === -1) {
-      visible += text[cursor];
+      append(cursor, cursor + 1);
       cursor += 1;
       continue;
     }
@@ -818,7 +830,7 @@ function visibleMarkdownText(text: string): string {
       labelDepth -= 1;
     }
     if (labelEnd >= text.length || text[labelEnd + 1] !== "(") {
-      visible += text[cursor];
+      append(cursor, cursor + 1);
       cursor += 1;
       continue;
     }
@@ -838,11 +850,11 @@ function visibleMarkdownText(text: string): string {
       destinationDepth -= 1;
     }
     if (destinationEnd >= text.length) {
-      visible += text[cursor];
+      append(cursor, cursor + 1);
       cursor += 1;
       continue;
     }
-    visible += text.slice(labelStart + 1, labelEnd);
+    append(labelStart + 1, labelEnd);
     cursor = destinationEnd + 1;
   }
   return visible;
@@ -1078,7 +1090,14 @@ type EmailOccurrence = {
    detection reads both rather than only the shape that is easy to match. */
 const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-const emailDomain = /([A-Z0-9.-]+\.[A-Z]{2,})\b/;
+// These contextual code points belong to valid IDNA labels. Detection keeps
+// them; the unit exemption below depends only on its positive ASCII boundary.
+const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u30FB-]|\\x[0-9a-f]{2})+`;
+const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
+const emailDomain = new RegExp(
+  `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`,
+  "iu",
+);
 const emailAddressSource =
   `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
 
@@ -1087,22 +1106,84 @@ const emailAddressSource =
    Flagging it made fixture addresses in test files indistinguishable from a
    real one, which teaches everybody to wave the gate through. */
 function domainNamesNobody(domain: string): boolean {
-  const lowered = domain.toLowerCase();
+  // Keep reserved fixture-domain handling separate from the unit exemption.
+  let asciiDomain: string;
+  try {
+    asciiDomain = domainToASCII(domain);
+  } catch {
+    // Some runtimes throw for rejected IDNA input. It earns no exemption.
+    return false;
+  }
+  if (!asciiDomain) return false;
+  const lowered = asciiDomain.toLowerCase();
   return lowered === "example.com" || lowered === "example.net" || lowered === "example.org"
     || lowered.endsWith(".invalid") || lowered.endsWith(".test");
 }
 
+/* Exempt only one ASCII instance label (including systemd hex escapes) and
+   one non-delegated unit type. The positive boundary makes this independent
+   of which Unicode/IDNA continuations the mailbox matcher can consume. */
+const systemdUnitDomain = /^(?:[A-Z0-9-]|\\x[0-9a-f]{2})+\.(?:service|socket|scope|slice|timer|mount|automount|path|device|swap)$/i;
+const systemdUnitBoundary = /^[\x09-\x0d /"'`)\],;:]$/;
+
+type EmailTextView = {
+  text: string;
+  source?: { text: string; offsets: number[] };
+};
+
+function markdownEmailView(decoded: string): EmailTextView {
+  const offsets: number[] = [];
+  const visible = visibleMarkdownText(decoded, offsets);
+  const parts: string[] = [];
+  const keptOffsets: number[] = [];
+  const append = (start: number, end: number): void => {
+    parts.push(visible.slice(start, end));
+    for (let index = start; index < end; index += 1) keptOffsets.push(offsets[index]);
+  };
+  let start = 0;
+  for (const match of visible.matchAll(/<[^>]*>|[\[\]*_`~]/g)) {
+    append(start, match.index);
+    start = match.index + match[0].length;
+  }
+  append(start, visible.length);
+  return { text: parts.join(""), source: { text: decoded, offsets: keptOffsets } };
+}
+
+function emailTextViews(text: string): EmailTextView[] {
+  const preserved = decodeSensitiveText(text, true).text;
+  const canonical = canonicalSensitiveText(text).text.replaceAll("\0", "\n");
+  return [{ text }, { text: preserved }, { text: canonical }, markdownEmailView(preserved), markdownEmailView(canonical)];
+}
+
 /** Every mailbox in the text that reaches a person, in the order they appear. */
-function* emailOccurrences(text: string): Generator<EmailOccurrence> {
-  const pattern = new RegExp(emailAddressSource, "gi");
+function* emailOccurrences(text: string, source?: EmailTextView["source"]): Generator<EmailOccurrence> {
+  const pattern = new RegExp(emailAddressSource, "giu");
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    const following = text[pattern.lastIndex];
+    // A quoted mailbox can contain another real address. Systemd names have
+    // unquoted local parts, so that outer mailbox earns no unit exemption.
+    if (!match[1].startsWith('"') && systemdUnitDomain.test(match[2])) {
+      const boundary = following === undefined || systemdUnitBoundary.test(following);
+      if (!source && boundary) continue;
+      // Projection cannot create an exemption: the same source domain and
+      // its original boundary must qualify too. A removed Markdown delimiter
+      // may leave a sentence-ending period, never a domain continuation.
+      if (source && (boundary || (following === "."
+        && (text[pattern.lastIndex + 1] === undefined || /^[\x09-\x0d ]$/.test(text[pattern.lastIndex + 1]))))) {
+        const sourceStart = source.offsets[pattern.lastIndex - match[2].length];
+        const sourceEnd = source.offsets[pattern.lastIndex - 1] + 1;
+        const sourceFollowing = source.text[sourceEnd];
+        if (source.text.slice(sourceStart, sourceEnd) === match[2]
+          && (sourceFollowing === undefined || systemdUnitBoundary.test(sourceFollowing))) continue;
+      }
+    }
     if (domainNamesNobody(match[2])) continue;
     yield { address: match[0], domain: match[2], index: match.index, localPart: match[1] };
   }
 }
 
-function hasEmailAddress(text: string): boolean {
-  return emailOccurrences(text).next().done !== true;
+function hasEmailAddress(text: string, source?: EmailTextView["source"]): boolean {
+  return emailOccurrences(text, source).next().done !== true;
 }
 
 export function sensitiveClasses(text: string): Set<FindingClass> {
@@ -1129,7 +1210,9 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
     findings.add("home_path");
     break;
   }
-  if (hasEmailAddress(searchableText)) findings.add("email_address");
+  // Decode encoded boundaries without removing their default-ignorable code
+  // points. Both the original and decoded characters must meet the unit rule.
+  if (emailTextViews(text).some((view) => hasEmailAddress(view.text, view.source))) findings.add("email_address");
   const credentialAssignmentPattern = /(?:api[_-]?(?:key|token)|access[_-]?token|authorization|password|secret)\s*[:=]\s*(?:"[^"\r\n]{12,}"|'[^'\r\n]{12,}'|[^\s"'`]{12,})/i;
   if (credentialAssignmentPattern.test(searchableText)) {
     findings.add("credential");
@@ -1866,10 +1949,11 @@ function trailerBlockLines(lines: string[]): Set<number> {
 function* addressLines(
   view: string,
   lines: string[],
+  source?: EmailTextView["source"],
 ): Generator<{ line: number; occurrence: EmailOccurrence }> {
   let line = 0;
   let nextLineStart = lines[0].length + 1;
-  for (const occurrence of emailOccurrences(view)) {
+  for (const occurrence of emailOccurrences(view, source)) {
     while (line + 1 < lines.length && occurrence.index >= nextLineStart) {
       line += 1;
       nextLineStart += lines[line].length + 1;
@@ -1891,10 +1975,10 @@ export type CommitAddressReview = { attributable: string[]; exempt: string[] };
 export function commitMessageAddressReview(message: string): CommitAddressReview {
   const attributable = new Set<string>();
   const exempt = new Set<string>();
-  for (const view of sensitiveTextViews(message).views) {
+  for (const { text: view, source } of emailTextViews(message)) {
     const lines = view.split("\n");
     const block = trailerBlockLines(lines);
-    for (const { line, occurrence } of addressLines(view, lines)) {
+    for (const { line, occurrence } of addressLines(view, lines, source)) {
       const attributed = !block.has(line)
         || !MACHINE_ATTRIBUTION_TRAILER.test(lines[line])
         || !isMachineAttributionAddress(occurrence);
@@ -2096,11 +2180,11 @@ function branchIdentities(repository: string, base: string): CommitIdentity[] | 
   return identities;
 }
 
-/* One identity in the shape the forge composes it: a message whose last
-   paragraph is the attribution trailer, so the trailer rules read a composed
-   trailer exactly as they read a written one. */
+/* Read recorded identity fields in an attribution trailer. Field boundaries
+   stay whitespace: synthetic angle brackets would hide a Markdown-obfuscated
+   address as an HTML tag in the rendered-text inspection. */
 function composedAttributionMessage(identity: CommitIdentity): string {
-  return `squash merge\n\n${COMPOSED_ATTRIBUTION_TRAILER}: ${identity.name} <${identity.address}>\n`;
+  return `squash merge\n\n${COMPOSED_ATTRIBUTION_TRAILER}: ${identity.name} ${identity.address}\n`;
 }
 
 /**

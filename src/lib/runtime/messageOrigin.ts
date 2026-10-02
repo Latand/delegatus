@@ -31,6 +31,12 @@ export interface MessageOrigin {
   conversationId?: string;
 }
 
+/** Compare durable authorship without depending on object property order. */
+export function sameMessageOrigin(left: MessageOrigin | undefined, right: MessageOrigin | undefined): boolean {
+  return left?.kind === right?.kind && left?.role === right?.role
+    && left?.project === right?.project && left?.conversationId === right?.conversationId;
+}
+
 /**
  * The feed-facing authorship of one delivered message, keyed by the transcript
  * row's engine message id: the wire shape of `/api/log/provenance` and the

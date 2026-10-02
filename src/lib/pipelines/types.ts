@@ -165,8 +165,11 @@ export type PipelineEdgeActivation = {
   edge: PipelineEdgeKind;
   /** On a fail activation: the source's budget was spent, so this is the
       one handoff past it (#1868). It spends no reviewed round, and the
-      target's pass follows the source's pass edge instead of re-running it. */
+      target's pass follows the source's pass edge, except a terminal advance
+      gate gets one final re-check (#2247). */
   budgetSpent?: true;
+  /** The terminal gate must judge the spent fix once more; a fail parks. */
+  budgetRecheck?: true;
 };
 
 export type PipelineVerdictRecovery = {
@@ -363,6 +366,28 @@ export type PipelineStageAttempt = {
       the engine the limit was hit on; account ids are unique only within an
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
+  /** Recovery expenditure survives condition changes and host relaunches. */
+  providerRecoveryBudget?: { tries: number; startedAt: string };
+  providerWait?: {
+    condition: import("./providerConditions").ProviderCondition;
+    text: string;
+    accountId: string | null;
+    turnTs: number;
+    tries: number;
+    startedAt: string;
+    resumeAt: string;
+    resetsAt: number | null;
+    actionAt?: string;
+    switchedAccountId?: string;
+    failedAccounts?: string[];
+    capacityProbes?: number;
+  };
+  providerRecoveries?: Array<{
+    at: string;
+    action: "wait" | "continue" | "switch" | "relaunch" | "park";
+    condition: import("./providerConditions").ProviderCondition;
+    summary: string;
+  }>;
   flowId: string | null;
   /** Clean pipeline SHA expected when the first reviewer launches. */
   expectedReviewHeadSha?: string | null;
@@ -478,8 +503,8 @@ export type PipelineStageAttempt = {
       the lane kept going instead of parking on it. */
   decisionRequested?: boolean;
   /** Set on the failed attempt whose findings were handed along a spent fail
-      edge (#1868): they went to the fix stage and the source was not asked
-      again. The verdict and its findings stay on this attempt. */
+      edge (#1868): they went to the fix stage. A terminal advance gate gets one
+      final re-check (#2247). The verdict and findings stay on this attempt. */
   budgetSpent?: boolean;
   /** On a `budgetSpent` attempt: the head that review judged (#1938), compared
       with the head the fix writes to decide whether the lane may move on. */
@@ -775,6 +800,8 @@ export type Pipeline = {
   branch: string;
   baseBranch: string;
   baseRef: string;
+  /** The caller explicitly pinned baseRef; automatically fetched bases are not pins. */
+  baseRefPinned?: boolean;
   lastPassedCommit: string;
   /** Absent reads as `internal`. See {@link PipelinePublication}. */
   publication?: PipelinePublication;
@@ -1077,6 +1104,8 @@ export type PatchPipelineRequest = {
   /** for set-position: exact world coordinates selected by a user drag. */
   pos?: { x: number; y: number };
   stage?: PipelineStageInput;
+  /** add-stage: explicitly splice into this stage's pass edge. */
+  after?: string;
   index?: number;
   stageIds?: string[];
   toIndex?: number;

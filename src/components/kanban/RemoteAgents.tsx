@@ -8,7 +8,7 @@ export type RemoteAgentView = AgentRow & { peer: string; stale: boolean; asOf: n
 export function RemoteAgents({ rows, nowMs }: { rows: readonly RemoteAgentView[]; nowMs: number }) {
   const { t, locale } = useLocale();
   const groups = new Map<string, RemoteAgentView[]>();
-  for (const row of rows) groups.set(row.peer, [...(groups.get(row.peer) ?? []), row]);
+  for (const row of rows) groups.set(row.peer, [...(groups.get(row.peer) ?? []), { ...row, stale: !Number.isFinite(row.asOf) || nowMs - row.asOf > 900_000 }]);
   return <>{[...groups].map(([peer, agents]) => (
     <details className="remote-agents" data-remote-agents="" key={peer}>
       <summary>{t(agents.length === 1 ? "kanban.remoteAgentOne" : "kanban.remoteAgents", { peer, count: agents.length, working: agents.filter((agent) => agent.st === "working").length })}</summary>

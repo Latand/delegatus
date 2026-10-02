@@ -147,6 +147,46 @@ function isVerdictRecovery(value: unknown): boolean {
   );
 }
 
+function isProviderCondition(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  return ["usage_limit", "transient", "auth_required", "other", "host_death", "turn_cut"].includes(String(condition.kind))
+    && isNullableString(condition.scope) && (condition.scope === null || String(condition.scope).length <= 64)
+    && isNullableString(condition.resetLabel) && (condition.resetLabel === null || String(condition.resetLabel).length <= 160)
+    && typeof condition.label === "string" && condition.label.length > 0 && condition.label.length <= 100;
+}
+
+/** Transcript evidence may use the filesystem's fractional millisecond mtime. */
+function isEvidenceTimestamp(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function isProviderWait(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
+  return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
+    && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
+    && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
+    && dated(wait.startedAt) && dated(wait.resumeAt)
+    && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
+    && (wait.actionAt === undefined || dated(wait.actionAt))
+    && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
+    && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
+    && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
+}
+
+function isProviderRecoveries(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.length <= 8 && value.every((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    return typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
+      && ["wait", "continue", "switch", "relaunch", "park"].includes(String(entry.action))
+      && isProviderCondition(entry.condition) && typeof entry.summary === "string" && entry.summary.length <= 2000;
+  });
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -173,11 +213,21 @@ function isAttempt(value: unknown, index: number): boolean {
         && limited.accountId.length > 0
         && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
-        && (limited.limitedAt === undefined || limited.limitedAt === null || (Number.isSafeInteger(limited.limitedAt) && limited.limitedAt >= 0))
+        && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
+    (attempt.providerRecoveryBudget === undefined || (
+      attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
+      && !Array.isArray(attempt.providerRecoveryBudget)
+      && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
+      && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
+      && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
+      && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
+    )) &&
+    isProviderWait(attempt.providerWait) &&
+    isProviderRecoveries(attempt.providerRecoveries) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
@@ -699,6 +749,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.branch === "string" &&
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
+    (pipeline.baseRefPinned === undefined || typeof pipeline.baseRefPinned === "boolean") &&
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
@@ -982,6 +1033,10 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
+            providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
+              ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,
+            providerRecoveries: attempt.providerRecoveries?.map((recovery) => ({ ...recovery, condition: { ...recovery.condition } })),
             flowId: attempt.flowId ?? null,
             expectedReviewHeadSha: attempt.expectedReviewHeadSha ?? null,
             reviewHeadSha: attempt.reviewHeadSha ?? null,
@@ -1163,8 +1218,9 @@ export function pipelineLockWaitMs(): number {
  * A refusal raised before `mutate` runs is a {@link StoreBusyBeforeAdmissionError}
  * (#1766): the lease was never taken, so nothing was read, written or reserved
  * and the same request may run again under the same idempotency key. A busy
- * error from anywhere after that keeps its ordinary ambiguous meaning — the
- * lease release raises the same message after the row is committed. */
+ * error from inside the callback keeps its ordinary ambiguous meaning: an
+ * earlier persist may have committed. Lease release never throws; failed
+ * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;
@@ -1222,27 +1278,17 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
   delivery.journal = [...delivery.journal, { at: new Date().toISOString(), kind, ownerId: delivery.ownerId, epoch: delivery.epoch, conversationId, reason }].slice(-100);
 }
 
-function terminalDeliveryFailure(pipeline: Pipeline): string | null {
-  const terminalAttempt = pipeline.state === "needs_decision" && pipeline.cursor
-    ? pipeline.runs.find((run) => run.stageId === pipeline.cursor!.stageId)?.attempts.findLast((attempt) => !attempt.historical)
-    : null;
-  return terminalAttempt?.verdict?.status === "fail" && terminalAttempt.completedAt
-    ? `${pipeline.cursor!.stageId}:${terminalAttempt.n}:${terminalAttempt.startedAt ?? ""}` : null;
-}
-
 function releaseTerminalDelivery(pipeline: Pipeline): void {
   if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
-  const failure = terminalDeliveryFailure(pipeline);
-  const failed = failure !== null && failure !== delivery?.settledFailure;
-  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed" && !failed)) return;
+  // Parks retain the lane's claim so its cursor can resume and publish.
+  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
   if (delivery.operation?.state === "running") return;
   delivery.active = false;
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
-  if (failed) delivery.settledFailure = failure;
-  deliveryJournal(pipeline, "release", failed ? "terminal failure without an active fail edge" : `pipeline ${pipeline.state}`);
+  deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -1324,8 +1370,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       tx.put(old);
     }
     pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
-      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal,
-      settledFailure: terminalDeliveryFailure(pipeline) ?? pipeline.delivery.settledFailure };
+      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
@@ -1466,6 +1511,7 @@ export function buildPipeline(input: {
     ...identity,
     baseBranch: "",
     baseRef: "",
+    baseRefPinned: false,
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,
