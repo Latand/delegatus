@@ -1,0 +1,75 @@
+{
+  "label": "after",
+  "limit": 0.1,
+  "readings": [
+    {
+      "viewport": "desktop-1440",
+      "cls": 0.0001,
+      "shifts": 3,
+      "largest": [
+        {
+          "at": 7909,
+          "value": 0.0001,
+          "sources": [
+            "SPAN.inline-flex.max-w-full"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 864,
+          "value": 0,
+          "sources": [
+            "BUTTON.or-close-all"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 7896,
+          "value": 0,
+          "sources": [
+            "BUTTON.or-close-all",
+            "SPAN.or-names"
+          ],
+          "mandate": false
+        }
+      ],
+      "handOff": {
+        "scrollFrom": 4,
+        "scrollDrift": 0,
+        "headTop": 179,
+        "headBottom": 207,
+        "columnTop": 166,
+        "columnBottom": 900,
+        "headVisible": true
+      },
+      "secondDraft": {
+        "top": 245,
+        "left": 962,
+        "width": 524,
+        "visibleShare": 0.83,
+        "viewportHeight": 900
+      },
+      "pageErrors": []
+    },
+    {
+      "viewport": "phone-390",
+      "cls": 0.0112,
+      "shifts": 1,
+      "largest": [
+        {
+          "at": 809,
+          "value": 0.0112,
+          "sources": [
+            "SPAN.inline-flex.max-w-full",
+            "SPAN.inline-flex.min-w-0",
+            "SPAN.inline-flex.min-w-0"
+          ],
+          "mandate": false
+        }
+      ],
+      "handOff": null,
+      "secondDraft": null,
+      "pageErrors": []
+    }
+  ]
+}
