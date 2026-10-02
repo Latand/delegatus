@@ -10,6 +10,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { formatConversationHash } from "@/lib/accounts/identity";
 import { cleanTitle } from "@/lib/title";
 
 import { reviewerBindingTargetsForRound } from "../flows/flowModel";
@@ -28,6 +29,7 @@ import {
   resolveStageNavFile,
   stageAttempts,
   stageNames,
+  type StageNavTarget,
 } from "../pipelines/pipelineModel";
 import { PipelineBlock, PipelineStateLine } from "../pipelines/PipelineBlock";
 import { blockAgeSeconds, type PipelineAnswer } from "../pipelines/pipelineBlockModel";
@@ -435,11 +437,16 @@ export function MobilePipelineScreen({
   const stageFile = (stage: PipelineStage): FileEntry | null => resolveStageNavFile(attemptNavTarget(latestAttempt(pipeline, stage.id)), files);
   const stageConversation = (stage: PipelineStage) => {
     const file = stageFile(stage);
-    return { openable: Boolean(file), latest: file ? nowFragment(file) : null };
+    return { openable: Boolean(attemptNavTarget(latestAttempt(pipeline, stage.id))), latest: file ? nowFragment(file) : null };
+  };
+  const openAttempt = (target: StageNavTarget): void => {
+    const file = resolveStageNavFile(target, files);
+    if (file) onOpenConversation(file);
+    else window.location.hash = formatConversationHash({ conversationId: target.conversationId ?? undefined, path: target.agentPath ?? "" });
   };
   const openStage = (_pipeline: Pipeline, stage: PipelineStage): void => {
-    const file = stageFile(stage);
-    if (file) onOpenConversation(file);
+    const target = attemptNavTarget(latestAttempt(pipeline, stage.id));
+    if (target) openAttempt(target);
   };
   const linked = pipelineLinkedTasks(pipeline, tasks, [...flows], files).filter((task) => task.id !== cameFromTask);
 
@@ -550,6 +557,7 @@ export function MobilePipelineScreen({
           headingRef={heading}
           stageConversation={stageConversation}
           onOpenStage={openStage}
+          onOpenAttempt={openAttempt}
           onConfigureStage={(_pipeline, stage) => {
             setConfiguring(stage.id);
             nav.openSheet("stage");

@@ -1746,7 +1746,11 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
     assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent, retiredSeat);
     const before = fieldValues(prior);
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHoldingSnapshot(), explicit: true,
+    const caller = attributionOf(dependencies);
+    const noteAuthor = caller.kind === "manager"
+      ? { kind: "orchestrator" as const, conversationId: caller.conversationId }
+      : { kind: "agent" as const, conversationId: caller.conversationId };
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", noteAuthor, seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
