@@ -1053,10 +1053,13 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("desktop s
   const stage = pane(host, "verify")!;
   expect(stage.querySelector('[data-open-conversation="verify"]')?.textContent).toBe("Open agent");
   expect(stage.querySelector('[data-stage-question]')?.textContent ?? null).toBe(state === "needs_decision" ? "Choose a layout.\nCompact or expanded?" : null);
-  click(stage.querySelector('[data-open-conversation="verify"]'));
-  await tick();
-  expect(host.querySelector(`[data-kanban-reader="${idOf(verify2)}"]`)).toBeTruthy();
   click(stage.querySelector('[data-attempt="1"]'));
   await tick();
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
+  click(stage.querySelector('[data-open-conversation="verify"]'));
+  await tick();
+  expect(sheet(host)).toBeNull();
+  const reader = host.querySelector(`[data-kanban-reader="${idOf(verify2)}"]`);
+  expect(reader).toBeTruthy();
+  expect(reader!.closest('[data-stages-sheet]')).toBeNull();
 });

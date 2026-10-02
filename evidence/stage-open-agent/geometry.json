@@ -4,6 +4,8 @@
     "lang": "en",
     "state": "running",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -12,6 +14,8 @@
     "lang": "en",
     "state": "passed",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -20,6 +24,8 @@
     "lang": "en",
     "state": "failed",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -28,6 +34,8 @@
     "lang": "en",
     "state": "needs_decision",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -36,6 +44,8 @@
     "lang": "uk",
     "state": "running",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -44,6 +54,8 @@
     "lang": "uk",
     "state": "passed",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -52,6 +64,8 @@
     "lang": "uk",
     "state": "failed",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -60,6 +74,8 @@
     "lang": "uk",
     "state": "needs_decision",
     "buttonHeight": 44,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -68,6 +84,8 @@
     "lang": "en",
     "state": "running",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -76,6 +94,8 @@
     "lang": "en",
     "state": "passed",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -84,6 +104,8 @@
     "lang": "en",
     "state": "failed",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -92,6 +114,8 @@
     "lang": "en",
     "state": "needs_decision",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -100,6 +124,8 @@
     "lang": "uk",
     "state": "running",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -108,6 +134,8 @@
     "lang": "uk",
     "state": "passed",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -116,6 +144,8 @@
     "lang": "uk",
     "state": "failed",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   },
@@ -124,6 +154,8 @@
     "lang": "uk",
     "state": "needs_decision",
     "buttonHeight": 32,
+    "readerOutsideSheet": true,
+    "visibleComposer": true,
     "composerEnabled": true,
     "sends": 1
   }

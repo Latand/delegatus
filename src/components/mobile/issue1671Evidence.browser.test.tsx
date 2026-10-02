@@ -5744,6 +5744,20 @@ browserTest("stage agent row: conversations, parked questions and earlier attemp
           const geometry = await question.evaluate((element) => ({ width: element.clientWidth, scroll: element.scrollWidth, whiteSpace: getComputedStyle(element).whiteSpace }));
           expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
           expect(geometry.whiteSpace).toBe("pre-wrap");
+          if (width === 1440) {
+            expect(await question.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+            await question.focus();
+            await page.keyboard.press("End");
+            await page.waitForFunction(() => {
+              const element = document.querySelector('[data-stage-question="design"]');
+              return !!element && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+            }, undefined, { timeout: 5_000 });
+            const buttonReachable = await open.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+            });
+            expect(buttonReachable).toBe(true);
+          }
         } else expect(await question.count()).toBe(0);
         await stage.screenshot({ path: path.join(out, `${width}-${lang}-${state}.png`) });
         if (width === 390) {
@@ -5759,14 +5773,29 @@ browserTest("stage agent row: conversations, parked questions and earlier attemp
         }
         if (width === 1440) expect(await stage.locator('[data-attempt="1"]').isVisible()).toBe(true);
         await open.click();
-        const reader = page.locator(width === 390 ? '[data-mobile2-conversation="conversation_kanban-1"]' : '[data-kanban-reader="conversation_kanban-1"]').filter({ has: page.locator('textarea') }).last();
+        if (width === 1440) {
+          await page.locator('[data-stages-sheet]').waitFor({ state: "detached", timeout: 5_000 });
+        }
+        const reader = page.locator(width === 390 ? '[data-mobile2-conversation="conversation_kanban-1"]' : '[data-kanban-reader="conversation_kanban-1"]').filter({ has: page.locator('textarea') });
         await reader.waitFor();
+        expect(await reader.isVisible()).toBe(true);
+        expect(await reader.evaluate((element) => element.closest('[data-stages-sheet]') === null)).toBe(true);
         const composer = reader.locator('textarea').first();
         expect(await composer.isEnabled()).toBe(true);
+        await composer.scrollIntoViewIfNeeded();
+        const visibleComposer = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const x = rect.x + rect.width / 2;
+          const y = rect.y + rect.height / 2;
+          return x > 0 && x < innerWidth && y > 0 && y < innerHeight
+            && element.contains(document.elementFromPoint(x, y));
+        });
+        expect(visibleComposer).toBe(true);
         await composer.fill("Use the compact layout.");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${state}-reader.png`) });
         await composer.press("Enter");
         await page.waitForFunction(() => (window as unknown as { evidence: { sends: Array<{ text?: string; path?: string; conversationId?: string }> } }).evidence.sends.some((send) => send.text === "Use the compact layout." && (send.path === "/repo/kanban-1.jsonl" || send.conversationId === "conversation_kanban-1")));
-        readings.push({ width, lang, state, buttonHeight: box!.height, composerEnabled: true, sends: await page.evaluate(() => (window as unknown as { evidence: { sends: unknown[] } }).evidence.sends.length) });
+        readings.push({ width, lang, state, buttonHeight: box!.height, readerOutsideSheet: true, visibleComposer, composerEnabled: true, sends: await page.evaluate(() => (window as unknown as { evidence: { sends: unknown[] } }).evidence.sends.length) });
         expect(errors).toEqual([]);
       } finally { await context.close(); }
     }

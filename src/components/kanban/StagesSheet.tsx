@@ -460,9 +460,12 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
       {/* A stage that never ran says when it starts once, in its draft. */}
       {neverRan ? null : <div className="pane-sub">{bits}</div>}
-      {agent.question ? <p className="m-0 whitespace-pre-wrap break-words text-ui text-primary" data-stage-question={stage.id}>{agent.question}</p> : null}
+      {agent.question ? <p className="m-0 max-h-40 shrink-0 overflow-y-auto whitespace-pre-wrap break-words text-ui text-primary" tabIndex={0} data-stage-question={stage.id}>{agent.question}</p> : null}
       {agent.target ? (
-        <button type="button" className="btn quiet" data-open-conversation={stage.id} onClick={() => props.onOpenRecorded({ path: agent.target!.agentPath, conversationId: agent.target!.conversationId })}>{t("pipelineStage.openAgent")}</button>
+        <button type="button" className="btn quiet" data-open-conversation={stage.id} onClick={() => {
+          props.onClose();
+          props.onOpenRecorded({ path: agent.target!.agentPath, conversationId: agent.target!.conversationId });
+        }}>{t("pipelineStage.openAgent")}</button>
       ) : null}
       {attempts.length > 1 ? (
         <div className="attempts" role="group" aria-label={t("kanban.stages.attempts")}>

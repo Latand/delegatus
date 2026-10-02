@@ -498,7 +498,9 @@ if (KANBAN) {
       { ...current.runs[0]!.attempts[0]!, n: 2, state, agentPath, conversationId: idOf(agentPath), verdict: { status: state === "failed" ? "fail" : state === "needs_decision" ? "needs_decision" : "pass", findings: [] },
         report: { seq: 1, at: iso(60), actor: { kind: "operator" }, calls: 1,
           verdict: { status: state === "needs_decision" ? "needs_decision" : state === "failed" ? "fail" : "pass", findings: [] },
-          summary: "Which layout should we use?\nChoose the compact layout or keep the expanded layout.\nЯке компонування обрати? Компактне чи розгорнуте?", provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
+          summary: ["Which layout should we use?", "Choose the compact layout or keep the expanded layout.", "Яке компонування обрати? Компактне чи розгорнуте?",
+            ...Array.from({ length: 36 }, (_, index) => `Option ${index + 1}: explain the choice here.`),
+            `/repo/${"unbroken-path-segment".repeat(8)}`, "End of the question. Кінець питання."].join("\n"), provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
       },
     ] }];
   }
