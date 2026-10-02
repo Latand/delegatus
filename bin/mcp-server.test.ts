@@ -25,7 +25,7 @@ for (const runtime of ["node", "bun"]) {
       !key.startsWith("LLV_") && !key.startsWith("DELEGATUS_")));
     const launcherProcess = spawn(Bun.which(runtime)!, [launcher], {
       cwd: root,
-      env: { ...environment, HOME: root, XDG_CONFIG_HOME: root, LLV_STATE_DIR: path.join(root, "state"),
+      env: { ...environment, NODE_ENV: "test", HOME: root, XDG_CONFIG_HOME: root, LLV_STATE_DIR: path.join(root, "state"),
         LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_PID: pidFile },
       stdio: ["pipe", "pipe", "pipe"],
     });
