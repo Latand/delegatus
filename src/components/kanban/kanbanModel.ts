@@ -238,6 +238,11 @@ export interface KanbanModelInput {
       seat record names leaves the bands (#1841). */
   seat?: SeatRefs | null;
   query?: string;
+  /** The conversations with a reader open and unfolded in a card. A draft no
+      task holds stands in Assigned unless one of these is held by a card there:
+      a reader fills the column, so a draft above it would push the agent the
+      operator is reading out of the window. */
+  openReaders?: ReadonlySet<string>;
   /** Epoch seconds. */
   now: number;
 }
@@ -702,6 +707,12 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       holdsSeat,
     }];
   });
+
+  /* The draft's launch writes a task in Assigned and takes the draft's place there. Beside an agent being
+     read in Assigned the draft stays in Inbox instead, where it pushes nothing out of the window. */
+  const readInAssigned = cards.some((card) => card.task && !card.hide.hidden && card.status === "assigned"
+    && card.members.some((member) => input.openReaders?.has(conversationIdentity(member.file))));
+  if (readInAssigned) for (const card of cards) if (holdsOnlyDrafts(card)) card.status = "inbox";
 
   /* Search and the Overview's predicate narrow the same way and in the same
      place: what they reject leaves `shown`, and every count above is already

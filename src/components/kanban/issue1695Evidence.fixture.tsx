@@ -139,7 +139,10 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
    Board carries the create draft above empty columns; `orchestrator-first-
    overview` is the quiet Overview, which leads with its band. No project has a
    seat in either. */
-const ORCH_FIRST = SCENARIO === "orchestrator-first";
+/* `seat-create-cls`: the same new project, and the seat created from its draft on a clock (the receipt, the
+   `spawn:` projection, the scanned transcript), for the layout shifts of creating an orchestrator. */
+const SEAT_CLS = SCENARIO === "seat-create-cls";
+const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW;
 /* #2166 §3.8: the same project a moment after its seat was created, the seat
@@ -1689,7 +1692,7 @@ function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
   /* A launch the transcript has not appeared for reads nothing. */
-  if (LAUNCH_CLS && file.path.startsWith("spawn:")) return "";
+  if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (file === searchVer2) {
@@ -2104,6 +2107,7 @@ const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
 /* The launch the page runs on a clock (`?scenario=launch-cls`). POST /api/spawn answers the receipt after the
    latency a real launch has; /api/files then shows the `spawn:` projection, and from the adoption on the
    scanned transcript, whose rows arrive on the timeline below. */
+const SEAT_TITLE = "Orchestrator for atlas";
 const launchRun = {
   launchId: "launch-cls", conversationId: "conversation_launch-cls", path: "/repo/launch-cls.jsonl",
   startedAt: 0, prompt: "", title: "Claude", engine: "claude", model: "haiku", effort: "low", clientAttemptId: null as string | null,
@@ -2132,7 +2136,7 @@ function launchTranscript(): string {
 }
 /* The files and tasks the board holds at this moment of the launch. */
 function launchAdvance() {
-  if (!LAUNCH_CLS || !launchRun.startedAt) return;
+  if (!(LAUNCH_CLS || SEAT_CLS) || !launchRun.startedAt) return;
   const elapsed = Date.now() - launchRun.startedAt;
   const nowSeconds = Date.now() / 1_000;
   for (let index = files.length - 1; index >= 0; index -= 1) if (files[index]!.conversationId === launchRun.conversationId) files.splice(index, 1);
@@ -2140,19 +2144,22 @@ function launchAdvance() {
   const ended = elapsed >= LAUNCH_END_MS;
   const common = { model: launchRun.model, launchModel: launchRun.model, effort: launchRun.effort, fast: null, mtime: nowSeconds };
   files.push(adopted
-    ? conversation("launch-cls", launchRun.prompt.split("\n")[0] ?? "", {
+    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.prompt.split("\n")[0] ?? "", {
       ...common, path: launchRun.path, size: new TextEncoder().encode(launchTranscript()).length,
       ...(ended
         ? { activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, lastTurn: { startedAt: launchRun.startedAt, endedAt: Date.now() } }
         : working({ mtime: nowSeconds, lastTurn: { startedAt: launchRun.startedAt, endedAt: null } })),
     })
-    : conversation("launch-cls", launchRun.title, {
+    : conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.title, {
       ...common, path: `spawn:${launchRun.launchId}`, size: 0, activity: "live", activityReason: "structured_spawn_starting", generation: 1,
       spawn: {
         launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: null, conversationId: launchRun.conversationId, generation: 1,
         state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt,
+        ...(SEAT_CLS ? { mandate: { kind: "version", version: ORCHESTRATOR_PROMPT_VERSION } } : {}),
       },
     }));
+  /* The seat's conversation belongs to no task. */
+  if (SEAT_CLS) return;
   const index = tasks.findIndex((entry) => entry.id === "t-launch");
   const placeholder = {
     id: "t-launch", project: PROJECT, text: launchRun.prompt.split("\n")[0] ?? "", status: "assigned", placement: "unplaced",
@@ -2167,6 +2174,8 @@ function launchAdvance() {
   else tasks.push(placeholder);
 }
 /* Nothing waits on the operator, so the phone's own fallback focus has no reason to leave the launched conversation. */
+/* A project created a moment ago holds nothing until its seat is made. */
+if (SEAT_CLS) files.splice(0, files.length);
 if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: null, pendingQuestion: null });
 Object.assign(window, { launchRun });
 
@@ -2210,6 +2219,39 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     launchAdvance();
     return json({ ok: true, launched: true, transport: "structured", state: "path-pending", target: "", launchId: launchRun.launchId, conversationId: launchRun.conversationId, initialMessage: "queued" });
   }
+  /* The seat's create: the same receipt a spawn answers, after the same latency. */
+  if (SEAT_CLS && url.pathname === "/api/orchestrator/seat" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    Object.assign(launchRun, {
+      startedAt: Date.now(), prompt: String(body.mandate ?? ""), title: SEAT_TITLE, engine: String(body.engine ?? "claude"),
+      model: String(body.model ?? "") || "opus", effort: String(body.effort ?? "") || "high", clientAttemptId: typeof body.clientRequestId === "string" ? body.clientRequestId : null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, LAUNCH_RECEIPT_MS));
+    launchAdvance();
+    return json({ ok: true, launched: true, transport: "structured", state: "path-pending", target: "", launchId: launchRun.launchId, conversationId: launchRun.conversationId, initialMessage: "queued" });
+  }
+  if (SEAT_CLS && url.pathname === "/api/orchestrator/seat" && launchRun.startedAt && url.searchParams.get("scope") !== "all") {
+    evidence.seatReads += 1;
+    const adopted = Date.now() - launchRun.startedAt >= LAUNCH_ADOPT_MS;
+    const at = new Date(launchRun.startedAt).toISOString();
+    return json({
+      seat: {
+        project: PROJECT, seatEpoch: 1, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : `spawn:${launchRun.launchId}`, mandate: launchRun.prompt,
+        promptVersion: ORCHESTRATOR_PROMPT_VERSION, predecessorConversationId: null, state: "active",
+        intent: { clientRequestId: launchRun.clientAttemptId, mode: "spawn", launchId: launchRun.launchId, error: null }, designatedAt: at, activatedAt: at,
+      },
+      pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null,
+      all: { conversationIds: [launchRun.conversationId], paths: [launchRun.path], previous: { conversationIds: [], paths: [] } },
+    });
+  }
+  if (SEAT_CLS && url.pathname === "/api/orchestrator/seat/status" && launchRun.startedAt) {
+    return json({
+      project: PROJECT, designated: true, conversationId: launchRun.conversationId, predecessorConversationId: null,
+      engine: launchRun.engine, model: launchRun.model, effort: launchRun.effort, accountId: "primary", cwd: "/repo/atlas", transcriptPath: launchRun.path,
+      liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
+      context: null, transcriptFacts: null, rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    });
+  }
   if (url.pathname === "/api/files") {
     launchAdvance();
     /* #1820's first run: an installation with nothing in it at all. */
@@ -2239,7 +2281,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : ORCH_FIRST
-      ? { files: [], projectCatalog: [{ project: PROJECT, conversations: 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
@@ -2612,7 +2654,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
       if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
-      if (LAUNCH_CLS && req.path === launchRun.path) {
+      if ((LAUNCH_CLS || SEAT_CLS) && req.path === launchRun.path) {
         /* The transcript grows by whole lines: a read answers what lies past the offset it was given. */
         const bytes = new TextEncoder().encode(launchTranscript());
         return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: bytes.length, size: bytes.length }];

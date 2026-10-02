@@ -8,28 +8,47 @@
       "shifts": 3,
       "largest": [
         {
-          "at": 7918,
+          "at": 7896,
           "value": 0.0001,
           "sources": [
             "SPAN.inline-flex.max-w-full"
-          ]
+          ],
+          "mandate": false
         },
         {
-          "at": 841,
+          "at": 857,
           "value": 0,
           "sources": [
             "BUTTON.or-close-all"
-          ]
+          ],
+          "mandate": false
         },
         {
-          "at": 7890,
+          "at": 7885,
           "value": 0,
           "sources": [
             "BUTTON.or-close-all",
             "SPAN.or-names"
-          ]
+          ],
+          "mandate": false
         }
       ],
+      "handOff": {
+        "scrollFrom": 4,
+        "scrollDrift": 0,
+        "headTop": 179,
+        "headBottom": 207,
+        "columnTop": 166,
+        "columnBottom": 900,
+        "headVisible": true
+      },
+      "secondDraft": {
+        "top": 245,
+        "left": 962,
+        "width": 524,
+        "visibleShare": 0.83,
+        "viewportHeight": 900
+      },
       "pageErrors": []
     },
     {
@@ -38,15 +57,18 @@
       "shifts": 1,
       "largest": [
         {
-          "at": 779,
+          "at": 816,
           "value": 0.0113,
           "sources": [
             "SPAN.inline-flex.max-w-full",
             "SPAN.inline-flex.min-w-0",
             "SPAN.inline-flex.min-w-0"
-          ]
+          ],
+          "mandate": false
         }
       ],
+      "handOff": null,
+      "secondDraft": null,
       "pageErrors": []
     }
   ]

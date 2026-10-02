@@ -8,6 +8,7 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
+import { conversationIdentity } from "@/lib/accounts/identity";
 import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
@@ -672,6 +673,22 @@ test("an agent draft is the card's own: a band-local draft on its task, any othe
   expect(alone.status).toBe("assigned");
   expect(holdsOnlyDrafts(alone)).toBe(true);
   expect(holdsOnlyDrafts(onTask)).toBe(false);
+});
+
+test("a draft stands in Assigned, unless a reader is open in a card there: then it stays in Inbox beside it", () => {
+  const live = file(1);
+  const tasks = [task("t1", "assigned", [live.path])];
+  const base = layout([live]);
+  (base as unknown as { drafts: unknown[] }).drafts = [{ key: "draft::draft-alone", id: "draft-alone", x: 648, y: 0, w: 600, h: 400 }];
+  const projection = projectTaskWorkflows([...tasks], [], [], [live]);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled task" });
+  const draftCard = (openReaders?: ReadonlySet<string>) => buildKanbanModel({ bands, tasks, pipelines: [], projection, files: [live], openReaders, now: NOW })
+    .unlinked.find((card) => card.drafts.includes("draft-alone"))!;
+  /* No reader open (or an unrelated one): the launched card will take the draft's place at the top of Assigned. */
+  expect(draftCard().status).toBe("assigned");
+  expect(draftCard(new Set(["conversation_fixture_9"])).status).toBe("assigned");
+  /* The agent in Assigned is open to read: a draft above it would push it out of the window. */
+  expect(draftCard(new Set([conversationIdentity(live)])).status).toBe("inbox");
 });
 
 

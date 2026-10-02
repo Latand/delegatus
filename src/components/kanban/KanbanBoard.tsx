@@ -382,10 +382,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
+  const readerStorage = props.readerStorage === undefined ? browserStorage() : props.readerStorage;
+  const memory = useMemo(() => new ReaderMemory(project, readerStorage), [project, readerStorage]);
+  const openReaders = useSyncExternalStore(memory.subscribe, memory.snapshot, () => NO_READERS);
+  const openReadersRef = useRef(openReaders);
+  openReadersRef.current = openReaders;
+  /* The readers a card holds open, for where a new draft stands (kanbanModel's `openReaders`). */
+  const unfoldedReaders = useMemo(() => new Set(openReaders.filter((reader) => !reader.folded).map((reader) => reader.key)), [openReaders]);
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, now: modelNow }),
-    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, modelNow],
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, openReaders: unfoldedReaders, now: modelNow }),
+    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, unfoldedReaders, modelNow],
   );
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
@@ -403,11 +410,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const cards = useMemo(() => allCards(model), [model]);
   const owners = useMemo(() => conversationOwners(cards, files), [cards, files]);
   const anchors = useMemo(() => cardAnchors(cards, owners), [cards, owners]);
-  const readerStorage = props.readerStorage === undefined ? browserStorage() : props.readerStorage;
-  const memory = useMemo(() => new ReaderMemory(project, readerStorage), [project, readerStorage]);
-  const openReaders = useSyncExternalStore(memory.subscribe, memory.snapshot, () => NO_READERS);
-  const openReadersRef = useRef(openReaders);
-  openReadersRef.current = openReaders;
   const [placement] = useState(() => new ReaderPlacement());
   /* One reader at a time may take the whole window; it is the same reader,
      moved, and goes back into its card when it leaves. */
@@ -1782,8 +1784,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Opening what a card holds ───────────────────────────────────────── */
   /* What to bring into view once React has committed: the card, and the
      reader when one was opened. */
-  const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean; focusSelector?: string } | null>(null);
-  const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false, focusSelector?: string) => {
+  const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean; focusSelector?: string; landing?: boolean } | null>(null);
+  const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false, focusSelector?: string, landing = false) => {
     leaveLoose(readerKey);
     const card = cardsByIdRef.current.get(cardId);
     if (card) {
@@ -1796,7 +1798,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (query && !cardMatchesShown(modelRef.current, card)) setQuery("");
       if (modeRef.current === "tabs") setTab(card.status);
     }
-    pendingReveal.current = { cardId, readerKey, focusReader, focusSelector };
+    pendingReveal.current = { cardId, readerKey, focusReader, focusSelector, landing };
     setRevealTick((tick) => tick + 1);
   }, [query, leaveLoose]);
   /* What each attention request's handoff changed about a reader, so that
@@ -1808,7 +1810,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const disown = useCallback((key: string) => {
     for (const [requestId, owned] of handoffOwned.current) if (owned.key === key) handoffOwned.current.delete(requestId);
   }, []);
-  const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean } = {}) => {
+  const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean; landing?: boolean } = {}) => {
     const key = conversationIdentity(file);
     if (!options.handoff) disown(key);
     const owner = ownersRef.current.get(key);
@@ -1816,7 +1818,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setFocusedReader(key);
     onConversationOpened?.(file.path);
     /* Revealing leaves another loose reader's window, so a new one takes the window after it. */
-    revealCard(owner?.cardId ?? "", key, options.focus !== false);
+    revealCard(owner?.cardId ?? "", key, options.focus !== false, undefined, options.landing);
     if (!owner) {
       setLooseReader({ key, path: file.path, project });
       setFullReader(key);
@@ -1832,7 +1834,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const slot = wanted.readerKey ? placement.slotOf(wanted.readerKey) : null;
     const target = slot ?? (wanted.cardId ? root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`) : null);
     if (!target) return;
-    target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    if (wanted.landing) {
+      /* A launched card stands where its draft stood. The column stays as it is while that head is in view; a
+         scroll would move the content as visibly as a layout shift, and bring the reader's foot up under the header. */
+      const card = wanted.cardId ? root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`) : null;
+      const body = card?.closest<HTMLElement>(".col-body");
+      if (card && body) {
+        const head = card.getBoundingClientRect().top;
+        const view = body.getBoundingClientRect();
+        if (head < view.top || head > view.bottom - 40) card.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+      } else target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    } else target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     if (slot && wanted.focusReader) slot.querySelector<HTMLElement>("[data-kanban-reader]")?.focus({ preventScroll: true });
     if (wanted.focusSelector) target.querySelector<HTMLElement>(wanted.focusSelector)?.focus({ preventScroll: true });
   }, [revealTick, placement]);
@@ -2417,7 +2429,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   if (mode !== "tabs") {
     for (const status of KANBAN_STATUSES) {
       if (status === (wideShelf ?? "assigned") || readingStatuses.has(status)) continue;
-      if (model.columns[status].cards.length || (status === "inbox" && (model.unlinked.some((card) => !holdsOnlyDrafts(card)) || composingTask))) continue;
+      if (model.columns[status].cards.length || (status === "inbox" && (model.unlinked.some((card) => !(holdsOnlyDrafts(card) && card.status === "assigned")) || composingTask))) continue;
       stripStatuses.add(status);
     }
   }
@@ -2507,7 +2519,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       launching.current.delete(id);
       launchedDrafts.current.add(id);
       draftCloseRef.current?.(id);
-      openReaderFor(files.find((file) => conversationIdentity(file) === identity) ?? entry.file);
+      openReaderFor(files.find((file) => conversationIdentity(file) === identity) ?? entry.file, { landing: true });
     }
   });
 
@@ -2979,8 +2991,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   if (status === "assigned") while (split > 0 && shown[split - 1]!.idle) split -= 1;
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
-  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !holdsOnlyDrafts(card)) : [];
-  const drafting = status === "assigned" ? model.unlinkedShown.filter(holdsOnlyDrafts) : [];
+  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned")) : [];
+  const drafting = status === "assigned" ? model.unlinkedShown.filter((card) => holdsOnlyDrafts(card) && card.status === "assigned") : [];
   const unboundRemote = status === "inbox" ? remoteAgents.filter((row) => !row.task) : [];
   const empty = shown.length === 0 && unlinked.length === 0 && drafting.length === 0 && unboundRemote.length === 0 && !newTask;
   /* This column holds the wide share, or gave it to a widened shelf. */

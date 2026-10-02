@@ -25,6 +25,30 @@ turn ends. Records: `evidence/launch-render-polish/cls-before.json` and `cls-aft
    moved on each streamed chunk. A launched reader keeps the height of the draft it came from
    (`launchedConversations.ts`); a reader the operator opens on the board sizes to content as before.
 
+5. **A second draft beside a live agent.** A draft is as tall as a reader, so drawn above an agent being
+   read in Assigned it pushed that agent wholly below the window. With a reader open in a card in Assigned
+   the draft stays in Inbox, beside it (`openReaders` in `kanbanModel.ts`); otherwise it stands at the top of
+   Assigned as above.
+6. **The hand-off scrolled the column.** Opening the launched card's reader scrolled Assigned until the
+   reader's foot was in view, which put the card's head (and the first-prompt title) under the column header.
+   The hand-off now leaves the column where it is while the card's head is in view (`landing` in
+   `KanbanBoard.tsx`). The driver records the column's scroll position across the hand-off, since the
+   layout-shift metric does not count a scroll.
+
+## Creating an orchestrator
+
+The driver's second case (`?scenario=seat-create-cls`) creates the seat from a new project's draft on the same
+clock. Records: `evidence/launch-render-polish/seat-cls-before.json` and `seat-cls-after.json`.
+
+- **The draft came back for a few frames.** Once the seat's reply arrived, the confirm let go of its
+  submitting state before the durable read had said where the seat landed, so the panel drew the short draft
+  again and then the live seat at 75% of the window: the board jumped up and back down (0.30 at 1440).
+  `useSeatConfirm` now keeps the submitting state until that read is in.
+- The composer's runtime pill is recorded from its first frame and must read the chosen effort in every
+  frame (it read the engine's lowest tier first before the provisional window carried the effort).
+- The mandate bubble's own hand-over shifts the phone by 0.096; it is the first-bubble lane's (#2006, #2415)
+  and is read apart in the record (`clsWithoutMandate`).
+
 ## Phone
 
 The phone swaps the draft screen for the conversation when the launch is adopted. The strip that names the
