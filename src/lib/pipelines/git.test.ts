@@ -1203,6 +1203,54 @@ function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void, acceptedBo
   return { ...box, accepted, head };
 }
 
+function sameHunkRebaseSandbox() {
+  const box = publishSandbox();
+  const policy = (first: number, second: number) => [
+    "def first():",
+    "    # before one",
+    "    # before two",
+    "    # before three",
+    `    value = ${first}`,
+    "    # after one",
+    "    # after two",
+    "    # after three",
+    "    return value",
+    "",
+    "def second():",
+    "    # before one",
+    "    # before two",
+    "    # before three",
+    `    value = ${second}`,
+    "    # after one",
+    "    # after two",
+    "    # after three",
+    "    return value",
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(box.repo, "policy.py"), policy(1, 1));
+  git(box.repo, "add", "policy.py");
+  git(box.repo, "commit", "-m", "add policy functions");
+  git(box.repo, "push", "origin", "main");
+  git(box.subject.worktreeDir, "fetch", "origin");
+  git(box.subject.worktreeDir, "rebase", "origin/main");
+
+  fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), policy(2, 1));
+  git(box.subject.worktreeDir, "add", "policy.py");
+  git(box.subject.worktreeDir, "commit", "-m", "change first policy");
+  const accepted = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+  box.subject.lastPassedCommit = accepted;
+  savePipelines([box.subject]);
+
+  fs.writeFileSync(path.join(box.repo, "policy.py"), `# newer main line\n${policy(1, 1)}`);
+  git(box.repo, "add", "policy.py");
+  git(box.repo, "commit", "-m", "advance main above policy");
+  git(box.repo, "push", "origin", "main");
+  git(box.subject.worktreeDir, "fetch", "origin");
+  git(box.subject.worktreeDir, "rebase", "origin/main");
+  const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+  return { ...box, accepted, head, policy };
+}
+
 test.each(["update", "revert"])("stage reconciliation retains accepted history followed by a builder %s", (operation) => {
   const box = rebasedStageSandbox();
   try {
@@ -1217,6 +1265,43 @@ test.each(["update", "revert"])("stage reconciliation retains accepted history f
     expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
     expect(git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha)).toBe(`${result.sha} ${head} ${box.accepted}`);
     expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation rejects an amended replay moved to an identical hunk in another function", () => {
+  const box = sameHunkRebaseSandbox();
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), box.policy(1, 2));
+    git(box.subject.worktreeDir, "add", "policy.py");
+    git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const main = git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0];
+    expect(git(box.subject.worktreeDir, "cherry", head, box.accepted)).toBe(`- ${box.accepted}`);
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(box.subject.lastPassedCommit).toBe(box.accepted);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    expect(git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main").split(/\s+/)[0]).toBe(main);
+    expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation matches a location-preserving replay after line shifts and later builder edits", () => {
+  const box = sameHunkRebaseSandbox();
+  try {
+    const builderHead = box.commit("builder.txt", "later builder work\n");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    expect(git(box.subject.worktreeDir, "cherry", builderHead, box.accepted)).toBe(`- ${box.accepted}`);
+
+    const result = reconcilePipelineStageHead(box.subject, builderHead, realExec);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect(git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha)).toBe(`${result.sha} ${builderHead} ${box.accepted}`);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 

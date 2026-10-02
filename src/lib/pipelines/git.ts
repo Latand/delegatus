@@ -683,10 +683,10 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
 }
 
 /** `git cherry` strips whitespace before comparing patch IDs. Keep its fast
-    history scan, then require the changed file paths, modes and exact added /
-    removed lines and context to agree before treating a whitespace-insensitive
-    match as retained. Hunk positions are omitted so a replay still matches
-    after surrounding lines move on a newer base. */
+    history scan, then require the changed file paths, modes, hunk section and
+    exact added / removed lines and context to agree before treating a
+    whitespace-insensitive match as retained. Line positions are omitted so a
+    replay still matches after surrounding lines move on a newer base. */
 function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): string | null | { error: string } {
   const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
     "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", commit], pipeline.worktreeDir);
@@ -705,6 +705,10 @@ function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): s
       evidence.push(line);
       binary = line === "GIT binary patch";
     } else if (line.startsWith("@@")) {
+      // Keep Git's function/section label (the text after the closing @@) to
+      // distinguish identical local hunks in different parts of one file.
+      // The ranges themselves move during a valid rebase and are not identity.
+      evidence.push(line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, "@@"));
       inHunk = true;
     } else if (inHunk && ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
       || line.startsWith("\\ No newline"))) {
