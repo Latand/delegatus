@@ -228,7 +228,7 @@ test("the relay service step is optional: it offers the engine that answers, and
   expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("relay");
   expect(host.textContent).toContain("Answer for a relay service");
   expect(host.querySelector("[data-onboarding-relay-engine=claude]")?.getAttribute("aria-checked")).toBe("true");
-  expect(host.querySelector("[data-external-relay-connect]")).not.toBeNull();
+  expect(host.querySelector("[data-external-relay-connect-known=celestia]")).not.toBeNull();
   flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
   expect(requests.find((request) => request.url.includes("/api/onboarding") && request.method === "PUT")?.body).toEqual({ steps: { relay: "skipped" } });
   expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");
