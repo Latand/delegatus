@@ -1,0 +1,332 @@
+{
+  "schemaVersion": 1,
+  "base": "70f13157dfaf312a78b37c751df25848bc6ccdb3",
+  "implementation": "42c449392",
+  "driver": "scripts/profile-kanban-board.ts",
+  "method": {
+    "cpuRate": 4,
+    "eventsPerSecond": 40,
+    "history": 40,
+    "viewportHeights": {
+      "1440": 900,
+      "390": 844
+    },
+    "phoneSurface": "real MobileKanban at 390 CSS pixels",
+    "timingRuns": 3,
+    "switchesPerTimingRun": 3,
+    "streamWindowSeconds": 10,
+    "state": "isolated",
+    "browser": "Chromium headless shell",
+    "comparison": "same shared fixture and driver, serial main/head runs under the heavy gate",
+    "sourceCoverage": "collected during the fix; final cached-scope return is covered by a separate red/green DOM regression; final timing round uses the completed implementation"
+  },
+  "timings": {
+    "1440": {
+      "main": {
+        "runs": [
+          {
+            "fps": 58.4,
+            "longTasks": 0,
+            "switchPaintMs": [
+              269,
+              222,
+              230
+            ],
+            "medianSwitchPaintMs": 230,
+            "mountedCards": 97,
+            "pageErrors": []
+          },
+          {
+            "fps": 59.9,
+            "longTasks": 0,
+            "switchPaintMs": [
+              234,
+              231,
+              224
+            ],
+            "medianSwitchPaintMs": 231,
+            "mountedCards": 97,
+            "pageErrors": []
+          },
+          {
+            "fps": 50.5,
+            "longTasks": 0,
+            "switchPaintMs": [
+              324,
+              282,
+              262
+            ],
+            "medianSwitchPaintMs": 282,
+            "mountedCards": 97,
+            "pageErrors": []
+          }
+        ],
+        "medianFps": 58.4,
+        "medianSwitchPaintMs": 231
+      },
+      "head": {
+        "runs": [
+          {
+            "fps": 57,
+            "longTasks": 0,
+            "switchPaintMs": [
+              281,
+              255,
+              219
+            ],
+            "medianSwitchPaintMs": 255,
+            "mountedCards": 97,
+            "pageErrors": []
+          },
+          {
+            "fps": 48.4,
+            "longTasks": 7,
+            "switchPaintMs": [
+              306,
+              289,
+              311
+            ],
+            "medianSwitchPaintMs": 306,
+            "mountedCards": 97,
+            "pageErrors": []
+          },
+          {
+            "fps": 58.9,
+            "longTasks": 0,
+            "switchPaintMs": [
+              299,
+              249,
+              242
+            ],
+            "medianSwitchPaintMs": 249,
+            "mountedCards": 97,
+            "pageErrors": []
+          }
+        ],
+        "medianFps": 57,
+        "medianSwitchPaintMs": 255
+      }
+    },
+    "390": {
+      "main": {
+        "runs": [
+          {
+            "fps": 60.1,
+            "longTasks": 0,
+            "switchPaintMs": [
+              192,
+              181,
+              210
+            ],
+            "medianSwitchPaintMs": 192,
+            "mountedCards": 73,
+            "pageErrors": []
+          },
+          {
+            "fps": 59.9,
+            "longTasks": 0,
+            "switchPaintMs": [
+              163,
+              151,
+              121
+            ],
+            "medianSwitchPaintMs": 151,
+            "mountedCards": 73,
+            "pageErrors": []
+          },
+          {
+            "fps": 60.1,
+            "longTasks": 0,
+            "switchPaintMs": [
+              161,
+              160,
+              135
+            ],
+            "medianSwitchPaintMs": 160,
+            "mountedCards": 73,
+            "pageErrors": []
+          }
+        ],
+        "medianFps": 60.1,
+        "medianSwitchPaintMs": 160
+      },
+      "head": {
+        "runs": [
+          {
+            "fps": 60.1,
+            "longTasks": 0,
+            "switchPaintMs": [
+              214,
+              280,
+              338
+            ],
+            "medianSwitchPaintMs": 280,
+            "mountedCards": 73,
+            "pageErrors": []
+          },
+          {
+            "fps": 60.1,
+            "longTasks": 0,
+            "switchPaintMs": [
+              158,
+              142,
+              127
+            ],
+            "medianSwitchPaintMs": 142,
+            "mountedCards": 73,
+            "pageErrors": []
+          },
+          {
+            "fps": 60,
+            "longTasks": 0,
+            "switchPaintMs": [
+              205,
+              143,
+              129
+            ],
+            "medianSwitchPaintMs": 143,
+            "mountedCards": 73,
+            "pageErrors": []
+          }
+        ],
+        "medianFps": 60.1,
+        "medianSwitchPaintMs": 143
+      }
+    }
+  },
+  "latency": {
+    "1440": {
+      "main": {
+        "warmSeconds": 40,
+        "streamingRenameMs": [
+          5097,
+          5066,
+          5079
+        ],
+        "streamingMoveMs": [
+          5097,
+          5066,
+          5079
+        ],
+        "medianStreamingRenameMs": 5079,
+        "medianStreamingMoveMs": 5079,
+        "quietRenameMs": 142,
+        "quietMoveMs": 142
+      },
+      "head": {
+        "warmSeconds": 40,
+        "streamingRenameMs": [
+          558,
+          438,
+          281
+        ],
+        "streamingMoveMs": [
+          558,
+          438,
+          281
+        ],
+        "medianStreamingRenameMs": 438,
+        "medianStreamingMoveMs": 438,
+        "quietRenameMs": 232,
+        "quietMoveMs": 232
+      }
+    },
+    "390": {
+      "main": {
+        "warmSeconds": 40,
+        "streamingRenameMs": [
+          2903,
+          399,
+          3372
+        ],
+        "streamingMoveMs": [
+          2903,
+          399,
+          3372
+        ],
+        "medianStreamingRenameMs": 2903,
+        "medianStreamingMoveMs": 2903,
+        "quietRenameMs": 118,
+        "quietMoveMs": 118
+      },
+      "head": {
+        "warmSeconds": 40,
+        "streamingRenameMs": [
+          418,
+          262,
+          417
+        ],
+        "streamingMoveMs": [
+          418,
+          262,
+          417
+        ],
+        "medianStreamingRenameMs": 417,
+        "medianStreamingMoveMs": 417,
+        "quietRenameMs": 157,
+        "quietMoveMs": 157
+      }
+    }
+  },
+  "additionalDesktopFreshnessCapture": {
+    "warmSeconds": 40,
+    "rounds": [
+      {
+        "streaming": true,
+        "renameMs": 465,
+        "moveMs": 465,
+        "events": 59
+      },
+      {
+        "streaming": false,
+        "renameMs": 186,
+        "moveMs": 186,
+        "events": 0
+      },
+      {
+        "streaming": true,
+        "renameMs": 549,
+        "moveMs": 549,
+        "events": 62
+      },
+      {
+        "streaming": true,
+        "renameMs": 460,
+        "moveMs": 460,
+        "events": 58
+      }
+    ]
+  },
+  "contentionSample": {
+    "fps": 46.8,
+    "longTasks": 9,
+    "switchPaintMs": [
+      426,
+      388,
+      273
+    ],
+    "medianSwitchPaintMs": 388,
+    "mountedCards": 97,
+    "pageErrors": []
+  },
+  "verification": {
+    "focusedTests": 101,
+    "typecheck": "pass",
+    "additionalLintDiagnosticsAgainstMain": 0,
+    "existingLintErrors": 70,
+    "existingLintWarnings": 3,
+    "renderCeiling": 600,
+    "privacyPublicationWithCommits": "pass",
+    "staleSpawnRegressionAtOriginalCommit": "red at 0a66415da, green after fix",
+    "unchangedSeatPollRegression": "red before fix, green after fix",
+    "seatScopeReturnRegression": "red before fix, green after fix"
+  },
+  "notes": [
+    "Phone uses existing per-column limits and mounts 73 rows from the same corpus that mounts 97 desktop cards.",
+    "The earlier 390 evidence used a scaled desktop surface. These captures use the real phone surface.",
+    "Traced runs are excluded from timing medians.",
+    "Shared-host contention affected individual samples; every timing sample is retained.",
+    "The initial desktop freshness capture had higher quiet latency under contention; a second head capture measured 186 ms quiet and 465 ms streaming median. Main quiet was 142 ms. Phone quiet was 157 ms on head and 118 ms on main.",
+    "Hosted privacy-publication fails in unchanged trusted-source OCR self-tests; local branch inspection passes."
+  ]
+}
