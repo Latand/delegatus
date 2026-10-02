@@ -2698,6 +2698,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.rotationContext": "контекст на {percent}% вікна моделі",
   "orchPanel.rotationDead": "його хост зник",
   "orchPanel.badgeNeedsYou": "потребує тебе",
+  "orchPanel.badgeWorking": "працює",
   "orchPanel.badgeLive": "живий",
   "orchPanel.badgeWaiting": "чекає",
   "orchPanel.badgeStalled": "тиша",

@@ -49,6 +49,8 @@ Object.assign(globalThis, {
   localStorage: dom.localStorage,
   ResizeObserver: TestResizeObserver,
   IntersectionObserver: undefined,
+  requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0) as unknown as number,
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
 /* Desktop: the dock is a desktop surface (the phone is slice C). */
 (dom as unknown as { matchMedia: (q: string) => unknown }).matchMedia = (query: string) => ({
@@ -1733,12 +1735,12 @@ test("a seat holding a question badges «needs you» in the warning tone, and na
   expect(badge.getAttribute("title")).toBe("Rollout window · Orchestrator");
 });
 
-test("a quiet seat keeps the live badge, and claims no decision in its tooltip", async () => {
+test("a running seat uses the shared working word, and claims no decision in its tooltip", async () => {
   const host = await mountLive();
 
   const badge = stateBadge(host);
-  expect(badge.getAttribute("data-orchestrator-badge")).toBe("live");
-  expect(badge.textContent).toBe("live");
+  expect(badge.getAttribute("data-orchestrator-badge")).toBe("working");
+  expect(badge.textContent).toBe("working");
   expect(badge.hasAttribute("title")).toBeFalse();
 });
 

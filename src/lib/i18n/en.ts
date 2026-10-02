@@ -2745,6 +2745,7 @@ export const en = {
   "orchPanel.rotationContext": "context is at {percent}% of the model's window",
   "orchPanel.rotationDead": "its host is gone",
   "orchPanel.badgeNeedsYou": "needs you",
+  "orchPanel.badgeWorking": "working",
   "orchPanel.badgeLive": "live",
   "orchPanel.badgeWaiting": "waiting",
   "orchPanel.badgeStalled": "quiet",

@@ -14462,7 +14462,10 @@ describe("task motion and waiting reasons", () => {
             await page.locator(selector("motion-taskref")).click();
             await page.locator('[data-phone-task-title]').waitFor();
             await page.locator('[data-motion] button').click();
-            await page.waitForFunction(() => document.querySelector('[data-phone-task-title]')?.textContent?.includes("Review older work"));
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-tasklink.png`) });
+            const linkedTaskTitle = page.locator('[data-phone-task-body="motion-bare"] [data-phone-task-title]');
+            await linkedTaskTitle.waitFor();
+            expect(await linkedTaskTitle.textContent()).toContain(locale === "en" ? "Review older work" : "Переглянути давнішу роботу");
             await page.locator("[data-mobile2-back]").click();
             await page.locator("[data-mobile2-back]").click();
             await page.locator('[data-phone-card="task:motion-worker"]').waitFor();

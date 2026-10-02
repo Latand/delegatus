@@ -4195,6 +4195,70 @@ test("task placement bindings require atomic guards and classify field refusals 
   expect(result.unchanged).toBe(true);
 });
 
+test("MCP task writes preserve the bound conversation as hold provenance and ignore supplied provenance", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-binding-hold-provenance-"));
+  sandboxes.push(sandbox);
+  const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state") };
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+    const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
+  }
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+    import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+    import { viewerMcpBindings } from "./src/lib/mcp/bindings";
+    import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
+    import { TASKS_FILE } from "./src/lib/tasks/store";
+    import { persistedTaskRows } from "./src/lib/tasks/storeFixture";
+    if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
+    let conversationId = "conversation_create_bound";
+    const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "agent", conversationId, role: "builder" }),
+      taskSelectionSource: () => ({ read: (id: string) => persistedTaskRows(TASKS_FILE).find(task => task.id === id) ?? null }),
+      getPipelines: () => ({ pipelines: [] }),
+    }), new MemoryMcpReceiptStore());
+    const server = createViewerMcpServer(service);
+    const client = new Client({ name: "task-hold-provenance", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: args });
+      const payload = result.structuredContent as Record<string, unknown> | undefined;
+      if (!payload || payload.ok !== true) throw new Error(JSON.stringify(payload ?? result.content));
+      return payload;
+    };
+    const steps = Array.from({ length: 8 }, (_, index) => ({
+      id: "step-" + index, text: "Cause " + index, state: index < 5 ? "done" : "open",
+      ...(index === 5 ? { hold: { kind: "worker", note: "Waiting for capacity", by: "operator", conversationId: "conversation_spoofed" } } : {}),
+    }));
+    try {
+    const created = await call("create_task", {
+      clientRequestId: "hold-create-bound", project: "fixture-project", text: "Track a waiting reason", full: true, steps,
+      hold: { kind: "worker", note: "Waiting for capacity", by: "operator", since: "2000-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
+    });
+    const createdTask = created.task;
+    conversationId = "conversation_update_bound";
+    const updated = await call("update_task", {
+      clientRequestId: "hold-update-bound", taskId: created.taskId, full: true,
+      hold: { kind: "worker", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
+    });
+    const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
+    console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task }));
+    } finally { await client.close(); await server.close(); }
+  `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  const error = await new Response(child.stderr).text();
+  expect([await child.exited, error]).toEqual([0, ""]);
+  const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask };
+  expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
+  expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
+  expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
+  expect(result.readTask.hold).toEqual(result.updatedTask.hold);
+  expect(result.createdTask.steps).toHaveLength(8);
+  expect(result.createdTask.steps?.filter(step => step.state === "done")).toHaveLength(5);
+  expect(result.createdTask.steps?.[5]?.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound" });
+  expect(result.readTask.steps).toEqual(result.updatedTask.steps);
+});
+
 
 test("continue-review forwards its receipt key, added budget and server actor, answers the grant and wakes the controller (#1938)", async () => {
   const calls: unknown[] = [];

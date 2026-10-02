@@ -942,6 +942,28 @@ test("task coordinates publish finite axes and retain pinned-update position sem
   });
 });
 
+test("task writes advertise hold reasons and the additive checklist with stopping guidance", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const listed = await client.listTools();
+    for (const name of ["create_task", "update_task"] as const) {
+      const tool = listed.tools.find(entry => entry.name === name)!;
+      const properties = tool.inputSchema.properties as Record<string, { description?: string; enum?: string[]; items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; properties?: Record<string, { enum?: string[]; type?: string }> }> }>;
+      const holdSchema = properties.hold as typeof properties.hold & { properties?: Record<string, { enum?: string[]; type?: string }> };
+      const hold = holdSchema.properties ? holdSchema : holdSchema.anyOf?.find(part => part.type === "object") ?? {};
+      const stepsSchema = properties.steps as unknown as { items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; items?: { properties?: Record<string, unknown> }; maxItems?: number }> };
+      const steps = stepsSchema.items ? stepsSchema : stepsSchema.anyOf?.find(part => part.type === "array") ?? {};
+      expect(hold.properties?.kind.enum).toContain("worker");
+      expect(hold.properties?.note.type).toBe("string");
+      expect(hold.properties).not.toHaveProperty("by");
+      expect(hold.properties).not.toHaveProperty("conversationId");
+      expect(steps.maxItems).toBe(20);
+      expect(steps.items?.properties).toHaveProperty("id");
+      expect(steps.items?.properties).toHaveProperty("state");
+      expect(tool.description).toContain("Stop work while waiting");
+    }
+  });
+});
+
 /* #1720 — membership is committed at the launch reservation from what the CALL
    carried, and both binding fields worked only because these schemas pass extra
    keys through: a caller reading the published tool contract could not find the
