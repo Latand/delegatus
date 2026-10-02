@@ -1,11 +1,13 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 
 import { en } from "@/lib/i18n/en";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
-import { PRODUCT_NAME } from "@/lib/brand";
+import { resetLocaleForTests } from "@/lib/i18n";
+import { viewBus } from "@/hooks/viewPresenceBus";
 
 /*
  * Issue #696, review finding 1 — the whole path, end to end.
@@ -91,6 +93,8 @@ beforeEach(() => {
   resetFilesClientCacheForTests();
   dom.localStorage.clear();
   dom.sessionStorage.clear();
+  dom.location.hash = "";
+  resetLocaleForTests();
   document.body.replaceChildren();
 });
 
@@ -137,6 +141,48 @@ function unmountViewer() {
   act(() => { root.unmount(); });
 }
 
+/* The original load mismatch came from restoring browser state in the first
+   hydration render. Exercise the real Viewer boundary, including the mount
+   handoff into ViewerApp; hydrating BootShell alone cannot protect that gate. */
+for (const phone of [false, true]) for (const restore of ["saved", "hash", "file"] as const) {
+  test(`Viewer hydrates without warnings before ${restore} restoration on ${phone ? "phone" : "desktop"}`, async () => {
+    phoneWidth = phone;
+    const serverHtml = renderToString(<Viewer />);
+    dom.localStorage.setItem("llvProject", restore === "hash" ? "other-project" : RESTORED_PROJECT);
+    dom.localStorage.setItem("llv_lang", "uk");
+    if (restore === "hash") dom.location.hash = `#p=${RESTORED_PROJECT}`;
+    if (restore === "file") dom.location.hash = "#f=%2Ffixture.jsonl";
+    /* Server output is independent of every browser-only preference. */
+    expect(renderToString(<Viewer />)).toBe(serverHtml);
+    expect(serverHtml).toContain("data-boot-shell");
+    const calls = stubFetch(() => new Response("upstream is down", { status: 500 }));
+    const host = document.createElement("div");
+    host.innerHTML = serverHtml;
+    document.body.append(host);
+    const recoverable: unknown[] = [];
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        mounted = hydrateRoot(host, <Viewer />, { onRecoverableError: (error) => recoverable.push(error) });
+      });
+      await act(async () => { await Bun.sleep(60); });
+      expect(recoverable).toEqual([]);
+      expect(errors.mock.calls).toEqual([]);
+      expect(warnings.mock.calls).toEqual([]);
+      expect(host.querySelector("[data-boot-shell]")).toBeNull();
+      expect(host.querySelector('[data-catalog-error="true"]')).toBeTruthy();
+      expect(calls()).toBeGreaterThan(0);
+      expect(viewBus.getContext().project).toBe(RESTORED_PROJECT);
+      expect(dom.localStorage.getItem("llvProject")).toBe(restore === "hash" ? "other-project" : RESTORED_PROJECT);
+    } finally {
+      unmountViewer();
+      errors.mockRestore();
+      warnings.mockRestore();
+    }
+  });
+}
+
 test("a project restored from localStorage names the catalog failure instead of loading forever", async () => {
   dom.localStorage.setItem("llvProject", RESTORED_PROJECT);
   const calls = stubFetch(() => new Response("upstream is down", { status: 500 }));
@@ -177,7 +223,7 @@ test("on a phone, where the rail is behind a drawer, the failure is still named"
   const host = await mountViewer();
 
   /* The rail really is gone. */
-  expect(host.textContent).not.toContain(PRODUCT_NAME);
+  expect(host.querySelector("[data-rail-brand]")).toBeNull();
   /* And the failure is named anyway, with its recovery action. */
   expect(host.querySelector('[data-catalog-error="true"]')).toBeTruthy();
   expect(host.textContent).toContain(en["catalog.errorTitle"]);
