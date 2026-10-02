@@ -15,7 +15,8 @@ import type { RemoteAgentView } from "./RemoteAgents";
  */
 
 export type RemoteLaneView = LaneRow & { peer: string; install: string; stale: boolean; asOf: number };
-export type RemoteHosts = Readonly<Record<string, { label: string; linked: boolean }>>;
+export type RemoteHost = { label: string; linked: boolean; state?: "active" | "failing"; lastCall?: number | null };
+export type RemoteHosts = Readonly<Record<string, RemoteHost>>;
 export interface RemoteFeed {
   agents: RemoteAgentView[];
   lanes: RemoteLaneView[];
@@ -29,6 +30,8 @@ export interface RemoteCard {
   install: string;
   host: string;
   linked: boolean;
+  state?: RemoteHost["state"];
+  lastCall?: number | null;
   lanes: RemoteLaneView[];
 }
 
@@ -74,6 +77,8 @@ export function remoteCardFor(task: Pick<BoardTask, "id" | "machine"> | null, fe
     install: task.machine,
     host: host?.label ?? task.machine.slice(0, 8),
     linked: host?.linked ?? false,
+    state: host?.state,
+    lastCall: host?.lastCall,
     lanes: feed.lanes.filter((lane) => lane.install === task.machine && lane.tk.includes(task.id)).sort((a, b) => b.at - a.at || a.k.localeCompare(b.k)),
   };
 }
