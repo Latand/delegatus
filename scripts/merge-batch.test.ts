@@ -2,6 +2,7 @@ import { expect, test, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, requiredVerdict, nextRefresh, commandRunner, type CommandRunner } from "./merge-batch";
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
@@ -29,7 +30,7 @@ function fixture() {
   git(repo, ["remote", "add", "origin", remote]);
   writeFileSync(join(repo, "story.txt"), "first\nsecond\nthird\nfourth\nfifth\n");
   git(repo, ["add", "."]); git(repo, ["commit", "-m", "Initial"]); git(repo, ["push", "origin", "main"]);
-  const base = git(repo, ["rev-parse", "HEAD"]);
+  let base = git(repo, ["rev-parse", "HEAD"]);
   const views = new Map<number, Record<string, unknown>>();
   const addPr = (number: number, file: string, content: string) => {
     git(repo, ["checkout", "-B", `topic-${number}`, base]);
@@ -42,12 +43,18 @@ function fixture() {
     git(repo, ["checkout", "main"]);
     return sha;
   };
+  const seed = (file: string, content: string) => {
+    git(repo, ["checkout", "main"]);
+    writeFileSync(join(repo, file), content);
+    git(repo, ["add", "."]); git(repo, ["commit", "-m", `Seed ${file}`]); git(repo, ["push", "origin", "main"]);
+    base = git(repo, ["rev-parse", "HEAD"]);
+  };
   const gh = async (args: string[]) => {
     if (args[0] === "pr" && args[1] === "view") return JSON.stringify(views.get(Number(args[2])));
     throw new Error(`Unexpected GH request: ${args.slice(0, 2).join(" ")}`);
   };
   const good: CommandRunner = async () => ({ code: 0, output: "" });
-  return { root, repo, base, views, addPr, gh, good };
+  return { root, repo, get base() { return base; }, views, addPr, seed, gh, good };
 }
 
 test("real squash accepts context drift, preserves reviewed patch and defers every conflict", async () => {
@@ -110,7 +117,7 @@ test("a real git bisect isolates a local gate culprit and rebuilds the remaining
   expect(git(state.work, ["rev-list", "--count", `${state.base}..HEAD`])).toBe("2");
 });
 
-function landingFixture(mode: "green" | "attributed" | "unknown" | "behind" | "lost-response" = "green") {
+function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green") {
   const f = fixture();
   const stateFile = join(f.root, "merge-batch.json");
   const calls: string[][] = [];
@@ -137,12 +144,32 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "behind" | "l
       if (mode === "behind") {
         git(f.repo, ["commit", "--allow-empty", "-m", `Main movement ${++refreshes}`]); git(f.repo, ["push", "origin", "main"]);
       }
-      const red = (mode === "attributed" || mode === "unknown") && reds++ === 0;
+      const red = (mode === "attributed" || mode === "unknown" || mode === "privacy-file") && reds++ === 0;
       return JSON.stringify({ state: "OPEN", headRefOid: batch.tip, mergeStateStatus: mode === "behind" ? "BEHIND" : "CLEAN",
         statusCheckRollup: [{ name: "privacy", status: "COMPLETED", conclusion: red ? "FAILURE" : "SUCCESS", detailsUrl: "https://github.com/example/fixture/actions/runs/123" },
           { name: "optional", conclusion: "FAILURE", status: "COMPLETED" }] });
     }
-    if (args[0] === "run") return mode === "unknown" ? "infrastructure unavailable" : `commit_message: ${batch.rows[1].commit.slice(0, 12)} message email_address`;
+    if (args[0] === "run") {
+      if (mode === "unknown") return "infrastructure unavailable";
+      if (mode === "privacy-file") {
+        const value = "hosted-fingerprint-fixture-value";
+        const compact = value.normalize("NFKC").toLocaleLowerCase("en-US").replaceAll(/[^\p{L}\p{N}]/gu, "");
+        const catalog = join(f.root, "fingerprints.json");
+        writeFileSync(catalog, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1", fingerprints: [{
+          length: compact.length, sha256: createHash("sha256").update(compact).digest("hex"),
+        }] }));
+        const result = Bun.spawnSync({
+          cmd: [process.execPath, join(import.meta.dir, "privacy-publication-gate.ts"), "--repository", batch.work, "--paths", "b.txt"],
+          cwd: f.repo,
+          env: { ...process.env, LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog },
+          stderr: "pipe",
+          stdout: "pipe",
+        });
+        expect(result.exitCode).toBe(1);
+        return result.stdout.toString();
+      }
+      return `commit_message: ${batch.rows[1].commit.slice(0, 12)} message email_address`;
+    }
     if (args[0] === "pr" && args[1] === "merge") {
       expect(args).toContain("--rebase");
       expect(args[args.indexOf("--match-head-commit") + 1]).toBe(batch.tip);
@@ -193,6 +220,18 @@ test("an unattributable red merges nothing", async () => {
   await f.batch.build(`12@${a}`); await f.batch.gate();
   await expect(f.batch.land()).rejects.toThrow("names no batch commit or path");
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(0);
+});
+
+test("a real hosted fingerprint file notice drops its PR and lands the healthy remainder", async () => {
+  const f = landingFixture("privacy-file");
+  const good = f.addPr(12, "a.txt", "healthy change");
+  const bad = f.addPr(13, "b.txt", "hosted-fingerprint-fixture-value");
+  await f.batch.build(`12@${good},13@${bad}`);
+  await f.batch.gate();
+  const state = await f.batch.land();
+  expect(state.rows.map((row) => row.status)).toEqual(["merged", "culprit"]);
+  expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).not.toContain("b.txt");
 });
 
 test("a successful merge with a lost response recovers receipts without rebuilding or merging again", async () => {
@@ -257,14 +296,51 @@ test("touched tests are existing files, with TSX siblings and no directories", (
     .toEqual(["src/a.test.ts", "src/b.test.tsx", "src/c.test.ts"]);
 });
 
-test("gate notices map whole commit tokens or paths, with ambiguous paths covering every writer", () => {
+test("gate notices require unique path ownership or an attributed changed line", () => {
   const commits = [
     { number: 12, commit: "a".repeat(40), paths: ["src/a.ts"] },
     { number: 13, commit: "b".repeat(40), paths: ["src/a.ts", "src/b.ts"] },
   ];
   expect(noticePrs("merge_boundary: aaaaaaaaaaaa author identity", commits)).toEqual([12]);
-  expect(noticePrs("error: src/a.ts:12: email_address", commits)).toEqual([12, 13]);
+  expect(noticePrs("error: src/a.ts:12: email_address", commits, () => "b".repeat(40))).toEqual([13]);
+  expect(noticePrs("error: src/a.ts:12: email_address", commits)).toEqual([]);
+  expect(noticePrs("file: src/b.ts known_value", commits)).toEqual([13]);
   expect(noticePrs("all checks failed", commits)).toEqual([]);
   expect(noticePrs("error: longsrc/b.tsuffix", commits)).toEqual([]);
   expect(noticePrs("git checkout " + "b".repeat(40) + "\ngit diff -- src/b.ts\ninfrastructure failed", commits)).toEqual([]);
+});
+
+test("bisect keeps the reviewed regression test corpus when a candidate lacks the test file", async () => {
+  const f = fixture();
+  f.seed("adder.js", "exports.add = (a, b) => a + b;\n");
+  const source = f.addPr(12, "adder.js", "exports.add = (a, b) => a - b;\n");
+  const detector = f.addPr(13, "adder.test.ts", [
+    "const { add } = require('./adder');",
+    "if (add(5, 3) !== 8) throw new Error('add regression');",
+    "",
+  ].join("\n"));
+  const runner: CommandRunner = async (cwd, args, env) => {
+    if (args[0] === "git" && args[1] === "bisect") {
+      return commandRunner(cwd, args, env);
+    }
+    if (args[1] === "bun" && args[2] === "test") {
+      const testFile = args.at(-1)!.replace(/^\.\//, "");
+      const script = [
+        "const fs=require('node:fs');",
+        `if(!fs.existsSync(${JSON.stringify(testFile)}))process.exit(125);`,
+        "const {add}=require('./adder');",
+        "process.exit(add(5,3)===8?0:1);",
+      ].join("");
+      return commandRunner(cwd, ["node", "-e", script], env);
+    }
+    return { code: 0, output: "" };
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  const built = await batch.build(`12@${source},13@${detector}`);
+  const state = await batch.gate();
+  expect(state.rows.map((row) => row.status)).toEqual(["culprit", "clean"]);
+  expect(state.gated).toBe(state.tip);
+  expect(existsSync(join(state.work, "adder.test.ts"))).toBe(true);
+  expect(git(state.work, ["show", `${state.tip}:adder.js`])).toContain("a + b");
+  expect(built.testCorpus).toBeUndefined();
 });

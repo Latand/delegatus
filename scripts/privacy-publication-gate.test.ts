@@ -303,6 +303,26 @@ function createVendorDigestFixture(): { manifest: string; readme: string; root: 
 }
 
 describe("privacy publication gate", () => {
+  test("the real gate reports fingerprint-only file findings with safe file and line attribution", () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-attribution-"));
+    temporaryDirectories.push(directory);
+    const findingValue = "known-test-fingerprint-private-value";
+    const file = "src/shared-fixture.ts";
+    mkdirSync(join(directory, "src"), { recursive: true });
+    writeFileSync(join(directory, file), `export const sample = "${findingValue}";\n`);
+    const catalog = join(directory, "fingerprints.json");
+    writeFingerprintCatalog(catalog, findingValue);
+    const result = runGateArguments(["--repository", directory, "--paths", file], {
+      LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+      LLV_PRIVACY_KNOWN_VALUES: "",
+    }, directory);
+    const output = result.stdout.toString();
+    expect(result.exitCode).toBe(1);
+    expect(output).toContain("PRIVACY GATE: FAIL\nknown_value: 1\n");
+    expect(output).toContain("file: src/shared-fixture.ts:1 known_value");
+    expect(output).not.toContain(findingValue);
+  });
+
   test("publication children exclude unapproved ambient API keys", () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-ambient-"));
     temporaryDirectories.push(directory);

@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -58,14 +58,27 @@ export function touchedTests(paths: string[], regularFile: (path: string) => boo
 }
 
 type BatchCommit = { number: number; commit: string; paths: string[] };
-export function noticePrs(log: string, commits: BatchCommit[]): number[] {
+export function noticePrs(log: string, commits: BatchCommit[], lineOwner?: (path: string, line: number) => string | undefined): number[] {
   // Checkout logs also print HEAD and filenames. Only a diagnostic can accuse
   // a PR; incidental checkout output must never turn a main-wide red into one.
   const notices = log.split("\n").filter((line) => /\b(?:commit_message|merge_boundary|error|warning|notice|finding|file|path):|::(?:error|warning|notice)(?:\s|::)/i.test(line)).join("\n");
   const hashes = new Set(notices.match(/\b[a-f0-9]{7,40}\b/g) ?? []);
-  const tokens = new Set(notices.split(/[\s:,'"`()[\]<>]+/).filter(Boolean));
-  return commits.filter((entry) => [...hashes].some((hash) => entry.commit.startsWith(hash))
-    || entry.paths.some((path) => tokens.has(path))).map((entry) => entry.number);
+  const attributed = new Set(commits.filter((entry) => [...hashes].some((hash) => entry.commit.startsWith(hash)))
+    .map((entry) => entry.number));
+  for (const line of notices.split("\n")) {
+    const diagnostic = /(?:error|warning|notice|finding|file|path):\s*(.+?):(\d+)(?::|\s)/i.exec(line);
+    if (diagnostic && lineOwner) {
+      const owner = lineOwner(diagnostic[1]!, Number(diagnostic[2]));
+      const row = owner && commits.find((entry) => entry.commit === owner);
+      if (row) attributed.add(row.number);
+      continue;
+    }
+    const pathNotice = /(?:error|warning|notice|finding|file|path):\s*([^:\s]+)(?:\s|$)/i.exec(line);
+    if (!pathNotice) continue;
+    const writers = commits.filter((entry) => entry.paths.includes(pathNotice[1]!));
+    if (writers.length === 1) attributed.add(writers[0]!.number);
+  }
+  return [...attributed];
 }
 
 type Check = { name?: string; context?: string; status?: string; conclusion?: string; state?: string; detailsUrl?: string };
@@ -115,6 +128,7 @@ export type RunState = {
   published: string | null; refreshes: number; landed: boolean; gates: Gate[];
   resolving?: { number: number; work: string; main: string };
   mergeIntent?: string;
+  testCorpus?: Record<string, string>;
 };
 export type CommandResult = { code: number; output: string };
 export type CommandRunner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<CommandResult>;
@@ -142,6 +156,30 @@ export function localGateCommands(cwd: string, base: string): Gate[] {
     ...(tests.length ? [{ id: "tests", args: ["bun", "test", ...tests.map((path) => `./${path}`)] }] : []),
     { id: "privacy", args: ["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--check-commits"] },
   ];
+}
+
+function prepareCorpusPath(cwd: string, path: string, createdDirectories: string[]): string {
+  const segments = path.split(/[\\/]/);
+  if (path.startsWith("/") || segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("Unsafe regression test path in batch gate");
+  }
+  let current = cwd;
+  for (const [index, segment] of segments.entries()) {
+    current = join(current, segment);
+    const final = index === segments.length - 1;
+    try {
+      const metadata = lstatSync(current);
+      if (metadata.isSymbolicLink() || (final ? !metadata.isFile() : !metadata.isDirectory())) {
+        throw new Error("Regression test path changed type during bisect");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (final) continue;
+      mkdirSync(current);
+      createdDirectories.push(current);
+    }
+  }
+  return current;
 }
 
 const PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefOid,headRefName,closingIssuesReferences,headRepository";
@@ -269,17 +307,37 @@ export class MergeBatch {
   }
 
   private async gateCommand(cwd: string, gate: Gate): Promise<CommandResult> {
-    // Older bisect subjects may predate added tests or deleted lint targets.
     let args = gate.args;
     if (gate.id === "tests" || gate.id === "eslint") {
       const prefix = gate.id === "tests" ? 2 : 3;
-      const files = args.slice(prefix).filter((path) => existsSync(join(cwd, path)) && statSync(join(cwd, path)).isFile());
-      if (!files.length) return { code: 0, output: "" };
+      let files = args.slice(prefix).filter((path) => existsSync(join(cwd, path)) && statSync(join(cwd, path)).isFile());
+      const corpus = gate.id === "tests" ? this.read().testCorpus : undefined;
+      if (corpus) files = Object.keys(corpus).map((path) => `./${path}`);
+      if (!files.length) return gate.id === "tests" && args.length > prefix
+        ? { code: 1, output: "Stable regression test corpus is unavailable at this bisect subject" }
+        : { code: 0, output: "" };
       args = [...args.slice(0, prefix), ...files];
     }
     const stateDir = mkdtempSync(join("/var/tmp", "merge-gate-state-"));
-    try { return await this.run(cwd, ["/var/tmp/llv-gate", ...args], { ...process.env, LLV_STATE_DIR: stateDir }); }
-    finally { rmSync(stateDir, { recursive: true, force: true }); }
+    const corpus = gate.id === "tests" ? this.read().testCorpus : undefined;
+    const backups = new Map<string, Buffer | null>();
+    const createdDirectories: string[] = [];
+    try {
+      if (corpus) for (const [path, contents] of Object.entries(corpus)) {
+        const absolute = prepareCorpusPath(cwd, path, createdDirectories);
+        backups.set(path, existsSync(absolute) ? readFileSync(absolute) : null);
+        writeFileSync(absolute, Buffer.from(contents, "base64"));
+      }
+      return await this.run(cwd, ["/var/tmp/llv-gate", ...args], { ...process.env, LLV_STATE_DIR: stateDir });
+    } finally {
+      for (const [path, contents] of backups) {
+        const absolute = join(cwd, path);
+        if (contents === null) unlinkSync(absolute);
+        else writeFileSync(absolute, contents);
+      }
+      for (const directory of createdDirectories.reverse()) rmdirSync(directory);
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   }
 
   async bisectSubject(gate: Gate): Promise<CommandResult> {
@@ -296,7 +354,7 @@ export class MergeBatch {
     try {
       git(state.work, ["bisect", "start", state.tip, state.base]);
       const result = await this.run(state.work, ["git", "bisect", "run", process.execPath, import.meta.path, "_bisect", commandFile]);
-      if (result.code !== 0) throw new Error(`Bisect could not attribute ${gate.id}`);
+      if (result.code !== 0) throw new Error(`Bisect could not attribute ${gate.id}: ${result.output.slice(-4_000)}`);
       const bad = git(state.work, ["rev-parse", "refs/bisect/bad"]);
       const row = state.rows.find((entry) => entry.status === "clean" && entry.commit === bad);
       if (!row) throw new Error(`Bisect found no batch PR for ${gate.id}`);
@@ -310,8 +368,15 @@ export class MergeBatch {
   async gate(): Promise<RunState> {
     const state = this.read();
     this.assertTip(state);
-    while (state.rows.some((row) => row.status === "clean")) {
+    if (!state.testCorpus) {
       state.gates = localGateCommands(state.work, state.base);
+      const tests = state.gates.find((gate) => gate.id === "tests");
+      if (tests) state.testCorpus = Object.fromEntries(tests.args.slice(2).map((path) => [
+        path.replace(/^\.\//, ""), readFileSync(join(state.work, path)).toString("base64"),
+      ]));
+      this.save(state);
+    }
+    while (state.rows.some((row) => row.status === "clean")) {
       this.save(state);
       let failed: Gate | null = null;
       for (const gate of state.gates) {
@@ -370,6 +435,9 @@ export class MergeBatch {
     state.base = base;
     // Reclassify against the original reviewed patches, including clean rebases.
     await this.rebuild(state);
+    delete state.testCorpus;
+    state.gates = [];
+    this.save(state);
     return this.gate();
   }
 
@@ -381,7 +449,13 @@ export class MergeBatch {
       const run = /\/actions\/runs\/(\d+)/.exec(check.detailsUrl ?? "");
       if (!run) throw new Error("Red required check has no readable workflow log; nothing merged");
       const log = await this.gh(["run", "view", run[1]!, "--log-failed"]);
-      const attributed = noticePrs(log, state.rows.filter((row) => row.status === "clean"));
+      const attributed = noticePrs(log, state.rows.filter((row) => row.status === "clean"), (path, line) => {
+        if (path.startsWith("/") || path.split("/").includes("..")) return undefined;
+        try {
+          const blame = git(state.work, ["blame", "--line-porcelain", "-L", `${line},${line}`, "--", path]);
+          return /^([a-f0-9]{40})\s/.exec(blame)?.[1];
+        } catch { return undefined; }
+      });
       if (!attributed.length) throw new Error("Red required check names no batch commit or path; nothing merged");
       for (const number of attributed) {
         culprits.add(number);
