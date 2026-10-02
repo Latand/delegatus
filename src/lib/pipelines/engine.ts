@@ -1683,11 +1683,6 @@ function knownReset(...candidates: Array<number | null | undefined>): number | n
   return resets.length ? Math.min(...resets) : null;
 }
 
-function rateLimitParkDetail(resetsAt: number | null, accountLabel: string): string {
-  const reset = resetsAt === null ? "an unknown reset time" : new Date(resetsAt * 1_000).toISOString();
-  return `rate limited until ${reset}, account ${accountLabel}`;
-}
-
 /** Usage-limit history for `engine`. Both engines name their main account
     `default`, so a limit hit on one engine never affects an account of the
     other; an entry from before engines were recorded belongs to the engine
@@ -1752,6 +1747,7 @@ function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAtte
   if (bookControllerWaitRound(attempt, now, now, ports,
     { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
     recordProviderRecovery(attempt, "park", condition, detail, now);
+    attempt.completedAt = now;
     park(pipeline, `provider transport recovery exhausted after 10 minutes; ${detail}`, attempt);
   } else pipeline.stateDetail = `waiting for provider transport; ${detail}`;
   persist();
@@ -1892,6 +1888,8 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     losses += 1;
   }
   if (condition.kind === "host_death" && losses >= 1) {
+    attempt.completedAt = ports.now();
+    recordProviderRecovery(attempt, "park", condition, "stage host died without output twice; automatic relaunch exhausted", attempt.completedAt);
     park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
     return true;
   }
@@ -1905,6 +1903,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     if (stopped.outcome === "unresolved" || bookControllerWaitRound(attempt, now, now, ports,
       { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
       recordProviderRecovery(attempt, "park", condition, reason, now);
+      attempt.completedAt = now;
       park(pipeline, reason, attempt);
     } else pipeline.stateDetail = `waiting for the cut stage host to terminate after ${condition.label}; ${stopReason}`;
     persist();
@@ -3827,30 +3826,36 @@ async function tickRunStage(
         });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        park(pipeline, `${rateLimitParkDetail(knownReset(...usageLimitedAccounts.map((limited) => limited.resetsAt)), accountLabel)}; failover unavailable: ${reason}`, attempt);
+        attempt.completedAt = activationNow;
+        park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
         return;
       }
       if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)) {
-        const resetsAt = knownReset(
+        const resetCandidates = [
           ...usageLimitedAccounts.map((limited) => limited.resetsAt),
           resolution.kind === "exhausted" ? resolution.resetsAt : null,
-        );
+        ];
+        const resetsAt = knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > unixMs(activationNow)))
+          ?? knownReset(...resetCandidates);
         const condition: ProviderCondition = { kind: "usage_limit", scope: "usage", resetLabel: null, label: `${engine} usage limit` };
         attempt.providerWait ??= { condition, text: "no allowed account has capacity", accountId: latestLimited.accountId,
           turnTs: unixMs(activationNow), tries: 0, startedAt: activationNow,
           resumeAt: new Date(resetsAt ? resetsAt * 1_000 + 60_000 : unixMs(activationNow) + 30 * 60_000).toISOString(), resetsAt };
         const wait = attempt.providerWait;
+        wait.resetsAt = resetsAt;
         const untilReset = resetsAt ? resetsAt * 1_000 + 60_000 - unixMs(activationNow) : 0;
         // Waiting for a future provider reset spends no capacity probes.
         if (untilReset <= 0) wait.capacityProbes = (wait.capacityProbes ?? 0) + 1;
         if ((wait.capacityProbes ?? 0) >= 3
           || !resetsAt && unixMs(activationNow) - unixMs(wait.startedAt) >= 6 * 60 * 60_000) {
+          attempt.completedAt = activationNow;
+          recordProviderRecovery(attempt, "park", condition, "account capacity recovery exhausted", activationNow);
           park(pipeline, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, attempt);
           return;
         }
         const delay = untilReset > 0 ? Math.min(15 * 60_000, untilReset) : 15 * 60_000;
         attempt.providerWait.resumeAt = new Date(unixMs(activationNow) + delay).toISOString();
-        pipeline.stateDetail = `waiting for ${condition.label} on account ${accountLabel}; next try at ${attempt.providerWait.resumeAt}`;
+        pipeline.stateDetail = `waiting for ${condition.label} on account ${accountLabel}${untilReset > 0 ? ` to reset at ${new Date(resetsAt! * 1_000).toISOString()}` : ""}; next try at ${attempt.providerWait.resumeAt}`;
         ports.scheduleTick?.(delay);
         return;
       }

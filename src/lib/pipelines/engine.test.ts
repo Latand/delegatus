@@ -31,6 +31,7 @@ const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (re
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = await import("./store");
 const { durableStageTurnEvidence } = await import("./durableEvidence");
+const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
 const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
@@ -15501,6 +15502,14 @@ function recoveryReport(at: string): import("./types").PipelineStageReport {
     provenance: { head: STAGE_HEAD, branch: "pipeline/test", uncommitted: [], pullRequest: null, outputs: [] } };
 }
 
+function expectProviderParkAt(pipeline: Pipeline, at: string): void {
+  const events = projectPipelineEvents([pipeline]);
+  const blocked = events.filter(event => event.type === "stage_blocked").at(-1)!;
+  expect(blocked.at).toBe(at);
+  expect(events.filter(event => event.type === "stage_waiting").every(event => Date.parse(event.at) <= Date.parse(blocked.at))).toBe(true);
+  expect(projectPipelineEvents([pipeline]).find(event => event.key === blocked.key)).toEqual(blocked);
+}
+
 // Recovery regressions use the existing injected controller ports.
 for (const parked of [false, true]) {
   test(`recorded report wins with an unreadable transcript, parked=${parked}`, async () => {
@@ -15678,6 +15687,7 @@ test.each([false, true])("a silent dead read-write host relaunches with WIP and 
   now += 30_000;
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.stateDetail).toContain("died without output twice");
+  expectProviderParkAt(loadPipelines()[0]!, h.ports.now());
   expect(h.spawnInputs).toHaveLength(2);
 });
 
@@ -15999,13 +16009,16 @@ test.each([120_000, 24 * 60 * 60_000, null])("pending capacity recovery exhausts
     expect(loadPipelines()[0]!.state).toBe("running");
     f.advance(60_001);
   } else f.advance(6 * 60 * 60_000);
+  let parkedAt: string | null = null;
   for (let probe = 0; probe < 4; probe += 1) {
     await tickPipelines([], f.h.ports);
+    if (loadPipelines()[0]!.state === "needs_decision") parkedAt ??= f.h.ports.now();
     f.advance(30 * 60_000);
   }
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toMatch(/usage limit.*capacity/);
+  expectProviderParkAt(parked, parkedAt!);
   for (let tick = 0; tick < 32; tick += 1) {
     f.advance(30 * 60_000);
     await tickPipelines([], f.h.ports);
@@ -16041,6 +16054,33 @@ test("mixed provider cuts retain recovery expenditure until stage progress", asy
   expect(f.h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
 });
 
+test("pending capacity ignores an elapsed historical reset when the pool names a future reset", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  const futureReset = Math.floor(f.now() / 1_000) + 7 * 24 * 60 * 60;
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: futureReset, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  f.advance(180_000);
+  for (let probe = 0; probe < 32; probe += 1) {
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    f.advance(30 * 60_000);
+  }
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.runs[0]!.attempts[1]!.providerWait!.capacityProbes ?? 0).toBe(0);
+  expect(waiting.runs[0]!.attempts[1]!.providerWait!.resetsAt).toBe(futureReset);
+  expect(waiting.stateDetail).toContain(new Date(futureReset * 1_000).toISOString());
+  f.advance(futureReset * 1_000 + 60_000 - f.now());
+  for (let probe = 0; probe < 3; probe += 1) {
+    await tickPipelines([], f.h.ports);
+    f.advance(30 * 60_000);
+  }
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("capacity recovery exhausted after 3 due probes");
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
 test("a legacy parked hostless failover returns to pending capacity recovery", async () => {
   const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
   f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
@@ -16067,6 +16107,29 @@ test("a legacy parked hostless failover returns to pending capacity recovery", a
   expect(f.h.spawnInputs).toHaveLength(2);
 });
 
+test("a failover account lookup failure retains its named park and original timestamp", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  let lookups = 0;
+  f.h.ports.resolveProjectSpawn = () => { lookups += 1; throw new Error("project account bindings are unreadable"); };
+  await tickPipelines([], f.h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const at = parked.runs[0]!.attempts[1]!.completedAt!;
+  for (let tick = 0; tick < 32; tick += 1) {
+    f.advance(30 * 60_000);
+    await tickPipelines([], f.h.ports);
+  }
+  expect(lookups).toBe(1);
+  expect(parked.stateDetail).toContain("usage limit: account capacity lookup unavailable");
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.completedAt).toBe(at);
+  expectProviderParkAt(loadPipelines()[0]!, at);
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
 test("a failed host teardown has a bounded recovery wait without spending a fix round", async () => {
   const h = harness();
   await runningStructuredStage(h);
@@ -16084,6 +16147,7 @@ test("a failed host teardown has a bounded recovery wait without spending a fix 
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("stage host died without output");
   expect(loadPipelines()[0]!.stateDetail).toContain("ownership cannot be verified");
+  expectProviderParkAt(loadPipelines()[0]!, h.ports.now());
   expect(h.spawnInputs).toHaveLength(1);
   expect(loadPipelines()[0]!.cursor?.stageId).toBe("plan");
 });
@@ -16143,5 +16207,6 @@ test.each([false, true])("refused provider continuations keep their delivery key
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race");
   expect(loadPipelines()[0]!.stateDetail).toContain("continuation refused");
+  expectProviderParkAt(loadPipelines()[0]!, f.h.ports.now());
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.tries).toBe(0);
 });
