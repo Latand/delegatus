@@ -157,10 +157,18 @@ other paths, query strings, fragments, longer hosts and alternate spellings
 receive no exemption. Percent/entity/NFKC-obfuscated spellings remain blocked.
 The surrounding text must also retain boundaries after decoding, NFKC and
 Markdown projection; wrapping a host fragment in backticks or a link label
-cannot hide its attachment to another host or URI. A newline or string-literal
-concatenation or repetition (including enclosing comma/conditional operands),
+cannot hide its attachment to another host or URI. Non-space whitespace
+(including tabs, Unicode line separators and decoded separators) or string-literal
+concatenation or repetition (including enclosing comma/conditional, function-call
+and indexed operands),
 or literal template interpolation cannot exempt a fragment attached to an email, host or
 URI, including fragments wrapped in autolink brackets.
+Opaque URI schemes such as `data:` and whitespace-split schemes retain their
+prefix ownership, so they cannot turn the approved host into another URI.
+Decoded views retain that ownership across quoted and JSON payloads. A source
+property or type colon cannot erase an earlier enclosing URI scheme.
+Verified opening and closing block-comment delimiters around a standalone public
+value provide source boundaries; actual email and URI continuations remain checked.
 JSON Unicode and string escapes are decoded in an additional inspection view;
 only exact ASCII source spellings receive exemptions. Quoted values must occupy
 the entire literal; URI punctuation tails such as semicolons and commas prevent

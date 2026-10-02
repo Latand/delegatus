@@ -250,6 +250,22 @@ function runGateArguments(arguments_: string[], environment: Record<string, stri
   });
 }
 
+async function runGateWithDeadline(arguments_: string[], environment: Record<string, string>) {
+  const started = performance.now();
+  const child = Bun.spawn({
+    cmd: [process.execPath, gate, ...arguments_], cwd: join(import.meta.dir, ".."),
+    env: { ...process.env, ...environment, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe",
+  });
+  const timeout = setTimeout(() => child.kill("SIGTERM"), 3000);
+  try {
+    const exitCode = await child.exited;
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { elapsed: performance.now() - started, exitCode, stdout, stderr };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function runGate(paths: string[], environment: Record<string, string> = {}) {
   return runGateArguments(["--paths", ...paths], environment);
 }
@@ -1217,6 +1233,116 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "review quoted approved comment cast prefix", text: `const relay = "other." + (<string> /* "${host}" */ "${host}");`, pass: false },
       { name: "review PHP quoted comment prefix", text: `$relay = "other." . /* "fake" */ "${host}";`, pass: false },
       { name: "review standalone quoted comment", text: `// Public relay: "${origin}"`, pass: true },
+      ...[host, origin, discovery].map((value, index) => ({
+        name: `review standalone multiline comment ${index}`, text: `/**\n * Public relay: ${value}\n */`, pass: true,
+      })),
+      ...[host, origin, discovery].map((value, index) => ({
+        name: `review standalone bare multiline comment ${index}`, text: `/**\n * ${value}\n */`, pass: true,
+      })),
+      ...[host, origin, discovery].map((value, index) => ({
+        name: `review standalone bare quoted multiline comment ${index}`, text: `/**\n * "${value}"\n */`, pass: true,
+      })),
+      { name: "review standalone repeated bare comments", text: `/**\n * ${host}\n */\n/**\n * "${origin}"\n */`, pass: true },
+      ...[host, origin, discovery].map((value, index) => ({
+        name: `review standalone quoted multiline comment ${index}`, text: `/**\n * Public relay: "${value}"\n */`, pass: true,
+      })),
+      { name: "review multiline comment email continuation", text: `/**\n * fixture@\n${host}\n */`, pass: false },
+      { name: "review multiline comment URI continuation", text: `/**\n * ${origin}\n!private\n */`, pass: false },
+      ...[host, origin, discovery].flatMap((value, index) => [
+        { name: `review URI opaque comma ${index}`, text: `data:,${value}`, pass: false },
+        { name: `review URI opaque payload ${index}`, text: `data:text,${value}`, pass: false },
+        { name: `review URI assigned opaque payload ${index}`, text: `relay=data:text,${value}`, pass: false },
+        { name: `review URI opaque URN ${index}`, text: `urn:fixture,${value}`, pass: false },
+        { name: `review URI opaque equals ${index}`, text: `urn:fixture=${value}`, pass: false },
+        { name: `review URI opaque quoted equals ${index}`, text: `urn:fixture='${value}'`, pass: false },
+        { name: `review URI opaque wrapped equals ${index}`, text: `<urn:fixture='${value}'>`, pass: false },
+        { name: `review URI opaque parenthesized payload ${index}`, text: `urn:fixture(${value})`, pass: false },
+        { name: `review URI opaque bracketed payload ${index}`, text: `urn:fixture[${value}]`, pass: false },
+        { name: `review URI opaque quoted payload ${index}`, text: `<urn:'${value}'>`, pass: false },
+        { name: `review URI opaque source-shaped payload ${index}`, text: `urn:fixture,key:'${value}'`, pass: false },
+        { name: `review URI opaque nested source-shaped payload ${index}`, text: `<urn:{key:'${value}'}>`, pass: false },
+        { name: `review URI opaque object payload ${index}`, text: `data:,{origin:"${value}"}`, pass: false },
+        { name: `review URI opaque JSON payload ${index}`, text: `data:application/json,{"origin":"${value}"}`, pass: false },
+        { name: `review URI opaque repeated quoted payload ${index}`, text: `urn:"fixture","${value}"`, pass: false },
+        { name: `review URI wrapped opaque autolink ${index}`, text: `<data:text,'${value}'>`, pass: false },
+        { name: `review URI wrapped opaque quoted ${index}`, text: `(data:text,"${value}")`, pass: false },
+        { name: `review URI wrapped opaque bare ${index}`, text: `(data:text,${value} )`, pass: false },
+        { name: `review URI opaque content type ${index}`, text: `data:text/plain,${value}`, pass: false },
+      ]),
+      ...["\t", "\n", "\r", "%09 ", "&#9; "].map((separator, index) => ({
+        name: `review URI split scheme ${index}`, text: `http:${separator}${host}`, pass: false,
+      })),
+      ...[["(", " )"], ["<", ">"], ["[", " ]"]].map(([open, close], index) => ({
+        name: `review URI wrapped split scheme ${index}`, text: `${open}http:\t${host}${close}`, pass: false,
+      })),
+      { name: "review URI minified object boundary", text: `const relay={origin:"${origin}"};`, pass: true },
+      { name: "review URI spaced object key boundary", text: `const relay={ origin:"${origin}"};`, pass: true },
+      { name: "review URI multiline object key boundary", text: `const relay={ origin:\n"${origin}"};`, pass: true },
+      { name: "review URI interface key boundary", text: `interface Relay { origin:"${origin}"; }`, pass: true },
+      { name: "review URI type key boundary", text: `type Relay = { origin:"${origin}" };`, pass: true },
+      // The existing narrow policy treats an adjacent '=' as a continuation.
+      { name: "review URI compact literal type continuation", text: `const relay:"${host}"="${host}";`, pass: false },
+      { name: "review URI spaced literal type boundary", text: `const relay: "${host}" = "${host}";`, pass: true },
+      { name: "review URI generic type boundary", text: `const relay:Record<string,string>="${host}";`, pass: true },
+      { name: "review URI nested object boundary", text: `const relay={outer:{origin:"${origin}"}};`, pass: true },
+      { name: "review URI sibling URL boundary", text: `const relay={other:"https://example.invalid",origin:"${origin}"};`, pass: true },
+      ...["ur%6e:", "ur&#110;:", "ｕｒｎ:", "ur\u200bn:", "urn%3a", "urn&#58;", "urn\\u003a"].map((scheme, index) => ({
+        name: `review URI decoded opaque scheme ${index}`, text: `${scheme}fixture="${host}"`, pass: false,
+      })),
+      ...["\t ", "\u2028 ", "%09 ", "&#9; "].flatMap((separator, index) => [
+        { name: `review whitespace quoted URI ownership ${index}`, text: `urn:${separator}"${host}"`, pass: false },
+        { name: `review whitespace quoted email ownership ${index}`, text: `fixture@${separator}"${host}"`, pass: false },
+        { name: `review whitespace JSON URI ownership ${index}`, text: `data:application/json,${separator}{"origin":"${host}"}`, pass: false },
+      ]),
+      { name: "review whitespace standalone quoted prose", text: `Relay: "${host}"`, pass: true },
+      ...["%09 ", "&#9; ", "\t "].flatMap((separator, index) => [
+        { name: `review quoted continuation host prefix ${index}`, text: `"other."${separator}"${host}"`, pass: false },
+        { name: `review quoted continuation host suffix ${index}`, text: `${host}${separator}".example.invalid"`, pass: false },
+        { name: `review quoted continuation path suffix ${index}`, text: `${origin} ${separator}"/private"`, pass: false },
+        { name: `review quoted continuation URI prefix ${index}`, text: `"ur%6e:"${separator}"${host}"`, pass: false },
+      ]),
+      { name: "review quoted continuation decoded mailbox", text: `%22fixture@%22\t"${host}"`, pass: false },
+      { name: "review quoted continuation single-quoted host", text: `other.\t '${host}'`, pass: false },
+      { name: "review quoted continuation standalone newline terminator", text: `const relay = "${host}"\n;`, pass: true },
+      { name: "review quoted continuation standalone newline object", text: `const relay = {\n"origin":\n"${origin}"\n};`, pass: true },
+      { name: "review wrapped continuation opaque prefix", text: `("urn:")\t"${host}"`, pass: false },
+      { name: "review wrapped continuation host prefix", text: `("other.")%09 "${host}"`, pass: false },
+      { name: "review wrapped continuation quoted origin suffix", text: `("${origin}")\t"/private"`, pass: false },
+      { name: "review wrapped continuation quoted path suffix", text: `"${origin}"\t("/private")`, pass: false },
+      { name: "review wrapped continuation nested prefix", text: `(("ur%6e:"))&#9; (("${host}"))`, pass: false },
+      { name: "review wrapped continuation nested suffix", text: `(("${origin}"))\t(("/private"))`, pass: false },
+      { name: "review wrapped continuation standalone origin", text: `const relay = (("${origin}"));`, pass: true },
+      { name: "review wrapped continuation standalone multiline origin", text: `const relay = (\n"${origin}"\n);`, pass: true },
+      ...["/private", ":443", "?private=1", ".example.invalid"].map((suffix, index) => ({
+        name: `review unquoted wrapped continuation suffix ${index}`, text: `("${origin}")\t${suffix}`, pass: false,
+      })),
+      { name: "review unquoted wrapped continuation bare quoted port", text: `"${origin}"\t:443`, pass: false },
+      { name: "review unquoted wrapped continuation JSON tab suffix", text: `("${host}")\\t.example.invalid`, pass: false },
+      { name: "review unquoted wrapped continuation JSON Unicode tab suffix", text: `("${host}")\\u0009.example.invalid`, pass: false },
+      { name: "review unquoted wrapped continuation multiline JSON key", text: `{ "${host}"\n: true }`, pass: true },
+      { name: "review unquoted wrapped continuation multiline statement", text: `const relay = ("${origin}")\n;`, pass: true },
+      { name: "review unquoted wrapped continuation multiline line comment", text: `const relay = ("${origin}")\n// Public relay`, pass: true },
+      { name: "review unquoted wrapped continuation multiline block comment", text: `const relay = ("${origin}")\n/* Public relay */`, pass: true },
+      { name: "review compound concatenation assignment", text: `let relay = "other."; relay += "${host}";`, pass: false },
+      { name: "review compound concatenation call assignment", text: `let relay = "other."; relay += String("${host}");`, pass: false },
+      { name: "review compound PHP concatenation assignment", text: `$relay = "other."; $relay .= "${host}";`, pass: false },
+      { name: "review standalone logical assignment", text: `let relay; relay ||= "${host}";`, pass: true },
+      { name: "review compound format assignment", text: `relay = "other.%s"; relay %= "${host}"`, pass: false },
+      { name: "review compound format call assignment", text: `relay = "other.%s"; relay %= str("${host}")`, pass: false },
+      { name: "review compound conditional first branch", text: `let relay = "other."; relay += true ? "${host}" : "unused";`, pass: false },
+      { name: "review compound conditional second branch", text: `let relay = "other."; relay += false ? "unused" : "${host}";`, pass: false },
+      { name: "review compound conditional call branch", text: `let relay = "other."; relay += true ? String("${host}") : "unused";`, pass: false },
+      { name: "review compound conditional multiline branch", text: `let relay = "other."; relay += true ?\nString("${host}")\n: "unused";`, pass: false },
+      { name: "review standalone logical conditional assignment", text: `let relay; relay ||= true ? "${host}" : "unused";`, pass: true },
+      { name: "review standalone assignment after compound comma", text: `let other, relay = ""; relay += "unused", other = "${host}";`, pass: true },
+      { name: "review standalone declaration after compound newline", text: `let relay = ""; relay += "unused"\nconst other = "${host}";`, pass: true },
+      { name: "review standalone assignment after compound newline", text: `let relay = ""; relay += "unused"\nrelay = "${host}";`, pass: true },
+      ...[host, origin, discovery].flatMap((value, index) => [
+        { name: `review source array value ${index}`, text: `const relays = {origin:["${value}"]};`, pass: true },
+        { name: `review source nested array value ${index}`, text: `const relays = {origin:[["${value}"]]};`, pass: true },
+        { name: `review source multiline array value ${index}`, text: `const relays = {origin:\n["${value}"]};`, pass: true },
+        { name: `review URI array-shaped payload ${index}`, text: `data:,{origin:["${value}"]}`, pass: false },
+      ]),
       { name: "review standalone unbalanced comment", text: `const relay = /* " */ "${origin}";`, pass: true },
       { name: "review commented prefix type assertion", text: `const relay = "other." + (<string> /* comment */ "${host}");`, pass: false },
       { name: "review spaced prefix type assertion", text: `const relay = "other." + (<string> "${host}");`, pass: false },
@@ -1330,7 +1456,49 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "review newline prefix", text: `other.\n${host}`, pass: false },
       { name: "review newline suffix", text: `${host}\n.example.invalid`, pass: false },
       { name: "review newline email", text: `fixture@\n${host}`, pass: false },
+      ...[["tab", "\t"], ["line separator", "\u2028 "], ["paragraph separator", "\u2029 "],
+        ["percent tab", "%09 "], ["entity tab", "&#9; "]].flatMap(([name, separator]) => [
+        { name: `review whitespace email ${name}`, text: `fixture@${separator}${host}`, pass: false },
+        { name: `review whitespace host prefix ${name}`, text: `other.${separator}${host}`, pass: false },
+        { name: `review whitespace host suffix ${name}`, text: `${host} ${separator}.example.invalid`, pass: false },
+      ]),
+      ...["\n", "\t"].flatMap((separator, index) => ["--", "__", "%2d%2d", "&#45;&#45;"].flatMap((run, runIndex) => [
+        { name: `review whitespace repeated prefix ${index} ${runIndex}`, text: `private${run}${separator}${host}`, pass: false },
+        { name: `review whitespace repeated suffix ${index} ${runIndex}`, text: `${host}${separator}${run}private`, pass: false },
+      ])),
+      { name: "review whitespace standalone horizontal rule", text: `${host}\n---`, pass: true },
       { name: "review concatenated prefix", text: `const relay = "other." + "${host}";`, pass: false },
+      { name: "review call operand String prefix", text: `const relay = "other." + String("${host}");`, pass: false },
+      { name: "review call operand arrow prefix", text: `const relay = "other." + ((x)=>x)("${host}");`, pass: false },
+      { name: "review call operand nested prefix", text: `const relay = "other." + String(String("${host}"));`, pass: false },
+      { name: "review call operand method prefix", text: `const relay = "other." + helpers.identity("${host}");`, pass: false },
+      { name: "review call operand comment prefix", text: `const relay = "other." + String /* comment */ ("${host}");`, pass: false },
+      { name: "review call operand String suffix", text: `const relay = String("${host}") + ".example.invalid";`, pass: false },
+      { name: "review call operand arrow suffix", text: `const relay = ((x)=>x)("${host}") + ".example.invalid";`, pass: false },
+      { name: "review call operand concat method", text: `const relay = "other.".concat("${host}");`, pass: false },
+      { name: "review call operand returned literal suffix", text: `const relay = (() => "${host}")() + ".example.invalid";`, pass: false },
+      { name: "review call operand shell substitution prefix", text: `relay=other.$(printf %s "${host}")`, pass: false },
+      { name: "review call operand indexed array suffix", text: `const relay = ["${host}"][0] + ".example.invalid";`, pass: false },
+      { name: "review call operand indexed tuple suffix", text: `relay = ("${host}",)[0] + ".example.invalid"`, pass: false },
+      { name: "review call operand indexed literal method", text: `const relay = ("${host}")["concat"](".example.invalid");`, pass: false },
+      { name: "review call operand standalone typed call", text: `const relay = identity<string>("${host}");`, pass: true },
+      { name: "review call operand standalone typed collection", text: `const relays = new Set<string>(["${host}"]);`, pass: true },
+      { name: "review call operand attached typed call", text: `const relay = "other." + identity<string>("${host}");`, pass: false },
+      { name: "review call operand Ruby prefix", text: `relay = "other." << String("${host}")`, pass: false },
+      { name: "review call operand private method prefix", text: `class Relay {\n#identity(x){return x;}\nmake(){return "other." + this.#identity("${host}");}}`, pass: false },
+      { name: "review call operand private method body", text: `class Relay {\n#make(){return "other." + String("${host}");}\nmake(){return this.#make();}}`, pass: false },
+      { name: "review call operand spaced private method", text: `class Relay {\n#identity(x){return x;}\nmake(){return "other." + this. #identity("${host}");}}`, pass: false },
+      { name: "review call operand standalone private method", text: `class Relay {\n#identity(x){return x;}\nmake(){return this.#identity("${host}");}}`, pass: true },
+      { name: "review call operand here-doc prefix", text: `relay=other.$(cat <<EOF\n${host}\nEOF\n)`, pass: false },
+      { name: "review call operand here-doc suffix", text: `relay=$(cat <<EOF\n${host}\nEOF\n).example.invalid`, pass: false },
+      { name: "review call operand optional receiver method", text: `const relay = ("${host}")?.concat(".example.invalid");`, pass: false },
+      { name: "review call operand optional indexed suffix", text: `const relay = ["${host}"]?.[0] + ".example.invalid";`, pass: false },
+      { name: "review call operand optional literal callee", text: `const relay = "other."?.concat("${host}");`, pass: false },
+      { name: "review call operand optional call prefix", text: `const relay = "other." + String?.("${host}");`, pass: false },
+      { name: "review call operand optional member prefix", text: `const relay = "other." + helpers?.identity("${host}");`, pass: false },
+      { name: "review call operand standalone optional call", text: `const relay = String?.("${host}");`, pass: true },
+      { name: "review call operand standalone optional member", text: `const relay = helpers?.identity("${host}");`, pass: true },
+      { name: "review call operand standalone optional index", text: `const relay = ["${host}"]?.[0];`, pass: true },
       { name: "review concatenated suffix", text: `const relay = '${host}' + '.example.invalid';`, pass: false },
       { name: "review concatenated email", text: `const relay = "fixture@" +\n "${host}";`, pass: false },
       { name: "review concatenated origin", text: `const relay = "${origin}" + ":443";`, pass: false },
@@ -1422,6 +1590,73 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return environment;
     }
     for (const source of sources) {
+      for (const [name, fragment] of [
+        ["block comments", "/* ".repeat(200_000)],
+        ["templates", String.fromCharCode(96) + String.fromCharCode(92, 96).repeat(200_000)],
+        ["double quotes", String.fromCharCode(34) + String.fromCharCode(92, 34).repeat(200_000)],
+        ["single quotes", String.fromCharCode(39) + String.fromCharCode(92, 39).repeat(200_000)],
+      ]) test(`${source}: unclosed ${name} stay bounded and fail closed`, async () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "unclosed.ts");
+        writeFileSync(publication, `${fragment} ${host}`);
+        const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
+        expect(result.elapsed).toBeLessThan(3000);
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toContain("known_value:");
+        expect(result.stderr).toBe("");
+      }, 30_000);
+      test(`${source}: long identifiers without schemes stay bounded`, async () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "identifier.ts");
+        writeFileSync(publication, `${"a".repeat(200_000)},"${host}"`);
+        const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
+        expect(result.elapsed).toBeLessThan(3000);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe("PRIVACY GATE: PASS\n");
+        expect(result.stderr).toBe("");
+      }, 30_000);
+      test(`${source}: repeated type declarations stay bounded`, async () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "declarations.ts");
+        writeFileSync(publication, `${"const a: ".repeat(30_000)}"${host}"`);
+        const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
+        expect(result.elapsed).toBeLessThan(3000);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe("PRIVACY GATE: PASS\n");
+        expect(result.stderr).toBe("");
+      }, 30_000);
+      test(`${source}: large unquoted tokens stay bounded`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "unquoted.ts");
+        writeFileSync(publication, `(${host})`.repeat(4000));
+        const started = performance.now();
+        const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
+        expect(performance.now() - started).toBeLessThan(3000);
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).toContain("known_value:");
+        expect(result.stderr.toString()).toBe("");
+      }, 30_000);
+      test(`${source}: large chained calls stay bounded`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+        temporaryDirectories.push(directory);
+        mkdirSync(join(directory, ".git"));
+        const publication = join(directory, "chained.ts");
+        writeFileSync(publication, `relay${`("${host}")`.repeat(100_000)};`);
+        const started = performance.now();
+        const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
+        expect(performance.now() - started).toBeLessThan(3000);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+        expect(result.stderr.toString()).toBe("");
+      }, 30_000);
       test(`${source}: large quoted JSON stays bounded`, () => {
         const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
         temporaryDirectories.push(directory);

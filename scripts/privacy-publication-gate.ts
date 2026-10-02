@@ -122,15 +122,69 @@ function maskApprovedPublicValues(text: string): string {
   // source projections. Collisions conservatively withhold all exemptions.
   const marker = String.fromCharCode(0xe000);
   if (text.includes(marker)) return text;
-  type OperandGroup = { attached: boolean; parent?: OperandGroup };
-  const candidates: Array<{ start: number; end: number; allowed: boolean; group?: OperandGroup }> = [];
+  // Opaque schemes have no //, and a scheme ending at whitespace can resume
+  // after decoding. Retain schemes at token/assignment/wrapper boundaries;
+  // property/type colons are recognized as source syntax below.
+  function enclosingUriStart(token: string): number | undefined {
+    let start = -1;
+    let boundary = false;
+    // Walk each scheme run once. Retrying a greedy scheme regex at every
+    // character in a long identifier makes a token with no scheme quadratic.
+    for (let index = 0; index < token.length; index += 1) {
+      const character = token[index];
+      if (/[a-z]/i.test(character) && start < 0) {
+        start = index;
+        boundary = index === 0 || /[=,([{<]/.test(token[index - 1]);
+      }
+      if (character === ":" && start >= 0
+        && (boundary || (token[index + 1] === "/" && token[index + 2] === "/"))) return start;
+      if (!/[a-z0-9+.-]/i.test(character)) start = -1;
+    }
+    return undefined;
+  }
+  type OperandGroup = { attached: boolean; indexed?: boolean; parent?: OperandGroup };
+  const candidates: Array<{ start: number; end: number; allowed: boolean; opensComment: boolean; closesComment: boolean; sourceColonValue: boolean; propertyKey: boolean; sourceCommentTail: boolean; group?: OperandGroup }> = [];
   // Delimiters such as '=' or '(' inside a string do not end its URI.
-  const literals = text.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*|#[^\r\n]*|--[^\r\n]*|"(?:\\[\s\S]|[^"\\\r\n\0])*"|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\[\s\S]|[^'\\\r\n\0])*'|`(?:\\[\s\S]|[^`\\\0])*`/gu);
+  // Treat '#' in member access or a private declaration as syntax.
+  // Unclosed block comments and quoted tokens consume their remaining span once;
+  // retrying a closing-delimiter search at each inner opener is quadratic.
+  const literals = text.matchAll(/\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<!\.)#(?![\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
   let literal = literals.next().value;
   let previousLiteralEnd = 0;
   let syntaxCursor = 0;
   let previousSyntax = "";
   let precedingSyntax = "";
+  let pendingAttachment = false;
+  let compoundDepth: number | undefined;
+  let lineStart = true;
+  let uriCursor = 0;
+  let tokenHierarchicalUri = false;
+  let tokenOpaqueUri = false;
+  let tokenEmail = false;
+  let schemeRun = false;
+  let schemeAtBoundary = false;
+  // Candidates arrive in source order. Cache prefix classifications while
+  // advancing once; a long unquoted token never needs another backwards scan.
+  function advanceUriPrefix(end: number): void {
+    while (uriCursor < end) {
+      const index = uriCursor++;
+      const character = text[index];
+      if (/[\s"'`\0]/.test(character)) {
+        tokenHierarchicalUri = tokenOpaqueUri = tokenEmail = schemeRun = false;
+        continue;
+      }
+      if (character === "@") tokenEmail = true;
+      if (/[a-z]/i.test(character) && !schemeRun) {
+        schemeRun = true;
+        schemeAtBoundary = index === 0 || /[\s"'`\0=,([{<]/.test(text[index - 1]);
+      }
+      if (character === ":" && schemeRun) {
+        tokenOpaqueUri ||= schemeAtBoundary;
+        tokenHierarchicalUri ||= text[index + 1] === "/" && text[index + 2] === "/";
+      }
+      if (!/[a-z0-9+.-]/i.test(character)) schemeRun = false;
+    }
+  }
   const operandGroups: OperandGroup[] = [];
   const closedGroups: OperandGroup[] = [];
   // Retain enclosing operand context without rereading completed literals.
@@ -138,21 +192,73 @@ function maskApprovedPublicValues(text: string): string {
   function advanceSyntax(end: number): void {
     while (syntaxCursor < end) {
       const character = text[syntaxCursor++];
-      if (/\s/.test(character)) continue;
+      if (/\s/.test(character)) {
+        if (/[\r\n\u2028\u2029]/.test(character)) lineStart = true;
+        continue;
+      }
+      // A new statement after a completed RHS ends root compound ownership.
+      // Operators and conditional branches on the next line keep that RHS.
+      if (lineStart && compoundDepth !== undefined && operandGroups.length <= compoundDepth
+        && /[\p{L}\p{N}_$'"`)\]}]/u.test(previousSyntax) && /[\p{L}_$]/u.test(character)
+        && !/^(?:as|satisfies|in|instanceof)\b/.test(text.slice(syntaxCursor - 1, syntaxCursor + 12))) compoundDepth = undefined;
+      lineStart = false;
+      // Optional access keeps the receiver/operand across both characters.
+      // Named properties transform a receiver like ordinary member access;
+      // calls and indexes retain its ownership until their own suffix is read.
+      const optionalStart = character === "?" && text[syntaxCursor] === ".";
+      const optionalEnd = character === "." && previousSyntax === "?";
+      if (optionalStart || optionalEnd) {
+        if (optionalStart && previousSyntax === "'") pendingAttachment = true;
+        if (optionalEnd && !/^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n])*[([]/.test(text.slice(syntaxCursor))) {
+          for (const group of closedGroups) group.attached = true;
+        }
+        precedingSyntax = previousSyntax;
+        previousSyntax = character;
+        continue;
+      }
       if (/[)\]}]/.test(character)) {
         const group = operandGroups.pop();
         if (group) closedGroups.push(group);
       } else {
+        // An operator still attaches its operand when a callee name lies
+        // before '('. A closed attached operand can itself be the callee of
+        // the next call, as in an immediately invoked arrow function.
+        pendingAttachment ||= closedGroups.some((group) => group.attached);
+        if (/[+%*&^~|]/.test(character)
+          || (previousSyntax === "<" && /[<>]/.test(character))) pendingAttachment = true;
+        if (character === "." && previousSyntax === "'") pendingAttachment = true;
+        if (character === "=") {
+          pendingAttachment = /[+%.*]/.test(previousSyntax)
+            || (previousSyntax === "<" && precedingSyntax === "<");
+          if (pendingAttachment) compoundDepth ??= operandGroups.length;
+        } else if (/[\0;,:?]/.test(character)) {
+          pendingAttachment = false;
+          if (/[\0;]/.test(character)
+            || (character === "," && compoundDepth !== undefined && operandGroups.length <= compoundDepth)) compoundDepth = undefined;
+        }
         if (/[+%.*&^~|<]/.test(character)) {
           for (const group of closedGroups) group.attached = true;
         }
+        const calledGroups = /[([]/.test(character) ? closedGroups.slice() : [];
         closedGroups.length = 0;
         if (character === "\0") operandGroups.length = 0;
         else if (/[([{]/.test(character)) {
           const parent = operandGroups.at(-1);
-          operandGroups.push({ attached: parent?.attached === true || /[+%.*&^~|<]/.test(previousSyntax)
+          const group: OperandGroup = { attached: parent?.attached === true || pendingAttachment || compoundDepth !== undefined
+            || (/[+%.*&^~|<]/.test(previousSyntax) && !(previousSyntax === "." && precedingSyntax === "?"))
             || (previousSyntax === ">" && precedingSyntax === "<")
-            || operandGroups.length >= 16, parent });
+            || (previousSyntax === "$" && /[\p{L}\p{N}_./@)\]}-]/u.test(precedingSyntax))
+            || operandGroups.length >= 16, indexed: character === "[" && calledGroups.length > 0, parent };
+          // Keep returned/indexed literals connected to subsequent operands
+          // so a suffix can revoke those literals' exemptions too.
+          for (const callee of calledGroups) {
+            // Invoking a computed property can transform its receiver. Its
+            // literals are attached even if the argument has no explicit '+'.
+            if (character === "(" && callee.indexed) callee.attached = true;
+            callee.parent = group;
+          }
+          operandGroups.push(group);
+          pendingAttachment = false;
         }
       }
       precedingSyntax = previousSyntax;
@@ -167,12 +273,15 @@ function maskApprovedPublicValues(text: string): string {
       previousLiteralEnd = syntaxCursor;
       previousSyntax = "'";
       precedingSyntax = "";
+      lineStart = false;
+      pendingAttachment = false;
       closedGroups.length = 0;
     }
     literal = literals.next().value;
   }
   let previousCommentStart = -1;
   let previousCommentCandidateEnd = 0;
+  let openingCommentContentStart = -1;
   const marked = text.replace(approvedPublicValuePattern, (match: string, delimiter: string, offset: number) => {
     const index = candidates.length;
     const end = offset + match.length;
@@ -186,11 +295,17 @@ function maskApprovedPublicValues(text: string): string {
     advanceSyntax(literal ? Math.min(literal.index, start) : start);
     const inComment = literal !== undefined && /^(?:\/[/*]|#|--)/.test(literal[0])
       && literal.index <= start && literal.index + literal[0].length >= end;
+    const unclosedComment = inComment && literal !== undefined && literal[0].startsWith("/*") && !literal[0].endsWith("*/");
     const commentLiteral = inComment && quoted && text[end] === delimiter;
+    const closesComment = inComment && literal !== undefined && literal[0].startsWith("/*")
+      && /^\s*\*\/$/.test(text.slice(end + (commentLiteral ? 1 : 0), literal.index + literal[0].length));
     if (inComment && literal !== undefined && previousCommentStart !== literal.index) {
       previousCommentStart = literal.index;
       previousCommentCandidateEnd = literal.index;
+      const opening = /^\/\*+[\s*]*/.exec(literal[0]);
+      openingCommentContentStart = opening ? literal.index + opening[0].length : -1;
     }
+    const opensComment = inComment && start - (commentLiteral ? 1 : 0) === openingCommentContentStart;
     const insideLiteral = literal !== undefined && !inComment && literal.index < start && literal.index + literal[0].length >= end;
     const wholeLiteral = literal !== undefined && insideLiteral && literal.index + literal[0].search(/["'`]/) === start - 1 && literal.index + literal[0].length === end + 1;
     const expressionOffset = quoted && !wholeLiteral && insideLiteral && literal?.[0][0] === "`"
@@ -208,15 +323,16 @@ function maskApprovedPublicValues(text: string): string {
     const prefixStart = interpolatedLiteral ? expressionStart + 2
       : commentLiteral ? Math.max(previousCommentStart, previousCommentCandidateEnd - 1)
         : Math.max(0, previousLiteralEnd - 1);
-    const prefix = inspectLiteral ? text.slice(prefixStart, start) : "";
+    const prefix = inspectLiteral ? (commentLiteral && opensComment ? delimiter : text.slice(prefixStart, start)) : "";
     if (commentLiteral) previousCommentCandidateEnd = end + 1;
     const literalPrefix = prefix.slice(0, -1).replace(/(?:\\(?:\r\n|[\n\r\u2028\u2029]))+$/, "");
     const stringPrefix = /(?:^|[\s=(:,\[{])[uUrRbBfF]{1,2}$/.test(literalPrefix);
-    const literalTail = inspectLiteral ? text.slice(end + 1).replace(/^(?:\\(?:\r\n|[\n\r\u2028\u2029]))+/, "") : "";
+    const literalTail = inspectLiteral && !closesComment ? text.slice(end + 1).replace(/^(?:\\(?:\r\n|[\n\r\u2028\u2029]))+/, "") : "";
     const assertion = /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n])*(?:as|satisfies)\s+(?:const|string)\b(?=(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n])*(?:[;,\])}:+.!%]|$))/.exec(literalTail);
     const expressionTail = literalTail.slice(assertion?.[0].length ?? 0);
     const tailStart = (expressionTail[0] ?? "").normalize("NFKC");
-    const propertyKey = tailStart === ":" && /[,{]\s*["']$/.test(prefix);
+    const propertyKey = /^\s*:/.test(expressionTail) && /[,{]\s*["']$/.test(prefix);
+    const sourceCommentTail = inspectLiteral && /^(?:\s|[)\]}])*(?:\/\*|\/\/)/.test(literalTail);
     const expressionFragment = inspectLiteral && (
       operandGroups.at(-1)?.attached === true
       || (!stringPrefix && /[\p{L}\p{N}_./@$\\)\]}-]/u.test((literalPrefix.at(-1) ?? "").normalize("NFKC")))
@@ -225,14 +341,24 @@ function maskApprovedPublicValues(text: string): string {
       || /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*[\r\n]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[uUrRbBfF]{1,2})?["'`]/.test(expressionTail)
       || /^[\p{L}\p{N}_./@"'`%&#?$=\\\[{-]/u.test(tailStart)
       || (!propertyKey && tailStart === ":")
-      || /(?:[+%*&^~]|\.{1,2}|\|{2}|<<|<>)(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[uUrRbBfF]{1,2})?["'`]$/.test(prefix)
+      || /(?:[+%*&^~]|(?<!\?)\.{1,2}|\|{2}|<<|<>)(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[uUrRbBfF]{1,2})?["'`]$/.test(prefix)
       || /^(?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029]|#[^\r\n]*[\r\n]|--[^\r\n]*[\r\n])*(?:[+!.%*&^~]|\|{2}|<<|<>|(?:as|satisfies)\b)/.test(expressionTail));
     // A bare URL can also contain source-shaped delimiters. Its scheme or
     // email prefix still belongs to the same whitespace-delimited token.
-    let tokenStart = offset;
-    while (tokenStart > 0 && !/[\s"'`\0]/.test(text[tokenStart - 1])) tokenStart -= 1;
+    advanceUriPrefix(offset);
+    const typedTail = inspectLiteral ? literalPrefix.trimEnd() : "";
+    let typedAssignment = false;
+    if (typedTail.endsWith("=")) {
+      // A matching declaration cannot cross an earlier '=' or statement end.
+      // Restrict the scan to that final span instead of retrying every prefix.
+      const boundary = Math.max(typedTail.lastIndexOf("=", typedTail.length - 2), typedTail.lastIndexOf(";")) + 1;
+      typedAssignment = /\b(?:const|let|var)\s+[\p{L}_$][\p{L}\p{N}_$]*\s*:[^=;]*=$/u.test(typedTail.slice(boundary));
+    }
+    const sourceColonValue = inspectLiteral && /(?:[{,]\s*[\p{L}_$][\p{L}\p{N}_$]*\s*:\s*(?:[\[{]\s*)*|\b(?:const|let|var)\s+[\p{L}_$][\p{L}\p{N}_$]*\s*:\s*)$/u.test(literalPrefix);
     const uriPrefix = !/[\s\0]/.test(delimiter)
-      && /[a-z][a-z0-9+.-]*:\/\/|@|\.$/i.test(text.slice(tokenStart, offset));
+      && (tokenHierarchicalUri
+        || (!typedAssignment && !sourceColonValue && tokenOpaqueUri)
+        || tokenEmail || text[offset - 1] === ".");
     // URI punctuation is not a source separator unless a matching opener
     // establishes a closing parenthesis (for example a Markdown destination).
     const matchingClose = (delimiter === "(" && text[end] === ")")
@@ -241,22 +367,37 @@ function maskApprovedPublicValues(text: string): string {
       && !/^(?:[)\]}>;,]*(?:$|\s))/.test(text.slice(end + 1));
     const continued = wrapperTail || (/^[;,"'`\]}>)]$/.test(text[end] ?? "") && !matchingClose)
       || (/^[\]}>]$/.test(text[end] ?? "") && /^[\p{L}\p{N}_]/u.test(text[end + 1] ?? ""));
-    candidates.push({ start, end, group: inspectLiteral ? operandGroups.at(-1) : undefined,
-      allowed: quoted
+    // Bare operands (for example here-doc bodies) also inherit their enclosing
+    // attachment; source quotes are not required to retain that ownership.
+    candidates.push({ start, end, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, group: operandGroups.at(-1),
+      allowed: !unclosedComment && (inComment || (!pendingAttachment && compoundDepth === undefined)) && (quoted
         ? text[end] === delimiter && !uriPrefix && !expressionFragment && (wholeLiteral || interpolatedLiteral || commentLiteral)
-        : !continued && !insideLiteral && !uriPrefix });
+        : !continued && !insideLiteral && !uriPrefix) });
     return `${delimiter}${marker}${index}${marker}`;
   });
   if (candidates.length === 0) return text;
   while (literal) completeLiteral();
   advanceSyntax(text.length);
+  // The graph is final now. Memoize inherited attachment so a chain of calls
+  // containing many approved literals is traversed once instead of per literal.
+  const attachments = new Map<OperandGroup, boolean>();
   for (const candidate of candidates) {
+    const visited: OperandGroup[] = [];
+    let attached = false;
     for (let group = candidate.group; group; group = group.parent) {
+      const cached = attachments.get(group);
+      if (cached !== undefined) {
+        attached = cached;
+        break;
+      }
+      visited.push(group);
       if (group.attached) {
-        candidate.allowed = false;
+        attached = true;
         break;
       }
     }
+    for (const group of visited) attachments.set(group, attached);
+    if (attached) candidate.allowed = false;
   }
   const original = sensitiveTextViews(text);
   if (original.error || original.views.some((view) => view.includes(marker))) return text;
@@ -268,31 +409,129 @@ function maskApprovedPublicValues(text: string): string {
   const rightBoundary = /^[\t\n\r "'\x60)\]}>;,]$/;
   for (const view of views) {
     const normalized = view.normalize("NFKC");
+    // Keep enclosing schemes across quoted payloads, including JSON. Blank
+    // unrelated literal contents without introducing whitespace. A quoted
+    // fragment joined to another payload by concealed whitespace retains its
+    // contents, so decoded quotes cannot erase a scheme or mailbox prefix.
+    const markerOrCharacter = new RegExp(`${marker}\\d+${marker}|[\\s\\S]`, "g");
+    let uriContext = normalized.replaceAll(/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`/g,
+      (value, offset: number) => {
+        let next = offset + value.length;
+        let concealed = false;
+        while (/[)\]}>]/.test(normalized[next] ?? "")) next += 1;
+        while (next < normalized.length && /\s/.test(normalized[next])) {
+          concealed ||= /[^\S ]/.test(normalized[next]);
+          next += 1;
+        }
+        if (concealed && !value.includes(marker)
+          && (normalized[next] === marker || /["'`([{<]/.test(normalized[next] ?? ""))) return value.slice(1, -1);
+        return value.replaceAll(markerOrCharacter, (part) => part.startsWith(marker) ? part : "\0");
+      });
+    const blankSyntax = (value: string) => value.replaceAll(/\S/g, "\0");
+    // Remove just verified source colons. Any earlier enclosing scheme stays
+    // inspectable, even when its payload resembles an object or a type.
+    uriContext = uriContext
+      .replaceAll(new RegExp(`(?<![\\p{L}\\p{N}_$])([\\p{L}_$][\\p{L}\\p{N}_$]*\\s*:\\s*)\\0*${marker}(\\d+)${marker}`, "gu"),
+        (value, colon: string, index: string) => candidates[Number(index)].sourceColonValue
+          ? blankSyntax(colon) + value.slice(colon.length) : value)
+      .replaceAll(/[,{]\s*[\p{L}_$][\p{L}\p{N}_$]*\s*:\s*(?=[\[{\0])/gu, blankSyntax)
+      .replaceAll(/\b(?:const|let|var)\s+([\p{L}_$][\p{L}\p{N}_$]*\s*:)/gu,
+        (value, colon: string) => value.replace(colon, blankSyntax(colon)))
+      .replaceAll(/\s+/g, (whitespace) => /[^\S ]/.test(whitespace) ? "" : whitespace);
+    for (const token of uriContext.matchAll(/\S+/g)) {
+      const scheme = enclosingUriStart(token[0]);
+      const mailbox = token[0].indexOf("@");
+      const owner = Math.min(scheme ?? Infinity, mailbox >= 0 ? mailbox : Infinity);
+      if (!Number.isFinite(owner)) continue;
+      for (const occurrence of token[0].matchAll(new RegExp(`${marker}(\\d+)${marker}`, "g"))) {
+        // A later Markdown destination does not own an earlier link label.
+        if (occurrence.index > owner) candidates[Number(occurrence[1])].allowed = false;
+      }
+    }
     for (const occurrence of normalized.matchAll(new RegExp(`${marker}(\\d+)${marker}`, "g"))) {
       const start = occurrence.index;
       const end = start + occurrence[0].length;
-      // Whitespace can split an email/host/URI across lines. It is a valid
-      // standalone delimiter only when it does not conceal a continuation.
+      // Look through the candidate's own quote and neighbouring quoted
+      // fragments only across concealed whitespace. Source terminators and
+      // ordinary prose whitespace retain their existing boundaries.
+      const ownQuote = /["'`]/.test(normalized[start - 1] ?? "") && normalized[start - 1] === normalized[end];
+      let fragmentBefore = start - (ownQuote ? 2 : 1);
+      let fragmentAfter = end + (ownQuote ? 1 : 0);
+      const wrapperPairs: Record<string, string> = { "(": ")", "[": "]", "{": "}", "<": ">", '"': '"', "'": "'", "`": "`" };
+      // Expand only complete wrappers enclosing this candidate. Unsupported
+      // depth withholds its exemption, just like the source operand scanner.
+      for (let depth = 0; ; depth += 1) {
+        let left = fragmentBefore;
+        let right = fragmentAfter;
+        while (left >= 0 && /\s/.test(normalized[left])) left -= 1;
+        while (right < normalized.length && /\s/.test(normalized[right])) right += 1;
+        if (!wrapperPairs[normalized[left]] || wrapperPairs[normalized[left]] !== normalized[right]) break;
+        if (depth >= 16) {
+          candidates[Number(occurrence[1])].allowed = false;
+          break;
+        }
+        fragmentBefore = left - 1;
+        fragmentAfter = right + 1;
+      }
+      const beforeQuote = fragmentBefore;
+      const afterQuote = fragmentAfter;
+      while (fragmentBefore >= 0 && /\s/.test(normalized[fragmentBefore])) fragmentBefore -= 1;
+      while (fragmentAfter < normalized.length && /\s/.test(normalized[fragmentAfter])) fragmentAfter += 1;
+      const concealedBefore = /[^\S ]/.test(normalized.slice(fragmentBefore + 1, beforeQuote + 1));
+      const concealedAfter = /[^\S ]/.test(normalized.slice(afterQuote, fragmentAfter));
+      if (concealedBefore) {
+        while (/[\s"'`)\]}>]/.test(normalized[fragmentBefore] ?? "")) fragmentBefore -= 1;
+      }
+      const quotedSuffix = concealedAfter && /["'`([{<]/.test(normalized[fragmentAfter] ?? "");
+      if (quotedSuffix) {
+        while (/[\s"'`([{<]/.test(normalized[fragmentAfter] ?? "")) fragmentAfter += 1;
+      }
+      let fragmentPrefixRun = fragmentBefore;
+      let fragmentSuffixRun = fragmentAfter;
+      while (fragmentPrefixRun >= 0 && /[-_]/.test(normalized[fragmentPrefixRun])) fragmentPrefixRun -= 1;
+      while (fragmentSuffixRun < normalized.length && /[-_]/.test(normalized[fragmentSuffixRun])) fragmentSuffixRun += 1;
+      const uriSuffix = (quotedSuffix
+        ? /[.@/:?#;,!$&*+=%()\\]/.test(normalized[fragmentAfter] ?? "")
+        : /[.@/:?#!$&*+=%\\]/.test(normalized[fragmentAfter] ?? ""))
+        || (fragmentSuffixRun > fragmentAfter && /[\p{L}\p{N}]/u.test(normalized[fragmentSuffixRun] ?? ""));
+      const sourceSuffixBoundary = candidates[Number(occurrence[1])].closesComment
+        || (normalized[fragmentAfter] === ":" && candidates[Number(occurrence[1])].propertyKey)
+        || (normalized[fragmentAfter] === "/" && candidates[Number(occurrence[1])].sourceCommentTail);
+      if ((concealedBefore && (/[.@/]/.test(normalized[fragmentBefore] ?? "")
+        || (fragmentPrefixRun < fragmentBefore && /[\p{L}\p{N}]/u.test(normalized[fragmentPrefixRun] ?? "")))
+        && !(normalized[fragmentBefore] === "/" && candidates[Number(occurrence[1])].opensComment))
+        || (concealedAfter && uriSuffix && !sourceSuffixBoundary)) {
+        candidates[Number(occurrence[1])].allowed = false;
+      }
+      // Non-space whitespace can split an email/host/URI, including decoded
+      // tabs and Unicode line separators. Ordinary spaces still delimit prose.
       let before = start - 1;
       let after = end;
       while (before >= 0 && /\s/.test(normalized[before])) before -= 1;
       while (after < normalized.length && /\s/.test(normalized[after])) after += 1;
-      const splitBefore = /[\r\n]/.test(normalized.slice(before + 1, start));
+      let prefixRun = before;
+      let suffixRun = after;
+      while (prefixRun >= 0 && /[-_]/.test(normalized[prefixRun])) prefixRun -= 1;
+      while (suffixRun < normalized.length && /[-_]/.test(normalized[suffixRun])) suffixRun += 1;
+      const splitBefore = /[^\S ]/.test(normalized.slice(before + 1, start));
       let previousToken = before;
       if (splitBefore && /[=:?#&;,]/.test(normalized[before] ?? "")) {
         while (previousToken >= 0 && !/\s/.test(normalized[previousToken])) previousToken -= 1;
       }
       const splitUriPrefix = previousToken < before
-        && /[a-z][a-z0-9+.-]*:\/\//i.test(normalized.slice(previousToken + 1, before + 1));
+        && enclosingUriStart(normalized.slice(previousToken + 1, before + 1)) !== undefined;
       if ((start > 0 && !leftBoundary.test(normalized[start - 1]))
         || (end < normalized.length && !rightBoundary.test(normalized[end]))
         || (before >= 0 && (/[.@/]/.test(normalized[before])
-          || (/[-_]/.test(normalized[before]) && /[\p{L}\p{N}_]/u.test(normalized[before - 1] ?? ""))
+          || (prefixRun < before && /[\p{L}\p{N}]/u.test(normalized[prefixRun] ?? ""))
           || (splitUriPrefix && /[=:?#&;,]/.test(normalized[before])))
-          && splitBefore)
+          && splitBefore
+          && !(normalized[before] === "/" && candidates[Number(occurrence[1])].opensComment))
         || (after < normalized.length && (/[.@/:?#;,!$&*+=%()\\]/.test(normalized[after])
-          || (/[-_]/.test(normalized[after]) && /[\p{L}\p{N}_]/u.test(normalized[after + 1] ?? "")))
-          && /[\r\n]/.test(normalized.slice(end, after)))) {
+          || (suffixRun > after && /[\p{L}\p{N}]/u.test(normalized[suffixRun] ?? "")))
+          && /[^\S ]/.test(normalized.slice(end, after))
+          // A verified closing comment delimiter supplies the source boundary.
+          && !candidates[Number(occurrence[1])].closesComment)) {
         candidates[Number(occurrence[1])].allowed = false;
       }
     }
