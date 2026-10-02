@@ -160,6 +160,14 @@ function recordFile(state: string): string {
   return path.join(dir, name);
 }
 
+function stateText(directory: string): string {
+  return readdirSync(directory, { withFileTypes: true }).map((entry) => {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) return stateText(filename);
+    return entry.isFile() ? readFileSync(filename, "utf8") : "";
+  }).join("\n");
+}
+
 function pointerFile(fixture: ReturnType<typeof install>): string {
   const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
   return path.join(fixture.state, "self-update", `release-${installId}.json`);
@@ -518,6 +526,34 @@ for (const tokenSource of ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated"] as const
       }
     }, 60_000);
   }
+}
+
+for (const invalidCharacter of ["\n", "\r", "\u0100"] as const) {
+  test(`malformed Viewer tokens are omitted from restart headers and diagnostics (${JSON.stringify(invalidCharacter)})`, async () => {
+    const fixture = install({ tokenProtected: true });
+    const token = `fixture-prefix${invalidCharacter}fixture-suffix`;
+    fixture.env.LLV_TOKEN = token;
+    const running = await start(fixture);
+    const before = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+    });
+    const next = release(fixture, "malformed-token-update");
+    writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+    request(before, "web", "restart-malformed-token");
+
+    const after = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.requestId === "restart-malformed-token" && record.web.state === "failed" ? record : null;
+    });
+    const persistedState = stateText(fixture.state);
+    expect(after.web.error).toMatchObject({ kind: "message", text: "GET / answered 401" });
+    expect(persistedState).not.toContain(token);
+    expect(running.output()).not.toContain(token);
+    expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+    expect(await socketAnswers(before.socket)).toBe(true);
+    expect(running.child.exitCode).toBeNull();
+  }, 60_000);
 }
 
 test("a release whose web does not start gives way to the one it replaced, and says so", async () => {

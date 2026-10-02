@@ -273,4 +273,11 @@ describe("probePageAndChunk", () => {
     chunkStatus = 500;
     expect(await probePageAndChunk(port)).toBe("GET /_next/static/chunks/app.js answered 500");
   });
+
+  test("does not expose malformed bearer values from fetch errors", async () => {
+    const token = `fixture-prefix\nfixture-suffix`;
+    const error = await probePageAndChunk(port, 5_000, { authorization: `Bearer ${token}` });
+    expect(error).toBe("Viewer readiness probe failed");
+    expect(error).not.toContain(token);
+  });
 });

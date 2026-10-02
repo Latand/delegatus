@@ -1178,14 +1178,13 @@ async function main() {
      a checkout: a packaged install is updated by its package manager. */
   if (checkout) {
     const probeHeaders = () => {
-      // Use the serving child's effective token, including environment-supplied
-      // tokens and the launcher's phone-access overrides. The service tag alone
-      // does not authenticate through the token perimeter.
+      // Use the serving child's effective token, but never let a malformed
+      // value reach fetch: Bun's header error includes the rejected value.
       const { LLV_TOKEN: token } = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
-      return {
-        ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      };
+      const value = typeof token === "string" ? token.trim() : "";
+      const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
+      if (value && !/[^\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
+      return headers;
     };
     const restartWeb = async () => {
       const previous = serverRef.current;
