@@ -516,3 +516,15 @@ describe("a launch that failed before it ran (#2170)", () => {
     expect(attentionId(dismissed, NOW)).toBeNull();
   });
 });
+
+test("memory attention survives host death, expires, dismisses and returns for a new kill", () => {
+  const at = new Date((NOW - 60) * 1000).toISOString();
+  const file = entry({ path: "/memory.jsonl", memoryKill: { at, limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true } });
+  const reason = attentionReason(file, NOW)!;
+  expect(reason.kind).toBe("memory");
+  expect(reason.id).toBe(`/memory.jsonl:memory:${at}`);
+  expect(attentionReason(file, NOW + 24 * 3600)).toBeNull();
+  const dismissed = { ...file, attentionDismissal: { at: new Date(NOW * 1000).toISOString(), reasonId: reason.id, reason: "memory", by: { kind: "operator" } } } as FileEntry;
+  expect(attentionId(dismissed, NOW)).toBeNull();
+  expect(attentionId({ ...dismissed, memoryKill: { ...file.memoryKill!, at: new Date((NOW + 1) * 1000).toISOString() } }, NOW + 2)).not.toBeNull();
+});

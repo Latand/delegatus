@@ -4,12 +4,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
+
+test("a one-stage merger pipeline accepts its role and persists the effective read-write profile", () => {
+  const effectiveRole = { roleId: "merger" as const, engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", access: "read-write" as const, promptScaffold: "Merge reviewed PRs" };
+  expect(isEffectiveRole(effectiveRole)).toBe(true);
+  const pipeline = buildPipeline({ id: "merger-fixture", task: "Merge batch", project: "fixture", repoDir: "/repo",
+    stages: [{ id: "merge", kind: "run", prompt: "Merge", role: { roleId: "merger", params: { prs: "12@abcdef1" } }, effectiveRole, next: null }],
+    srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z" });
+  expect(pipeline.stages[0]!.effectiveRole).toEqual(effectiveRole);
+});
 
 const deliveryTarget = { repository: "repo-delivery-fixture", remote: "", branch: "refs/heads/review-target", pr: 637, rejectedHead: "a".repeat(40) };
 function deliveryFixture(id: string): Pipeline {
