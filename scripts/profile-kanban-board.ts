@@ -150,6 +150,8 @@ const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], 
 const results: Record<string, unknown> = {};
 try {
   const width = Number(process.env.PROFILE_WIDTH ?? 1440);
+  const phone = width < 640;
+  const cardSelector = phone ? "[data-phone-kanban-column] [data-phone-card]" : "[data-kanban-board] .card[data-id]";
   const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 900 }, deviceScaleFactor: 1 });
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -211,20 +213,20 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.port}/?scenario=pipelines&streaming=1${process.env.PROFILE_RENDERS ? "&renders=1" : ""}`);
   try {
-    await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 60_000 });
+    await page.waitForSelector(cardSelector, { state: "attached", timeout: 60_000 });
   } catch (error) {
     throw new Error(`the board never rendered a card: ${pageErrors.join(" | ") || "no page error"}`, { cause: error });
   }
   /* PROFILE_CSS: rules injected after load, to switch a suspect off and see what the trace gives back. */
   if (process.env.PROFILE_CSS) await page.addStyleTag({ content: process.env.PROFILE_CSS });
   await page.waitForTimeout(3_000);
-  const corpus = await page.evaluate(() => ({
+  const corpus = await page.evaluate((cardSelector) => ({
     ...(window as unknown as { profileCorpus: unknown }).profileCorpus as object,
-    cards: document.querySelectorAll("[data-kanban-board] .card[data-id]").length,
+    cards: document.querySelectorAll(cardSelector).length,
     liveGlyphs: [...document.querySelectorAll('.mglyph[data-live="1"]')].map((glyph) => (glyph as HTMLElement).dataset.glyph).join(","),
     animations: document.getAnimations().length,
     dom: document.querySelectorAll("*").length,
-  }));
+  }), cardSelector);
 
   /* The components that re-rendered since the last read, per event, with the
      props that changed; absent unless PROFILE_RENDERS is set. */
@@ -369,7 +371,8 @@ try {
   results.still = { ...summarize(still, still.windowMs), commits: still.commits, ...rounded(sampledMs(stillProfile as never)) };
 
   /* ── scroll: 80 wheel events, data frozen ──────────────────────────── */
-  const box = await page.locator('.column[data-status="assigned"] .col-body').first().boundingBox();
+  if (phone) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+  const box = await page.locator(phone ? '[data-phone-kanban-column="assigned"]' : '.column[data-status="assigned"] .col-body').first().boundingBox();
   if (!box) throw new Error("the Assigned column has no scroll box");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.waitForTimeout(500);
@@ -411,13 +414,13 @@ try {
   for (let round = 0; round < Number(process.env.PROFILE_SWITCHES ?? 3); round++) {
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
     await page.evaluate(() => { location.hash = "#p=quiet-project"; });
-    await page.waitForFunction(() => document.querySelectorAll("[data-kanban-board] .card[data-id]").length === 0, null, { timeout: 30_000 });
+    await page.waitForFunction((cardSelector) => document.querySelectorAll(cardSelector).length === 0, cardSelector, { timeout: 30_000 });
     await page.waitForTimeout(1_500);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuRate });
     await start();
-    const switched = await page.evaluate(async () => {
+    const switched = await page.evaluate(async (cardSelector) => {
       const sample = (window as unknown as { profileSample: { lastCommitAt: number } }).profileSample;
-      const cards = () => document.querySelectorAll("[data-kanban-board] .card[data-id]").length;
+      const cards = () => document.querySelectorAll(cardSelector).length;
       const begin = performance.now();
       location.hash = "#p=atlas";
       let paintMs = -1;
@@ -431,7 +434,7 @@ try {
         if (paintMs >= 0 && now - Math.max(last, sample.lastCommitAt) > 400) return { paintMs, settleMs: Math.max(last, sample.lastCommitAt) - begin, cards: count };
         if (now - begin > 30_000) return { paintMs, settleMs: now - begin, cards: count };
       }
-    });
+    }, cardSelector);
     const quiet = await stop();
     switches.push({ paintMs: Math.round(switched.paintMs), settleMs: Math.round(switched.settleMs), cards: switched.cards, longTasks: quiet.longTasks.length, longTaskMaxMs: Math.round(Math.max(0, ...quiet.longTasks.map((entry) => entry.ms))) });
   }
@@ -439,7 +442,7 @@ try {
   // stream UI check. Keep this in the shared driver, with the same real board.
   if (process.env.PROFILE_LATENCY) {
     await page.screenshot({ path: path.join(out, "before-edits.png") });
-    const latency = await page.evaluate(async ({ rate, warmSeconds }) => {
+    const latency = await page.evaluate(async ({ rate, warmSeconds, phone }) => {
       const w = window as unknown as {
         profileCorpus: { liveIds: string[] };
         runtimeEmit: (envelope: unknown) => void;
@@ -478,8 +481,11 @@ try {
             w.evidence.setTaskStatus("t-pending", status);
           }
           if (sentAt >= 0) {
-            if (renameMs < 0 && document.querySelector('.card[data-id="task:t-export"] .title')?.textContent?.includes(title)) renameMs = at - sentAt;
-            if (moveMs < 0 && document.querySelector('.card[data-id="task:t-pending"]')?.closest<HTMLElement>(".column")?.dataset.status === status) moveMs = at - sentAt;
+            const renamed = document.querySelector(phone ? '[data-phone-card="task:t-export"] [data-phone-card-title]' : '.card[data-id="task:t-export"] .title');
+            const moved = document.querySelector(phone ? '[data-phone-card="task:t-pending"]' : '.card[data-id="task:t-pending"]');
+            const column = moved?.closest<HTMLElement>(phone ? "[data-phone-kanban-column]" : ".column");
+            if (renameMs < 0 && renamed?.textContent?.includes(title)) renameMs = at - sentAt;
+            if (moveMs < 0 && (phone ? column?.dataset.phoneKanbanColumn : column?.dataset.status) === status) moveMs = at - sentAt;
           }
           if (streaming) {
             const due = Math.floor(at / 1000 * rate);
@@ -491,12 +497,12 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
       return { warmSeconds, rounds };
-    }, { rate: eventsPerSecond, warmSeconds: Number(process.env.PROFILE_WARM_SECONDS ?? 40) });
+    }, { rate: eventsPerSecond, warmSeconds: Number(process.env.PROFILE_WARM_SECONDS ?? 40), phone });
     results.latency = latency;
     for (const [status, id, frame] of [["assigned", "t-export", "rename-painted.png"], ["inbox", "t-pending", "move-painted.png"]] as const) {
-      const tab = page.locator(`.tabs-nav [data-tab="${status}"]`).first();
+      const tab = page.locator(phone ? `[data-phone-kanban-tab="${status}"]` : `.tabs-nav [data-tab="${status}"]`).first();
       if (await tab.count()) await tab.click();
-      await page.locator(`.card[data-id="task:${id}"]`).scrollIntoViewIfNeeded();
+      await page.locator(phone ? `[data-phone-card="task:${id}"]` : `.card[data-id="task:${id}"]`).scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(out, frame) });
     }
     await page.screenshot({ path: path.join(out, "after-edits.png") });
