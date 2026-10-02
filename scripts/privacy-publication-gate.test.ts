@@ -31,6 +31,10 @@ import {
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
+const escapedVersionSourceLines = [
+  String.raw`  expect(pinnedBunVersion("RUN npm install -g bun@1.4.0\nRUN npm install -g bun@1.4.0")).toBe("1.4.0");`,
+  String.raw`  expect(() => pinnedBunVersion("npm install -g bun@1.4.0\nnpm install -g bun@1.3.3")).toThrow();`,
+];
 const packageVersionSamples = [
   ["pkg", "1.2.3"].join("@"),
   ["@scope/pkg", "1.2.3"].join("@"),
@@ -44,6 +48,8 @@ const packageVersionSamples = [
   ["pkg", "1.2.3-beta"].join("@"),
   ["pkg", "1.2.3-beta.rc"].join("@"),
   ["pkg", "1.2.3-beta.com"].join("@"),
+  ...[String.raw`\n`, String.raw`\t`, String.raw`\r`, String.raw`\x0a`, String.raw`\tail`]
+    .map((escape) => ["pkg", "1.2.3"].join("@") + escape),
   `Inspect \`${["pkg", "1.2.3"].join("@")}\`.`,
   `Inspect [${["pkg", "1.2.3+sha.abc"].join("@")}](https://fixture.invalid).`,
   `Encoded preface %41: \`${["pkg", "1.2.3"].join("@")}\`.`,
@@ -58,7 +64,7 @@ const versionLookingRealAddresses = [
     ]),
   `\`${["pkg", "1.2.3"].join("@")}\` and ${["pkg", "1.2.3"].join("@")} . ${["probe", "1.2.3"].join("@")}\`.com`,
   `\`${["probe", "1.2.3+sha.abc"].join("@")}\`.com`,
-  ...[".", "/", "!", "?", ">tail", "}", "=", "\\tail", "%20", "&#32;", "\u00A0", "\u200B", "💡"]
+  ...[".", "/", "!", "?", ">tail", "}", "=", "%20", "&#32;", "\u00A0", "\u200B", "💡"]
     .map((suffix) => ["probe", "1.2.3"].join("@") + suffix),
   ...["1.2.3.4.5", "1.2.3-beta.", "1.2.3+sha.", "1.2.3-beta%2E1", "1.2.3+sha&#46;abc", "1.2.3-beta.1+sha", "1.2.3-beta.rc.1+sha.2"]
     .map((domain) => ["probe", domain].join("@")),
@@ -76,6 +82,8 @@ const versionLookingRealAddresses = [
   ["probe", "1.2.3.&#xF0B;&#xF40;.com"].join("@"),
   ["someone", "b.io"].join("@"),
   ...["com", "target", "укр", "xn--j1amh"].map((tld) => ["a", `1.2.3.${tld}`].join("@")),
+  ...["1.2.3example", "1.2.3.example", "1.2.3.example.com", "1.2.3.target", "1.2.3.com", "1.2.3.укр", "1.2.3.xn--j1amh", "1.2.3.\u{1F130}.com"]
+    .map((domain) => ["probe", domain].join("@") + String.raw`\n`),
   ["a", "1.2.3-beta.укр"].join("@"),
   [JSON.stringify(["someone", "b.io"].join("@")), "1.2.3"].join("@"),
   ...["\u200B", "\u0375α", "・カ", "१२३"].map((label) => ["a", `1.2.3.${label}.com`].join("@")),
@@ -752,7 +760,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   });
 
   test("RAW version tokens follow the positive grammar across ASCII and Unicode", () => {
-    const permitted = new Set([" ", "\t", "\r", "\n", "\v", "\f", '"', "'", "`", ")", "]", ",", ";", ":"]);
+    const permitted = new Set([" ", "\t", "\r", "\n", "\v", "\f", '"', "'", "`", ")", "]", ",", ";", ":", "\\"]);
     const boundaries = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
     boundaries.push("α", "\u0301", "\u0375", "\u30FB", "\u200B", "\u00A0", "）", "／", "💡");
     for (const boundary of boundaries) {
@@ -3738,6 +3746,19 @@ describe("mergeBoundaryReview", () => {
     });
     return result.stdout.toString().trim();
   }
+
+  test.each(escapedVersionSourceLines)("escaped version source lines pass files and commit messages (%#)", (line) => {
+    const repo = gitRepo();
+    writeFileSync(join(repo, "source.ts"), line + "\n");
+    commit(repo, `test: escaped package version\n\n${line}`, canonicalIdentity);
+
+    expect(sensitiveClasses(line).has("email_address")).toBe(false);
+    expect(commitMessageFindings(repo, "main").size).toBe(0);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
 
   test.each(packageVersionSamples)("package versions pass files, commit messages and identities (%#)", (specifier) => {
     const repo = gitRepo();

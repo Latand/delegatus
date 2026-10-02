@@ -638,10 +638,10 @@ const emailAddressSource =
 // Only complete RAW package-version tokens earn this exemption. Detection
 // keeps every view intact; source correspondence is checked per occurrence.
 const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?`;
-const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:])`;
+const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:\\])`;
 
 const rawPackageVersion = new RegExp(`${packageVersionSource}${packageVersionBoundary}`, "y");
-const packageVersionFollowing = /^[\x09-\x0d "'`)\],;:]$/;
+const packageVersionFollowing = /^[\x09-\x0d "'`)\],;:\\]$/;
 
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
    resolve to anyone — the same reason `.invalid` is already skipped here.
