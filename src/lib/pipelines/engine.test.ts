@@ -692,6 +692,47 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test("a fixer head probe stays outside the controller lease and a pause fences its review admission", async () => {
+  const fixture = await realWorktreeLane("fixer-head-pause", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let work: Promise<unknown> | undefined;
+  try {
+    const { h, git, worktree } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "fix handed findings");
+    h.setConversationActive(false);
+    h.messages.set("/codex/stage-1.jsonl", { text: 'Checked.\n```json\n{"status":"fail","findings":["P2 — discovery in fix.txt:1"]}\n```', ts: Date.now() + 100_000_000 });
+    let entered!: () => void;
+    const checking = new Promise<void>((resolve) => { entered = resolve; });
+    let intercepted = false;
+    work = tickPipelines([entry("/codex/stage-1.jsonl")], { ...h.ports, exec: async (...args) => {
+      if (!intercepted && args[0] === "git" && args[1][0] === "status") {
+        intercepted = true; entered(); await held;
+      }
+      return await h.ports.exec(...args);
+    } });
+    await checking;
+    expect(loadPipelines()[0]!.state).toBe("running");
+    const paused = await Promise.race([patchPipeline(fixture.id, { action: "pause" }, h.ports), Bun.sleep(150).then(() => null)]);
+    expect(paused).not.toBeNull();
+    release(); await work;
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("paused");
+    expect(lane.lastPassedCommit).toBe(fixture.base);
+    expect(lane.runs[0]!.attempts[0]!.acceptedForReview).not.toBe(true);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    release(); await work;
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test.each(["Another issue noticed", "Users cannot save", "rejected publication", "historical red tests"])("a fixer self-fail with a committed head goes to review with its findings as notes: %s", async (finding) => {
   const fixture = await realWorktreeLane("fixer-self-fail", [
     { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
@@ -700,9 +741,9 @@ test.each(["Another issue noticed", "Users cannot save", "rejected publication",
   try {
     const { h, git, worktree, origin } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "fix handed findings");
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "fix handed findings");
+    const fixed = await git(worktree, "rev-parse", "HEAD");
     const hook = path.join(origin, "hooks", "pre-receive");
     if (finding === "rejected publication") fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     h.setConversationActive(false);
@@ -724,7 +765,7 @@ test.each(["Another issue noticed", "Users cannot save", "rejected publication",
     expect(current.runs[0]!.attempts[0]!.verdict?.status).toBe("fail");
     expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
     expect(current.cursor?.input).toContain(`${finding} in fix.txt:1`);
-    expect(git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
+    expect(await git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
     await tickPipelines([], h.ports);
     expect(h.spawnInputs.at(-1)?.prompt).toContain(`${finding} in fix.txt:1`);
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
@@ -751,8 +792,8 @@ test.each([
   try {
     if (commit) {
       fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "partial fix\n");
-      fixture.git(fixture.worktree, "add", "fix.txt");
-      fixture.git(fixture.worktree, "commit", "-m", "partial fix");
+      await fixture.git(fixture.worktree, "add", "fix.txt");
+      await fixture.git(fixture.worktree, "commit", "-m", "partial fix");
     }
     fixture.h.setConversationActive(false);
     const shortSummary = "Committed partial fixes; remaining discovery listed";
@@ -763,7 +804,7 @@ test.each([
       lane.runs[0]!.attempts[0]!.report = {
         seq: 1, at: fixture.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
         verdict: { status: "fail", ...blockFields, findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
-        provenance: { head: fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+        provenance: { head: await fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
       };
       savePipelines([lane]);
     }
@@ -802,10 +843,10 @@ test.each([
     const { h, git, worktree } = fixture;
     if (commit) {
       fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
-      git(worktree, "add", "fix.txt");
-      git(worktree, "commit", "-m", "fix handed findings");
+      await git(worktree, "add", "fix.txt");
+      await git(worktree, "commit", "-m", "fix handed findings");
     }
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    const fixed = await git(worktree, "rev-parse", "HEAD");
     const blockedReason = "Required check service is unavailable";
     const verdict = { status: "fail" as const, findings,
       ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}) };
@@ -965,8 +1006,8 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
   try {
     const { h, git, worktree, base } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "committed partial fix");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "committed partial fix");
     const lane = loadPipelines()[0]!;
     if (settlement === "reported plus fenced completion") {
       lane.runs[0]!.attempts[0]!.report = {
@@ -975,7 +1016,7 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
         actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
         verdict: { status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] },
         summary: "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.",
-        provenance: { head: git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+        provenance: { head: await git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
         calls: 1,
       };
       savePipelines([lane]);
@@ -1009,8 +1050,8 @@ test("a fenced fixer verdict keeps a blocker after the bounded relay output", as
   try {
     const { h, git, worktree, base } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "committed partial fix");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "committed partial fix");
     const summary = `${"Verification details recorded. ".repeat(1200)}Blocked: cannot run required integration checks.`;
     h.setConversationActive(false);
     h.messages.set("/codex/stage-1.jsonl", {

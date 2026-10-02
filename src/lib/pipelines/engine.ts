@@ -3176,14 +3176,20 @@ async function settleStageVerdict(
   /* A fixer repairs discoveries; its next reviewer owns the verdict. Admit
      only an already committed, clean head through the normal acceptance and
      publication path. Blocked work and other roles retain fail routing. */
-  if (fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports)) {
+  const fixerCanReview = await fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports);
+  if (fixerCanReview === null) {
+    pipeline.stateDetail = "fixer head verification pending";
+    persist();
+    return;
+  }
+  if (fixerCanReview) {
     attempt.acceptedForReview = true;
     attempt.output = [parsed.output, "Fixer notes for the reviewer:", ...(parsed.verdict.findings ?? []).map((finding) => `- ${finding}`)]
       .filter(Boolean).join("\n\n");
     attempt.state = "committing";
     setCursorState(pipeline, stage.id, "committing");
     persist();
-    commitPassedStage(pipeline, stage, attempt, ports);
+    await commitPassedStage(pipeline, stage, attempt, ports);
     return;
   }
   if (parsed.verdict.status !== "pass") {
@@ -3241,20 +3247,25 @@ async function settleStageVerdict(
   (await commitPassedStage(pipeline, stage, attempt, ports));
 }
 
-function fixerSelfFailCanGoToReview(
+function fixerHasNextReviewer(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
+  const definition = attemptStage(stage, attempt);
+  const next = pipeline.stages.find((candidate) => candidate.id === stage.next);
+  return stage.kind === "run" && attempt.effectiveRole.roleId === "builder"
+    && attempt.effectiveRole.access === "read-write" && definition.role?.params?.mode === "apply-fixes"
+    && !!next && (next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer");
+}
+
+async function fixerSelfFailCanGoToReview(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
   parsed: ParsedStageVerdict,
   ports: PipelinePorts,
-): boolean {
-  const definition = attemptStage(stage, attempt);
-  const next = pipeline.stages.find((candidate) => candidate.id === stage.next);
+): Promise<boolean | null> {
   if (parsed.verdict.status !== "fail" || parsed.verdict.blocked === true
-    || stage.kind !== "run" || attempt.effectiveRole.roleId !== "builder"
-    || attempt.effectiveRole.access !== "read-write" || definition.role?.params?.mode !== "apply-fixes"
-    || !next || !(next.kind === "review-loop" || next.effectiveRole.roleId === "reviewer")) return false;
-  const head = currentPipelineBranchHead(pipeline, ports.exec);
+    || !fixerHasNextReviewer(pipeline, stage, attempt)) return false;
+  const head = ports.deferStageGit ? ports.reviewIngressHead?.(pipeline) : await currentPipelineBranchHead(pipeline, ports.exec);
+  if (!head) return null;
   return head.ok && head.sha !== pipeline.lastPassedCommit;
 }
 
@@ -6304,9 +6315,11 @@ async function collectReviewIngressHeads(ports: PipelinePorts) {
   for (const pipeline of loadPipelinesForProjection()) {
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-    if (!["running", "needs_decision"].includes(pipeline.state) || stage?.kind !== "review-loop"
-      || (attempt?.flowId && pipeline.cursor?.state !== "pending")
-      || (attempt?.state === "committing" && pipeline.cursor?.state !== "pending")) continue;
+    const fixer = stage && attempt && attempt.state !== "committing" && fixerHasNextReviewer(pipeline, stage, attempt);
+    const review = stage?.kind === "review-loop"
+      && (!attempt?.flowId || pipeline.cursor?.state === "pending")
+      && (attempt?.state !== "committing" || pipeline.cursor?.state === "pending");
+    if (!["running", "needs_decision"].includes(pipeline.state) || (!fixer && !review)) continue;
     const fence = reviewIngressFence(pipeline);
     const abort = new AbortController();
     const revalidate = () => {
