@@ -5,6 +5,9 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 export const LIST_ANSWER_BYTES = 24_000;
 export const fullAnswer = (args: Record<string, unknown>) => args.full === true || args.compact === false;
+/** Static recovery hints are available when explicitly requested. */
+export const answerHint = (args: Record<string, unknown>, readMore: string) =>
+  args.includeHints === true || fullAnswer(args) ? { readMore } : {};
 export const firstLine = (value: string, max = 160) => value.split("\n", 1)[0]!.slice(0, max);
 
 export { compactFlow } from "@/lib/reviewHistory/listAnswers";
@@ -55,7 +58,7 @@ export function taskAcknowledgement(task: BoardTask, args: Record<string, unknow
       return [key, value ?? null];
     })),
     omittedFieldCount: full ? 0 : Object.keys(task).filter(key => !["id", "project", "status", "updatedAt", "revision", "placement", "board", "color", "icon", "pos", "note"].includes(key)).length,
-    readMore: "get_task(taskId) reads the complete stored task; full:true returns it on a write.",
+    ...answerHint(args, "get_task(taskId) reads the complete stored task; full:true returns it on a write."),
   };
 }
 

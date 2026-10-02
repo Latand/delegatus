@@ -1,0 +1,488 @@
+{
+  "base": "c5d2bd0c751a62ea349f5af36311453285866c4e",
+  "method": "Equivalent generated fixtures; fresh isolated state; real MCP SDK and loopback Viewer routes. Tokens are minified JSON chars / 4. Client monotonic p50/p95 on shared host. Explicit read keys and src are omitted where safe in candidate requests; status-only view is selected explicitly. Sandbox path lengths differ by one character; path-bearing estimates can include small fractional differences.",
+  "seed": {
+    "tasks": 107,
+    "pipelines": 27,
+    "stagesPerPipeline": 2,
+    "attemptsPerStage": 6,
+    "transcriptMessages": 1000,
+    "transcriptBytes": 1232553
+  },
+  "before": [
+    {
+      "key": "get_pipeline/stage",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 6.04,
+      "p95ms": 8.71,
+      "maxMs": 8.97,
+      "inTokP50": 18.25,
+      "outTokP50": 204.5
+    },
+    {
+      "key": "get_pipeline/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 5.87,
+      "p95ms": 8.1,
+      "maxMs": 8.19,
+      "inTokP50": 17.5,
+      "outTokP50": 180.75
+    },
+    {
+      "key": "get_pipeline/full",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 7.27,
+      "p95ms": 12.02,
+      "maxMs": 12.02,
+      "inTokP50": 16.5,
+      "outTokP50": 93656.5
+    },
+    {
+      "key": "get_pipeline/default",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 12.52,
+      "p95ms": 17.92,
+      "maxMs": 20.06,
+      "inTokP50": 13.75,
+      "outTokP50": 94160.75
+    },
+    {
+      "key": "list_tasks/limit200",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 21.72,
+      "p95ms": 30.19,
+      "maxMs": 46.22,
+      "inTokP50": 17.25,
+      "outTokP50": 6094.5
+    },
+    {
+      "key": "list_tasks/limit5",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 7.22,
+      "p95ms": 8.75,
+      "maxMs": 10.7,
+      "inTokP50": 16.75,
+      "outTokP50": 570.5
+    },
+    {
+      "key": "list_pipelines/open",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 15.29,
+      "p95ms": 19.65,
+      "maxMs": 24.72,
+      "inTokP50": 21,
+      "outTokP50": 1495.75
+    },
+    {
+      "key": "list_pipelines/status-only",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 15.38,
+      "p95ms": 18.63,
+      "maxMs": 22.47,
+      "inTokP50": 21,
+      "outTokP50": 1495.75
+    },
+    {
+      "key": "search_transcripts/indexed3",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 10.58,
+      "p95ms": 13.09,
+      "maxMs": 15.87,
+      "inTokP50": 20.75,
+      "outTokP50": 237.25
+    },
+    {
+      "key": "conversation_messages/page10",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 25.08,
+      "p95ms": 27.57,
+      "maxMs": 28.09,
+      "inTokP50": 45.5,
+      "outTokP50": 3184.5
+    },
+    {
+      "key": "resources/system-summary",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 6.67,
+      "p95ms": 8.35,
+      "maxMs": 8.54,
+      "inTokP50": 7.75,
+      "outTokP50": 1536
+    },
+    {
+      "key": "agent_activity/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 6.3,
+      "p95ms": 7.94,
+      "maxMs": 8.2,
+      "inTokP50": 14.25,
+      "outTokP50": 563.5
+    },
+    {
+      "key": "update_task/status",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 11.7,
+      "p95ms": 14.69,
+      "maxMs": 19.84,
+      "inTokP50": 24,
+      "outTokP50": 167.5
+    },
+    {
+      "key": "pipeline_action/routine",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 8.29,
+      "p95ms": 11.71,
+      "maxMs": 12.99,
+      "inTokP50": 18,
+      "outTokP50": 164.75
+    },
+    {
+      "key": "stage_report/forge-fast",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 22.94,
+      "p95ms": 27.58,
+      "maxMs": 30.64,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "list_conversations/isolated-scan",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 19.73,
+      "p95ms": 19.73,
+      "maxMs": 19.73,
+      "inTokP50": 14.25,
+      "outTokP50": 195.75
+    },
+    {
+      "key": "stage_report/forge-delay1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1224.42,
+      "p95ms": 1233.71,
+      "maxMs": 1233.71,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "get_pipeline/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1228.45,
+      "p95ms": 1233.92,
+      "maxMs": 1233.92,
+      "inTokP50": 18.25,
+      "outTokP50": 204.5
+    },
+    {
+      "key": "stage_report/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1230.57,
+      "p95ms": 1236.96,
+      "maxMs": 1236.96,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "pipeline_action/retry-remote-fast",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 33.06,
+      "p95ms": 33.06,
+      "maxMs": 33.06,
+      "inTokP50": 19.5,
+      "outTokP50": 232.25
+    },
+    {
+      "key": "pipeline_action/retry-remote1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 3626.53,
+      "p95ms": 3627.91,
+      "maxMs": 3627.91,
+      "inTokP50": 19.5,
+      "outTokP50": 223
+    },
+    {
+      "key": "create_pipeline/draft-admission",
+      "n": 5,
+      "ok": 5,
+      "p50ms": 15.11,
+      "p95ms": 21.39,
+      "maxMs": 21.39,
+      "inTokP50": 636.75,
+      "outTokP50": 280.75
+    },
+    {
+      "key": "request_attention/browser-arrival1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 1259.25,
+      "p95ms": 1259.73,
+      "maxMs": 1259.73,
+      "inTokP50": 30,
+      "outTokP50": 326.5
+    }
+  ],
+  "after": [
+    {
+      "key": "get_pipeline/stage",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.45,
+      "p95ms": 2.15,
+      "maxMs": 5.07,
+      "inTokP50": 10.75,
+      "outTokP50": 202.75
+    },
+    {
+      "key": "get_pipeline/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.07,
+      "p95ms": 1.64,
+      "maxMs": 2.29,
+      "inTokP50": 10,
+      "outTokP50": 179
+    },
+    {
+      "key": "get_pipeline/full",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 5.12,
+      "p95ms": 5.25,
+      "maxMs": 5.25,
+      "inTokP50": 9.25,
+      "outTokP50": 93654.5
+    },
+    {
+      "key": "get_pipeline/default",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.03,
+      "p95ms": 1.55,
+      "maxMs": 1.56,
+      "inTokP50": 6.25,
+      "outTokP50": 179
+    },
+    {
+      "key": "list_tasks/limit200",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 15.55,
+      "p95ms": 29.1,
+      "maxMs": 45.32,
+      "inTokP50": 9.75,
+      "outTokP50": 6031.75
+    },
+    {
+      "key": "list_tasks/limit5",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.7,
+      "p95ms": 2.48,
+      "maxMs": 2.49,
+      "inTokP50": 9.25,
+      "outTokP50": 508
+    },
+    {
+      "key": "list_pipelines/open",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 8.4,
+      "p95ms": 11.35,
+      "maxMs": 15.63,
+      "inTokP50": 13.5,
+      "outTokP50": 1444.5
+    },
+    {
+      "key": "list_pipelines/status-only",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 8.06,
+      "p95ms": 10.78,
+      "maxMs": 12.35,
+      "inTokP50": 18,
+      "outTokP50": 654.25
+    },
+    {
+      "key": "search_transcripts/indexed3",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 3.89,
+      "p95ms": 6.62,
+      "maxMs": 8.73,
+      "inTokP50": 13.25,
+      "outTokP50": 210.5
+    },
+    {
+      "key": "conversation_messages/page10",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 17.35,
+      "p95ms": 21.69,
+      "maxMs": 24.61,
+      "inTokP50": 37.75,
+      "outTokP50": 3123.75
+    },
+    {
+      "key": "resources/system-summary",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 0.36,
+      "p95ms": 0.66,
+      "maxMs": 0.66,
+      "inTokP50": 0.5,
+      "outTokP50": 143.75
+    },
+    {
+      "key": "agent_activity/compact",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 1.46,
+      "p95ms": 4.13,
+      "maxMs": 4.14,
+      "inTokP50": 14.25,
+      "outTokP50": 523.75
+    },
+    {
+      "key": "update_task/status",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 5.87,
+      "p95ms": 7.95,
+      "maxMs": 21.47,
+      "inTokP50": 24,
+      "outTokP50": 143.75
+    },
+    {
+      "key": "pipeline_action/routine",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 2.98,
+      "p95ms": 4.73,
+      "maxMs": 8.79,
+      "inTokP50": 18,
+      "outTokP50": 78.25
+    },
+    {
+      "key": "stage_report/forge-fast",
+      "n": 20,
+      "ok": 20,
+      "p50ms": 16.67,
+      "p95ms": 23.5,
+      "maxMs": 24.42,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "list_conversations/isolated-scan",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 14.56,
+      "p95ms": 14.56,
+      "maxMs": 14.56,
+      "inTokP50": 6.75,
+      "outTokP50": 193.75
+    },
+    {
+      "key": "stage_report/forge-delay1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1219.69,
+      "p95ms": 1223,
+      "maxMs": 1223,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "get_pipeline/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1216.73,
+      "p95ms": 1217.69,
+      "maxMs": 1217.69,
+      "inTokP50": 10.75,
+      "outTokP50": 202.75
+    },
+    {
+      "key": "stage_report/concurrent-forge1200",
+      "n": 3,
+      "ok": 3,
+      "p50ms": 1217.25,
+      "p95ms": 1218.23,
+      "maxMs": 1218.23,
+      "inTokP50": 18.5,
+      "outTokP50": 114
+    },
+    {
+      "key": "pipeline_action/retry-remote-fast",
+      "n": 1,
+      "ok": 1,
+      "p50ms": 27.46,
+      "p95ms": 27.46,
+      "maxMs": 27.46,
+      "inTokP50": 19.5,
+      "outTokP50": 145.75
+    },
+    {
+      "key": "pipeline_action/retry-remote1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 3617.78,
+      "p95ms": 3621.85,
+      "maxMs": 3621.85,
+      "inTokP50": 19.5,
+      "outTokP50": 136.5
+    },
+    {
+      "key": "create_pipeline/draft-admission",
+      "n": 5,
+      "ok": 5,
+      "p50ms": 8.65,
+      "p95ms": 15.36,
+      "maxMs": 15.36,
+      "inTokP50": 608.5,
+      "outTokP50": 280.75
+    },
+    {
+      "key": "request_attention/browser-arrival1200",
+      "n": 2,
+      "ok": 2,
+      "p50ms": 1255.46,
+      "p95ms": 1256.44,
+      "maxMs": 1256.44,
+      "inTokP50": 30,
+      "outTokP50": 326.5
+    }
+  ],
+  "discoveryBefore": {
+    "tools": 51,
+    "totalTok": 40171.75,
+    "commonPrefixChars": 0,
+    "repeatedPrefixTok": 0
+  },
+  "discoveryAfter": {
+    "tools": 51,
+    "totalTok": 40577.25,
+    "commonPrefixChars": 0,
+    "repeatedPrefixTok": 0
+  }
+}
