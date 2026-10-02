@@ -626,3 +626,26 @@ test("an agent's create_orchestrator is refused at the seat route, and a create 
   expect(byOperator.status).toBe(200);
   expect(spawns).toEqual([expect.objectContaining({ engine: "claude", model: "sonnet" })]);
 });
+
+test("agent rotation retains its pending intent when downstream update admission closes", async () => {
+  seatSeeded(); callerIs(SEAT_ID);
+  const { deps, spawns } = dependencies();
+  const nativeSpawn = deps.spawn;
+  let autonomous: boolean | undefined;
+  deps.spawn = async (_body, restriction?: boolean) => {
+    autonomous = restriction;
+    writeDrain(statePath("self-update", "auto-drain.json"), { id: "downstream-seat-drain", target: "a".repeat(40), since: AT, until: 0, persistent: true });
+    return { status: 503, body: { code: "AUTO_UPDATE_DRAIN", error: "held for update" } };
+  };
+  const request = { project: "proj-a", clientRequestId: "downstream-rotation-1" };
+  const held = await routeRotation("seat", request);
+  expect(autonomous).toBe(true);
+  expect(held.body.code).toBe("launch_held_for_update");
+  expect(orchestratorSeatFor("proj-a").pending?.state).toBe("pending");
+  expect(spawns).toHaveLength(0);
+  releaseDrain(statePath("self-update", "auto-drain.json"), "downstream-seat-drain");
+  deps.spawn = nativeSpawn;
+  const resumed = await routeRotation("seat", request);
+  expect(resumed.status).toBe(200); expect(spawns).toHaveLength(1);
+  expect(spawns[0].clientAttemptId).toBe(request.clientRequestId);
+});

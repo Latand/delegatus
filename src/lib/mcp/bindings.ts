@@ -33,6 +33,7 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -1436,8 +1437,13 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  let autonomous = !!dependencies;
+  if (dependencies) {
+    try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
+    catch { /* Unavailable attribution retains the autonomous admission restriction. */ }
+  }
   const hold = dependencies ? activeDrain() : null;
-  if (hold && dependencies && ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind)) {
+  if (hold && autonomous) {
     throw new McpToolRefusal("new launches are held while the automatic update drains running work", {
       code: "launch_held_for_update", target: hold.target, since: hold.since,
       blockers: readAuto(statePath("self-update", "auto.json")).lastBlockers,
@@ -1485,7 +1491,9 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     }
   }
   const launcher = mcpSpawnLauncher(dependencies);
-  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), spawnControlHeaders());
+  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
+    ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
+  });
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)

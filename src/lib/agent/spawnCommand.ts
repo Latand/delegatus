@@ -65,6 +65,8 @@ import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
+import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "./capabilityHeader";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -966,7 +968,8 @@ export async function executeSpawnRequest(
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
     const begun = await withAccountMutationLockAsync(() => {
-      if (dependencies.autonomousAdmissionHeld?.()
+      const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
+      if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
         && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) return null;
       if (!existingAttempt && clientAttemptId) {
         /* The validation endpoint may have fenced this exact downstream key

@@ -4409,3 +4409,13 @@ test("MCP note authors follow authenticated attribution and round-trip through r
     expect(loadTasks()[0]!.note).toBeUndefined();
   }
 });
+
+test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries its autonomous admission restriction to the route", async (kind) => {
+  let sentHeaders: Record<string, string> | undefined;
+  const control = { post: async (_path: string, _body: Record<string, unknown>, headers?: Record<string, string>) => {
+    sentHeaders = headers; return { conversationId: "conversation_fixture_admission", launchId: "fixture-admission", state: "starting", initialMessage: "pending" };
+  } };
+  const spawn = viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_fixture_caller", role: "builder" }) } as never).spawn_agent;
+  await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
+  expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
+});
