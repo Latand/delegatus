@@ -78,12 +78,9 @@ test("the latest deployment is the newest one, not the one the id ordering happe
   const latest = latestLedgerDeployment(env);
   expect(latest).toEqual({ state: "ok", value: HISTORY[3]!.status });
 
-  /* The ordering that produced the false signal, kept here so the difference
-     between the two reads is a fact of the test rather than a claim: the tail
-     the runtime snapshot mirrors ends on the deployment with the largest id,
-     which is the rolled-back one from the morning. */
+  /* The snapshot list and keyed latest read both use deployment start order. */
   const tail = ledgerDeployments(1, env);
-  expect(tail.state === "ok" && tail.value.at(-1)!.phase).toBe("rolled-back");
+  expect(tail.state === "ok" && tail.value.at(-1)!.phase).toBe("succeeded");
 });
 
 test("a ledger whose newest deployment did roll back still says so", () => {

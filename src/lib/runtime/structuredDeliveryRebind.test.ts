@@ -29,6 +29,7 @@ const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { createFakeDeliveryLedger, FakeEngineHost } = await import("./fixtures/fakeEngineHost");
+const { ownedHostProcess } = await import("./fixtures/ownedHostProcess");
 const { RuntimeHostUnavailableError } = await import("./client");
 const {
   bindStructuredDeliveryQueue,
@@ -532,41 +533,55 @@ test("a carried-over host released mid-registration is released once and stays g
 
 test("a carried-over host terminated mid-registration is released once and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-terminate");
-  await bindStructuredDeliveryQueue([], { registry, client });
-  const { conversationId, key } = seedConversation(registry, directory, "handover-terminate-session");
-  const { host, releases } = releaseCountingHost();
-  await publishStructuredDeliveryHost({ key, host });
+  const processFixture = await ownedHostProcess();
+  let gate: ReturnType<typeof producerCursorGate> | undefined;
+  let rebind: Promise<void> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client });
+    const { conversationId, key } = seedConversation(registry, directory, "handover-terminate-session");
+    const { host, releases } = releaseCountingHost();
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await publishStructuredDeliveryHost({ key, host: processFixture.bind(host) });
 
-  const gate = producerCursorGate(client, journal);
-  const rebind = bindStructuredDeliveryQueue([], { registry, client: gate.client });
-  await Promise.race([gate.started, rebind]);
-  expect(hasStructuredDeliveryHost(key)).toBe(true);
+    gate = producerCursorGate(client, journal);
+    rebind = bindStructuredDeliveryQueue([], { registry, client: gate.client });
+    await Promise.race([gate.started, rebind]);
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
 
-  /* A kill effect drains through the controller's termination path while the
-     registration is still parked. */
-  journal.executeOperation({
-    kind: "kill",
-    operationId: "operation-handover-terminate",
-    idempotencyKey: "handover-terminate",
-    conversationId,
-    sessionKey: key,
-  });
-  await kickStructuredDeliveryQueue();
-  await settles(() => {
-    const status = journal.operationResult("operation-handover-terminate")?.receipt.status;
-    return status === "delivered" || status === "failed" || status === "rejected";
-  }, "the kill receipt");
-  expect(journal.operationResult("operation-handover-terminate")?.receipt.status).toBe("delivered");
-  expect(releases.count).toBe(1);
-  expect(hasStructuredDeliveryHost(key)).toBe(false);
+    /* A kill effect drains through the controller's termination path while the
+       registration is still parked. */
+    journal.executeOperation({
+      kind: "kill",
+      operationId: "operation-handover-terminate",
+      idempotencyKey: "handover-terminate",
+      conversationId,
+      sessionKey: key,
+    });
+    await kickStructuredDeliveryQueue();
+    await settles(() => {
+      const status = journal.operationResult("operation-handover-terminate")?.receipt.status;
+      return status === "delivered" || status === "failed" || status === "rejected";
+    }, "the kill receipt");
+    expect(journal.operationResult("operation-handover-terminate")?.receipt.status).toBe("delivered");
+    expect(releases.count).toBe(1);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
 
-  gate.open();
-  await rebind;
+    gate.open();
+    await rebind;
 
-  expect(hasStructuredDeliveryHost(key)).toBe(false);
-  expect(releases.count).toBe(1);
-
-  await close();
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(releases.count).toBe(1);
+  } finally {
+    gate?.open();
+    try { await rebind; }
+    finally {
+      try { await close(); }
+      finally { await processFixture.cleanup(); }
+    }
+  }
 });
 
 test("a carried-over host whose registration fails is retried and delivers exactly once (#1191)", async () => {
