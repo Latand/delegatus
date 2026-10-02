@@ -8,7 +8,19 @@ import tailwind from "@tailwindcss/postcss";
 import { isImageInput } from "./docker-image-scope.cjs";
 
 const root = path.resolve(import.meta.dir, "..");
-const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/docker-image.yml"), "utf8"));
+interface Job {
+  if?: string;
+  needs?: string;
+  "timeout-minutes": string | number;
+  concurrency?: { group: string; "cancel-in-progress": boolean; queue: string };
+  outputs?: Record<string, string>;
+  steps: { name?: string; with?: Record<string, unknown>; env?: Record<string, string>; run?: string }[];
+}
+const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/docker-image.yml"), "utf8")) as {
+  jobs: Record<string, Job>;
+  concurrency: { group: string; "cancel-in-progress": string };
+  on: { push: { branches: string[]; tags: string[] } };
+};
 
 test("image inputs build, while prose, unrelated CI and shell tooling skip", () => {
   for (const file of [
@@ -31,8 +43,8 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   const { scope, build } = workflow.jobs;
   expect(scope.if).toBe("github.event_name == 'pull_request'");
   expect(scope["timeout-minutes"]).toBe(3);
-  expect(scope.steps[0].with["fetch-depth"]).toBe(0);
-  expect(scope.outputs.build).toBe("${{ steps.inputs.outputs.build }}");
+  expect(scope.steps[0].with?.["fetch-depth"]).toBe(0);
+  expect(scope.outputs?.build).toBe("${{ steps.inputs.outputs.build }}");
   expect(scope.steps[1].env).toEqual({
     BASE_SHA: "${{ github.event.pull_request.base.sha }}",
     HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
@@ -46,14 +58,17 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   expect(workflow.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
   expect(build["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
   const image = build.steps.find((step: { name?: string }) => step.name === "Build both architectures");
-  expect(image.with.platforms).toBe("linux/amd64,linux/arm64");
-  expect(image.with.push).toBe("${{ github.event_name != 'pull_request' }}");
+  expect(image?.with?.platforms).toBe("linux/amd64,linux/arm64");
+  expect(image?.with?.push).toBe("${{ github.event_name != 'pull_request' }}");
 });
 
 test("real Git diff excludes main merges and retains deletions, renames and files beyond 300", () => {
   const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-git-"));
   // Hooks can supply repository selectors; the fixture must own its own Git.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    NODE_ENV: "test",
+  };
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture" });
   const git = (...args: string[]) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
