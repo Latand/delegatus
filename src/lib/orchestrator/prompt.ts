@@ -506,7 +506,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
     "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.",
-    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
+    "- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round. normal: rows, effort low or medium. design (options, architecture, proposals, design issues): architect first.",
     "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks. Never self-grade; fix discoveries and note out-of-spec. Fail only with blocked:true and blockedReason.",
     "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
