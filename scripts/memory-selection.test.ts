@@ -110,9 +110,16 @@ function setup(cost = 0.00001) {
 const response = () => Response.json({ answers: Object.fromEntries(c.candidates.map(m => [m.id, { noul: 0.9 }])), usage: { cost: 0.0001, input_tokens: 100 } });
 
 test("USD cap refuses before fetch, including the probe cost", async () => {
-  const { ledger, probe } = setup(CAP_USD - 0.005);
+  const { ledger, probe } = setup(CAP_USD + 0.005);
   let calls = 0;
   await expect(paidReplay(sample, labels, ledger, probe, async () => { calls++; return response(); })).rejects.toThrow("Budget");
+  expect(calls).toBe(0);
+});
+
+test("probe overrun below the total cap refuses before fetch", async () => {
+  const { ledger, probe } = setup(CAP_USD - 0.005);
+  let calls = 0;
+  await expect(paidReplay(sample, labels, ledger, probe, async () => { calls++; return response(); })).rejects.toThrow("stop and reconcile");
   expect(calls).toBe(0);
 });
 
@@ -128,6 +135,26 @@ test("reservation is durable before fetch; completed replay spends nothing twice
   await paidReplay(sample, labels, ledger, probe, fake);
   expect(calls).toBe(1);
   await expect(paidReplay({ ...sample, seed: "changed" }, labels, ledger, probe, fake)).rejects.toThrow("Frozen");
+});
+
+test("provider overrun remains blocked when the ledger is reopened", async () => {
+  const { ledger, probe } = setup(0);
+  const cases = ["p01", "p02"].map(id => ({ ...c, id, candidates: [candidate("c1")] }));
+  const replaySample = { ...sample, cases };
+  const replayLabels = { ...labels, cases: cases.map(row => ({ ...labels.cases[0], id: row.id,
+    candidates: labels.cases[0].candidates.slice(0, 1) })) };
+  let calls = 0;
+  const fake = async () => {
+    calls++;
+    return Response.json({ answers: { c1: { noul: 0.9 } }, usage: { cost: 1.1, input_tokens: 100 } });
+  };
+  await expect(paidReplay(replaySample, replayLabels, ledger, probe, fake)).rejects.toThrow("stop and reconcile");
+  expect(calls).toBe(1);
+  const persisted = fs.readFileSync(ledger, "utf8");
+  expect(charged(JSON.parse(persisted).receipts)).toBe(1.1);
+  await expect(paidReplay(replaySample, replayLabels, ledger, probe, fake)).rejects.toThrow("stop and reconcile");
+  expect(calls).toBe(1);
+  expect(fs.readFileSync(ledger, "utf8")).toBe(persisted);
 });
 
 test.each(["network", "http", "shape"])("%s failure burns reservation and blocks a retry", async kind => {

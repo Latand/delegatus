@@ -261,6 +261,9 @@ export async function paidReplay(sample: Sample, labels: Labels, ledgerPath: str
     }
     if (ledger.receipts.some(r => r.status !== "complete")) throw new Error("Unsettled reservation; reconcile provider usage before retry");
     if (charged(ledger.receipts) > CAP_USD) throw new Error("Budget exhausted");
+    // A completed receipt preserves actual spend, but an overrun invalidates
+    // the price bound for future requests, including after a restart.
+    if (ledger.receipts.some(r => r.costUsd! > r.reservedUsd)) throw new Error("Provider exceeded pinned price bound; stop and reconcile");
     for (const c of sample.cases) {
       if (!c.candidates.length || ledger.receipts.some(r => r.id === c.id)) continue;
       const body = requestBody(c);
