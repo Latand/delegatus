@@ -1,3 +1,4 @@
+import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -934,7 +935,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     systemHealth: {
       tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,
-      ...(storageIncidents.length ? { storage: { incidents: storageIncidents } } : {}),
+      storage: { incidents: storageIncidents, writes: stateWriteHealth(stateDir()) },
     },
     conversationAliases: registrySnapshot.conversationAliases,
     ...(Object.keys(launchProjection.routes).length ? { launchRoutes: launchProjection.routes } : {}),
