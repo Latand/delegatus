@@ -14538,6 +14538,45 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 600_000);
 });
 
+describe("state writes disk-full alert", () => {
+  browserTest("desktop alert stays clear of header and composer in both schemes and locales", async () => {
+    const out = path.resolve(".artifacts/self-update-reload/state-writes");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?state-disk-full=1`, VIEWPORT, scheme, locale, "reduce");
+        try {
+          const alert = page.locator("[data-state-writes-alert]");
+          await alert.waitFor();
+          expect(await alert.count()).toBe(1);
+          const geometry = await alert.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const overlaps = [...document.querySelectorAll('header, [data-mobile2-bar], textarea')].filter((other) => {
+              const b = other.getBoundingClientRect();
+              return b.width && b.height && box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top;
+            }).length;
+            return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom, overlaps, clipped: el.scrollHeight > el.clientHeight };
+          });
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.y).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(VIEWPORT.width);
+          expect(geometry.bottom).toBeLessThanOrEqual(VIEWPORT.height);
+          expect(geometry.overlaps).toBe(0);
+          expect(geometry.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `desktop-${scheme}-${locale}.png`) });
+          readings.push({ scheme, locale, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/state-lease-recovery", { recursive: true });
+      fs.writeFileSync("evidence/state-lease-recovery/desktop.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 /*
  * Launch layout shifts (docs/design/launch-render-polish.md). A launch is read
  * the way the operator watches it: the draft is opened, the first prompt sent
@@ -14975,6 +15014,9 @@ describe("task chip native queue presentation", () => {
       for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-queue-preview`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
+          /* Recovery is exercised after a normal reload; it also gives headless
+             Chromium a fresh paint of the mixed-locale text. */
+          await page.reload();
           const panel = page.locator('[data-testid="native-queue-panel"]');
           await panel.waitFor();
           await page.evaluate(() => document.fonts.ready);
@@ -14983,6 +15025,15 @@ describe("task chip native queue presentation", () => {
             const row = panel.locator(selector);
             expect(await row.textContent()).not.toContain("task reference");
             expect(await row.textContent()).toContain("start this one");
+            const wordsFit = await row.evaluate((node) => {
+              const words = node.querySelector("p")!.lastElementChild!;
+              const range = document.createRange(); range.selectNodeContents(words);
+              const box = range.getBoundingClientRect(); const parent = words.parentElement!.getBoundingClientRect();
+              const style = getComputedStyle(words);
+              return box.width > 0 && box.height > 0 && box.top >= parent.top && box.bottom <= parent.bottom + 1
+                && style.visibility === "visible" && style.opacity === "1";
+            });
+            expect(wordsFit).toBeTrue();
             expect(await row.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
           }
           const deputyHead = page.locator('[data-deputy-head]');
@@ -14999,7 +15050,7 @@ describe("task chip native queue presentation", () => {
           expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
           expect(pageErrors).toEqual([]);
           await page.screenshot({ path: path.join(out, `${locale}-${width}-edit.png`) });
-          cases.push({ locale, width, cleanPreview: true, cleanEdit: true, cleanDeputy: true, badge: "Fix __init__.py (#42)", overflow: false });
+          cases.push({ locale, width, cleanPreview: true, wordsWithinBounds: true, cleanEdit: true, cleanDeputy: true, badge: "Fix __init__.py (#42)", overflow: false });
         } finally { await context.close(); }
       }
     } finally { await browser.close(); server.stop(); }

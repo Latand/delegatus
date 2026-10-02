@@ -5884,6 +5884,47 @@ browserTest("task chip: the phone task screen's Ask button attaches the task and
   if (failures.length) throw new Error(failures.join("\n"));
 }, 180_000);
 
+describe("state writes disk-full alert", () => {
+  browserTest("phone alert stays clear of header and composer at 390px", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/self-update-reload/state-writes");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          await page.goto(`${base}/?state-disk-full=1`);
+          const alert = page.locator("[data-state-writes-alert]");
+          await alert.waitFor();
+          expect(await alert.count()).toBe(1);
+          const geometry = await alert.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const overlaps = [...document.querySelectorAll('header, [data-mobile2-bar], textarea')].filter((other) => {
+              const b = other.getBoundingClientRect();
+              return b.width && b.height && box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top;
+            }).length;
+            return { x: box.x, y: box.y, right: box.right, bottom: box.bottom, height: box.height, overlaps, clipped: el.scrollHeight > el.clientHeight };
+          });
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.y).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.bottom).toBeLessThanOrEqual(844);
+          expect(geometry.overlaps).toBe(0);
+          expect(geometry.clipped).toBe(false);
+          await page.screenshot({ path: path.join(out, `phone-${scheme}-${locale}.png`) });
+          readings.push({ scheme, locale, geometry });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/state-lease-recovery", { recursive: true });
+      fs.writeFileSync("evidence/state-lease-recovery/phone.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); stop(); }
+  }, 120_000);
+});
+
 /*
  * Launching an agent from the phone's draft screen: the screen is the new
  * agent's conversation from the first frame and stays so while the scan swaps

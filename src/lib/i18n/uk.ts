@@ -4,6 +4,12 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "stateWrites.title": "Диск заповнений: зміни стану не зберігаються",
+  "stateWrites.free": "Вільне місце: {free}.",
+  "stateWrites.unknown": "невідомо",
+  "stateWrites.since": "Збої з {time}.",
+  "stateWrites.recovery": "Звільніть місце на цьому диску; Delegatus відновиться сама.",
+
   "telemetry.settings": "Налаштування",
   "telemetry.label": "Анонімний пінг встановлення",
   "telemetry.locked": "Вимкнено змінною середовища.",
