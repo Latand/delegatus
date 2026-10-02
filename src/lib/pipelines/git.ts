@@ -1191,6 +1191,7 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
   const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
   const delivery = pipeline.delivery;
   return crypto.createHash("sha256").update(JSON.stringify({ state: pipeline.state, closed: pipeline.closedAt, hidden: pipeline.hiddenAt,
+    control: pipeline.controlGeneration,
     cursor: pipeline.cursor, stages: pipeline.stages, head: pipeline.lastPassedCommit,
     branch: pipeline.branch, worktree: pipeline.worktreeDir,
     attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,

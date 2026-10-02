@@ -765,6 +765,7 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
+    (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
     isNullableString(pipeline.stateDetail) &&
     isNullableString(pipeline.srcPath) &&
     isNullableString(pipeline.srcConversationId) &&
@@ -1398,6 +1399,17 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
+    const action = pipeline.remoteAction;
+    if (action?.state === "pending" && action.action === "takeover"
+      && action.takeover?.expectedOwner === expectedOwner && action.takeover.expectedEpoch === expectedEpoch
+      && action.takeover.reason === reason
+      && (action.actor?.kind === "agent" ? action.actor.conversationId : null) === conversationId) {
+      // Ownership and its admitted outcome are one durable mutation. There
+      // is no restart window in which the new epoch still has an old fence.
+      pipeline.remoteAction = { ...action, state: "settled", settledAt: new Date().toISOString() };
+      if (pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
+      deliveryJournal(pipeline, "recovery", "takeover remote verification settled", conversationId);
+    }
     tx.put(pipeline);
     return { pipeline };
   });

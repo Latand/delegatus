@@ -10,7 +10,7 @@ process.env.LLV_STATE_DIR = remoteState;
 const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 closeAgentRegistryForTests();
 const { pipelineCorpus } = await import("./fixtures/corpus");
-const { savePipelines, findPipelineRecord, withPipelineMutation } = await import("./store");
+const { savePipelines, findPipelineRecord, takeoverPipelineDelivery, withPipelineMutation } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, preparePipelineReviewRepair, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
 const { publishPipelineBranch } = await import("./git");
@@ -217,23 +217,46 @@ test("an old publication lock refusal preserves a newer reservation and lane det
   } finally { Object.defineProperty(process, "platform", platform); }
 });
 
-test("a queued publication is superseded by a pause before execution", async () => {
+test.each([false, true])("a queued publication is superseded by pause even after same-clock resume (%s)", async (resumeAfterward) => {
   const h = setupRetry(); h.lane.state = "running";
+  const clock = "2026-01-01T00:00:00.000Z"; h.lane.pausedAt = clock; h.lane.resumedAt = clock;
   h.lane.delivery = { target: { repository: "pause-repo", remote: "origin", branch: `refs/heads/${h.lane.branch}` },
     disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
   savePipelines([h.lane]);
   let pushes = 0;
-  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+  const ports = { ...h.ports, now: () => clock, exec: async (_command: string, args: string[]) => {
     if (args[0] === "push") pushes++;
     return { code: 0, stdout: args[0] === "rev-parse" ? HEAD : args[0] === "branch" ? h.lane.branch
       : args.includes("ls-remote") && pushes ? `${HEAD}\trefs/heads/${h.lane.branch}\n` : "", stderr: "" };
   } };
   await patchPipeline(h.lane.id, { action: "publish" }, ports);
   await patchPipeline(h.lane.id, { action: "pause" }, ports);
+  if (resumeAfterward) await patchPipeline(h.lane.id, { action: "resume" }, ports);
   const result = await publishPipelineBranch(findPipelineRecord(h.lane.id)!, ports.exec, { acceptedSha: HEAD });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining("superseded") });
   expect(pushes).toBe(0);
-  expect(findPipelineRecord(h.lane.id)!.state).toBe("paused");
+  expect(findPipelineRecord(h.lane.id)!.state).toBe(resumeAfterward ? "running" : "paused");
+});
+
+test("a same-clock pause and resume during one remote probe supersedes its retry", async () => {
+  const h = setupRetry(); const clock = "2026-01-01T00:00:00.000Z";
+  h.lane.pausedAt = clock; h.lane.resumedAt = clock; savePipelines([h.lane]);
+  const ports = { ...h.ports, now: () => clock };
+  await patchPipeline(h.lane.id, { action: "retry-stage" }, ports);
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const executor = settlePendingRemoteActions({ ...ports, exec: async (...args: Parameters<typeof realExec>) => {
+    if (args[1].includes("ls-remote")) { entered(); await held; }
+    return await ports.exec(args[0], args[1]);
+  } });
+  try {
+    await checking;
+    await patchPipeline(h.lane.id, { action: "pause" }, ports);
+    await patchPipeline(h.lane.id, { action: "resume" }, ports);
+    release(); await executor;
+    expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "needs_decision", remoteAction: { state: "settled", error: "remote action superseded" } });
+  } finally { release(); await executor; }
 });
 
 test("review retry records pending intent before flow teardown and yields its lease", async () => {
@@ -278,6 +301,36 @@ test("a cancelled takeover preserves a newer pause and its detail", async () => 
   await withPipelineMutation((lanes, persist) => { const current = lanes.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; persist([current]); });
   await settlement;
   expect(findPipelineRecord(lane!.id)).toMatchObject({ state: "paused", stateDetail: "new operator pause", remoteAction: { state: "settled", error: "remote action superseded" } });
+});
+
+test.each([false, true])("takeover settlement survives restart after the ownership transaction (paused afterward: %s)", async (pauseAfterward) => {
+  savePipelines([]);
+  const [owner, lane] = pipelineCorpus(2, 1);
+  for (const item of [owner!, lane!]) { item.state = "needs_decision"; item.stateDetail = null; item.closedAt = null; item.lastPassedCommit = HEAD; item.cursor = { stageId: "review", state: "reviewing", input: null, activatedBy: null }; }
+  const target = { repository: "takeover-crash-repo", remote: "origin", branch: "refs/heads/shared" };
+  owner!.delivery = { target, disposition: "owner", publish: "enabled", ownerId: owner!.id, epoch: 1, active: true, journal: [] };
+  lane!.delivery = { target, disposition: "comparison", publish: "disabled", ownerId: owner!.id, epoch: 1, active: false, journal: [] };
+  savePipelines([owner!, lane!]);
+  const reason = "Recover the delivery target";
+  const ports = { ...defaultPipelinePorts(), exec: async () => { throw new Error("a completed takeover must not replay remote probes"); } };
+  expect((await patchPipeline(lane!.id, { action: "takeover", expectedOwner: owner!.id, expectedEpoch: 1, reason }, ports)).error).toBeUndefined();
+  const actionId = findPipelineRecord(lane!.id)!.remoteAction!.id;
+  // Stop at the actual durable ownership write, before the controller can
+  // run its separate result adoption. A new executor reads only the store.
+  expect((await takeoverPipelineDelivery(lane!.id, owner!.id, 1, reason, null,
+    (current) => current.remoteAction?.id === actionId && current.remoteAction.state === "pending")).error).toBeUndefined();
+  if (pauseAfterward) await withPipelineMutation((pipelines, persist) => {
+    const current = pipelines.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; persist([current]);
+  });
+  await settlePendingRemoteActions(ports);
+  const current = findPipelineRecord(lane!.id)!;
+  expect(current.delivery).toMatchObject({ ownerId: lane!.id, epoch: 2, active: true });
+  expect(current.remoteAction).toMatchObject({ id: actionId, state: "settled" });
+  expect(current.remoteAction!.error).toBeUndefined();
+  expect(current.stateDetail).toBe(pauseAfterward ? "new operator pause" : null);
+  expect(current.delivery!.journal.some((entry) => entry.reason === "takeover remote verification settled")).toBe(true);
+  expect(current.delivery!.journal.some((entry) => entry.reason.includes("superseded"))).toBe(false);
+  expect(findPipelineRecord(owner!.id)!.delivery).toMatchObject({ active: false, publish: "disabled" });
 });
 
 test("approved-review backoff keeps its wait detail and schedules no immediate tick", async () => {

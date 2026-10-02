@@ -3640,7 +3640,8 @@ class ActivationSuperseded extends Error {
 /** Controls and graph edits fence actuation, including a pause followed by resume. */
 function activationFence(pipeline: Pipeline): string {
   return JSON.stringify([pipeline.state, pipeline.cursor?.stageId, pipeline.stages,
-    pipeline.graphEdits, pipeline.pausedAt, pipeline.resumedAt, pipeline.closedAt]);
+    pipeline.graphEdits, pipeline.pausedAt, pipeline.resumedAt, pipeline.closedAt,
+    ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration])]);
 }
 
 /** Each reservation has one process owner. Unknown owner liveness never grants
@@ -6080,6 +6081,7 @@ function remoteActionFence(pipeline: Pipeline): string {
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   return crypto.createHash("sha256").update(JSON.stringify({
     state: pipeline.state, cursor: pipeline.cursor, stages: pipeline.stages,
+    control: pipeline.controlGeneration,
     attempt: attempt ? { n: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId, state: attempt.state, flowId: attempt.flowId } : null,
     head: pipeline.lastPassedCommit, branch: pipeline.branch, worktree: pipeline.worktreeDir,
     hidden: pipeline.hiddenAt, closed: pipeline.closedAt,
@@ -6111,7 +6113,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     }
     if (descriptor === null) continue;
     const abort = new AbortController();
-    let settlementFence = action.fence;
+    const settlementFence = action.fence;
     const matches = (pipeline: Pipeline | null) => pipeline?.remoteAction?.id === action.id
       && pipeline.remoteAction.state === "pending" && remoteActionFence(pipeline) === settlementFence;
     const receiptMatches = () => {
@@ -6155,7 +6157,8 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
           revalidate();
           if (!abort.signal.aborted) {
             const taken = await takeoverPipelineDelivery(preview.id, request.expectedOwner, request.expectedEpoch, request.reason, conversationId, matches);
-            if (taken.pipeline) settlementFence = remoteActionFence(taken.pipeline);
+            // The ownership transaction also settles this exact admitted
+            // takeover, before a crash or newer control can intervene.
             result = taken.pipeline ? { ok: true, sha: taken.pipeline.lastPassedCommit } : { ok: false, error: taken.error ?? "takeover refused" };
           }
         }
@@ -6193,7 +6196,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
 
 function reviewIngressFence(pipeline: Pipeline): string {
   return JSON.stringify([pipeline.worktreeDir, pipeline.branch, pipeline.lastPassedCommit, pipeline.cursor?.stageId,
-    pipeline.delivery?.target, pipeline.delivery?.epoch, pipeline.delivery?.ownerId]);
+    pipeline.delivery?.target, pipeline.delivery?.epoch, pipeline.delivery?.ownerId, pipeline.controlGeneration]);
 }
 
 async function collectReviewIngressHeads(ports: PipelinePorts) {
@@ -8814,6 +8817,7 @@ export async function patchPipeline(
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
+        pipeline.controlGeneration = crypto.randomUUID();
         pipeline.stateDetail = pauseResumeDetail("paused", actor);
         if (flow && flow.state !== "paused" && flow.state !== "closed") ports.patchFlow(flow.id, "pause", undefined, actor);
       }
@@ -8822,6 +8826,7 @@ export async function patchPipeline(
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
       pipeline.resumedAt = ports.now();
+      pipeline.controlGeneration = crypto.randomUUID();
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
       pipeline.stateDetail = pipeline.state === "needs_review" && pipeline.reviewPending
         ? reviewPendingDetail(pipeline.reviewPending)

@@ -855,6 +855,8 @@ export type Pipeline = {
       after a resume be a genuinely new event instead of a replay of the first. */
   pausedAt?: string | null;
   resumedAt?: string | null;
+  /** Durable control token: even same-clock pause/resume cancels old work. */
+  controlGeneration?: string;
   stateDetail: string | null;
   /** The bounded backoff a lane in `provisioning` is waiting out after a
       transient Git or network failure (#2115, #2176, #2220). Cleared when
