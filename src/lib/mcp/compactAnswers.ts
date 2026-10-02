@@ -26,6 +26,18 @@ const ERROR_CHARS = 300;
 const TITLE_CHARS = 80;
 const SUMMARY_CHARS = 2_000;
 
+function pipelineCheckFields(pipeline: Pipeline) {
+  return {
+    ...(pipeline.remoteAction ? { remoteCheck: { id: pipeline.remoteAction.id, action: pipeline.remoteAction.action,
+      state: pipeline.remoteAction.state, ...(pipeline.remoteAction.error ? { error: clampChars(pipeline.remoteAction.error, ERROR_CHARS) } : {}) } } : {}),
+    ...(pipeline.publicationAdmission ? { publicationAdmission: { id: pipeline.publicationAdmission.id, state: pipeline.publicationAdmission.state,
+      ...(pipeline.publicationAdmission.error ? { error: clampChars(pipeline.publicationAdmission.error, ERROR_CHARS) } : {}) } } : {}),
+    ...(pipeline.delivery?.operation ? { publicationCheck: { id: pipeline.delivery.operation.id,
+      state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha } } : {}),
+    ...(pipeline.stateDetail === "accepted head verification and publication pending" ? { gitCheck: { state: "pending" as const } } : {}),
+  };
+}
+
 /**
  * What a pipeline write answers: where the lane stands after the write and the
  * digests a guarded graph edit names next — what `create_pipeline` answers.
@@ -38,12 +50,7 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     stateDetail: clampChars(pipeline.stateDetail, ACK_DETAIL_CHARS),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
-    ...(pipeline.remoteAction ? { remoteCheck: { id: pipeline.remoteAction.id, action: pipeline.remoteAction.action,
-      state: pipeline.remoteAction.state, ...(pipeline.remoteAction.error ? { error: pipeline.remoteAction.error } : {}) } } : {}),
-    ...(pipeline.publicationAdmission ? { publicationAdmission: { id: pipeline.publicationAdmission.id, state: pipeline.publicationAdmission.state,
-      ...(pipeline.publicationAdmission.error ? { error: pipeline.publicationAdmission.error } : {}) } } : {}),
-    ...(pipeline.delivery?.operation ? { publicationCheck: { id: pipeline.delivery.operation.id,
-      state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha } } : {}),
+    ...pipelineCheckFields(pipeline),
     taskIds: [...(pipeline.taskIds ?? [])],
     ...finishesTaskFields(pipeline),
     branch: pipeline.branch,
@@ -95,6 +102,7 @@ export function pipelineActionAcknowledgement(pipeline: Pipeline, includeDigests
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
+    ...pipelineCheckFields(pipeline),
     ...finishesTaskFields(pipeline),
     ...(includeDigests ? { stageDigests: stageDigests(pipeline.stages ?? []), graphDigest: graphDigest(pipeline.stages ?? []) } : {}),
   };
