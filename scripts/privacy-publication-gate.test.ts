@@ -31,6 +31,55 @@ import {
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
+const packageVersionSamples = [
+  ["pkg", "1.2.3"].join("@"),
+  ["@scope/pkg", "1.2.3"].join("@"),
+  ["delegatus", "1.9.0"].join("@"),
+  ["fixture-package", "1.2.3"].join("@"),
+  ["pkg", "1.2.3-beta.1"].join("@"),
+  ["pkg", "1.2.3+sha"].join("@"),
+  ["pkg", "1.2.3+sha.abc"].join("@"),
+  ["pkg", "1.2"].join("@"),
+  ["pkg", "1.2.3.4"].join("@"),
+  ["pkg", "1.2.3-beta"].join("@"),
+  ["pkg", "1.2.3-beta.rc"].join("@"),
+  ["pkg", "1.2.3-beta.com"].join("@"),
+  `Inspect \`${["pkg", "1.2.3"].join("@")}\`.`,
+  `Inspect [${["pkg", "1.2.3+sha.abc"].join("@")}](https://fixture.invalid).`,
+  `Encoded preface %41: \`${["pkg", "1.2.3"].join("@")}\`.`,
+  ...[" ", "\t", "\r", "\n", "\v", "\f", '"', "'", "`", ")", "]", ",", ";", ":"]
+    .map((boundary) => ["pkg", "1.2.3+sha.abc"].join("@") + boundary),
+];
+const versionLookingRealAddresses = [
+  ...[".com", ".\u{1F130}.com", ".%F0%9F%84%B0.com", ".&#x1F130;.com"]
+    .flatMap((suffix) => [
+      `\`${["probe", "1.2.3"].join("@")}\`${suffix}`,
+      `[${["probe", "1.2.3"].join("@")}](https://fixture.invalid)${suffix}`,
+    ]),
+  `\`${["pkg", "1.2.3"].join("@")}\` and ${["pkg", "1.2.3"].join("@")} . ${["probe", "1.2.3"].join("@")}\`.com`,
+  `\`${["probe", "1.2.3+sha.abc"].join("@")}\`.com`,
+  ...[".", "/", "!", "?", ">tail", "}", "=", "\\tail", "%20", "&#32;", "\u00A0", "\u200B", "💡"]
+    .map((suffix) => ["probe", "1.2.3"].join("@") + suffix),
+  ...["1.2.3.4.5", "1.2.3-beta.", "1.2.3+sha.", "1.2.3-beta%2E1", "1.2.3+sha&#46;abc", "1.2.3-beta.1+sha", "1.2.3-beta.rc.1+sha.2"]
+    .map((domain) => ["probe", domain].join("@")),
+  ["probe", "1.2.3"].join("%40"),
+  ["probe", "1.2.3"].join("&#64;"),
+  ["a", "1.2.3.com"].join("@"),
+  ["probe", "1.2.3\u{1F130}.com"].join("@"),
+  ["probe", "1.2.3%F0%9F%84%B0.com"].join("@"),
+  ["probe", "1.2.3&#x1F130;.com"].join("@"),
+  ["probe", "1.2.3.\u{1F130}.com"].join("@"),
+  ["probe", "1.2.3.%F0%9F%84%B0.com"].join("@"),
+  ["probe", "1.2.3.&#x1F130;.com"].join("@"),
+  ["probe", "1.2.3.\u0F0B\u0F40.com"].join("@"),
+  ["probe", "1.2.3.%E0%BC%8B%E0%BD%80.com"].join("@"),
+  ["probe", "1.2.3.&#xF0B;&#xF40;.com"].join("@"),
+  ["someone", "b.io"].join("@"),
+  ...["com", "target", "укр", "xn--j1amh"].map((tld) => ["a", `1.2.3.${tld}`].join("@")),
+  ["a", "1.2.3-beta.укр"].join("@"),
+  [JSON.stringify(["someone", "b.io"].join("@")), "1.2.3"].join("@"),
+  ...["\u200B", "\u0375α", "・カ", "१२३"].map((label) => ["a", `1.2.3.${label}.com`].join("@")),
+];
 const systemdUnitSamples = [
   ["user", "1000.service"].join("@"),
   ["delegatus", "review.service"].join("@"),
@@ -46,6 +95,8 @@ const systemdUnitSamples = [
     .map((boundary) => ["delegatus", "review.service"].join("@") + boundary),
 ];
 const unitLookingRealAddresses = [
+  ["probe", "b.service", "1.2.3"].join("@"),
+  ["probe", "b.service", "1.2.3+sha.abc"].join("@"),
   [JSON.stringify(["probe", "personal.dev"].join("@")), "review.service"].join("@"),
   [JSON.stringify(["probe", "personal.dev"].join("@")), "review.service/"].join("@"),
   ["probe", "b**.service**%E2%80%8B"].join("%40"),
@@ -697,6 +748,19 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       const unit = ["probe", "b.service"].join("@") + boundary;
       expect(sensitiveClasses(unit).has("email_address"), `boundary ${boundary.codePointAt(0)}`).toBe(!permitted.has(boundary));
       expect(commitMessageAddressReview(unit).attributable.length, `boundary ${boundary.codePointAt(0)}`).toBe(permitted.has(boundary) ? 0 : 1);
+    }
+  });
+
+  test("RAW version tokens follow the positive grammar across ASCII and Unicode", () => {
+    const permitted = new Set([" ", "\t", "\r", "\n", "\v", "\f", '"', "'", "`", ")", "]", ",", ";", ":"]);
+    const boundaries = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
+    boundaries.push("α", "\u0301", "\u0375", "\u30FB", "\u200B", "\u00A0", "）", "／", "💡");
+    for (const boundary of boundaries) {
+      const token = ["pkg", "1.2.3"].join("@") + boundary;
+      // Another digit extends the numeric version before its end-of-text boundary.
+      const accepted = permitted.has(boundary) || /^[0-9]$/.test(boundary);
+      expect(sensitiveClasses(token).has("email_address"), `boundary ${boundary.codePointAt(0)}`).toBe(!accepted);
+      expect(commitMessageAddressReview(token).attributable.length > 0, `boundary ${boundary.codePointAt(0)}`).toBe(!accepted);
     }
   });
 
@@ -1377,7 +1441,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           temporaryDirectories.push(directory);
           const generation = generatePrivacyPlaceholders(directory);
           expect(generation.exitCode).toBe(0);
-          const image = join(directory, "docs", "acceptance", "issue-290", "readiness-kanban.png");
+          const imagePath = "docs/acceptance/issue-290/readiness-kanban.png";
+          const image = join(directory, imagePath);
+          const ocrText = contiguous ? fullWidth(value) : words.join("-");
           const configuration = join(directory, "known.json");
           writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
             fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
@@ -1385,11 +1451,16 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           const result = runGateArguments(["--repository", directory, "--paths", image], {
             ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
             LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
-            OCR_TEXT: contiguous ? fullWidth(value) : words.join("-"),
+            OCR_TEXT: ocrText,
           });
           expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
-          expect(result.stdout.toString()).toBe(!exactOnly || contiguous
-            ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+          const output = result.stdout.toString();
+          expect(output).toBe(!exactOnly || contiguous
+            ? `PRIVACY GATE: FAIL\nknown_value: 1\n${fileNotice(imagePath, "known_value")}\n` : "PRIVACY GATE: PASS\n");
+          expect(output).not.toContain(imagePath);
+          expect(output).not.toContain(image);
+          expect(output).not.toContain(ocrText);
+          expect(output).not.toContain(value);
           expect(result.stderr.toString()).toBe("");
         });
       }
@@ -3667,6 +3738,34 @@ describe("mergeBoundaryReview", () => {
     });
     return result.stdout.toString().trim();
   }
+
+  test.each(packageVersionSamples)("package versions pass files, commit messages and identities (%#)", (specifier) => {
+    const repo = gitRepo();
+    writeFileSync(join(repo, "packages.md"), `bun add -g ${specifier}\n`);
+    commit(repo, `chore: install ${specifier}`, { email: specifier, name: "Fixture Tool" });
+
+    expect(sensitiveClasses(specifier).has("email_address")).toBe(false);
+    expect(commitMessageFindings(repo, "main").size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main").findings.size).toBe(0);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test.each(versionLookingRealAddresses)("version-like real domains fail files, commit messages and identities (%#)", (address) => {
+    const repo = gitRepo();
+    writeFileSync(join(repo, "packages.md"), address);
+    commit(repo, `chore: inspect ${address}`, { email: address, name: "Fixture Person" });
+
+    expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address: 3\n");
+    expect(result.stdout.toString()).not.toContain(address);
+    expect(result.stderr.toString()).toBe("");
+  });
 
   test.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", (unit) => {
     const repo = gitRepo();
