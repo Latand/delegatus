@@ -2153,6 +2153,21 @@ service. §B.13 replaces the pairing panel, and §B.15 adds each target's
 chats. What this paragraph says about layout, entry rows, target settings
 and evidence still holds.
 
+**[delta] Built-in relays.** `src/lib/externalRelay/knownRelays.ts` lists the
+services this install connects with one button; the first is Celestia, and a
+move of its origin is a one-line change there. The surface leads with that
+button, which starts the pairing against the listed origin and opens the
+service's verify page in a window opened inside the click (a popup blocker
+admits only that), pointed at `verify_url` when the pairing answers; a window
+that did not open leaves the link in the pairing card. The description and the
+icon come from the descriptor at runtime (`GET /api/external-relay/known`),
+the icon only when it is a file on the relay's own origin. The owner
+confirmation stays; a first connection to a listed relay then takes the
+signed-in engine's default model and is answered by this install. The address
+field sits behind "Other address…". An `https` origin whose descriptor
+advertises its own host over `http://` is refused as `http_public`, which the
+surface words as "not available over a secure connection yet".
+
 **UI.** "External relay" is a settings dialog of its own, in the shell of
 the linked-installs dialog (`src/components/links/LinkedSettingsDialog.tsx`),
 opened from a row beside "Linked installs" in the desktop rail's ⋯ menu and
