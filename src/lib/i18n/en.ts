@@ -1743,6 +1743,8 @@ export const en = {
   "deputy.twin": "The orchestrator's parallel self is working",
   "composer.askInParallel": "Ask in parallel",
   "composer.askInParallelHint": "Starts the orchestrator's parallel self for this one message; the orchestrator keeps working. Ctrl+Shift+Enter",
+  "composer.parallelSentDirectly": "Seat idle — sent directly.",
+  "composer.parallelIdleHint": "The seat is idle; sends this message directly. Ctrl+Shift+Enter",
   "composer.askInParallelFailed": "Could not ask in parallel: {error}",
   "feed.backToLive": "Back to the live tail",
   "feed.newCount": "{count} new",

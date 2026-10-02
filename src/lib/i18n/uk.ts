@@ -1689,6 +1689,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "deputy.twin": "Паралельне я оркестратора працює",
   "composer.askInParallel": "Запитати паралельно",
   "composer.askInParallelHint": "Запускає паралельне я оркестратора для цього одного повідомлення; оркестратор працює далі. Ctrl+Shift+Enter",
+  "composer.parallelSentDirectly": "Оркестратор вільний — надіслано напряму.",
+  "composer.parallelIdleHint": "Оркестратор вільний; надсилає повідомлення напряму. Ctrl+Shift+Enter",
   "composer.askInParallelFailed": "Не вдалося запитати паралельно: {error}",
   "feed.backToLive": "Повернутись до живого хвоста",
   "feed.newCount": "{count} нових",
