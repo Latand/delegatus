@@ -107,8 +107,9 @@ export function requiresMediaTools(file: string): boolean {
   } finally { closeSync(fd); }
 }
 
-function rootViewerInputs(root: string): string[] {
-  return ["src/app/page.tsx", "src/app/layout.tsx"].filter(file => existsSync(path.join(root, file)));
+function rootViewerInputs(): string[] {
+  // A deleted root input must still trigger the GET / proof.
+  return ["src/app/page.tsx", "src/app/layout.tsx"];
 }
 
 interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
@@ -135,7 +136,7 @@ export function discover(root: string, base: string, files: readonly string[]): 
   const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
   // The GET / leg of verify-viewer-runtime serves the built root route. Follow
   // the route and its layouts/components as additional runtime inputs.
-  const viewerInputs = executedPaths(root, rootViewerInputs(root));
+  const viewerInputs = executedPaths(root, rootViewerInputs());
   const nativeScript = "scripts/verify-native-codex-runtime.ts";
   const nativeEntries = [nativeScript, ...workflowEntries(readFileSync(path.join(root, nativeScript), "utf8"))];
   const runtimePaths = executedPaths(root, runtimeEntries);
