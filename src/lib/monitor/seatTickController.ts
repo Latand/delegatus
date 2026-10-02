@@ -230,7 +230,7 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
     "",
-    `${card.detail}. Seat tick is withholding further wakes from this seat. Rotate the seat to restore its Viewer tools.`,
+    `${card.detail}. Routine wakes are withheld. A newly confirmed lane stall may send one recovery wake. Rotate the seat if its Viewer tools remain unavailable.`,
     `Project ${project}.`,
     "",
     `${MONITOR_REF_PREFIX} ${card.ref}`,
@@ -1505,9 +1505,16 @@ async function check(
        permanent refusal. A seat that cannot take a wake is not sent another
        until something that could change that has happened. */
     const refusals = seatTickActiveRefusalRun(state, refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt));
+    // A restored seat may start its MCP only when its next turn starts.
+    // A new confirmed stall gets one ordinary delivery; arrival records its
+    // token, and the existing pending-delivery fence still prevents duplicates.
     if (rotated) {
       delivery = { clientMessageId, outcome: "seat-rotated" };
-    } else if (mcpHealth?.status === "dead") {
+    } else if (mcpHealth?.status === "dead" && !(
+      verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
+      && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
+        && !(state.reportedStalls ?? []).includes(item.stallToken))
+    )) {
       delivery = { clientMessageId, outcome: "seat-mcp-unavailable" };
       fenceDetail = `${mcpHealth.detail}; rotate the seat`;
     } else if (withheld) {
@@ -1925,7 +1932,7 @@ export function startSeatTick(ports: {
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileSeatTick());
   const handoffHeld = ports.handoffHeld ?? (() => !!activeRestartGate(statePath("self-update", "auto-admission.json")));
-  const timer = schedule(() => {
+  const run = () => {
     /* A check that outran its interval drops the next one rather than stacking
        it. A tick that would land behind the one before it is stale by
        construction, and staleness is the whole reason nothing is queued. */
@@ -1934,9 +1941,12 @@ export function startSeatTick(ports: {
     void Promise.resolve(sweep())
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))
       .finally(() => { tickHost.__llvSeatTickRunning = false; });
-  }, policy.checkIntervalMs);
+  };
+  const timer = schedule(run, policy.checkIntervalMs);
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
+  // Read durable stall observations immediately; a restart owes no new interval.
+  run();
   return true;
 }
 

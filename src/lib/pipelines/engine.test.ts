@@ -15739,3 +15739,224 @@ test("an omitted pipeline review budget runs three reviews before the last fix c
   expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });
+
+
+/* Restart recovery retains the on-disk attempt and its partial work. */
+test.each([
+  { engine: "codex", interruption: "idle" }, { engine: "claude", interruption: "idle" },
+  { engine: "codex", interruption: "dead" }, { engine: "claude", interruption: "dead" },
+  { engine: "codex", interruption: "stalled" }, { engine: "claude", interruption: "stalled" },
+] as const)("restart resumes $engine $interruption once, then parks a second interruption", async ({ engine, interruption }) => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const before = loadPipelines()[0]!;
+  const attempt = before.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([before]);
+  const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
+  const sent: string[] = [];
+  const restarted = { ...h.ports,
+    restartRecoveryBootId: () => "boot-after-crash",
+    conversationTurnInterrupted: async () => interruption,
+    resumeSeveredTurn: async (input: { text: string }) => { sent.push(input.text); return true; },
+  };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("Delegatus restart");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted });
+  expect(sent).toHaveLength(1);
+  h.advanceWallClock(11 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted });
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+  expect(loadPipelines()[0]!.stateDetail).toContain("restart continuation");
+});
+
+
+test("restart retry-stage accepts only a confirmed stalled running attempt under expectedAttempt", async () => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  const restarted = { ...h.ports, spawnReceipt: () => ({ state: "completed", conversationId: attempt.conversationId, transcript: attempt.agentPath, paneId: null }) as ReturnType<PipelinePorts["spawnReceipt"]>, conversationTurnInterrupted: async () => "stalled" as const };
+  const request = { action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n } as const;
+  expect((await patchPipeline(lane.id, { ...request, expectedAttempt: attempt.n + 1 }, restarted)).code).toBe("STAGE_CHANGED");
+  expect((await patchPipeline(lane.id, request, { ...restarted, conversationTurnInterrupted: async () => null })).error).toBeDefined();
+  expect((await patchPipeline(lane.id, { action: "retry-stage" }, restarted)).error).toBeDefined();
+  expect((await patchPipeline(lane.id, request, restarted)).error).toBeUndefined();
+  expect(h.calls.some((call) => call.startsWith("stop-host:"))).toBe(true);
+  expect((await patchPipeline(lane.id, request, restarted)).error).toBeDefined();
+  await tickPipelines([], restarted);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.n).toBe(attempt.n + 1);
+});
+
+
+test("restart recovery reads restored idle and dead turns from the runtime snapshot", async () => {
+  await withRuntimeSnapshot({ runtime: { hostEpoch: 7 }, sessions: [
+    { conversationId: "idle-stage", host: "alive", turn: "idle", attentionIds: [] },
+    { conversationId: "dead-stage", host: "dead", turn: "running", attentionIds: [] },
+    { conversationId: "permission-stage", host: "alive", turn: "idle", attentionIds: ["permission"] },
+  ] }, async () => {
+    const ports = defaultPipelinePorts();
+    expect(await ports.conversationTurnInterrupted!("idle-stage")).toBe("idle");
+    expect(await ports.conversationTurnInterrupted!("dead-stage")).toBe("dead");
+    expect(await ports.conversationTurnInterrupted!("permission-stage")).toBeNull();
+    expect(await ports.conversationTurnInterrupted!("unknown-stage")).toBeNull();
+  });
+});
+
+
+test("restart recovery preserves working turns and pending continuations and parks unconfirmed host termination", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let sends = 0;
+  const restarted: PipelinePorts = { ...h.ports,
+    spawnReceipt: () => ({ state: "completed", conversationId: attempt.conversationId, transcript: attempt.agentPath, paneId: null }) as ReturnType<PipelinePorts["spawnReceipt"]>,
+    restartRecoveryBootId: () => "next-boot",
+    conversationTurnInterrupted: async () => "stalled",
+    resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted, conversationTurnInterrupted: async () => null });
+  expect(sends).toBe(0);
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted, conversationDeliveryOutstanding: () => true });
+  expect(sends).toBe(0);
+  h.setStageHost(attempt.conversationId!, { outcome: "unconfirmed", operationId: null, detail: "termination is not confirmed" });
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(0);
+  expect(loadPipelines()[0]!.stateDetail).toContain("confirm termination");
+  // The unresolved host cannot be replaced by manual retry either.
+  expect((await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, restarted)).error).toBeDefined();
+});
+
+
+test("restart resumes a report's interrupted turn and settles its verdict without another attempt", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const report = await engineModule.reportStageCompletion({ verdict: "pass", findings: [], summary: "Work finished" },
+    { kind: "agent", role: "builder", conversationId: attempt.conversationId }, h.ports);
+  expect(report.error).toBeUndefined();
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let sends = 0;
+  const restarted: PipelinePorts = { ...h.ports, restartRecoveryBootId: () => "report-boot",
+    conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(1);
+  const finalEntry = h.finish(attempt.agentPath!, "pass");
+  const message = h.messages.get(attempt.agentPath!)!;
+  h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message, lastRecordAt: message.ts });
+  await tickPipelines([finalEntry], restarted);
+  expect(loadPipelines()[0]!.state).toBe("completed");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+});
+
+
+test("restart retry rejects an incomplete receipt identity before stopping or parking its attempt", async () => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  const callsBefore = h.calls.length;
+  const result = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: attempt.n, stageId: "plan" },
+    { ...h.ports, conversationTurnInterrupted: async () => "stalled" });
+  expect(result.status).toBe(400);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.calls.slice(callsBefore).some((call) => call.startsWith("stop-host:"))).toBe(false);
+});
+
+test("running restart retry preserves an owed deploy continuation before it enters delivery", async () => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  const callsBefore = h.calls.length;
+  const result = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n }, {
+    ...h.ports, conversationTurnInterrupted: async () => "idle",
+    conversationInterruption: () => ({ state: "owed", recordedAt: h.ports.now(), resolvedAt: null }),
+  });
+  expect(result.status).toBe(409);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.calls.slice(callsBefore).some((call) => call.startsWith("stop-host:"))).toBe(false);
+});
+
+
+test.each([true, false])("restart recovery shares a runtime-host continuation only in its own boot: %s", async (sameBoot) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  attempt.hostEpoch = 1;
+  const at = h.ports.now();
+  const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
+  attempt.severedTurn = { epoch: 2, sightedAt: at, silentSince: lastRecordAt, resumedAt: at, clientMessageId: "existing-continuation" };
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
+  let sends = 0;
+  const restarted: PipelinePorts = { ...h.ports, runtimeHostEpoch: async () => 2,
+    restartRecoveryBootStartedAt: () => Date.parse(at) + (sameBoot ? -1000 : 1000),
+    conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(sameBoot ? 0 : 1);
+  h.advanceWallClock(11 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(sends).toBe(sameBoot ? 0 : 1);
+});
+
+
+test.each([true, false])("restart counts a delivered deploy continuation only in its own boot: %s", async (sameBoot) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const deliveredAt = h.ports.now();
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let sends = 0;
+  const restarted = { ...h.ports, restartRecoveryBootId: () => "deploy-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(deliveredAt) + (sameBoot ? -1000 : 1000),
+    conversationInterruption: () => ({ state: "delivered" as const, recordedAt: deliveredAt, resolvedAt: deliveredAt }),
+    conversationTurnInterrupted: async () => "idle" as const,
+    resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(sameBoot ? 0 : 1);
+  h.advanceWallClock(11 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(sends).toBe(sameBoot ? 0 : 1);
+});

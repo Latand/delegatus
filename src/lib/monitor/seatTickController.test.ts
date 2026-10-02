@@ -824,7 +824,8 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const pendingResponses = new Map<number, (message: any) => void>();
+  type FixtureResponse = { id: number; result: { serverInfo: { name: string }; isError: boolean; content: { text: string }[] } };
+  const pendingResponses = new Map<number, (message: FixtureResponse) => void>();
   let output = "";
   session.stdout.setEncoding("utf8");
   session.stdout.on("data", (chunk: string) => {
@@ -838,7 +839,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       }
     }
   });
-  const call = (id: number, method: string) => new Promise<any>((resolve, reject) => {
+  const call = (id: number, method: string) => new Promise<FixtureResponse>((resolve, reject) => {
     const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
     pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
     session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
@@ -6497,4 +6498,41 @@ test("maintenance settles before gather and launches after the wake; scratch che
   rig.deps.maintenance = { reconcile: async () => { order.push("settle"); return "maintenance: fixture settled"; }, launchIfDue: async () => { order.push("launch"); return "maintenance: fixture launched"; } };
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(order).toEqual(["settle", "wake", "launch"]); expect(record?.detail).toContain("maintenance: fixture settled"); expect(record?.detail).toContain("maintenance: fixture launched");
+});
+
+
+test("restart wakes a confirmed lane stall despite a missing MCP heartbeat, once per unchanged stall", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-stall-")), "seat-tick.json");
+  const options = { pipelines: [{ id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", src: CONVERSATION }], state: OVERDUE, stateFile };
+  const before = harness(options);
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane" }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  before.deps.sources!.liveness = liveness;
+  before.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
+  await runSeatTickCheck(PROJECT, before.deps);
+  expect(before.sent).toHaveLength(0);
+  // A new controller reads the first observation from the isolated disk store.
+  const restarted = harness({ ...options, state: undefined });
+  restarted.deps.sources!.liveness = liveness;
+  restarted.deps.mcpHealth = before.deps.mcpHealth;
+  const record = await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(record?.delivery?.outcome).toBe("delivered");
+  expect(restarted.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(restarted.sent).toHaveLength(1);
+});
+
+test("seat clock checks immediately after restart before its first interval", async () => {
+  let checks = 0;
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-clock-")), "seat-tick.json");
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, stateFile });
+  const ports = { policy: DEFAULT_SEAT_TICK_POLICY, handoffHeld: () => false,
+    recordSuccessions: () => [], scheduleInterval: () => ({ unref() {} }) as never,
+    sweep: async () => { checks += 1; await runSeatTickCheck(PROJECT, rig.deps); } };
+  startSeatTick(ports);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(checks).toBe(1);
+  stopSeatTick();
+  startSeatTick(ports);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(checks).toBe(2);
 });

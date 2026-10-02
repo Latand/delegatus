@@ -410,6 +410,8 @@ export type PipelineStageAttempt = {
       witness the controller has that a deploy cut its turn. Absent on attempts
       recorded before the field existed and on pane-hosted ones. */
   hostEpoch?: number;
+  /** One durable continuation reservation per Viewer/runtime-host boot. */
+  restartRecovery?: { bootId: string; requestedAt: string; clientMessageId: string; lastRecordAt: number | null };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it

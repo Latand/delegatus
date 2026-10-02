@@ -272,6 +272,10 @@ export interface PipelinePorts {
       exact witness that a deploy cut a running stage turn. Null when no host
       answers, which is never evidence of a succession. */
   runtimeHostEpoch?(): Promise<number | null>;
+  restartRecoveryBootId?(): string;
+  restartRecoveryBootStartedAt?(): number;
+  /** Positive runtime evidence; silence alone never interrupts a live tool. */
+  conversationTurnInterrupted?(conversationId: string): Promise<"idle" | "dead" | "stalled" | null>;
   /** Whether a delivery for this conversation is still waiting to land. A
       continuation is never added on top of one (#1747). */
   conversationDeliveryOutstanding?(conversationId: string): boolean;
@@ -1257,6 +1261,22 @@ export function defaultPipelinePorts(
       if (session.turn === "running" || session.turn === "interrupt_requested" || session.attentionIds.length > 0) return true;
       /* A hosted idle turn is an inter-turn state with unknown agent activity. */
       return null;
+    },
+    restartRecoveryBootId: () => PIPELINE_RECOVERY_BOOT_ID,
+    restartRecoveryBootStartedAt: () => PIPELINE_RECOVERY_BOOT_STARTED_AT,
+    conversationTurnInterrupted: async (conversationId) => {
+      const client = runtimeHostClient();
+      if (!client) return null;
+      try {
+        runtimeSnapshot ??= client.snapshot();
+        const current = await runtimeSnapshot;
+        const session = current.sessions.find((item) => item.conversationId === conversationId);
+        if (!session || session.attentionIds.length > 0 || session.host === "conflict") return null;
+        if (session.host === "dead" || session.host === "unhosted") return "dead";
+        if (session.turn === "idle") return "idle";
+        const liveness = await conversationTurnLiveness(registry, conversationId as ViewerConversationId, dependencies.liveness);
+        return liveness?.state === "severed" ? "stalled" : null;
+      } catch { return null; }
     },
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
@@ -3200,6 +3220,99 @@ function rerunHostLostReadOnlyStage(
  * delivery queue's own dedupe the last line of defence behind that.
  */
 const SEVERED_TURN_RESUME_SILENCE_MS = 3 * 60_000;
+const recoveryHost = globalThis as typeof globalThis & {
+  __llvPipelineRecoveryBootId?: string;
+  __llvPipelineRecoveryBootStartedAt?: number;
+};
+const PIPELINE_RECOVERY_BOOT_ID = recoveryHost.__llvPipelineRecoveryBootId ??= crypto.randomUUID();
+const PIPELINE_RECOVERY_BOOT_STARTED_AT = recoveryHost.__llvPipelineRecoveryBootStartedAt ??= Date.now() - process.uptime() * 1000;
+
+async function stopInterruptedStageAttempt(stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<PipelineStageStopResult> {
+  const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
+    launchId: attempt.launchId, conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId,
+    ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}) });
+  if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+  return stopped;
+}
+
+/** Restart and stall recovery share the existing durable conversation delivery
+    seam. Reserve before any host/transport effect, and preserve partial work. */
+async function recoverInterruptedStageTurn(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void,
+): Promise<boolean> {
+  const cut = deployCutOf(attempt, ports);
+  if (attempt.state !== "running" || attempt.paneId || !attempt.conversationId || !attempt.agentPath
+    || deployCutHoldsAttempt(cut, ports)) return false;
+  const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
+  if (!interrupted) return false;
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+  if (durable?.turn !== "busy" || durable.launchOnly) return false;
+  if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
+  const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
+  const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
+  const bootStartedAt = ports.restartRecoveryBootStartedAt?.() ?? PIPELINE_RECOVERY_BOOT_STARTED_AT;
+  // A deploy continuation delivered during this Viewer boot already consumed
+  // its recovery allowance. An older receipt must not suppress a later reboot.
+  if (cut?.state === "delivered" && cut.resolvedAt
+    && unixMs(cut.resolvedAt) >= bootStartedAt
+    && (!attempt.restartRecovery || unixMs(cut.resolvedAt) > unixMs(attempt.restartRecovery.requestedAt))) {
+    attempt.restartRecovery = { bootId, requestedAt: cut.resolvedAt,
+      clientMessageId: `stage-deploy-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${unixMs(cut.resolvedAt)}`,
+      lastRecordAt: durable.lastRecordAt ?? null };
+    if (typeof epoch === "number") attempt.hostEpoch = epoch;
+    delete attempt.severedTurn;
+    persist();
+  }
+  // The epoch-based recovery may already have sent this boot's continuation.
+  // Carry its reservation into the restart path before considering a send.
+  const legacy = attempt.severedTurn;
+  if (!attempt.restartRecovery && legacy?.epoch === epoch && legacy.resumedAt && legacy.clientMessageId
+    && unixMs(legacy.resumedAt) >= bootStartedAt) {
+    attempt.restartRecovery = { bootId, requestedAt: legacy.resumedAt,
+      clientMessageId: legacy.clientMessageId, lastRecordAt: legacy.silentSince };
+    attempt.hostEpoch = legacy.epoch;
+    delete attempt.severedTurn;
+    persist();
+  }
+  const previous = attempt.restartRecovery;
+  if (previous?.bootId === bootId) {
+    if (unixMs(ports.now()) - unixMs(previous.requestedAt) < SEVERED_TURN_PARK_SILENCE_MS) return true;
+    const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+    const detail = stopped.outcome === "stopped" || stopped.outcome === "not-running"
+      ? "stage interrupted again after its one restart continuation; retry-stage to start a fresh attempt"
+      : "stage interrupted again after its one restart continuation; host termination is still unconfirmed";
+    park(pipeline, detail, attempt);
+    persist();
+    return true;
+  }
+  const clientMessageId = `stage-restart-${pipeline.id}-${stage.id}-${attempt.n}-${bootId}`;
+  attempt.restartRecovery = { bootId, clientMessageId, requestedAt: ports.now(), lastRecordAt: durable.lastRecordAt ?? null };
+  // This path now owns succession recovery too; the older witness must not
+  // schedule another continuation when the resumed host starts progressing.
+  if (typeof epoch === "number") attempt.hostEpoch = epoch;
+  delete attempt.severedTurn;
+  persist();
+  try {
+    if (interrupted !== "idle") {
+      const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+      if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+        park(pipeline, "restart continuation could not confirm termination of the stalled host", attempt);
+        persist();
+        return true;
+      }
+    }
+    const accepted = await ports.resumeSeveredTurn?.({ conversationId: attempt.conversationId,
+      transcriptPath: attempt.agentPath, clientMessageId, project: pipeline.project, cwd: pipeline.repoDir,
+      text: "Your turn was interrupted by a Delegatus restart. Continue from your current work, finish it, and report your verdict with stage_report; use the fenced JSON fallback only if that tool is unavailable or returns an error." });
+    if (accepted !== true) park(pipeline, "restart continuation was refused; retry-stage to start a fresh attempt", attempt);
+    else pipeline.stateDetail = "interrupted stage received one restart continuation";
+  } catch {
+    park(pipeline, "restart continuation delivery could not be confirmed; retry-stage after checking the conversation", attempt);
+  }
+  persist();
+  return true;
+}
 /** Silence after the continuation before the attempt parks for the operator.
     Generous on purpose: a resumed agent writes its next record in seconds, so
     anything past this is a host that will not answer at all. */
@@ -3314,6 +3427,10 @@ async function reconcileSeveredStageTurn(
     if (resumed !== true) return "continue";
     witness.resumedAt = ports.now();
     witness.clientMessageId = clientMessageId;
+    attempt.restartRecovery = {
+      bootId: `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`,
+      requestedAt: witness.resumedAt, clientMessageId, lastRecordAt: witness.silentSince,
+    };
     pipeline.stateDetail = SEVERED_TURN_RESUMED_DETAIL;
     persist();
     return "handled";
@@ -4015,6 +4132,7 @@ async function tickRunStage(
      every reading this function trusts says "working" and returns. The epoch
      witness is the one reading that does not, and it costs a memoized snapshot
      field until a succession actually moves it. */
+  if (await recoverInterruptedStageTurn(pipeline, stage, attempt, ports, persist)) return;
   if (await reconcileSeveredStageTurn(pipeline, stage, attempt, ports, persist) === "handled") return;
   const unavailableSince = !attempt.paneId && attempt.conversationId
     ? await ports.conversationHostUnavailableSince?.(attempt.conversationId)
@@ -6469,7 +6587,9 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
  */
 function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
-  const waiting = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
+  const waiting = pipeline.state === "needs_decision" || (pipeline.state === "running" && req.action === "retry-stage"
+    && pipeline.cursor?.state === "running" && currentAttempt(pipeline, pipeline.cursor.stageId)?.state === "running")
+    ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     return {
       error: waiting ? `the pipeline waits on ${waiting}, not ${req.expectedStageId}` : `the pipeline is ${pipeline.state} and waits on no stage`,
@@ -8212,28 +8332,55 @@ export async function patchPipeline(
       if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }
-      const expectation = expectedStageRefusal(pipeline, req);
-      if (expectation) return expectation;
-      const survivorRefusal = pipelineSurvivorRefusal(pipeline);
-      if (survivorRefusal) return survivorRefusal;
-      if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
-      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
-      if (elsewhere) return elsewhere;
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
       }
+      const expectation = expectedStageRefusal(pipeline, req);
+      if (expectation) return expectation;
+      if (explicitReceiptRetry && stage?.id !== req.stageId) {
+        return { error: "the clicked launch belongs to a different pipeline stage", status: 409 };
+      }
+      if (explicitReceiptRetry && attempt?.launchId !== req.launchId) {
+        return { error: "the clicked launch is no longer the current failed attempt", status: 409 };
+      }
+      const survivorRefusal = pipelineSurvivorRefusal(pipeline);
+      if (survivorRefusal) return survivorRefusal;
+      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+      if (elsewhere) return elsewhere;
+      if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
+        const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+          persist();
+          return { error: "the restart-parked attempt host has not confirmed termination", status: 409 };
+        }
+      }
+      if (pipeline.state === "running") {
+        if (req.expectedAttempt === undefined) return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+        if (!stage || stage.kind !== "run" || !attempt || attempt.state !== "running" || attempt.paneId
+          || !attempt.conversationId || !attempt.agentPath || attempt.report || req.expectedAttempt !== attempt.n
+          || req.expectedStageId !== stage.id) return { error: "running retry requires the confirmed stalled stage and expectedAttempt", status: 409 };
+        const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
+        const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+        if (!interrupted || durable?.turn !== "busy" || durable.launchOnly
+          || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
+          || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+          return { error: "the running attempt is not confirmed stalled or has a pending delivery", status: 409 };
+        }
+        const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+          persist();
+          return { error: "the stalled attempt host has not confirmed termination", status: 409 };
+        }
+        park(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
+        persist();
+      }
+      if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
       const retryStageId = explicitReceiptRetry ? req.stageId! : stage?.id ?? null;
       const retryLaunchId = explicitReceiptRetry ? req.launchId! : attempt?.launchId ?? null;
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)
         && retryStageId !== null
         && retryLaunchId !== null;
-      if (explicitReceiptRetry && stage?.id !== retryStageId) {
-        return { error: "the clicked launch belongs to a different pipeline stage", status: 409 };
-      }
-      if (explicitReceiptRetry && attempt?.launchId !== retryLaunchId) {
-        return { error: "the clicked launch is no longer the current failed attempt", status: 409 };
-      }
       // The accepted work is already committed. Retry its publication from
       // this cursor without claiming a new launch or closing its stage flow.
       if (stage && attempt && passedStagePublicationPark(pipeline, attempt)) {
