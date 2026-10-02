@@ -3305,12 +3305,27 @@ async function recoverInterruptedStageTurn(
   const cut = deployCutOf(attempt, ports);
   if (attempt.state !== "running" || attempt.paneId || !attempt.conversationId || !attempt.agentPath
     || deployCutHoldsAttempt(cut, ports)) return false;
-  const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
+  const observedIdentity = { n: attempt.n, conversationId: attempt.conversationId, agentPath: attempt.agentPath, startedAt: attempt.startedAt };
+  let interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
   if (!interrupted) return false;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
   if (durable?.turn !== "busy" || durable.launchOnly) return false;
   if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
   const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
+  /* The runtime snapshot and transcript read above can go stale while the host
+     epoch is being read. Bind recovery to the same attempt and turn immediately
+     before reserving its continuation. A newer record means the stage progressed;
+     terminal evidence falls through to the ordinary verdict path. */
+  const latestInterrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
+  const latestDurable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+  if (attempt.state !== "running" || attempt.n !== observedIdentity.n
+    || attempt.conversationId !== observedIdentity.conversationId || attempt.agentPath !== observedIdentity.agentPath
+    || attempt.startedAt !== observedIdentity.startedAt || !latestInterrupted
+    || latestDurable?.turn !== "busy" || latestDurable.launchOnly
+    || latestDurable.lastRecordAt !== durable.lastRecordAt) return false;
+  interrupted = latestInterrupted;
+  if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
+  const recoveryEvidence = latestDurable;
   const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
   const bootStartedAt = ports.restartRecoveryBootStartedAt?.() ?? PIPELINE_RECOVERY_BOOT_STARTED_AT;
   // A deploy continuation delivered during this Viewer boot already consumed
@@ -3320,7 +3335,7 @@ async function recoverInterruptedStageTurn(
     && (!attempt.restartRecovery || unixMs(cut.resolvedAt) > unixMs(attempt.restartRecovery.requestedAt))) {
     attempt.restartRecovery = { bootId, requestedAt: cut.resolvedAt,
       clientMessageId: `stage-deploy-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${unixMs(cut.resolvedAt)}`,
-      lastRecordAt: durable.lastRecordAt ?? null };
+      lastRecordAt: recoveryEvidence.lastRecordAt ?? null };
     if (typeof epoch === "number") attempt.hostEpoch = epoch;
     delete attempt.severedTurn;
     persist();
@@ -3354,7 +3369,7 @@ async function recoverInterruptedStageTurn(
     return true;
   }
   const clientMessageId = `stage-restart-${pipeline.id}-${stage.id}-${attempt.n}-${bootId}`;
-  attempt.restartRecovery = { bootId, clientMessageId, requestedAt: ports.now(), lastRecordAt: durable.lastRecordAt ?? null };
+  attempt.restartRecovery = { bootId, clientMessageId, requestedAt: ports.now(), lastRecordAt: recoveryEvidence.lastRecordAt ?? null };
   // This path now owns succession recovery too; the older witness must not
   // schedule another continuation when the resumed host starts progressing.
   if (typeof epoch === "number") attempt.hostEpoch = epoch;

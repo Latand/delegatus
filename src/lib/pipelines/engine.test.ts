@@ -15924,6 +15924,56 @@ test.each([
   expect(loadPipelines()[0]!.stateDetail).toContain("restart continuation");
 });
 
+test.each(["idle-to-working", "busy-to-terminal"] as const)("restart recovery drops stale evidence for %s before dispatch", async (race) => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "codex", model: "gpt-5.6-sol", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  if (race === "busy-to-terminal") {
+    const report = await engineModule.reportStageCompletion({ verdict: "pass", findings: [], summary: "Work finished" },
+      { kind: "agent", role: "builder", conversationId: attempt.conversationId }, h.ports);
+    expect(report.error).toBeUndefined();
+  }
+  const firstRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: firstRecordAt });
+  let releaseEpoch!: () => void;
+  let markEpochRead!: () => void;
+  const epochGate = new Promise<void>((resolve) => { releaseEpoch = resolve; });
+  const epochRead = new Promise<void>((resolve) => { markEpochRead = resolve; });
+  let interruptReads = 0;
+  let sends = 0;
+  const raced: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "race-boot",
+    conversationTurnInterrupted: async () => {
+      interruptReads += 1;
+      return race === "idle-to-working" && interruptReads > 1 ? null : "idle";
+    },
+    runtimeHostEpoch: async () => { markEpochRead(); await epochGate; return 7; },
+    resumeSeveredTurn: async () => { sends += 1; return true; },
+  };
+  const ticking = tickPipelines([entry(attempt.agentPath!)], raced);
+  await epochRead;
+  if (race === "idle-to-working") {
+    h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: firstRecordAt + 1 });
+  } else {
+    h.finish(attempt.agentPath!, "pass", "Work finished");
+    const terminal = h.messages.get(attempt.agentPath!)!;
+    h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: terminal, lastRecordAt: terminal.ts });
+  }
+  releaseEpoch();
+  await ticking;
+
+  expect(sends).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+  if (race === "busy-to-terminal") expect(loadPipelines()[0]!.state).toBe("completed");
+  else expect(loadPipelines()[0]!.state).toBe("running");
+});
+
 
 test("restart retry-stage accepts only a confirmed stalled running attempt under expectedAttempt", async () => {
   const h = harness();
