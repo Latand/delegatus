@@ -112,7 +112,8 @@ type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: 
       than a lane that completed. */
   attemptState?: string;
   /** What the lane parked on, for the cases that read it (#1799). */
-  stateDetail?: string | null };
+  stateDetail?: string | null;
+  attemptConversationId?: string };
 
 function pipelineRecord(entry: PipelineFixture) {
   return {
@@ -128,8 +129,8 @@ function pipelineRecord(entry: PipelineFixture) {
     baseRef: "main",
     lastPassedCommit: "",
     stages: [],
-    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt }] }] : [],
-    cursor: null,
+    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt, ...(entry.attemptConversationId ? { conversationId: entry.attemptConversationId } : {}) }] }] : [],
+    cursor: entry.attemptConversationId ? { stageId: "build", state: entry.attemptState ?? "running" } : null,
     state: entry.state,
     pausedState: null,
     stateDetail: entry.stateDetail ?? null,
@@ -6809,9 +6810,9 @@ test("maintenance settles before gather and launches after the wake; scratch che
 
 test("restart wakes a confirmed lane stall despite a missing MCP heartbeat, once per unchanged stall", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-stall-")), "seat-tick.json");
-  const options = { pipelines: [{ id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", src: CONVERSATION }], state: OVERDUE, stateFile };
+  const options = { pipelines: [{ id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION }], state: OVERDUE, stateFile };
   const before = harness(options);
-  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane" }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane", stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
   before.deps.sources!.liveness = liveness;
   before.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
   await runSeatTickCheck(PROJECT, before.deps);
@@ -6845,9 +6846,9 @@ test("seat clock checks immediately after restart before its first interval", as
 
 test("a second interruption parking an announced running stall wakes its seat despite unchanged movement", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-park-wake-")), "seat-tick.json");
-  const lane = { id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", src: CONVERSATION };
+  const lane = { id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION };
   const first = harness({ pipelines: [lane], state: OVERDUE, stateFile });
-  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: lane.id }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: lane.id, stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
   first.deps.sources!.liveness = liveness;
   first.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
   await runSeatTickCheck(PROJECT, first.deps);
