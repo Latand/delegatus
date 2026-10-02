@@ -6,6 +6,7 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { procBackend } from "@/lib/proc";
 
+import { rememberRecordBytes } from "./registryRecords";
 import { openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
@@ -124,6 +125,7 @@ export interface StateCollectionSeed<T> {
   schemaVersion: number;
   migrationId: string;
   loadRecords(): readonly T[];
+  recordJson?(records: readonly T[], index: number): string | undefined;
   key(record: T): string;
   controllerActive?(record: T): boolean;
 }
@@ -138,6 +140,9 @@ export interface SqliteStateCollectionOptions<T> {
   controllerActive?(record: T): boolean;
   validate?(record: T): void;
   strictDecode?: boolean;
+  /** A parsed record this release cannot interpret stays in its original row.
+      JSON/decoder exceptions still indicate corruption and abort the read. */
+  preserveRejectedRecords?: boolean;
   decodeError?(error: unknown): Error;
   onDecodeError?(error: unknown): void;
   onIncrementalReadSnapshot?(revision: number): void;
@@ -495,7 +500,7 @@ function insertSeed<T>(db: Database, seed: StateCollectionSeed<T>): void {
     const key = seed.key(record);
     if (!key || seen.has(key)) throw new Error(`duplicate or empty ${seed.collection} migration key: ${key}`);
     seen.add(key);
-    insert.run(seed.collection, key, JSON.stringify(record), index, revision, seed.controllerActive?.(record) === false ? 0 : 1);
+    insert.run(seed.collection, key, seed.recordJson?.(records, index) ?? JSON.stringify(record), index, revision, seed.controllerActive?.(record) === false ? 0 : 1);
   });
 }
 
@@ -990,10 +995,10 @@ export class SqliteStateCollection<T> {
     return this.readDb.query<Pick<CollectionRow, "value_json">, [string, string, string, number]>(`
       SELECT value_json FROM state_rows
       WHERE collection = ? AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
-    `).all(this.options.collection, after, through, limit).map((row) => {
+    `).all(this.options.collection, after, through, limit).flatMap((row) => {
       const decoded = this.decodeRow(row.value_json);
-      if (decoded === null) throw new Error("invalid bounded state row");
-      return this.options.clone(decoded);
+      if (decoded === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+      return decoded === null ? [] : [this.options.clone(decoded)];
     });
   }
 
@@ -1025,13 +1030,17 @@ export class SqliteStateCollection<T> {
               ).get(this.options.collection, key);
               if (!row) return null;
               const value = this.decodeRow(row.value_json);
-              if (value === null) throw new Error("invalid bounded state row");
+              if (value === null) {
+                if (!this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+                return null;
+              }
               return this.options.clone(value);
             },
             put: (record) => {
               consume();
               this.validate(record);
               const key = this.options.key(record);
+              this.assertRowWritable(db, key);
               db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
                 VALUES (?,?,?,(SELECT COALESCE(MAX(row_order)+1,0) FROM state_rows WHERE collection=?),?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
                 value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
@@ -1040,6 +1049,7 @@ export class SqliteStateCollection<T> {
             },
             delete: (key) => {
               consume();
+              this.assertRowWritable(db, key);
               db.query("DELETE FROM state_rows WHERE collection = ? AND row_key = ?").run(this.options.collection, key);
               changed.set(key, "delete");
             },
@@ -1111,10 +1121,10 @@ export class SqliteStateCollection<T> {
     return this.readDb.query<{ value_json: string }, []>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
       WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
       AND json_extract(value_json, '$.publication') = 'remote-branch'
-      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed') ORDER BY row_key LIMIT 16`).all().map((row) => {
+      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed') ORDER BY row_key LIMIT 16`).all().flatMap((row) => {
       const decoded = this.decodeRow(row.value_json);
-      if (!decoded) throw new Error("invalid legacy pipeline row");
-      return this.options.clone(decoded);
+      if (!decoded && !this.options.preserveRejectedRecords) throw new Error("invalid legacy pipeline row");
+      return decoded ? [this.options.clone(decoded)] : [];
     });
   }
 
@@ -1236,6 +1246,7 @@ export class SqliteStateCollection<T> {
             const key = target.options.key(record);
             const valueJson = JSON.stringify(record);
             const controllerActive = target.options.controllerActive?.(record) === false ? 0 : 1;
+            target.assertRowWritable(db, key);
             const held = targetRows.get(key);
             return { key, valueJson, controllerActive, held, order: held?.row_order ?? targetOrder++ };
           });
@@ -1387,7 +1398,7 @@ export class SqliteStateCollection<T> {
   checkpointMirror(write: (records: readonly T[], revision: number) => void): void {
     const lease = this.acquireLeaseSync();
     try {
-      const records = this.snapshot();
+      const records = this.mirrorSnapshot();
       write(records, this.revision());
     } finally {
       this.releaseLeaseSync(lease);
@@ -1411,7 +1422,7 @@ export class SqliteStateCollection<T> {
       const lease = await this.acquireLease();
       let revision: number;
       try {
-        const records = this.snapshot();
+        const records = this.mirrorSnapshot();
         revision = this.revision();
         write(records, revision);
       } finally {
@@ -1420,6 +1431,19 @@ export class SqliteStateCollection<T> {
       if (this.revision() === revision) return revision;
     }
     throw new Error(`${this.options.collection} rollback checkpoint did not converge`);
+  }
+
+  /** Rollback mirrors include opaque records; controller snapshots exclude them. */
+  private mirrorSnapshot(): readonly T[] {
+    if (!this.options.preserveRejectedRecords) return this.snapshot();
+    const rows = this.readDb.query<{ value_json: string }, [string]>(
+      "SELECT value_json FROM state_rows WHERE collection = ? ORDER BY row_order, row_key",
+    ).all(this.options.collection);
+    const records = rows.map((row) => {
+      this.decodeRow(row.value_json); // strict parse before publication
+      return JSON.parse(row.value_json) as T;
+    });
+    return rememberRecordBytes(records, rows.map((row) => row.value_json), (record) => this.options.decode(record) !== null);
   }
 
   private collectionMeta(db = this.readDb): CollectionMeta | null {
@@ -1431,12 +1455,12 @@ export class SqliteStateCollection<T> {
   private decodeRow(valueJson: string): T | null {
     try {
       const decoded = this.options.decode(JSON.parse(valueJson) as unknown);
-      if (decoded === null && this.options.strictDecode) {
+      if (decoded === null && this.options.strictDecode && !this.options.preserveRejectedRecords) {
         throw new Error(`${this.options.collection} SQLite row is malformed`);
       }
       return decoded;
     } catch (error) {
-      if (this.options.strictDecode) {
+      if (this.options.strictDecode || this.options.preserveRejectedRecords) {
         throw this.options.decodeError?.(error) ?? error;
       }
       this.options.onDecodeError?.(error);
@@ -1604,6 +1628,18 @@ export class SqliteStateCollection<T> {
     this.options.validate?.(record);
   }
 
+  private protectedRow(row: { value_json: string } | null | undefined): boolean {
+    return Boolean(row && this.options.preserveRejectedRecords && this.decodeRow(row.value_json) === null);
+  }
+
+  private assertRowWritable(db: Database, key: string): void {
+    if (!this.options.preserveRejectedRecords) return;
+    const row = db.query<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",
+    ).get(this.options.collection, key);
+    if (this.protectedRow(row)) throw new Error(`refusing to overwrite preserved ${this.options.collection} record: ${key}`);
+  }
+
   private persistChangedRows(ownerToken: string, records: readonly T[]): void {
     for (const record of records) this.validate(record);
     const db = connectDatabase(this.filename);
@@ -1620,6 +1656,7 @@ export class SqliteStateCollection<T> {
           const key = this.options.key(record);
           const valueJson = JSON.stringify(record);
           const controllerActive = this.options.controllerActive?.(record) === false ? 0 : 1;
+          this.assertRowWritable(db, key);
           return { key, valueJson, controllerActive, row: current.get(this.options.collection, key) };
         });
         const actual = prepared.filter((entry) => (
@@ -1693,6 +1730,8 @@ export class SqliteStateCollection<T> {
           SELECT row_key, value_json, row_order, row_revision, controller_active
           FROM state_rows WHERE collection = ?
         `).all(this.options.collection).map((row) => [row.row_key, row] as const));
+        for (const key of [...seen, ...requestedDeletes]) this.assertRowWritable(db, key);
+        const protectedKeys = new Set([...current].filter(([, row]) => this.protectedRow(row)).map(([key]) => key));
         const encoded = records.map((record, index) => ({
           key: this.options.key(record),
           valueJson: JSON.stringify(record),
@@ -1708,7 +1747,7 @@ export class SqliteStateCollection<T> {
         });
         const deleted = mergeOmitted
           ? [...requestedDeletes].filter((key) => current.has(key))
-          : [...current.keys()].filter((key) => !seen.has(key));
+          : [...current.keys()].filter((key) => !seen.has(key) && !protectedKeys.has(key));
         const companionChanged = companion ? companion.collection.mergeRows(db, companion.lease, companion.records, companion.deleteKeys ?? []) : false;
         if (changed.length === 0 && deleted.length === 0) return companionChanged ? meta.revision : null;
         const nextRevision = meta.revision + 1;
@@ -1767,9 +1806,11 @@ export class SqliteStateCollection<T> {
     const upserts = records.flatMap((record) => {
       const key = this.options.key(record);
       const valueJson = JSON.stringify(record);
+      this.assertRowWritable(db, key);
       const held = current.get(this.options.collection, key);
       return held?.value_json === valueJson ? [] : [{ key, valueJson, held, controllerActive: this.options.controllerActive?.(record) === false ? 0 : 1 }];
     });
+    for (const key of deleteKeys) this.assertRowWritable(db, key);
     const deletes = deleteKeys.filter((key) => current.get(this.options.collection, key));
     if (!upserts.length && !deletes.length) return false;
     const revision = this.collectionMeta(db)!.revision + 1;

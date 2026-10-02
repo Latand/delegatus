@@ -34,9 +34,9 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const UUID = "11111111-2222-4333-8444-555555555555";
-const claudePath = `/home/u/.claude/projects/proj/${UUID}.jsonl`;
-const codexPath = `/home/u/.codex/sessions/2026/07/12/rollout-2026-07-12T00-00-00-${UUID}.jsonl`;
+const UUID = "11111111-2222-0333-8444-555555555555";
+const claudePath = `/fixture/.claude/projects/proj/${UUID}.jsonl`;
+const codexPath = `/fixture/.codex/sessions/2026/07/12/rollout-2026-07-12T00-00-00-${UUID}.jsonl`;
 
 function entry(over: Partial<FileEntry> = {}): FileEntry {
   return {
@@ -78,8 +78,8 @@ test("key precedence: conversation id wins, then session uuid, then path", () =>
 });
 
 test("path fallback when the filename carries no uuid", () => {
-  const noUuid = entry({ path: "/home/u/.claude/projects/proj/not-a-uuid.jsonl" });
-  expect(preferredTitleKey(noUuid)).toBe("path:/home/u/.claude/projects/proj/not-a-uuid.jsonl");
+  const noUuid = entry({ path: "/fixture/.claude/projects/proj/not-a-uuid.jsonl" });
+  expect(preferredTitleKey(noUuid)).toBe("path:/fixture/.claude/projects/proj/not-a-uuid.jsonl");
 });
 
 test("sanitize caps length, strips markdown, and treats blank as a clear", () => {
@@ -90,9 +90,9 @@ test("sanitize caps length, strips markdown, and treats blank as a clear", () =>
 
 test("isRenameableSessionPath rejects Claude subagent transcripts", () => {
   expect(isRenameableSessionPath(claudePath)).toBe(true);
-  expect(isRenameableSessionPath("/home/u/.claude/projects/proj/agent-123.jsonl")).toBe(false);
-  expect(isRenameableSessionPath("/home/u/.claude/projects/proj/abc/subagents/agent-9.jsonl")).toBe(false);
-  expect(isRenameableSessionPath("/home/u/.claude/projects/proj/abc/subagents/x.jsonl")).toBe(false);
+  expect(isRenameableSessionPath("/fixture/.claude/projects/proj/agent-123.jsonl")).toBe(false);
+  expect(isRenameableSessionPath("/fixture/.claude/projects/proj/abc/subagents/agent-9.jsonl")).toBe(false);
+  expect(isRenameableSessionPath("/fixture/.claude/projects/proj/abc/subagents/x.jsonl")).toBe(false);
 });
 
 test("set then clear leaves a tombstone and the label survives a reload (persistence)", () => {
@@ -180,8 +180,8 @@ test("alias conversation ids keep a title reachable and migrate it onto the cano
 
 test("a title filed under a predecessor generation is reachable and migrates via ownedPaths", () => {
   // The title was filed under a predecessor transcript's UUID key.
-  const predUuid = "22222222-2222-4333-8444-555555555555";
-  const predPath = `/home/u/.claude/projects/proj/${predUuid}.jsonl`;
+  const predUuid = "22222222-2222-0333-8444-555555555555";
+  const predPath = `/fixture/.claude/projects/proj/${predUuid}.jsonl`;
   const predKey = `uuid:claude:${predUuid}`;
   write(predKey, "Kept", undefined, "t1");
 
@@ -289,13 +289,16 @@ test("an unsupported schema version aborts a mutation", () => {
   expect(() => write("path:/x", "New", undefined, "t1")).toThrow(TitleStoreUnreadableError);
 });
 
-test("a malformed record aborts a mutation instead of silently dropping it", () => {
+test("a malformed record is preserved while healthy titles remain writable", () => {
   fs.writeFileSync(file, JSON.stringify({ version: 1, titles: [
     { key: "path:/a", title: "ok", revision: 1, updatedAt: "t" },
     { key: "path:/b", garbage: true },
   ] }));
-  expect(() => write("path:/x", "New", undefined, "t1")).toThrow(TitleStoreUnreadableError);
-  expect(JSON.parse(fs.readFileSync(file, "utf8")).titles).toHaveLength(2);
+  write("path:/x", "New", undefined, "t1");
+  expect(loadSessionTitles(file)).toHaveLength(2);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).titles).toHaveLength(3);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).titles.find((row: { key: string }) => row.key === "path:/b")).toEqual({ key: "path:/b", garbage: true });
+  expect(() => write("path:/b", "New", undefined, "t1")).toThrow("preserved title record");
 });
 
 test("read consumers degrade to no overrides on a corrupt store", () => {
@@ -327,4 +330,15 @@ test("store is capped to the newest records", () => {
   const stored = loadSessionTitles(file);
   expect(stored.length).toBeLessThanOrEqual(MAX_TITLE_OVERRIDES);
   expect(stored.some((record) => record.title === "fresh")).toBe(true);
+});
+
+
+test("title writes retain rejected record bytes and never evict them at the valid-record cap", () => {
+  const rejected = '{ "key" : "future-title", "revision" : "later", "extra" : [1, {"text":"brackets ] } and escaped \\" quote"}] }';
+  fs.writeFileSync(file, `{"version":1,"titles":[${rejected}]}`);
+  const rows = Array.from({ length: MAX_TITLE_OVERRIDES + 1 }, (_, index) => ({ key: `title-${index}`, title: "Name", revision: 1, updatedAt: `t${index}` }));
+  saveSessionTitles(rows, file);
+  write("new-title", "New", undefined, "t2");
+  expect(readSessionTitles(file)).toHaveLength(MAX_TITLE_OVERRIDES);
+  expect(fs.readFileSync(file, "utf8")).toContain(rejected);
 });

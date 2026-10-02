@@ -290,7 +290,7 @@ test.each(["max", "ultra"])("Astra %s pipelines persist creation and stage edits
   }
 });
 
-test("pipeline mutations preserve corrupt and future-schema registries", async () => {
+test("pipeline mutations refuse corrupt files and preserve individual rejected records", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipelines-corrupt-"));
   process.env.LLV_STATE_DIR = sandbox;
@@ -305,27 +305,31 @@ test("pipeline mutations preserve corrupt and future-schema registries", async (
       { id: "build", kind: "run", prompt: "build", next: "verify", effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } },
       { id: "verify", kind: "run", prompt: "verify", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } },
     ];
-    const rejectsWithoutRewrite = async (pipeline: unknown) => {
+    const preservesRejectedRecord = async (pipeline: unknown) => isolatedDelivery(async (root) => {
+      const filename = path.join(root, "pipelines.json");
       const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] });
-      fs.writeFileSync(file, bytes, "utf8");
-      await expect(withPipelineMutation((_pipelines, persist) => persist())).rejects.toThrow("malformed records");
-      expect(fs.readFileSync(file, "utf8")).toBe(bytes);
-    };
+      fs.writeFileSync(filename, bytes, "utf8");
+      await withPipelineMutation((records, persist) => { expect(records).toEqual([]); persist(); });
+      expect(fs.readFileSync(filename, "utf8")).toBe(bytes);
+      const db = new Database(path.join(root, "state.sqlite"));
+      try { expect(db.query("SELECT COUNT(*) AS count FROM state_rows WHERE collection='pipelines'").get()).toEqual({ count: 1 }); }
+      finally { db.close(); }
+    });
     const malformed = buildPipeline({ id: "badbad12", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" }) as unknown as Record<string, unknown>;
     malformed.state = "teleported";
-    await rejectsWithoutRewrite(malformed);
+    await preservesRejectedRecord(malformed);
 
     const incompatible = buildPipeline({ id: "badrole1", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     incompatible.stages[0]!.effectiveRole.model = "fable";
-    await rejectsWithoutRewrite(incompatible);
+    await preservesRejectedRecord(incompatible);
 
     const unsafeWorktree = buildPipeline({ id: "badpath1", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     unsafeWorktree.worktreeDir = "/repo";
-    await rejectsWithoutRewrite(unsafeWorktree);
+    await preservesRejectedRecord(unsafeWorktree);
 
     const mismatchedRole = buildPipeline({ id: "badrole2", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     mismatchedRole.stages[0]!.role = { roleId: "builder" };
-    await rejectsWithoutRewrite(mismatchedRole);
+    await preservesRejectedRecord(mismatchedRole);
 
     const expandedVerdict = buildPipeline({ id: "badverdt", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     expandedVerdict.runs[0]!.attempts.push({
@@ -346,7 +350,7 @@ test("pipeline mutations preserve corrupt and future-schema registries", async (
       verdict: { status: "pass", findings: Array.from({ length: 51 }, () => "finding") },
       error: null,
     });
-    await rejectsWithoutRewrite(expandedVerdict);
+    await preservesRejectedRecord(expandedVerdict);
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -867,14 +871,15 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
     const original = read().value_json;
     for (const corrupt of ["{broken", JSON.stringify({ ...pipeline, runs: null })]) {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(corrupt, collection, pipeline.id);
-      expect(() => loadPipelinesForStartup()).toThrow();
+      if (corrupt === "{broken") expect(() => loadPipelinesForStartup()).toThrow();
+      else expect(loadPipelinesForStartup()).toEqual([]);
       expect(read().value_json).toBe(corrupt);
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(original, collection, pipeline.id);
       expect(loadPipelinesForStartup()).toHaveLength(1);
     }
     if (collection === "pipelines_archive") {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run("{broken", collection, pipeline.id);
-      expect(loadArchivedPipelines()).toEqual([]);
+      expect(() => loadArchivedPipelines()).toThrow();
       expect(read().value_json).toBe("{broken");
     } else {
       db.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive',?,?,?,?,0)").run(pipeline.id, original, 0, 1);
@@ -897,7 +902,7 @@ test.each(["pipelines.json", "pipelines-archive.json"])("startup preserves malfo
   const archive = path.join(sandbox, filename);
   try {
     expect(loadPipelinesForStartup()).toEqual([]); // ENOENT is valid empty evidence.
-    for (const corrupt of ["null", "false", "[]", "{broken", JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [{}] })]) {
+    for (const corrupt of ["null", "false", "[]", "{broken"]) {
       fs.writeFileSync(archive, corrupt);
       expect(await withPipelineStartupAdmission(async (available) => available)).toBeFalse();
       expect(fs.readFileSync(archive, "utf8")).toBe(corrupt);
