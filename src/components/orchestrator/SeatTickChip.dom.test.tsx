@@ -834,13 +834,26 @@ test("maintenance: a held launch says why, and an unreadable run store warns whi
  * Progressive disclosure: a field is shown while it does something.
  */
 
-test("the interval is hidden while the wake switch is off, and Until and Reason appear only off the defaults", async () => {
+test("the panel offers instructions for every wake even at the default cadence", async () => {
+  const { root } = await mount();
+  await open(root);
+  const instruction = field<HTMLTextAreaElement>("[data-seat-tick-reason]");
+  expect(instruction).not.toBeNull();
+  expect(instruction.closest("label")?.textContent).toContain("Instructions for every wake");
+  expect(instruction.closest("label")?.textContent).toContain("The agent receives these instructions on every wake");
+  type(instruction, "Handle the inbox by priority.");
+  press(save());
+  await settle(root);
+  expect(puts()[0]!.body).toMatchObject({ reason: "Handle the inbox by priority." });
+});
+
+test("the interval is hidden while the wake switch is off, and Until appears only off the defaults", async () => {
   const { root } = await mount();
   await open(root);
   /* On the defaults: the interval, and nothing to expire or explain. */
   expect(body().querySelector("[data-seat-tick-interval]")).not.toBeNull();
   expect(body().querySelector("[data-seat-tick-until]")).toBeNull();
-  expect(body().querySelector("[data-seat-tick-reason]")).toBeNull();
+  expect(body().querySelector("[data-seat-tick-reason]")).not.toBeNull();
   expect(restore()).toBeNull();
 
   /* Typing an interval leaves the defaults: Until and Reason arrive. */

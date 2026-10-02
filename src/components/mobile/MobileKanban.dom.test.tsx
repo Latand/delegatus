@@ -92,10 +92,12 @@ const asking = (index: number) => file(index, {
 } as Partial<FileEntry>);
 
 function task(id: string, status: TaskStatus, paths: readonly string[] = [], text = `Task ${id}`): BoardTask {
+  /* Done fixtures stay inside retention relative to the same clock as the board. */
+  const at = new Date((NOW - 600) * 1_000).toISOString();
   return {
     id, project: "fixture", text, status, placement: "unplaced", revision: `r-${id}-1`,
-    assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" })),
-    createdAt: "2026-09-14T10:00:00.000Z", updatedAt: "2026-09-14T10:00:00.000Z",
+    assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at })),
+    createdAt: at, updatedAt: at,
   } as BoardTask;
 }
 

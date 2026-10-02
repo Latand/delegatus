@@ -1,7 +1,9 @@
 import { Children, isValidElement, type ReactElement } from "react";
 import { describe, expect, test } from "bun:test";
 
-import { md } from "./markdown";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { advanceMdStream, createMdStream, md, mdBlocks } from "./markdown";
 
 type AnchorProps = { href?: string; label?: string };
 type ImgProps = { alt?: string; src?: string };
@@ -110,5 +112,32 @@ describe("feed markdown images", () => {
     const img = findImg(md("![shot](https://example.com/a.png)"));
     expect(img).not.toBeNull();
     expect(img!.props.src).toBe("https://example.com/a.png");
+  });
+});
+
+describe("feed markdown lists", () => {
+  const html = (text: string) => renderToStaticMarkup(<>{mdBlocks(text)}</>);
+
+  test("renders a dash, star or plus item as a bullet row without the literal marker", () => {
+    const out = html("Steps:\n- first\n* second\n+ third");
+    expect(out).not.toContain("- first");
+    expect(out).not.toContain("* second");
+    expect(out.match(/•/g)).toHaveLength(3);
+    expect(out).toContain("first");
+    expect(out).toContain("third");
+  });
+
+  test("indents a nested item and keeps ordinary lines as text", () => {
+    const out = html("- top\n    - nested\n---\n**bold** line");
+    expect(out).toContain("margin-left:2rem");
+    expect(out).toContain("---");
+  });
+
+  test("the streaming machine settles on the same markup as the one-shot pass", () => {
+    const text = "Plan:\n- one\n- two\n\ndone";
+    const state = createMdStream();
+    advanceMdStream(state, text.slice(0, 12), true);
+    const settled = renderToStaticMarkup(<>{advanceMdStream(state, text, false)}</>);
+    expect(settled).toBe(html(text));
   });
 });

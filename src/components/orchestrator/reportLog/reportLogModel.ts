@@ -56,18 +56,33 @@ export function bodySegments(body: string, github: string | null, cards: readonl
   return segments;
 }
 
+const ENTRY_TIME_OPTIONS = {
+  clock: { hour: "2-digit", minute: "2-digit", hour12: false },
+  day: { day: "numeric", month: "short" },
+  yearDay: { day: "numeric", month: "short", year: "numeric" },
+} as const satisfies Record<string, Intl.DateTimeFormatOptions>;
+const ENTRY_TIME_FORMATS = new Map<string, Intl.DateTimeFormat>();
+
+function entryTimeFormat(locale: string, kind: keyof typeof ENTRY_TIME_OPTIONS): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale, kind]);
+  let formatter = ENTRY_TIME_FORMATS.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, ENTRY_TIME_OPTIONS[kind]);
+    // The public helper accepts arbitrary locale strings; bound retained formats.
+    if (ENTRY_TIME_FORMATS.size >= 48) ENTRY_TIME_FORMATS.delete(ENTRY_TIME_FORMATS.keys().next().value!);
+    ENTRY_TIME_FORMATS.set(key, formatter);
+  }
+  return formatter;
+}
+
 /** The entry's local time: the clock alone today, the day and the clock before. */
 export function entryTime(at: string, locale: string, now: Date = new Date()): string {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return "";
   const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+  const clock = entryTimeFormat(locale, "clock").format(date);
   if (sameDay) return clock;
-  const day = new Intl.DateTimeFormat(locale, {
-    day: "numeric",
-    month: "short",
-    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-  }).format(date);
+  const day = entryTimeFormat(locale, date.getFullYear() === now.getFullYear() ? "day" : "yearDay").format(date);
   return `${day} ${clock}`;
 }
 

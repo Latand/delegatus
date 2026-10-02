@@ -1007,6 +1007,8 @@
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }
+/* A launched reader keeps the height of the draft it came from (launchedConversations.ts). */
+.kb .reader.conv.launched:not(.folded):not(.in-sheet):not(.full) { height: var(--conv-in-card-h); }
 .kb .reader.conv:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
 .kb .reader.conv.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); }
 .kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
