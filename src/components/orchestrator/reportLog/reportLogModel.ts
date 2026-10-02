@@ -56,19 +56,23 @@ export function bodySegments(body: string, github: string | null, cards: readonl
   return segments;
 }
 
-/* A formatter is built once per locale and shape: a log of thirty entries built
-   sixty of them on every render, which was the log's whole cost (#2218). */
-const formatters = new Map<string, Intl.DateTimeFormat>();
-function formatter(locale: string, shape: "clock" | "day" | "dayYear"): Intl.DateTimeFormat {
-  const key = `${locale}|${shape}`;
-  let made = formatters.get(key);
-  if (!made) {
-    made = new Intl.DateTimeFormat(locale, shape === "clock"
-      ? { hour: "2-digit", minute: "2-digit", hour12: false }
-      : { day: "numeric", month: "short", ...(shape === "dayYear" ? { year: "numeric" } : {}) });
-    formatters.set(key, made);
+const ENTRY_TIME_OPTIONS = {
+  clock: { hour: "2-digit", minute: "2-digit", hour12: false },
+  day: { day: "numeric", month: "short" },
+  yearDay: { day: "numeric", month: "short", year: "numeric" },
+} as const satisfies Record<string, Intl.DateTimeFormatOptions>;
+const ENTRY_TIME_FORMATS = new Map<string, Intl.DateTimeFormat>();
+
+function entryTimeFormat(locale: string, kind: keyof typeof ENTRY_TIME_OPTIONS): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale, kind]);
+  let formatter = ENTRY_TIME_FORMATS.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, ENTRY_TIME_OPTIONS[kind]);
+    // The public helper accepts arbitrary locale strings; bound retained formats.
+    if (ENTRY_TIME_FORMATS.size >= 48) ENTRY_TIME_FORMATS.delete(ENTRY_TIME_FORMATS.keys().next().value!);
+    ENTRY_TIME_FORMATS.set(key, formatter);
   }
-  return made;
+  return formatter;
 }
 
 /** The entry's local time: the clock alone today, the day and the clock before. */
@@ -76,9 +80,9 @@ export function entryTime(at: string, locale: string, now: Date = new Date()): s
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return "";
   const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  const clock = formatter(locale, "clock").format(date);
+  const clock = entryTimeFormat(locale, "clock").format(date);
   if (sameDay) return clock;
-  const day = formatter(locale, date.getFullYear() === now.getFullYear() ? "day" : "dayYear").format(date);
+  const day = entryTimeFormat(locale, date.getFullYear() === now.getFullYear() ? "day" : "yearDay").format(date);
   return `${day} ${clock}`;
 }
 

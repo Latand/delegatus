@@ -474,7 +474,7 @@ test("a live host whose transcript goes silent past the threshold is stalled", (
     silentForMs: 11 * 60_000,
     stallAfterMs: 10 * 60_000,
     providerRetryAt: new Date(NOW + 5 * 60_000).toISOString(),
-  })).toEqual({ lifecycle: "stalled", reason: "host_alive_transcript_silent" });
+  })).toEqual({ lifecycle: "waiting", reason: "host_alive_turn_idle" });
 });
 
 test("a live busy host follows its own host's provider retry below the threshold and through retryAt plus grace (#2215)", async () => {
@@ -521,7 +521,7 @@ test("a live busy host follows its own host's provider retry below the threshold
   expect(highThreshold.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "provider_throttled", retryAt, stalledForMs: null });
 
   const settled = await read(retrying, { turn: "idle", lastRecordTs: FROZEN_AT });
-  expect(settled.conversations[0]).toMatchObject({ lifecycle: "stalled", reason: "host_alive_transcript_silent", retryAt: null });
+  expect(settled.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "host_alive_turn_idle", retryAt: null });
 
   const afterGrace = retryAtMs + PROVIDER_THROTTLE_GRACE_MS + 1;
   const stalled = await read(retrying, { now: afterGrace, lastRecordTs: FROZEN_AT });

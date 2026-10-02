@@ -29,7 +29,7 @@ const REVIEW_FRAME_RULES =
 // and stages kept re-solving what an earlier one had already solved. Pipeline
 // stages inherit the scaffold, so the sentence lives here once.
 const SEARCH_PRIOR_CONVERSATIONS =
-  "Before deciding, and whenever a problem or unknown appears, ask whether it was solved before: run a few search_transcripts queries in different phrasings (project-scoped, then unscoped), read any hit through conversation_messages at its transcript path, cite what you found or say nothing relevant existed, and check an old answer against the code as it is now before building on it.";
+  "Before deciding, and whenever a problem or unknown appears, ask whether it was solved before: run a few search_transcripts and search_memory queries in different phrasings (project-scoped, then unscoped), read transcript hits through conversation_messages at their transcript paths and memory hits through search_memory by id, cite what you found or say nothing relevant existed, and check an old answer against the code as it is now before building on it.";
 
 // #1843 — a builder whose live probes hit HTTP 429 finished the feature on an
 // invented response key and noted the gap in the PR; the reviewer passed it.
@@ -114,7 +114,7 @@ b. Blocked and news. Blocked is only for a wait outside Delegatus (an operator d
 c. Half done. When part of a task's outcome shipped and the rest did not, mark it done with a sentence saying what shipped, then create_task a continuation in the same project with the same icon and colour: its text names what remains, and its details name the predecessor's task id. Append a line to the predecessor's details naming the continuation's id.
 d. Inbox. Review inbox tasks by priority and description. Change a priority only where it is clearly wrong, and put the tasks the operator should look at first on your attention list.
 e. Titles and looks. Retitle placeholders, role names, stage ids and prompt excerpts with a human title of 3 to 10 words in the operator's interface language. Fill a missing icon or colour by the colour rule in create_task's description.
-7. Done means shipped: the task's pull request is merged and running in production (the brief says what production runs, or how to tell), or the task says no deploy is needed, and nothing it promised is still open. A task that is merged and not deployed stays open, and its text says so.
+7. A PR closed with a "Landed on main as <sha> through #B" comment counts as merged after verifying that commit is on main through the named batch. Done means shipped: the task's pull request is merged and running in production (the brief says what production runs, or how to tell), or the task says no deploy is needed, and nothing it promised is still open. A task that is merged and not deployed stays open, and its text says so.
 8. Nothing closes to tidy up. Confirmed retired seat cards are the history exception described above. A task that is old (no work for 7 days, judged by its newest assignment, stage attempt or pull request activity and never by updatedAt, which bulk writes refresh), empty, duplicated or unclear goes on your attention list with 2 or 3 options, and stays open. A pipeline its details name that no longer exists is a note on that task.
 9. Writing. Send each task's changes in one update_task call where you can. Change details only with appendLine or replaceLine, and give every change one appended line: "Maintenance <date>: <what changed> — <evidence>". Task text is for a person: a title, then at most a few plain sentences. When create_task answers TASK_BOARD_FULL, create the task with board: "hidden" and say so on your attention list.
 10. Finish. Before the last line of your final message, write one line per fact in exactly this form:
@@ -238,6 +238,19 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     promptScaffold: `You are a Deployer.\nMerged commit: {{sha}}\nPull request: {{pr}}\n\nFollow the project's own release procedure as the brief and the project's instruction files describe it. Prefer a path that keeps the current version serving until the new one is healthy, and validate the new version before traffic moves to it. A brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved mutating steps is explicit operator approval: run those steps in order without asking again. Without that approval, plan the path, validate what can be validated without mutation, present each mutating step for approval, then stop. Stop on failed health, a resource wait that does not clear, an unexpected migration or dependency change, an error spike, or a step nobody approved. Verdict: needs_decision when you stop for approval, with the steps to approve in your report; pass when the approved steps ran and the new version is healthy; fail when a step failed or health did not return. ${SHARED_RULES}`,
     safetyFences: ["Every mutating production step requires explicit operator approval; a brief or follow-up from the spawning orchestrator seat that quotes the operator's go and lists the approved steps supplies it.", "Keep the current version serving until its replacement is healthy; an explicitly approved in-place restart proceeds one instance at a time, each healthy before the next."],
     capabilities: ["production-write"],
+  },
+  {
+    id: "merger", name: "Merger",
+    description: "Batches reviewed PRs; sends resolutions for review.",
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    parameters: [{ key: "prs", label: "Reviewed PRs", description: "Comma-separated N@reviewedSha pairs.", kind: "text", required: true }],
+    promptScaffold: `You are a Merger. Reviewed PRs: {{prs}}. Use scripts/merge-batch.ts: build with the pairs, gate, then land. The script owns a temporary batch worktree and records its run in $TMPDIR/merge-batch.json; inspect that record and its report. Combine clean reviewed patches as one commit per PR, run local gates through /var/tmp/llv-gate, and land the batch with rebase and an exact head match. A conflict or changed patch is deferred for this pass. After the batch lands, run resolve N for each deferred PR, resolve its conflicts in the recorded worktree, stage only those resolutions and run resolve N again to gate and fast-forward its branch. Never judge your own resolution: report needs-review with its SHA so the seat sends git show --remerge-diff to a reviewer for the next batch. A culprit goes back to its lane as a finding. End with one row per listed PR (merged <main sha>, needs-review <sha>, culprit <check: excerpt>, head-moved) and the batch URL. Pass when every input has a row and the batch merged or is empty; fail on an unattributable red, repeated main movement or inaccessible gh. ${SHARED_RULES}`,
+    safetyFences: [
+      "Push only the batch branch you created and fast-forwards of a listed PR's branch. Never push main, force-push another branch, or change repository settings or branch protection.",
+      "Merge only listed PRs at their reviewed heads. Use the launched machine noreply identity and machine noreply trailers only. Public bodies, comments and reports carry no identities.",
+      "Never start a child agent or pipeline. A conflict resolution always returns to an independent reviewer before merging.",
+    ],
+    capabilities: [],
   },
   {
     id: "maintainer", name: "Maintainer",

@@ -182,6 +182,8 @@ export function attentionExpiries(files: readonly FileEntry[]): number[] {
       const at = isoSeconds(ask.at);
       if (at !== null) expiries.push(at + BRIDGE_ASK_TTL_SECONDS);
     }
+    const memoryAt = file.memoryKill ? isoSeconds(file.memoryKill.at) : null;
+    if (memoryAt !== null) expiries.push(memoryAt + 24 * 3600);
     const deliverySince = file.stuckDelivery ? isoSeconds(file.stuckDelivery.since) : null;
     if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000);
   }
@@ -198,6 +200,7 @@ export function attentionExpiries(files: readonly FileEntry[]): number[] {
  */
 export interface ConversationReason {
   kind: ConversationReasonKind;
+  memory?: FileEntry["memoryKill"];
   /** The shared attention identity: the push dedupe key and the cycle anchor. */
   id: string;
   since: number;
@@ -342,6 +345,13 @@ function undismissedReason(file: FileEntry, now: number): ConversationReason | n
       header: file.spawn?.error?.trim().split("\n", 1)[0] || null,
       dismissal: null,
     };
+  }
+  const memory = file.memoryKill;
+  const memoryAt = memory ? Date.parse(memory.at) / 1000 : NaN;
+  if (memory && Number.isFinite(memoryAt) && memoryAt <= now && now - memoryAt < 24 * 3600) {
+    const membership = file.durableLineage?.memberships.findLast((row) => row.kind === "pipeline");
+    return { kind: "memory", id: `${file.path}:memory:${memory.at}`, since: memoryAt, raisedAt: memoryAt, clocked: true,
+      header: membership?.stageId || file.durableLineage?.role || null, memory, dismissal: null };
   }
   /* Last: an inference from the agent's own words, below every structured
      signal (docs/research/attention-classifier.md §7.3). */

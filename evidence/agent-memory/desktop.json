@@ -1,0 +1,19 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 307,
+      "right": 1434,
+      "overflow": false,
+      "errors": []
+    },
+    {
+      "locale": "uk",
+      "width": 307,
+      "right": 1434,
+      "overflow": false,
+      "errors": []
+    }
+  ]
+}
