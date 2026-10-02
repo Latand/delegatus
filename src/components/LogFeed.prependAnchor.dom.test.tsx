@@ -93,6 +93,20 @@ for (const movement of [0, 60, -60]) {
   });
 }
 
+test("an older page keeps the DOM node of every row that was already on screen", async () => {
+  const scroller = await mount(); request(); scroller.scrollTop = 140;
+  const nodes = () => new Map([...host.querySelectorAll<HTMLElement>("[data-feed-key]")].map((row) => [row.dataset.feedKey!, row]));
+  const before = nodes();
+  expect([...before.keys()]).toEqual(["group:3:0", "row:5:0", "row:6:0", "row:7:0"]);
+  tail = { ...tail, lines, linesStart: 0, prependGen: 1, hasMore: false };
+  render(); finish(3); await wait(); render();
+  const after = nodes();
+  expect([...after.keys()]).toEqual(["row:0:0", "row:1:0", "row:2:0", "group:3:0", "row:5:0", "row:6:0", "row:7:0"]);
+  /* A re-parse of the window must not hand the rows new React keys: a new key
+     unmounts the row and mounts another, for every row, on every page. */
+  for (const key of before.keys()) expect(after.get(key)).toBe(before.get(key)!);
+});
+
 test("interleaved tail growth and media below the reader do not enter prepend compensation", async () => {
   const scroller = await mount(); request(); scroller.scrollTop = 140;
   tail = { ...tail, lines: [...tail.lines, message("tail-arrival")] }; render();
@@ -120,6 +134,8 @@ test("a previous conversation response cannot reveal more rows in the new projec
   tail = { ...tail, lines: Array.from({ length: 1700 }, (_, i) => message(`other-${i}`, i % 2 ? "assistant" : "user")),
     linesStart: 0, hasMore: false, prependGen: 0 };
   render(); await wait(); render();
+  /* The window grows a few rows per frame, not all at once. */
+  for (let frames = 0; frames < 40 && host.querySelectorAll("[data-feed-key]").length < 1500; frames += 1) { await wait(); render(); }
   expect(host.querySelectorAll("[data-feed-key]").length).toBe(1500);
   oldFinish(3); await wait(); render();
   expect(host.querySelectorAll("[data-feed-key]").length).toBe(1500);

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
-import { Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ArrowDown, ChevronUp, Sparkle } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -99,6 +99,13 @@ type ConversationRow =
     continues (null: none in the window). */
 type SeatResume = { ask: string | null };
 
+/* How many screens from the top the reader is when the next page of history
+   starts loading, so the page is usually there before the top is. */
+const PREFETCH_SCREENS = 2;
+/* Rows an older-history reveal mounts per animation frame. A step is
+   RENDER_STEP rows; mounting them in one commit is a frame of 300 ms or more,
+   and the reader scrolling up is looking at the rows the first few frames add. */
+const REVEAL_RAMP_ROWS = 80;
 /** Items rendered initially and added per «show earlier» step. */
 const RENDER_STEP = 1500;
 /** Compact scheme panes keep the DOM small — five agents on the canvas must
@@ -185,7 +192,8 @@ function viewportAnchor(scroller: HTMLElement, path: string): ViewportAnchor | n
 }
 
 function rowForAnchor(scroller: HTMLElement, key: string): HTMLElement | null {
-  return feedRows(scroller).find((row) => row.dataset.feedKey === key) ?? null;
+  /* The browser's own attribute lookup, not a pass over every row in script. */
+  return scroller.querySelector<HTMLElement>(`[data-feed-key="${key.replace(/["\\]/g, "\\$&")}"]`);
 }
 
 interface PrependViewportProps {
@@ -415,6 +423,39 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const revealStep = compact ? COMPACT_STEP : RENDER_STEP;
   const firstPaintCount = Math.min(FIRST_PAINT_ROWS, initialCount);
   const [visibleCount, setVisibleCount] = useState(firstPaintCount);
+  /* The count the ramp builds on: `visibleCount` as of the last commit, plus
+     what the ramp has asked for since. */
+  const visibleCountRef = useRef(visibleCount);
+  useLayoutEffect(() => { visibleCountRef.current = visibleCount; }, [visibleCount]);
+  const rampTargetRef = useRef<number | null>(null);
+  const rampHandleRef = useRef<number | null>(null);
+  /* How many rows the feed holds, read by a ramp that outlives its render. */
+  const itemCountRef = useRef(0);
+  /* Moves the rendered count toward `target` REVEAL_RAMP_ROWS per animation
+     frame, instead of mounting every row in one commit. */
+  const rampVisibleTo = useCallback((target: number) => {
+    if (rampTargetRef.current !== null) {
+      rampTargetRef.current = Math.max(rampTargetRef.current, target);
+      return;
+    }
+    rampTargetRef.current = target;
+    const advance = () => {
+      rampHandleRef.current = null;
+      const goal = rampTargetRef.current;
+      if (goal === null) return;
+      const next = Math.min(goal, visibleCountRef.current + REVEAL_RAMP_ROWS);
+      visibleCountRef.current = next;
+      setVisibleCount(next);
+      if (next >= goal || (itemCountRef.current > 0 && next >= itemCountRef.current)) {
+        rampTargetRef.current = null;
+      } else {
+        rampHandleRef.current = typeof requestAnimationFrame === "function"
+          ? requestAnimationFrame(advance)
+          : (setTimeout(advance, 0) as unknown as number);
+      }
+    };
+    advance();
+  }, []);
   const [newCount, setNewCount] = useState(0);
   const [pulse, setPulse] = useState(false);
   const [endedQuestion, setEndedQuestion] = useState<string | null>(null);
@@ -582,11 +623,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const cancel = (handle: number) => (raf ? cancelAnimationFrame(handle) : clearTimeout(handle));
     let handle = schedule(() => {
       handle = schedule(() => {
-        setVisibleCount((count) => Math.max(count, initialCount));
+        rampVisibleTo(initialCount);
       });
     });
     return () => cancel(handle);
-  }, [tailPath, initialCount, firstPaintCount]);
+  }, [tailPath, initialCount, firstPaintCount, rampVisibleTo]);
   /* Same instance, new transcript: pick up that transcript's remembered state. */
   useEffect(() => {
     if (!memoryKey) return;
@@ -705,6 +746,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     feed.items,
     awaitingSubmissions,
   );
+  useLayoutEffect(() => { itemCountRef.current = feed.items.length; }, [feed.items.length]);
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
@@ -778,6 +820,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     return () => {
       historyOwnerRef.current = {};
       olderRequestRef.current = null;
+      rampTargetRef.current = null;
+      if (rampHandleRef.current !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(rampHandleRef.current);
+        else clearTimeout(rampHandleRef.current);
+        rampHandleRef.current = null;
+      }
     };
   }, [tailPath, memoryKey]);
 
@@ -837,16 +885,21 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     return () => observer.disconnect();
   }, []);
 
+  /* One reveal step, a few rows per frame. A reveal asked for while a ramp is
+     still running is the same ask, so it adds nothing. */
+  const growVisibleBy = (step: number) => {
+    if (rampTargetRef.current === null) rampVisibleTo(visibleCountRef.current + step);
+  };
   const revealOlder = () => {
     if (hiddenLocal) {
-      setVisibleCount((value) => value + revealStep);
+      growVisibleBy(revealStep);
     } else if (tail.hasMore && !olderRequestRef.current) {
       const owner = historyOwnerRef.current;
       const request = {};
       olderRequestRef.current = request;
       void tail.loadOlder().then((added) => {
         if (historyOwnerRef.current === owner && added > 0) {
-          setVisibleCount((value) => value + revealStep);
+          growVisibleBy(revealStep);
         }
       }).finally(() => {
         if (olderRequestRef.current === request) olderRequestRef.current = null;
@@ -854,6 +907,18 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
   };
   const canRevealOlder = hiddenLocal > 0 || tail.hasMore;
+  /* Fetches the next page of history before the reader reaches the top, without
+     showing it: the rows stay hidden until the reader gets there, and then they
+     reveal from memory instead of waiting on a request. */
+  const prefetchOlder = () => {
+    if (hiddenLocal || !tail.hasMore || olderRequestRef.current) return;
+    const owner = historyOwnerRef.current;
+    const request = {};
+    olderRequestRef.current = request;
+    void tail.loadOlder().finally(() => {
+      if (historyOwnerRef.current === owner && olderRequestRef.current === request) olderRequestRef.current = null;
+    });
+  };
 
   const lastItem = feed.items.at(-1)?.item;
   const transcriptWorking: { icon: LucideIcon; label: string } =
@@ -1558,7 +1623,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               anchor: magnetRef.current ? null : viewportAnchor(el, tailPath ?? file.path),
             });
           }
-          if (el.scrollTop < 120 && canRevealOlder && !tail.loadingOlder && !tail.loading) revealOlder();
+          if (!tail.loadingOlder && !tail.loading) {
+            if (el.scrollTop < 120 && canRevealOlder) revealOlder();
+            else if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
+          }
           if (!magnetRef.current) scheduleRestAlign();
         }}
       >
@@ -1648,7 +1716,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
-                    className={compact ? "feed-cv" : undefined}
+                    className="feed-cv"
                   >
                     <FeedMessageRow
                       entry={row.entry}
@@ -1668,8 +1736,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               const foldResumes = resumes !== undefined && phone && item.kind === "prose";
               return (
                 /* Session-stable keys: a row keeps its DOM node while the
-                   window slides. Compact panes live on the zoomable canvas:
-                   off-screen rows skip layout/paint via content-visibility. */
+                   window slides, and an older page prepended to it. Off-screen
+                   rows skip layout/paint via content-visibility, on the
+                   zoomable canvas and in the focused reader alike; the text
+                   they skip stays findable and copyable. */
                 <div
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
@@ -1680,7 +1750,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
                     : item.kind === "tool" ? String(item.srcCall) : undefined}
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
-                  className={compact ? "feed-cv" : undefined}
+                  className="feed-cv"
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
                   <GalleryOwnerProvider value={item}>
