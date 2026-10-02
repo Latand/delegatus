@@ -20,7 +20,7 @@ const OPEN_INTERVAL_MS = 15_000;
 const IDLE_FIRST_MS = 30_000;
 const IDLE_MAX_MS = 300_000;
 
-type Plan = { nextAt: number; idle: number; burstUntil: number; failures: number; running: boolean };
+type Plan = { lastCallAt: number; nextAt: number; idle: number; burstUntil: number; failures: number; running: boolean };
 
 export interface SchedulePorts {
   now(): number;
@@ -55,9 +55,11 @@ export class LinkedBoardSchedule {
     const runs: Promise<void>[] = [];
     for (const link of links) {
       let plan = this.plans.get(link.id);
-      if (!plan) { plan = { nextAt: now, idle: IDLE_FIRST_MS, burstUntil: 0, failures: 0, running: false }; this.plans.set(link.id, plan); }
+      if (!plan) { plan = { lastCallAt: now, nextAt: now, idle: IDLE_FIRST_MS, burstUntil: 0, failures: 0, running: false }; this.plans.set(link.id, plan); }
       if (plan.running) continue;
       if (revisionMoved && plan.failures === 0 && this.ports.hasPush(link.id, link.projects)) plan.nextAt = Math.min(plan.nextAt, now);
+      // Opening a previously idle board must shorten the already-armed wait.
+      if (plan.failures === 0 && this.ports.boardOpen(link.projects)) plan.nextAt = Math.min(plan.nextAt, plan.lastCallAt + OPEN_INTERVAL_MS);
       if (now < plan.nextAt) continue;
       runs.push(this.run(link, plan));
     }
@@ -77,6 +79,7 @@ export class LinkedBoardSchedule {
     try {
       const { moved } = await this.ports.sync(link.id);
       const now = this.ports.now();
+      plan.lastCallAt = now;
       plan.failures = 0;
       if (moved > 0) { plan.burstUntil = now + BURST_MS; plan.idle = IDLE_FIRST_MS; }
       if (this.ports.boardOpen(link.projects)) plan.nextAt = now + OPEN_INTERVAL_MS;

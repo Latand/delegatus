@@ -1113,3 +1113,15 @@ test("MCP pipeline tools describe default 3 and accept an explicit higher budget
   });
   expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
 });
+
+
+test("search order is optional and advertised with relevance and newest choices", async () => {
+  expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion" }).success).toBe(true);
+  expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion", order: "other" }).success).toBe(false);
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+    const schema = listed.tools.find((tool) => tool.name === "search_transcripts")!.inputSchema;
+    expect((schema.properties!.order as { enum: string[] }).enum).toEqual(["relevance", "newest"]);
+    expect(schema.required).not.toContain("order");
+  });
+});

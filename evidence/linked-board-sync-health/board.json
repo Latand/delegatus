@@ -1,0 +1,113 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "width": 1440,
+      "locale": "en",
+      "readings": {
+        "synced": {
+          "text": "Stage · synced",
+          "colour": "rgb(23, 122, 55)",
+          "clipped": false
+        },
+        "stale": {
+          "text": "Stage · sync 20 min ago",
+          "colour": "rgb(138, 95, 0)",
+          "clipped": false
+        },
+        "failing": {
+          "text": "Stage · sync failed",
+          "colour": "rgb(198, 40, 40)",
+          "clipped": false
+        },
+        "waiting": {
+          "text": "Stage · waiting for sync",
+          "colour": "rgb(108, 108, 121)",
+          "clipped": false
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "locale": "uk",
+      "readings": {
+        "synced": {
+          "text": "Stage · синхронізовано",
+          "colour": "rgb(23, 122, 55)",
+          "clipped": false
+        },
+        "stale": {
+          "text": "Stage · синхр. 20 хв тому",
+          "colour": "rgb(138, 95, 0)",
+          "clipped": false
+        },
+        "failing": {
+          "text": "Stage · збій синхр.",
+          "colour": "rgb(198, 40, 40)",
+          "clipped": false
+        },
+        "waiting": {
+          "text": "Stage · очікуємо синхр.",
+          "colour": "rgb(108, 108, 121)",
+          "clipped": false
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "locale": "en",
+      "readings": {
+        "synced": {
+          "text": "Stage · synced",
+          "colour": "rgb(23, 122, 55)",
+          "clipped": false
+        },
+        "stale": {
+          "text": "Stage · sync 20 min ago",
+          "colour": "rgb(138, 95, 0)",
+          "clipped": false
+        },
+        "failing": {
+          "text": "Stage · sync failed",
+          "colour": "rgb(198, 40, 40)",
+          "clipped": false
+        },
+        "waiting": {
+          "text": "Stage · waiting for sync",
+          "colour": "rgb(108, 108, 121)",
+          "clipped": false
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "locale": "uk",
+      "readings": {
+        "synced": {
+          "text": "Stage · синхронізовано",
+          "colour": "rgb(23, 122, 55)",
+          "clipped": false
+        },
+        "stale": {
+          "text": "Stage · синхр. 20 хв тому",
+          "colour": "rgb(138, 95, 0)",
+          "clipped": false
+        },
+        "failing": {
+          "text": "Stage · збій синхр.",
+          "colour": "rgb(198, 40, 40)",
+          "clipped": false
+        },
+        "waiting": {
+          "text": "Stage · очікуємо синхр.",
+          "colour": "rgb(108, 108, 121)",
+          "clipped": false
+        }
+      },
+      "pageErrors": []
+    }
+  ]
+}

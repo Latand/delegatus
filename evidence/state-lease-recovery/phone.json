@@ -1,0 +1,54 @@
+[
+  {
+    "scheme": "light",
+    "locale": "en",
+    "geometry": {
+      "x": 0,
+      "y": 768.5,
+      "right": 390,
+      "bottom": 844,
+      "height": 75.5,
+      "overlaps": 0,
+      "clipped": false
+    }
+  },
+  {
+    "scheme": "light",
+    "locale": "uk",
+    "geometry": {
+      "x": 0,
+      "y": 768.5,
+      "right": 390,
+      "bottom": 844,
+      "height": 75.5,
+      "overlaps": 0,
+      "clipped": false
+    }
+  },
+  {
+    "scheme": "dark",
+    "locale": "en",
+    "geometry": {
+      "x": 0,
+      "y": 768.5,
+      "right": 390,
+      "bottom": 844,
+      "height": 75.5,
+      "overlaps": 0,
+      "clipped": false
+    }
+  },
+  {
+    "scheme": "dark",
+    "locale": "uk",
+    "geometry": {
+      "x": 0,
+      "y": 768.5,
+      "right": 390,
+      "bottom": 844,
+      "height": 75.5,
+      "overlaps": 0,
+      "clipped": false
+    }
+  }
+]

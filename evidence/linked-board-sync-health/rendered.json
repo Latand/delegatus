@@ -1,0 +1,106 @@
+{
+  "1440-en": {
+    "reading": {
+      "synced": {
+        "colour": "rgb(23, 122, 55)",
+        "text": "Synced just now"
+      },
+      "stale": {
+        "colour": "rgb(138, 95, 0)",
+        "text": "Last successful sync 20 minutes ago"
+      },
+      "failing": {
+        "colour": "rgb(198, 40, 40)",
+        "text": "Last sync failed · last success just now"
+      }
+    },
+    "revoked": {
+      "colour": "rgb(198, 40, 40)",
+      "text": "Last sync failed · last success 1 minute ago"
+    },
+    "firstSyncBottom": 280.5,
+    "statuses": [
+      "failing",
+      "synced"
+    ],
+    "pageErrors": []
+  },
+  "1440-uk": {
+    "reading": {
+      "synced": {
+        "colour": "rgb(23, 122, 55)",
+        "text": "Синхронізовано щойно"
+      },
+      "stale": {
+        "colour": "rgb(138, 95, 0)",
+        "text": "Остання успішна синхронізація 20 хвилин тому"
+      },
+      "failing": {
+        "colour": "rgb(198, 40, 40)",
+        "text": "Остання синхронізація невдала · остання успішна щойно"
+      }
+    },
+    "revoked": {
+      "colour": "rgb(198, 40, 40)",
+      "text": "Остання синхронізація невдала · остання успішна 1 хвилину тому"
+    },
+    "firstSyncBottom": 280.5,
+    "statuses": [
+      "failing",
+      "synced"
+    ],
+    "pageErrors": []
+  },
+  "390-en": {
+    "reading": {
+      "synced": {
+        "colour": "rgb(23, 122, 55)",
+        "text": "Synced just now"
+      },
+      "stale": {
+        "colour": "rgb(138, 95, 0)",
+        "text": "Last successful sync 20 minutes ago"
+      },
+      "failing": {
+        "colour": "rgb(198, 40, 40)",
+        "text": "Last sync failed · last success just now"
+      }
+    },
+    "revoked": {
+      "colour": "rgb(198, 40, 40)",
+      "text": "Last sync failed · last success 1 minute ago"
+    },
+    "firstSyncBottom": 252.5,
+    "statuses": [
+      "failing",
+      "synced"
+    ],
+    "pageErrors": []
+  },
+  "390-uk": {
+    "reading": {
+      "synced": {
+        "colour": "rgb(23, 122, 55)",
+        "text": "Синхронізовано щойно"
+      },
+      "stale": {
+        "colour": "rgb(138, 95, 0)",
+        "text": "Остання успішна синхронізація 20 хвилин тому"
+      },
+      "failing": {
+        "colour": "rgb(198, 40, 40)",
+        "text": "Остання синхронізація невдала · остання успішна щойно"
+      }
+    },
+    "revoked": {
+      "colour": "rgb(198, 40, 40)",
+      "text": "Остання синхронізація невдала · остання успішна 1 хвилину тому"
+    },
+    "firstSyncBottom": 252.5,
+    "statuses": [
+      "failing",
+      "synced"
+    ],
+    "pageErrors": []
+  }
+}
