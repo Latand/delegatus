@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -18,6 +19,8 @@ export function composeStageInput(
 ): string {
   const inline = renderStagePrompt(pipeline, stage, role, previousOutput);
   if (Buffer.byteLength(inline, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) return inline;
+
+  excludeControllerArtifacts(worktreeDir);
 
   const specification = pipeline.spec?.trim() || "No separate pinned specification was supplied.";
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
@@ -67,6 +70,31 @@ export function composeStageInput(
     }
   }
   return prompt;
+}
+
+/** Keep private controller handoffs readable in the worktree while ensuring
+    Git status and ordinary `git add -A` never treat them as stage changes. */
+function excludeControllerArtifacts(worktreeDir: string): void {
+  let excludeFile: string;
+  try {
+    excludeFile = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], {
+      cwd: worktreeDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    // Unit fixtures can compose input against a directory that is not a Git
+    // worktree. Real pipeline worktrees always are, and take the guarded path.
+    if (fs.existsSync(path.join(worktreeDir, ".git"))) {
+      throw new Error(`cannot protect pipeline stage input artifacts in ${worktreeDir}`);
+    }
+    return;
+  }
+  const rule = "/.artifacts/pipeline-stage-inputs/";
+  const existing = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, "utf8") : "";
+  if (existing.split(/\r?\n/).includes(rule)) return;
+  fs.mkdirSync(path.dirname(excludeFile), { recursive: true, mode: 0o700 });
+  fs.appendFileSync(excludeFile, `${existing && !existing.endsWith("\n") ? "\n" : ""}${rule}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 function artifactReference(part: { label: string; file: string; text: string }, headBytes: number): string {

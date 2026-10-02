@@ -1,16 +1,31 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { composeStageInput } from "./stageInput";
+import { commitPipelineStage } from "./git";
 import { buildPipeline } from "./store";
 import type { PipelineStage } from "./types";
+import { realExec } from "@/lib/workflows/provision";
 
 const artifactState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-inputs-"));
 const laneRoot = path.join(artifactState, "worktree");
 fs.mkdirSync(laneRoot);
+const git = (...args: string[]) => {
+  const result = spawnSync("git", args, { cwd: laneRoot, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  return result.stdout.trim();
+};
+git("init", "--initial-branch=main");
+git("config", "user.email", "pipeline-test");
+git("config", "user.name", "Pipeline Test");
+git("config", "commit.gpgSign", "false");
+fs.writeFileSync(path.join(laneRoot, "tracked.txt"), "base\n");
+git("add", "tracked.txt");
+git("commit", "-m", "base");
 let priorState: string | undefined;
 beforeEach(() => {
   priorState = process.env.LLV_STATE_DIR;
@@ -94,4 +109,34 @@ test("a tight prompt shrinks the output excerpt before externalizing a small spe
   expect(rendered).toContain("Previous head");
   expect(rendered).toContain("AC: preserve the handoff");
   expect(rendered).not.toContain("Full specification file:");
+});
+
+test("controller artifacts stay outside read-only settlement in a repository without ignore rules", () => {
+  const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
+  const previous = "Previous " + "p".repeat(40_000);
+  const prompt = composeStageInput(pipeline, stage, stage.effectiveRole, previous);
+  const head = git("rev-parse", "HEAD");
+
+  expect(fs.existsSync(path.join(laneRoot, ".gitignore"))).toBe(false);
+  expect(git("status", "--porcelain")).toBe("");
+  expect(git("add", "--dry-run", "-A")).toBe("");
+  expect(commitPipelineStage(pipeline, stage.id, false, realExec, [], head)).toEqual({ ok: true, sha: head });
+  expect(git("rev-parse", "HEAD")).toBe(head);
+  expect(prompt).toContain("Full previous output file:");
+  expect(prompt).toContain("Full specification file:");
+});
+
+test("read-write settlement never stages or commits controller artifacts", () => {
+  const { pipeline, stage } = handoffFixture("Build {{prev.output}}", "Spec " + "s".repeat(40_000));
+  const previous = "Previous " + "p".repeat(40_000);
+  const prompt = composeStageInput(pipeline, stage, stage.effectiveRole, previous);
+  const head = git("rev-parse", "HEAD");
+
+  expect(git("status", "--porcelain")).toBe("");
+  expect(git("add", "--dry-run", "-A")).toBe("");
+  expect(commitPipelineStage(pipeline, stage.id, true, realExec)).toEqual({ ok: true, sha: head });
+  expect(git("rev-parse", "HEAD")).toBe(head);
+  expect(git("ls-files", "--", ".artifacts/pipeline-stage-inputs")).toBe("");
+  expect(prompt).toContain("Full previous output file:");
+  expect(prompt).toContain("Full specification file:");
 });

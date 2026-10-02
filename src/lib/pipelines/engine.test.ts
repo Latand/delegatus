@@ -658,6 +658,46 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test("a read-only successor settles and advances when its handoff is in a clean Git worktree", async () => {
+  const fixture = await realWorktreeLane("readonly-stage-input-handoff", [
+    { id: "design", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Design", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review {{prev.output}}", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
+  ]);
+  try {
+    const { git, h, id, worktree } = fixture;
+    const design = "Design head\n" + "d".repeat(45_000);
+    const sourceIgnore = fs.readFileSync(path.join(fixture.repo, ".gitignore"), "utf8");
+    h.setConversationActive(false);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports))
+      .toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", design)], h.ports);
+    await tickPipelines([], h.ports);
+
+    expect(h.spawnInputs).toHaveLength(2);
+    const handoff = h.spawnInputs[1]!.prompt.match(/Full previous output file: (.+)\n/)?.[1];
+    expect(handoff).toBeDefined();
+    expect(path.isAbsolute(handoff!)).toBe(true);
+    expect(fs.readFileSync(handoff!, "utf8")).toBe(design);
+    expect(sourceIgnore).not.toContain(".artifacts/pipeline-stage-inputs");
+    expect(git(worktree, "status", "--porcelain")).toBe("");
+
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, h.ports))
+      .toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass", "Reviewed")], h.ports);
+    await tickPipelines([], h.ports);
+
+    expect(loadPipelines().find((pipeline) => pipeline.id === id)?.state).toBe("running");
+    expect(h.spawnInputs).toHaveLength(3);
+    expect(h.spawnInputs[2]!.prompt).toContain("Build");
+    expect(git(worktree, "status", "--porcelain")).toBe("");
+  } finally {
+    if (fs.existsSync(fixture.root)) fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("an owner publishes a review-fix commit before the passing review starts", async () => {
   const fixture = await realWorktreeLane("owner-review-fix", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
@@ -1242,6 +1282,7 @@ test("an oversized expanded stage prompt parks before spawn with every part's by
 
 test.each(["reviewer", "builder"])("large fail-edge findings launch the %s stage through the same file handoff", async (roleId) => {
   const h = harness();
+  const repoDir = path.join(process.env.LLV_STATE_DIR!, "large-fail-edge-repo");
   const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
   const spawnAgent = h.ports.spawnAgent;
   h.ports.spawnAgent = (input, reserved) => {
@@ -1251,7 +1292,7 @@ test.each(["reviewer", "builder"])("large fail-edge findings launch the %s stage
   await create(h.ports, [
     { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null, onFail: { to: "fix", maxRounds: 1 } },
     { id: "fix", kind: "run", role: { roleId }, prompt: "Resolve {{prev.output}}", next: null },
-  ] as never);
+  ] as never, { repoDir });
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const findings = Array.from({ length: 25 }, (_, n) => ({ severity: "P1" as const, text: `src/module.ts:${n + 1} ` + "f".repeat(1_800) }));
