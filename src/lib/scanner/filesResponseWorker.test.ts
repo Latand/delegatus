@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +34,16 @@ const request = {
   headers: [] as Array<[string, string]>,
   snapshot: { files: [], projectCatalog: [], complete: true },
 };
+
+function expectEtagMatchesBody(result: { body: string; etag: string }): void {
+  expect(result.etag).toBe(`"${createHash("sha1").update(result.body).digest("hex")}"`);
+}
+
+function bodyWithoutVolatileStorageFreeBytes(body: string): string {
+  const parsed = JSON.parse(body) as { systemHealth: { storage: { writes: { freeBytes: number | null } } } };
+  parsed.systemHealth.storage.writes.freeBytes = 0;
+  return JSON.stringify(parsed);
+}
 
 function scratchState(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-response-worker-"));
@@ -70,15 +81,15 @@ test("a burst of rapid sequential projections is served by one worker process", 
   const stateDir = scratchState();
   try {
     const before = filesResponseWorkerPoolDiagnostics().spawns;
-    const etags: string[] = [];
+    const results: Array<Awaited<ReturnType<typeof buildFilesResponseInWorker>>> = [];
     for (let index = 0; index < 6; index += 1) {
-      etags.push((await buildFilesResponseInWorker(request, runtimeFor(stateDir))).etag);
+      results.push(await buildFilesResponseInWorker(request, runtimeFor(stateDir)));
     }
     const after = filesResponseWorkerPoolDiagnostics();
     expect(after.spawns - before).toBe(1);
     expect(after.builds).toBeGreaterThanOrEqual(6);
     expect(after.pid).not.toBeNull();
-    expect(new Set(etags).size).toBe(1);
+    for (const result of results) expectEtagMatchesBody(result);
   } finally {
     shutdownFilesResponseWorker("test");
     fs.rmSync(stateDir, { recursive: true, force: true });
@@ -95,10 +106,10 @@ test("concurrent projections are served by one worker process", async () => {
     const after = filesResponseWorkerPoolDiagnostics();
     expect(after.spawns - before).toBe(1);
     expect(results).toHaveLength(6);
-    expect(new Set(results.map((result) => result.etag)).size).toBe(1);
+    for (const result of results) expectEtagMatchesBody(result);
     /* Each answer is read from its own body file and the file is removed, so
        two builds can never hand back the same one. */
-    expect(new Set(results.map((result) => result.body)).size).toBe(1);
+    expect(new Set(results.map((result) => bodyWithoutVolatileStorageFreeBytes(result.body))).size).toBe(1);
   } finally {
     shutdownFilesResponseWorker("test");
     fs.rmSync(stateDir, { recursive: true, force: true });
@@ -184,7 +195,20 @@ test("a retired worker still answers the next revision with a delta from its per
     expect(delta.rows).toEqual([["files", { count: 2, upsert: [["/sessions/changed.jsonl", expect.objectContaining({ mtime: 2 })]] }]]);
 
     const repeated = await buildFilesResponseInWorker(scoped(2) as never, runtimeFor(stateDir));
-    expect(repeated.delta).toBeUndefined();
+    expectEtagMatchesBody(repeated);
+    if (repeated.delta) {
+      expect(repeated.delta.base).toBe(second.etag);
+      const repeatedDelta = JSON.parse(repeated.delta.body);
+      expect(repeatedDelta.rows).toBeUndefined();
+      expect(repeatedDelta.set).toBeUndefined();
+      expect(repeatedDelta.unset).toBeUndefined();
+      expect(repeatedDelta.entries).toEqual([[
+        "systemHealth",
+        { upsert: [["storage", expect.objectContaining({
+          writes: expect.objectContaining({ state: "ok", since: null, freeBytes: expect.any(Number) }),
+        })]] },
+      ]]);
+    }
     expect(fs.readdirSync(path.join(stateDir, "files-response-results")).filter((name) => !name.startsWith("delta-base-"))).toEqual([]);
   } finally {
     shutdownFilesResponseWorker("test");

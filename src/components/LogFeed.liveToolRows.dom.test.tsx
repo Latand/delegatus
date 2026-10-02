@@ -40,6 +40,8 @@ Object.assign(globalThis, {
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0),
   cancelAnimationFrame: (id: number) => clearTimeout(id),
   window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   document: dom.document,
   navigator: dom.navigator,
   Node: dom.Node,
