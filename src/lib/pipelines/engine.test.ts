@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -664,6 +665,98 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   await tickPipelines([], h.ports);
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
+
+test("a rebased builder reconciles accepted content and continues with fast-forward delivery", async () => {
+  const fixture = await realWorktreeLane("rebase-reconcile", [
+    { id: "brief", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Brief", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ], undefined, false, true);
+  try {
+    const { git, h, id, repo, origin, worktree } = fixture;
+    h.setConversationActive(false);
+    fs.writeFileSync(path.join(worktree, ".gitignore"), "accepted-rule\n");
+    fs.writeFileSync(path.join(worktree, "brief.md"), "accepted brief\n");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
+    const branch = loadPipelines().find((item) => item.id === id)!.branch;
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
+    fs.writeFileSync(path.join(repo, "asset.bin"), crypto.randomBytes(1_200_000));
+    git(repo, "add", "main.txt");
+    git(repo, "add", "asset.bin");
+    git(repo, "commit", "-m", "advance main");
+    git(repo, "push", "origin", "main");
+    git(worktree, "rebase", "origin/main");
+    fs.appendFileSync(path.join(worktree, ".gitignore"), "builder-rule\n");
+    fs.appendFileSync(path.join(worktree, "brief.md"), "builder elaboration\n");
+    fs.writeFileSync(path.join(worktree, "build.txt"), "builder content\n");
+    git(worktree, "add", ".gitignore", "brief.md", "build.txt");
+    git(worktree, "commit", "-m", "build after rebase");
+    const rebased = git(worktree, "rev-parse", "HEAD");
+    const tree = git(worktree, "rev-parse", "HEAD^{tree}");
+
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+
+    const current = loadPipelines().find((item) => item.id === id)!;
+    expect(current.state).toBe("running");
+    expect(current.cursor?.stageId).toBe("review");
+    const reconciled = current.lastPassedCommit;
+    expect(git(worktree, "rev-parse", `${reconciled}^{tree}`)).toBe(tree);
+    expect(git(worktree, "rev-list", "--parents", "-n", "1", reconciled)).toBe(`${reconciled} ${rebased} ${accepted}`);
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(reconciled);
+    expect(current.publishedCommit).toBe(reconciled);
+    for (let n = 0; n < 4 && h.spawnInputs.length < 3; n += 1) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(3);
+    await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
+    expect(loadPipelines().find((item) => item.id === id)!.state).toBe("completed");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rewritten builder history parks with the dropped accepted commit and preserves delivery", async () => {
+  const fixture = await realWorktreeLane("rebase-dropped", [
+    { id: "brief", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Brief", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
+  ], undefined, false, true);
+  try {
+    const { git, h, id, repo, origin, worktree } = fixture;
+    h.setConversationActive(false);
+    fs.writeFileSync(path.join(worktree, "dropped.md"), "accepted content\n");
+    git(worktree, "add", "dropped.md");
+    git(worktree, "commit", "-m", "accepted requirement");
+    const dropped = git(worktree, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(worktree, "kept.md"), "kept content\n");
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
+    const branch = loadPipelines().find((item) => item.id === id)!.branch;
+    for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
+    fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
+    git(repo, "add", "main.txt");
+    git(repo, "commit", "-m", "advance main");
+    git(repo, "push", "origin", "main");
+    git(worktree, "rebase", "--onto", "origin/main", dropped);
+    const rewritten = git(worktree, "rev-parse", "HEAD");
+
+    await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+
+    const parked = loadPipelines().find((item) => item.id === id)!;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain("dropped accepted commits");
+    expect(parked.stateDetail).toContain(dropped);
+    expect(parked.stateDetail).not.toContain(`dropped accepted commits: ${accepted}`);
+    expect(parked.lastPassedCommit).toBe(accepted);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(rewritten);
+    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    expect(h.spawnInputs).toHaveLength(2);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test("an owner publishes a review-fix commit before the passing review starts", async () => {
   const fixture = await realWorktreeLane("owner-review-fix", [
