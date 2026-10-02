@@ -584,6 +584,20 @@ export function attemptNavTarget(attempt: PipelineStageAttempt | null): StageNav
   return { conversationId: attempt.conversationId, agentPath: attempt.agentPath };
 }
 
+/** The stage's own conversations and parked question, independent of scan timing. */
+export function stageAgentRowModel(pipeline: Pipeline, stageId: string) {
+  const attempts = stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
+  const latest = attempts.at(-1) ?? null;
+  return {
+    target: attemptNavTarget(latest),
+    question: latest?.state === "needs_decision" ? latest.report?.summary?.trim() || null : null,
+    earlier: attempts.slice(0, -1).flatMap((attempt, index) => {
+      const target = attemptNavTarget(attempt);
+      return target ? [{ n: attempt.n, position: index + 1, state: attempt.state, target }] : [];
+    }),
+  };
+}
+
 /** Resolve a stage-graph navigation target to the file its card should open.
     Precedence is strict: the stored conversation id resolves ONLY to its CURRENT
     (non-archived) generation — never to a folded predecessor — so a migrated

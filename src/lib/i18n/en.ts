@@ -2167,6 +2167,7 @@ export const en = {
   "pipelineBlock.foldMore": { one: "{count} more stage", other: "{count} more stages" },
   "pipelineBlock.passedRow": { one: "{count} passed", other: "{count} passed" },
   "pipelineBlock.latest": "“{text}”",
+  "pipelineStage.openAgent": "Open agent",
   "pipelineBlock.openConversation": "Open conversation",
   "pipelineState.paused": "paused",
   "pipelineState.completed": "completed",

@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 35, and a v34 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(35);
+test("the default mandate is at version 36, and a v35 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(36);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -111,7 +111,8 @@ test("the default mandate is at version 35, and a v34 seat reads as stale", () =
   expect(orchestratorMandateStale(32)).toBe(true);
   expect(orchestratorMandateStale(33)).toBe(true);
   expect(orchestratorMandateStale(34)).toBe(true);
-  expect(orchestratorMandateStale(35)).toBe(false);
+  expect(orchestratorMandateStale(35)).toBe(true);
+  expect(orchestratorMandateStale(36)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -152,7 +153,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
   33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
   34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
-  35: "4595b2c267245be5d54a07be96a426cf64995294a69e60aac0a7575d289f5a17",
+  35: "3a35d3334e259e60d3388454068ab6ce1836fbcf8f87b05c7207e8caf626929b",
+  36: "851761d46924e3c16328ea1e31f1c768ae15d1aecb48b6ab9ee1b25c2aac9749",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -863,4 +865,9 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
   const reviewLoop = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/review-loop/SKILL.md"), "utf8");
   expect(reviewLoop).toContain('"roundLimit": 3');
   expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
+});
+
+test("the versioned mandate asks for a current status note in the operator's language", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("update_task note");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("waiting on whom/what");
 });
