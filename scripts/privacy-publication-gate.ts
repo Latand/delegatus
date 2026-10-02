@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
 
 import { decodeHTMLStrict } from "entities";
@@ -577,7 +578,13 @@ type EmailOccurrence = {
    detection reads both rather than only the shape that is easy to match. */
 const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-const emailDomain = /([A-Z0-9\p{L}\p{M}-]+(?:\.[A-Z0-9\p{L}\p{M}-]+)+)(?![A-Z0-9\p{L}\p{M}-]|\.[A-Z0-9\p{L}\p{M}-])/u;
+const idnaDomainLabel = String.raw`[A-Z0-9\p{L}\p{M}\p{N}-]+`;
+const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
+const emailDomain = new RegExp(
+  `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`
+    + `(?![A-Z0-9\\p{L}\\p{M}\\p{N}-]|${idnaDomainSeparator}${idnaDomainLabel})`,
+  "iu",
+);
 const emailAddressSource =
   `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
 
@@ -587,7 +594,12 @@ const emailAddressSource =
    real one, which teaches everybody to wave the gate through. Systemd unit
    type suffixes are not delegated TLDs, so template units name no mailbox. */
 function domainNamesNobody(domain: string): boolean {
-  const lowered = domain.toLowerCase();
+  /* UTS #46 maps the three alternate dot characters and IDNA labels to their
+     ASCII form. Apply exemptions only after mapping the complete domain, so
+     a real continuation cannot be hidden behind a `.service` prefix. */
+  const asciiDomain = domainToASCII(domain);
+  if (!asciiDomain) return false;
+  const lowered = asciiDomain.toLowerCase();
   return lowered === "example.com" || lowered === "example.net" || lowered === "example.org"
     || lowered.endsWith(".invalid") || lowered.endsWith(".test")
     || /\.(?:service|socket|scope|slice|timer|mount|automount|path|device|swap)$/.test(lowered);
