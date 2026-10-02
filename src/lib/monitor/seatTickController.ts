@@ -485,12 +485,17 @@ function wakeClientMessageId(
   project: string,
   seatEpoch: number,
   verdict: SeatTickVerdict,
-  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; releasedWake?: SeatTickProjectState["releasedWake"] },
+  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; operatorInstructions: string | null; releasedWake?: SeatTickProjectState["releasedWake"] },
 ): string {
   const shape = verdict.kind === "wake"
     ? verdict.reasons.map((reason) => reason.kind).sort().join(",")
     : "proposal";
-  return boundedWakeIdentity(`seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${context.fingerprint}`
+  // Fold instructions into the fixed-size board digest so edits change the
+  // payload identity without lengthening a key already near the runtime bound.
+  const fingerprint = context.operatorInstructions
+    ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions])).digest("hex").slice(0, context.fingerprint.length)
+    : context.fingerprint;
+  return boundedWakeIdentity(`seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
     + wakePromptIdentity(context.monitorPrompt)
     + releasedWakeIdentity(context.releasedWake ?? null), project, seatEpoch);
 }
@@ -628,7 +633,10 @@ function evidenceSummary(evidence: SeatTickWakeEvidence | null): string | null {
       : journal === "unasked" ? "runtime journal not asked"
         : `runtime journal: ${journal.status}${journal.reason ? ` — ${redactBounded(journal.reason, REASON_LIMIT)}` : ""}`);
   if (evidence.recorded === "lost") parts.push("the delivery record was settled lost on the journal's own verdict");
-  if (evidence.recorded === "delivered") parts.push("the delivery record was settled delivered on the journal's own verdict");
+  if (evidence.confirmation === "claude-ledger") parts.push("the Claude delivery ledger confirms the original operation's arrival");
+  if (evidence.recorded === "delivered") parts.push(evidence.confirmation === "claude-ledger"
+    ? "the delivery record was settled delivered on that confirmation"
+    : "the delivery record was settled delivered on the journal's own verdict");
   if (evidence.recorded === "refused") parts.push("the delivery record could not take the journal's verdict and keeps its own answer; the release rests on the journal alone");
   return parts.join("; ");
 }
@@ -1418,6 +1426,7 @@ async function check(
       /* The same row the message below reads its prompt from, read once: the
          identity and the text have to move together or they are exactly the
          disagreement this key exists to prevent. */
+      operatorInstructions: input.settings.reason,
       monitorPrompt: input.settings.monitorPrompt,
     });
     const text = verdict.kind === "wake"
@@ -1438,6 +1447,7 @@ async function check(
            raise (#1298), so the seat acts on the rest knowing what is missing
            from it. */
         gaps: verdict.gaps,
+        operatorInstructions: input.settings.reason,
         monitorPrompt: input.settings.monitorPrompt,
         monitorPromptUnchanged,
         mandateCarriesContract: input.seat.mandateCarriesTickContract === true,
@@ -1449,6 +1459,7 @@ async function check(
         signals: input.signals,
         items: policy.itemsPerWake,
         slot: String(Math.floor(input.now / policy.proposalIntervalMs)),
+        operatorInstructions: input.settings.reason,
         monitorPrompt: input.settings.monitorPrompt,
         monitorPromptUnchanged,
         mandateCarriesContract: input.seat.mandateCarriesTickContract === true,

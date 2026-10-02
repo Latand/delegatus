@@ -1,0 +1,49 @@
+{
+  "label": "after",
+  "limit": 0.1,
+  "readings": [
+    {
+      "viewport": "desktop-1440",
+      "cls": 0.0606,
+      "shifts": 3,
+      "largest": [
+        {
+          "at": 870,
+          "value": 0.0605,
+          "sources": [
+            "SECTION.column.agent[assigned]",
+            "ARTICLE.card.shelf",
+            "ARTICLE.card.shelf"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 7221,
+          "value": 0.0001,
+          "sources": [
+            "SPAN.inline-flex.max-w-full"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 7197,
+          "value": 0,
+          "sources": [
+            "BUTTON.or-close-all",
+            "SPAN.or-names"
+          ],
+          "mandate": false
+        }
+      ],
+      "readerShare": {
+        "minShare": 0.912,
+        "samples": 284
+      },
+      "order": {
+        "read": 0,
+        "launched": 1
+      },
+      "pageErrors": []
+    }
+  ]
+}

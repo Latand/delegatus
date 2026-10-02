@@ -75,7 +75,7 @@ async function render(): Promise<HTMLElement> {
 test("before a run the lead names the model and every row waits", async () => {
   answer = { runtime: RUNTIME, run: null };
   const host = await render();
-  expect(host.querySelector("[data-health-lead]")?.textContent).toContain("Haiku at low effort");
+  expect(host.querySelector("[data-health-lead]")?.textContent).toContain("Haiku 4.5 at low effort");
   expect(Array.from(host.querySelectorAll<HTMLElement>("[data-health-row]")).map((el) => el.dataset.healthState)).toEqual(["waiting", "waiting", "waiting", "waiting", "waiting"]);
   expect(host.querySelector("[data-health-start]")).not.toBeNull();
   expect(host.querySelector("[data-health-skip]")).not.toBeNull();

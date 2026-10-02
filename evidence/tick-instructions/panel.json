@@ -1,0 +1,190 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "case": "seat tick board cards",
+  "cases": [
+    {
+      "surface": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "locale": "en",
+      "theme": "light",
+      "instructions": {
+        "label": "Instructions for every wake",
+        "helper": "The agent receives these instructions on every wake: what to do next and when to stop. Required when changing the cadence or disabling wakes; also shown on the board card. Schedule resets and expiry keep them until you clear this field.",
+        "geometry": {
+          "left": 894.15625,
+          "right": 1188.15625,
+          "textLeft": 894.15625,
+          "textRight": 1178.78125,
+          "textHeight": 59,
+          "height": 64,
+          "viewport": 1440
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locale": "en",
+      "theme": "light",
+      "instructions": {
+        "label": "Instructions for every wake",
+        "helper": "The agent receives these instructions on every wake: what to do next and when to stop. Required when changing the cadence or disabling wakes; also shown on the board card. Schedule resets and expiry keep them until you clear this field.",
+        "geometry": {
+          "left": 16,
+          "right": 374,
+          "textLeft": 16,
+          "textRight": 374.015625,
+          "textHeight": 43,
+          "height": 48,
+          "viewport": 390
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "locale": "en",
+      "theme": "dark",
+      "instructions": {
+        "label": "Instructions for every wake",
+        "helper": "The agent receives these instructions on every wake: what to do next and when to stop. Required when changing the cadence or disabling wakes; also shown on the board card. Schedule resets and expiry keep them until you clear this field.",
+        "geometry": {
+          "left": 894.15625,
+          "right": 1188.15625,
+          "textLeft": 894.15625,
+          "textRight": 1178.78125,
+          "textHeight": 59,
+          "height": 64,
+          "viewport": 1440
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locale": "en",
+      "theme": "dark",
+      "instructions": {
+        "label": "Instructions for every wake",
+        "helper": "The agent receives these instructions on every wake: what to do next and when to stop. Required when changing the cadence or disabling wakes; also shown on the board card. Schedule resets and expiry keep them until you clear this field.",
+        "geometry": {
+          "left": 16,
+          "right": 374,
+          "textLeft": 16,
+          "textRight": 374.015625,
+          "textHeight": 43,
+          "height": 48,
+          "viewport": 390
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "locale": "uk",
+      "theme": "light",
+      "instructions": {
+        "label": "Вказівки на кожне пробудження",
+        "helper": "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися. Обов’язкові при зміні інтервалу або вимкненні пробуджень; також показуються на картці дошки. Скидання інтервалу та завершення строку дії зберігають їх, доки ви не очистите це поле.",
+        "geometry": {
+          "left": 851.8125,
+          "right": 1145.8125,
+          "textLeft": 851.8125,
+          "textRight": 1132.46875,
+          "textHeight": 75,
+          "height": 80,
+          "viewport": 1440
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locale": "uk",
+      "theme": "light",
+      "instructions": {
+        "label": "Вказівки на кожне пробудження",
+        "helper": "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися. Обов’язкові при зміні інтервалу або вимкненні пробуджень; також показуються на картці дошки. Скидання інтервалу та завершення строку дії зберігають їх, доки ви не очистите це поле.",
+        "geometry": {
+          "left": 16,
+          "right": 374,
+          "textLeft": 16,
+          "textRight": 351.28125,
+          "textHeight": 59,
+          "height": 64,
+          "viewport": 390
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "locale": "uk",
+      "theme": "dark",
+      "instructions": {
+        "label": "Вказівки на кожне пробудження",
+        "helper": "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися. Обов’язкові при зміні інтервалу або вимкненні пробуджень; також показуються на картці дошки. Скидання інтервалу та завершення строку дії зберігають їх, доки ви не очистите це поле.",
+        "geometry": {
+          "left": 851.8125,
+          "right": 1145.8125,
+          "textLeft": 851.8125,
+          "textRight": 1132.46875,
+          "textHeight": 75,
+          "height": 80,
+          "viewport": 1440
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "locale": "uk",
+      "theme": "dark",
+      "instructions": {
+        "label": "Вказівки на кожне пробудження",
+        "helper": "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися. Обов’язкові при зміні інтервалу або вимкненні пробуджень; також показуються на картці дошки. Скидання інтервалу та завершення строку дії зберігають їх, доки ви не очистите це поле.",
+        "geometry": {
+          "left": 16,
+          "right": 374,
+          "textLeft": 16,
+          "textRight": 351.28125,
+          "textHeight": 59,
+          "height": 64,
+          "viewport": 390
+        }
+      },
+      "pageErrors": []
+    }
+  ]
+}
