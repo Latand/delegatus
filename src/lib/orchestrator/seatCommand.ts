@@ -31,6 +31,7 @@ import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 function operatorTelegramConnected(): boolean {
   try {
@@ -431,6 +432,14 @@ function incumbentChangedResult(
 export interface SeatCommandResult {
   status: number;
   body: Record<string, unknown>;
+}
+
+function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null): SeatCommandResult | null {
+  const hold = triggeredBy?.kind === "agent" ? activeDrain() : null;
+  return hold ? { status: 409, body: {
+    error: "new launches are held while the automatic update drains running work",
+    code: "launch_held_for_update", target: hold.target, since: hold.since,
+  } } : null;
 }
 
 function text(value: unknown): string {
@@ -1002,6 +1011,10 @@ async function runOrchestratorSeatRequest(
   }
   const spawnSizing = agentSeatSizingRefusal(triggeredBy, resolvedRuntime.value.config, incumbent);
   if (spawnSizing) return spawnSizing;
+  // Reconciliation and completed replay above can settle admitted work. A
+  // fresh agent spawn still needs admission after any awaited handoff work.
+  const hold = agentSeatLaunchHold(triggeredBy);
+  if (hold) return hold;
   const telegramGrant = operatorTelegramConnected();
   const begun = beginOrchestratorSeatIntent({
     project,
@@ -1210,8 +1223,8 @@ const HANDOFF_NOTES_CAP = 2_000;
  * the route's answer by construction — for the actor it accepts and for every
  * refusal the rotation itself makes.
  *
- * Cross-origin rejection stays in the route, ahead of this: it is the perimeter,
- * and it is the only thing here that turns a caller away.
+ * Cross-origin rejection stays in the route, ahead of this: it is the perimeter.
+ * Automatic-update admission can also defer fresh agent launches.
  */
 export function handleOrchestratorRotationRequest(
   request: Pick<NextRequest, "headers">,
@@ -1330,6 +1343,10 @@ async function runOrchestratorRotation(
       },
     };
   }
+  // An accepted rotation can be replayed during a hold. Defer a fresh one
+  // before composition, which may itself launch a handoff summarizer.
+  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy);
+  if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
   const predecessor = predecessorTarget?.kind === "eligible" ? predecessorTarget : null;
