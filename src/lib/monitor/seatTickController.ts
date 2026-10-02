@@ -1323,7 +1323,8 @@ async function check(
     writeState,
     unresolved,
     deliver,
-    mayDispatch: () => !openingSeat?.conversationId || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead",
+    mayDispatch: () => !activeDrain() && (!openingSeat?.conversationId
+      || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead"),
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
@@ -1511,6 +1512,11 @@ async function check(
     const refusals = seatTickActiveRefusalRun(state, refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt));
     if (rotated) {
       delivery = { clientMessageId, outcome: "seat-rotated" };
+    } else if (activeDrain()) {
+      // Proposal preparation may have awaited the forge while admission closed.
+      // No attempt has entered transport; leave its work for the release tick.
+      delivery = { clientMessageId, outcome: "update-held" };
+      fenceDetail = "new seat work is held for the automatic update";
     } else if (mcpHealth?.status === "dead") {
       delivery = { clientMessageId, outcome: "seat-mcp-unavailable" };
       fenceDetail = `${mcpHealth.detail}; rotate the seat`;

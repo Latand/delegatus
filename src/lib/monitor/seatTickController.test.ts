@@ -26,6 +26,7 @@ fs.mkdirSync(SESSIONS, { recursive: true });
 
 const { SEAT_TICK_NO_SELF_SCHEDULE } = await import("./report");
 const { reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, wakeReached } = await import("./seatTickController");
+const { writeDrain, drainFile, releaseDrain } = await import("@/lib/selfUpdate/drain");
 const { DEFAULT_SEAT_TICK_POLICY } = await import("./seatTick");
 const { seatMcpHealth } = await import("./seatMcpHealth");
 const { viewerMcpTransportForLaunch } = await import("@/lib/agent/spawnPolicy");
@@ -1987,6 +1988,29 @@ test("open work with nobody seated raises the orchestrator card and wakes nothin
   expect(rig.sent).toEqual([]);
 });
 
+test("a drain beginning during proposal preparation holds the fresh wake until release", async () => {
+  const h = harness({});
+  let entered!: () => void;
+  let resume!: () => void;
+  const preparing = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  h.deps.proposalIssues = async () => { entered(); await gate; return [{ number: 1, title: "New work", labels: [], updatedAt: null }]; };
+  const check = runSeatTickCheck(PROJECT, h.deps);
+  await preparing;
+  writeDrain(drainFile(), { id: "inflight-seat", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    resume();
+    const held = await check;
+    expect(h.sent).toHaveLength(0);
+    expect(held?.delivery?.outcome).toBe("update-held");
+    releaseDrain(drainFile(), "inflight-seat");
+    await runSeatTickCheck(PROJECT, h.deps);
+    expect(h.sent).toHaveLength(1);
+    await runSeatTickCheck(PROJECT, h.deps);
+    expect(h.sent).toHaveLength(1);
+  } finally { resume(); releaseDrain(drainFile(), "inflight-seat"); }
+});
+
 test("the proactive slot delivers a proposal brief built from open issues", async () => {
   const rig = harness({});
   const record = await runSeatTickCheck(PROJECT, rig.deps);
@@ -3903,6 +3927,30 @@ test("dead Viewer MCP withholds a recordless refusal retry under its original ke
   expect(recovered.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId, text: pending.text });
   expect(fixture.acknowledged()).toEqual([child.id]);
   expect(fixture.row().outstandingWake).toBeNull();
+});
+
+test("a drain retains an unaccepted wake's original key until its retry is admitted", async () => {
+  const fixture = childFixture("drain-refused-retry");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
+  fixture.seed();
+  await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true, deliverWith: refuseBeforeReservation(503) }).deps);
+  const pending = fixture.row().outstandingWake!;
+  writeDrain(drainFile(), { id: "retry-seat", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    const held = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE });
+    await runSeatTickCheck(fixture.project, held.deps);
+    expect(held.sent).toEqual([]);
+    expect(fixture.row().outstandingWake).toEqual(pending);
+    expect(fixture.acknowledged()).toEqual([]);
+    releaseDrain(drainFile(), "retry-seat");
+    const resumed = childRig(fixture, { realWakeState: true, now: fixture.now + 10 * MINUTE });
+    await runSeatTickCheck(fixture.project, resumed.deps);
+    expect(resumed.sent).toHaveLength(1);
+    expect(resumed.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId, text: pending.text });
+    expect(fixture.acknowledged()).toEqual([child.id]);
+    expect(fixture.row().outstandingWake).toBeNull();
+  } finally { releaseDrain(drainFile(), "retry-seat"); }
 });
 
 test("a paused old lookup cannot dispatch after a successor replaces the refused wake (#1465)", async () => {
