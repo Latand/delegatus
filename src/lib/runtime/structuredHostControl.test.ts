@@ -239,9 +239,9 @@ test("an owned host ends through the runtime, bound to the process it authorized
     key: { engine: "claude", sessionId: CLAUDE_SESSION },
     expected: { pid: tree.pid, startIdentity: tree.startIdentity, bootEpoch: BOOT_EPOCH },
   }]);
-  /* The runtime retired the row inside its own lifecycle; retiring it a
-     second time here would be a second authority over one record. */
-  expect(retired).toEqual([]);
+  /* Runtime release ends its own host; the controller then retires the row
+     using the identities confirmed by the full process-tree sweep. */
+  expect(retired).toEqual([{ engine: "claude", sessionId: CLAUDE_SESSION }]);
   expect(procBackend.pidAlive(tree.pid)).toBeFalse();
 });
 
@@ -261,6 +261,7 @@ test("a runtime-confirmed exit receives no fallback group signal", async () => {
         return true;
       },
       signal: (pid) => { signals.push(pid); },
+      retireRegistryEntry: () => {},
     },
   );
 
@@ -454,6 +455,28 @@ test("a host that already exited retires its row without signalling anything", a
   expect(retired).toEqual([{ engine: "claude", sessionId: CLAUDE_SESSION }]);
 });
 
+test("a root-dead retry refuses a replacement at a retained survivor pid", async () => {
+  const replacementPid = 5_501;
+  const signals: number[] = [];
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 5_500, startIdentity: "5500:old", sessionId: CLAUDE_SESSION, owned: false }),
+    {
+      processIdentity: pid => pid === replacementPid ? "5501:replacement" : null,
+      pidAlive: pid => pid === replacementPid,
+      ppidMap: () => new Map(),
+      processGroupId: () => null,
+      protectedPids: () => new Set(),
+      retainedSurvivors: [{ pid: replacementPid, startIdentity: "5501:old", bootEpoch: BOOT_EPOCH }],
+      signal: pid => { signals.push(pid); },
+      terminateOwnedHost: async () => false,
+      deadlineMs: 0,
+    },
+  );
+
+  expect(outcome).toMatchObject({ ok: false, status: 409, error: expect.stringContaining("identity changed") });
+  expect(signals).toEqual([]);
+});
+
 test("a refused signal is a failure, not a success, and the registry row stays", async () => {
   const retired: SessionKey[] = [];
 
@@ -478,6 +501,29 @@ test("a refused signal is a failure, not a success, and the registry row stays",
   expect((outcome as { error: string }).error).toContain("EPERM");
   /* The host is still running, so the row that describes it must survive. */
   expect(retired).toEqual([]);
+});
+
+test("termination refuses to act when the captured tree was not durably recorded", async () => {
+  const effects: string[] = [];
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 6_050, startIdentity: "6050:start", sessionId: CLAUDE_SESSION }),
+    {
+      processIdentity: pid => `${pid}:start`,
+      pidAlive: () => true,
+      ppidMap: () => new Map([[6_051, 6_050]]),
+      processGroupId: () => 6_050,
+      protectedPids: () => new Set(),
+      persistCapturedTree: identities => {
+        effects.push(`persist:${identities.map(identity => identity.pid).join(",")}`);
+        return false;
+      },
+      terminateOwnedHost: async () => { effects.push("runtime-release"); return true; },
+      signal: pid => { effects.push(`signal:${pid}`); },
+    },
+  );
+
+  expect(outcome).toMatchObject({ ok: false, status: 409, error: expect.stringContaining("could not be persisted") });
+  expect(effects).toEqual(["persist:6050,6051"]);
 });
 
 test("a refused signal reports each survivor with the identity it carried (#1501)", async () => {

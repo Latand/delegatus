@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
@@ -11,6 +11,7 @@ import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
 import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
+import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import { FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
 import type { Flow } from "@/lib/flows/types";
@@ -1293,21 +1294,27 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
   }, [project]);
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
+  // A pin changes the subscription scope, while runtime turn settlements
+  // remain valid across that change for the same transcript generation.
+  const projectStatus = useMemo(() => createRuntimeFilesStatusProjection(), []);
   useEffect(() => {
     let alive = true;
     const cache = filesClientCache;
+    const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
+    const currentStatus = (next: FilesData) => bus ? projectStatus(next, bus.getState()) : next;
     const publishBackgroundData = (next: FilesData) => {
       if (!alive) return;
+      const projected = currentStatus(next);
       /* Scanner generations can change one live row inside a large catalog.
          Keep that reconciliation interruptible so reload, typing and board
          gestures do not wait behind a synchronous whole-Viewer render. */
       startTransition(() => {
-        if (alive) setData(next);
+        if (alive) setData(projected);
       });
     };
     const unsubscribeCache = cache.subscribe((next, priority) => {
       if (priority === "urgent") {
-        if (alive) setData(next);
+        if (alive) setData(currentStatus(next));
         return;
       }
       publishBackgroundData(next);
@@ -1453,9 +1460,14 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
         scheduleRevisionHydration(hydrated ? 0 : FILES_REVISION_RETRY_MS);
       }
     };
-    if (isRuntimeUiEnabled() && typeof window !== "undefined") {
-      const bus = getRuntimeBus();
-      const applyConnection = () => setCadence(filesPollCadence(bus.getState().connection));
+    if (bus) {
+      const applyConnection = () => {
+        const runtime = bus.getState();
+        setCadence(filesPollCadence(runtime.connection));
+        // Session turn events carry status independently of files.revision and
+        // its coalesced inventory scan. Every useFiles surface sees this frame.
+        if (projectStatus.updateRuntime(runtime)) publishBackgroundData(cache.readScope(pinnedPath));
+      };
       applyConnection();
       unsubBus = bus.subscribe(applyConnection);
       unsubFiles = bus.subscribeFilesRevision((revision) => {
@@ -1519,6 +1531,9 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       window.removeEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
       window.removeEventListener(FILES_CHANGED_EVENT, onChanged);
     };
-  }, [pinnedPath]);
-  return data.requestScope === requestScope ? data : filesClientCache.readScope(pinnedPath);
+  }, [pinnedPath, projectStatus]);
+  if (data.requestScope === requestScope) return data;
+  const scopedFallback = filesClientCache.readScope(pinnedPath);
+  const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
+  return bus ? projectStatus(scopedFallback, bus.getState()) : scopedFallback;
 }
