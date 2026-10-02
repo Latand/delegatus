@@ -600,7 +600,7 @@ test("under a journal the cursor has already passed, only a card that recently m
   const decision = seatTickDecision(input);
   expect(reasonsOf(decision)).toEqual(["unstarted-task"]);
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
-    .toBe("1 assigned board task(s) nothing has started, and 2 older than the backlog bound the wake no longer names");
+    .toBe("wire the chip — assigned, nothing started it; 2 older than the backlog bound");
   expect(decision.verdict.kind === "wake" && decision.verdict.items.map((item) => item.id)).toEqual(["task_b2"]);
 });
 

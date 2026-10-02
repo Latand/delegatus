@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { seatTickBullet } from "./report";
+import { redactMonitorText } from "./redact";
 import { maintenanceItemLabel } from "@/lib/boardMaintenance/text";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
@@ -185,7 +188,8 @@ function isOpenLane(pipeline: SeatTickPipelineInput): boolean {
 /**
  * The lanes this seat paused and has not resumed (#2063). A seat pauses its
  * lanes before a deploy and has to resume them after it, from a new turn; the
- * lanes are that turn's work, so every wake lists them until they move.
+ * lanes are that turn's work. Their first showing and each later deploy
+ * settlement carry the resume instruction.
  */
 function seatPausedLanes(input: SeatTickCheckInput): SeatTickPipelineInput[] {
   return input.pipelines.filter((pipeline) => isOpenLane(pipeline) && pipeline.pausedBy === "seat");
@@ -1281,9 +1285,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       candidates.push({ kind: "maintenance-settled", detail: newest.state === "failed" ? `board maintenance failed: ${newest.failure?.kind}` : `board maintenance finished: ${newest.counts.tasks} task(s) changed, ${newest.log.attention.length} item(s) for the operator` });
     }
     if (ownLanes.length > 0) {
-      const first = ownLanes[0]!;
-      const more = ownLanes.length > 1 ? ` and ${ownLanes.length - 1} more` : "";
-      candidates.push({ kind: "own-lane-settled", detail: `a lane you launched is ${first.settled}${more}` });
+      candidates.push({ kind: "own-lane-settled", detail: "lanes you launched have settled" });
     }
     if (laneEvents.length > 0) {
       const first = laneEvents[0]!;
@@ -1353,11 +1355,38 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     }
   }
 
+  const shownItems = new Set(input.state.itemsShown ?? []);
+  const all = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted })
+    .map(item => {
+      const itemVersion = agendaVersion(item, input);
+      return itemVersion ? { ...item, itemVersion } : item;
+    })
+    .filter(item => !item.itemVersion || !shownItems.has(item.itemVersion)
+      // A newly owed settlement remains deliverable even if its PR was shown.
+      || (item.laneAnnouncement && !input.state.announcedLanes.includes(item.laneAnnouncement))
+      || (item.kind === "pipeline" && settledDeploys.length > 0 && seatPausedLanes(input).some(lane => lane.id === item.id)));
+  const forReason = (kind: SeatTickWakeReasonKind): SeatTickItem[] => all.filter(item => {
+    switch (kind) {
+      case "unmerged-pr": return item.kind === "pull-request";
+      case "unstarted-task": return item.kind === "task";
+      case "permission-request": return item.kind === "permission";
+      case "own-lane-settled": return !!item.laneAnnouncement;
+      case "stalled": return !!item.stallToken || (item.kind === "pipeline" && persistedStalls.some(entry => entry.pipeline.id === item.id)) || (item.kind === "child" && persistedChildStalls.some(entry => entry.child.conversationId === item.id));
+      case "interval": return true;
+      default: return false;
+    }
+  });
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
   for (const reason of candidates) {
-    if (guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
+    const pending = forReason(reason.kind);
+    if (versionedReasons.has(reason.kind) && pending.length === 0) continue;
+    // Held-back items have never been delivered. A whole-board retry count
+    // must not prevent later pages from reaching the seat.
+    const unseenPage = input.state.itemsShown !== undefined && pending.some(item => item.itemVersion && !shownItems.has(item.itemVersion));
+    if (!unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
       guardHeld += 1;
       cards.push({
         ref: seatTickRetryGuardRef(reason.kind),
@@ -1366,7 +1395,21 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       });
       continue;
     }
-    reasons.push(reason);
+    if (reason.kind === "unmerged-pr") {
+      const first = input.pullRequests.find(pr => `#${pr.number}` === pending[0]?.id)!;
+      reasons.push({ ...reason, detail: `pull request #${first.number}${pending.length > 1 ? ` and ${pending.length - 1} more` : ""} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${first.mergeBlocked ? `; merge stopped: ${first.mergeBlocked}` : ""}` });
+    } else if (reason.kind === "own-lane-settled" || reason.kind === "unstarted-task" || reason.kind === "stalled") {
+      const named = pending.slice(0, input.policy.itemsPerWake).map(item => `${item.kind === "pull-request" ? `${item.id}: ` : ""}${item.label.replace(/\s+/g, " ").slice(0, 200)}`).join("; ");
+      const more = pending.length > input.policy.itemsPerWake ? `; ${pending.length - input.policy.itemsPerWake} more await a later wake` : "";
+      reasons.push({ ...reason, detail: `${named}${more}${reason.kind === "unstarted-task" && backlog > 0 ? `; ${backlog} older than the backlog bound` : ""}` });
+    } else reasons.push(reason);
+  }
+
+  // An unchanged reason can disappear while another open lane has moved.
+  // That new interval agenda must still be considered after item dedupe.
+  if (wakeDue && openWork && reasons.length === 0 && guardHeld === 0
+    && all.some(item => item.itemVersion && !shownItems.has(item.itemVersion))) {
+    reasons.push({ kind: "interval", detail: "open work changed since its last delivered wake" });
   }
 
   /* What this check could not read, said once on the board and on every wake
@@ -1401,7 +1444,6 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      The guard and the interval are untouched by any of it: the reasons here
      passed both, and a gap adds none. */
   if (reasons.length > 0) {
-    const all = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted });
     const items = all.slice(0, input.policy.itemsPerWake);
     const lines = seatTickReportLines(input, state, items, reasons);
     return {
@@ -1733,8 +1775,8 @@ function wakeItems(context: {
   const items: SeatTickItem[] = [];
   /* The seat's own deploy first, then the lanes it paused (#2063): the wake a
      deploy owes is "it settled, now resume what you paused for it", and the
-     per-wake bound must never cut either half. A paused lane is listed on
-     every wake until it is resumed, whatever the reason the wake carries. */
+     per-wake bound must never cut either half. Previously shown paused lanes
+     are offered again when a deployment settles. */
   for (const deploy of seatSettledDeploys(input)) {
     items.push({
       kind: "deploy",
@@ -1812,8 +1854,9 @@ function wakeItems(context: {
   /* A stall a landed wake already named, on a lane or child that has not
      moved since, gives its place to every unstarted task. Ahead of them, the
      same stall filled the item window on every wake and a task was only ever
-     counted as deferred. It is still listed, after the tasks. A stall no wake
-     named keeps its place ahead of them, or the tasks would starve it. */
+     counted as deferred. Legacy reported stalls stay after the tasks; the
+     delivered-item ledger filters unchanged versions. A stall no wake named
+     keeps its place ahead of them, or the tasks would starve it. */
   const reported = new Set(input.state.reportedStalls ?? []);
   const owned = new Set(context.ownLanes.map((lane) => lane.id));
   const laneStall = (entry: { pipeline: SeatTickPipelineInput; reason: string }): void => {
@@ -1925,6 +1968,8 @@ export function seatTickWakeCommitPlan(
   const reportedStalls = verdict.items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
   return {
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
+    itemsShown: verdict.items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
+    itemLines: verdict.items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
   };
@@ -2006,6 +2051,7 @@ export function seatTickWakeCommit(
     releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
+    itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit)),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
@@ -2045,4 +2091,39 @@ function childrenShown(before: readonly string[], shown: readonly string[]): str
   const replaced = new Set(shown.map(conversation));
   const merged = [...before.filter((token) => !replaced.has(conversation(token))), ...shown];
   return merged.slice(-SEAT_TICK_CHILDREN_SHOWN_LIMIT);
+}
+
+/** Stable per-item versions keep unrelated board movement out of dedupe.
+ * Existing child/outcome/event ledgers retain their own delivery semantics.
+ * Permission requests keep their reminder behavior: equal labels do not prove
+ * equal requests, and this projection has no durable request identity. */
+function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
+  if (!["pipeline", "provisioning", "task", "pull-request", "signal"].includes(item.kind)) return undefined;
+  const kind = item.kind === "provisioning" ? "pipeline" : item.kind;
+  const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const pipeline = kind === "pipeline" ? input.pipelines.find(row => row.id === item.id) : undefined;
+  const ownLane = kind === "pipeline" ? input.ownLanes.find(row => row.id === item.id) : undefined;
+  const source = kind === "task" ? input.tasks.find(row => row.id === item.id)
+    : kind === "pull-request" ? input.pullRequests.find(row => `#${row.number}` === item.id)
+    : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && input.state.stalledSeen.includes(pipeline.id) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
+    : ownLane ?? item.label;
+  return `${hash([kind, item.id])}@${hash(source)}`;
+}
+
+/** Replace the prior version of an item; retain a bounded recent history.
+ * Eviction can re-offer an old item, and can never lose an unseen obligation. */
+function mergeAgendaVersions(before: readonly string[], delivered: readonly string[]): string[] {
+  const key = (token: string) => token.split("@")[0];
+  const replaced = new Set(delivered.map(key));
+  return [...before.filter(token => !replaced.has(key(token))), ...new Set(delivered)].slice(-2000);
+}
+
+/** Production landings use the exact frozen text. The renderer may have cut
+ * an item; only a complete bullet is positive evidence that it was shown.
+ * Pure callers without an outstanding payload commit their explicit plan. */
+function visibleAgendaVersions(state: SeatTickProjectState, commit: SeatTickWakeCommit): string[] {
+  const text = state.outstandingWake?.text;
+  if (text === undefined || commit.itemLines === undefined) return commit.itemsShown ?? [];
+  const framed = `\n${text}\n`;
+  return commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`)).map(item => item.version);
 }

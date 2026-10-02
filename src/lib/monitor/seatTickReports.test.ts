@@ -461,9 +461,9 @@ test("the replayed day: one report asked per outcome wake, each settled by one c
   expect(day.digestLines.length).toBeLessThanOrEqual(6);
   /* Before and after, on the same day: the seats filed 11 reports and
      followed 5 of the 15 outcome wakes of the day seat with one; a seat that
-     files what the tick asks for files 27 — 21 outcome reports, 5 digests and
+     files what the tick asks for files 23 — 21 outcome reports, 1 digest and
      1 question. */
-  expect({ owed: day.owedLines.length, digests: day.digestLines.length, asks: day.askLines.length, filed: day.filed }).toEqual({ owed: 21, digests: 5, asks: 1, filed: 27 });
+  expect({ owed: day.owedLines.length, digests: day.digestLines.length, asks: day.askLines.length, filed: day.filed }).toEqual({ owed: 21, digests: 1, asks: 1, filed: 23 });
   expect(REAL_REPORTS).toHaveLength(11);
   /* The one ask the day left unanswered for more than ten minutes is asked
      once, and reported. */
@@ -474,9 +474,9 @@ test("the replayed day: one report asked per outcome wake, each settled by one c
 test("the replayed day with no report filed: every owed key is asked for in each later wake, the list never passes 64, and exactly one ask is owed", () => {
   const day = replayDay(false);
   /* Every wake from the first outcome on carries the owed line: the 21
-     outcome wakes and the 6 interval wakes after them. */
-  expect(day.wakes).toBe(21 + 6);
-  expect(day.owedLines).toHaveLength(21 + 6);
+     outcome wakes and one interval wake; unchanged later agendas stay quiet. */
+  expect(day.wakes).toBe(21 + 1);
+  expect(day.owedLines).toHaveLength(21 + 1);
   const firstKey = day.everOwed[0]!;
   let before = 0;
   for (const line of day.owedLines) {

@@ -111,7 +111,7 @@ test("the proposal brief asks for one ranked card and forbids opening issues or 
  * was missing so it can tell a short agenda from a blind one.
  * ------------------------------------------------------------------------- */
 
-test("a wake names the evidence it could not read, above the items and below the reasons", () => {
+test("a wake names the evidence it could not read, above the items and below the reason kinds", () => {
   const text = seatTickWakeMessage({
     project: PROJECT,
     reasons: [{ kind: "stalled", detail: "pipeline pipeline_a1 stage review is parked" }],
@@ -131,7 +131,8 @@ test("a wake names the evidence it could not read, above the items and below the
      that dropped its own blind spot to fit one more item would be the silence
      this section exists to end, one line smaller. */
   expect(text.indexOf("Evidence unavailable:")).toBeLessThan(text.indexOf("Items:"));
-  expect(text.indexOf("stalled: pipeline")).toBeLessThan(text.indexOf("Evidence unavailable:"));
+  expect(text.indexOf("Wake reasons: stalled")).toBeLessThan(text.indexOf("Evidence unavailable:"));
+  expect(text.indexOf("Items:")).toBeLessThan(text.indexOf("Why you were woken:"));
   /* And the contract is untouched, as it is by everything else. */
   expectContractClauses(text);
 });

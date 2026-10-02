@@ -175,7 +175,7 @@ function seatTickContractLines(mandateCarriesContract: boolean): string[] {
     : ["", "Contract:", `- ${SEAT_TICK_NO_SELF_SCHEDULE}`, ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
 }
 
-function seatTickBullet(item: SeatTickItem): string {
+export function seatTickBullet(item: SeatTickItem): string {
   const bullet = `- [${item.kind}] ${item.id} — ${item.label}`;
   /* A settled child's own last words (#1881), attached by the controller. */
   return item.finalMessage ? `${bullet}\n  final message: ${item.finalMessage}` : bullet;
@@ -270,8 +270,7 @@ export function seatTickWakeMessage(input: {
   const lines = [
     `Seat tick — ${input.project}.`,
     "",
-    "Why you were woken:",
-    ...input.reasons.map((reason) => `- ${reason.kind}: ${reason.detail}`),
+    `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ];
   /* Directly under the reasons, above the agenda, because it qualifies the
      whole message and because the agenda is the half the length bound eats
@@ -281,6 +280,7 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
   lines.push("", "Items:", ...input.items.map(seatTickBullet));
+  lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
     lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
   }

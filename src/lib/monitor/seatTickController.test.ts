@@ -1345,8 +1345,8 @@ test("a pull request line announces its creator's completed lane only after deli
     openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", createdAt: FINISHED_PR_CREATED, updatedAt: new Date(NOW - MINUTE).toISOString() }],
   });
   const second = await runSeatTickCheck(PROJECT, later.deps);
-  expect(second!.reasons).toContain("unmerged-pr");
-  expect(second!.reasons).not.toContain("own-lane-settled");
+  expect(second!.verdict).toBe("quiet");
+  expect(later.sent).toHaveLength(0);
 });
 
 test("a PR opened after a finished lane released its delivery head belongs to the active lane (#2081)", async () => {
@@ -6637,16 +6637,12 @@ test("a deploy the seat started wakes it once when it settles, with the lanes it
   expect(second!.reasons ?? []).not.toContain("deploy-settled");
   expect(again.sent).toHaveLength(0);
 
-  /* The lanes stay owed until they are resumed: the next wake the hour brings
-     lists them again, and still not the operator's. */
+  /* The lanes have been shown. An unchanged hour does not repeat them;
+     a later deploy settlement makes their resume instruction actionable again. */
   const hourly = harness({ pipelines, ...deploys, now: NOW + 70 * MINUTE, state: again.written.at(-1)! });
   const third = await runSeatTickCheck(PROJECT, hourly.deps);
-  expect(third).toMatchObject({ verdict: "wake" });
-  expect(third!.reasons ?? []).not.toContain("deploy-settled");
-  const hourlyText = hourly.sent[0]!.text;
-  for (const id of ["pipeline_s1", "pipeline_s2", "pipeline_s3"]) expect(hourlyText).toContain(`[pipeline] ${id} — lane ${id} — paused by you`);
-  expect(hourlyText).not.toContain("pipeline_op");
-  expect(hourlyText).not.toContain("[deploy]");
+  expect(third).toMatchObject({ verdict: "quiet" });
+  expect(hourly.sent).toHaveLength(0);
 });
 
 test("a lane the operator paused is not the seat's work: no stall, no interval wake (#2063)", async () => {
