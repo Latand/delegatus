@@ -41,7 +41,7 @@ import tailwind from "@tailwindcss/postcss";
 const repo = path.resolve(process.argv[2] ?? ".");
 const out = path.resolve(process.argv[3] ?? ".artifacts/performance/kanban");
 const idleSeconds = Number(process.argv[4] ?? 35);
-/* How many historical builders (each with its review lineage card) the corpus adds: the default is the 357-card board of #1546; `PROFILE_HISTORY=19` is the 96-card board of #2218. */
+/* How many historical builders (each with its review lineage card) the corpus adds: the default is the 357-card board of #1546; a board is 17 cards plus `HISTORY` builders plus one finished task for each of the first 60, so `PROFILE_HISTORY=19` is a 55-card board and `PROFILE_HISTORY=40` the 97-card board that stands for the 96-card project of #2218 (cards are counted in `corpus.cards`). */
 const HISTORY = Number(process.env.PROFILE_HISTORY ?? 280);
 fs.mkdirSync(out, { recursive: true });
 

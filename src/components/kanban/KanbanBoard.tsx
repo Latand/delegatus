@@ -2145,7 +2145,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       timer = 0;
       schedule();
     };
-    const onScroll = () => {
+    /* The capture listener hears every scroll under the board, and the seat's
+       feed and each reader pin to the bottom on every streamed event. Only a
+       scroller that holds the columns (the board, its page) or a column body
+       can move a card; any other scroll is ignored. */
+    const movesCards = (target: EventTarget | null) =>
+      !(target instanceof HTMLElement) || target.matches(".col-body") || target.querySelector(".column[data-status]") !== null;
+    const onScroll = (event: Event) => {
+      if (!movesCards(event.target)) return;
       if (timer) window.clearTimeout(timer);
       timer = window.setTimeout(settle, SCROLL_SETTLE_MS);
       if (performance.now() - measuredAt >= SCROLL_MEASURE_MS) schedule();
