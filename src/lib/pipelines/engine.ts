@@ -3296,17 +3296,76 @@ async function stopAutomaticInterruptedStageAttempt(stage: PipelineStage, attemp
   return stopped;
 }
 
-/** Restart and stall recovery share the existing durable conversation delivery
-    seam. Reserve before any host/transport effect, and preserve partial work. */
+async function replaceInterruptedStageAttempt(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void, bootId: string, lastRecordAt: number | null,
+): Promise<boolean> {
+  const previous = attempt.restartRecovery;
+  if (previous?.bootId === bootId) {
+    if (previous.replacedAttempt !== undefined) {
+      park(pipeline, "the automatic restart attempt was interrupted again during this boot; retry-stage to start another attempt", attempt);
+      persist();
+      return true;
+    }
+    // A record written by an older release may represent a continuation rather
+    // than a replacement attempt. Keep its bounded compatibility behavior.
+    if (previous.clientMessageId) {
+      if (unixMs(ports.now()) - unixMs(previous.requestedAt) < SEVERED_TURN_PARK_SILENCE_MS) return true;
+      park(pipeline, "the legacy restart continuation did not resume the stage; retry-stage to start a fresh attempt", attempt);
+      persist();
+      return true;
+    }
+  }
+  const requestedAt = previous?.bootId === bootId ? previous.requestedAt : ports.now();
+  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt };
+  persist();
+  const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
+  if (stopped === null) {
+    if (previous) attempt.restartRecovery = previous;
+    else delete attempt.restartRecovery;
+    persist();
+    return true;
+  }
+  if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+    park(pipeline, "restart recovery could not confirm termination of the interrupted stage host", attempt);
+    persist();
+    return true;
+  }
+
+  attempt.state = "failed";
+  attempt.completedAt = ports.now();
+  attempt.error = "interrupted by a Delegatus restart; replaced by a fresh stage attempt";
+  const replacement = newAttempt(pipeline, stage);
+  if (!runFor(pipeline, stage.id) || !replacement) {
+    park(pipeline, "restart recovery could not reserve a fresh stage attempt", attempt);
+    persist();
+    return true;
+  }
+  replacement.effectiveRole = structuredClone(attempt.effectiveRole);
+  replacement.definition = attempt.definition ? structuredClone(attempt.definition) : attempt.definition;
+  replacement.input = attempt.input;
+  replacement.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
+  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath! };
+  replacement.restartRecovery = { bootId, requestedAt, lastRecordAt, replacedAttempt: attempt.n };
+  attempt.restartRecovery.replacementAttempt = replacement.n;
+  setCursorState(pipeline, stage.id, "pending");
+  pipeline.state = "running";
+  pipeline.stateDetail = `stage attempt ${attempt.n} was interrupted by a restart; fresh attempt ${replacement.n} is starting`;
+  persist();
+  return true;
+}
+
+/** Restart and stall recovery share the same durable evidence and identity
+    fences. A replacement uses the bound definition, activation input and checkout. */
 async function recoverInterruptedStageTurn(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
   const cut = deployCutOf(attempt, ports);
-  if (attempt.state !== "running" || attempt.paneId || !attempt.conversationId || !attempt.agentPath
+  if (attempt.state !== "running" || attempt.report || attempt.paneId || !attempt.conversationId || !attempt.agentPath
     || deployCutHoldsAttempt(cut, ports)) return false;
   const observedIdentity = { n: attempt.n, conversationId: attempt.conversationId, agentPath: attempt.agentPath, startedAt: attempt.startedAt };
-  let interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
+  const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
   if (!interrupted) return false;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
   if (durable?.turn !== "busy" || durable.launchOnly) return false;
@@ -3323,25 +3382,12 @@ async function recoverInterruptedStageTurn(
     || attempt.startedAt !== observedIdentity.startedAt || !latestInterrupted
     || latestDurable?.turn !== "busy" || latestDurable.launchOnly
     || latestDurable.lastRecordAt !== durable.lastRecordAt) return false;
-  interrupted = latestInterrupted;
   if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
   const recoveryEvidence = latestDurable;
   const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
   const bootStartedAt = ports.restartRecoveryBootStartedAt?.() ?? PIPELINE_RECOVERY_BOOT_STARTED_AT;
-  // A deploy continuation delivered during this Viewer boot already consumed
-  // its recovery allowance. An older receipt must not suppress a later reboot.
-  if (cut?.state === "delivered" && cut.resolvedAt
-    && unixMs(cut.resolvedAt) >= bootStartedAt
-    && (!attempt.restartRecovery || unixMs(cut.resolvedAt) > unixMs(attempt.restartRecovery.requestedAt))) {
-    attempt.restartRecovery = { bootId, requestedAt: cut.resolvedAt,
-      clientMessageId: `stage-deploy-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${unixMs(cut.resolvedAt)}`,
-      lastRecordAt: recoveryEvidence.lastRecordAt ?? null };
-    if (typeof epoch === "number") attempt.hostEpoch = epoch;
-    delete attempt.severedTurn;
-    persist();
-  }
-  // The epoch-based recovery may already have sent this boot's continuation.
-  // Carry its reservation into the restart path before considering a send.
+  // A continuation already sent by an older release remains fenced as a
+  // legacy reservation. Current recovery starts a separate conversation.
   const legacy = attempt.severedTurn;
   if (!attempt.restartRecovery && legacy?.epoch === epoch && legacy.resumedAt && legacy.clientMessageId
     && unixMs(legacy.resumedAt) >= bootStartedAt) {
@@ -3351,72 +3397,13 @@ async function recoverInterruptedStageTurn(
     delete attempt.severedTurn;
     persist();
   }
-  const previous = attempt.restartRecovery;
-  if (previous?.bootId === bootId) {
-    if (unixMs(ports.now()) - unixMs(previous.requestedAt) < SEVERED_TURN_PARK_SILENCE_MS) return true;
-    if (interrupted === "idle") {
-      park(pipeline, "stage interrupted again after its one restart continuation; retry-stage to start a fresh attempt", attempt);
-      persist();
-      return true;
-    }
-    const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports);
-    if (stopped === null) return true;
-    const detail = stopped.outcome === "stopped" || stopped.outcome === "not-running"
-      ? "stage interrupted again after its one restart continuation; retry-stage to start a fresh attempt"
-      : "stage interrupted again after its one restart continuation; host termination is still unconfirmed";
-    park(pipeline, detail, attempt);
-    persist();
-    return true;
-  }
-  const clientMessageId = `stage-restart-${pipeline.id}-${stage.id}-${attempt.n}-${bootId}`;
-  attempt.restartRecovery = { bootId, clientMessageId, requestedAt: ports.now(), lastRecordAt: recoveryEvidence.lastRecordAt ?? null };
-  // This path now owns succession recovery too; the older witness must not
-  // schedule another continuation when the resumed host starts progressing.
-  if (typeof epoch === "number") attempt.hostEpoch = epoch;
-  delete attempt.severedTurn;
-  persist();
-  try {
-    if (interrupted !== "idle") {
-      const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports);
-      if (stopped === null) {
-        if (previous) attempt.restartRecovery = previous;
-        else delete attempt.restartRecovery;
-        persist();
-        return true;
-      }
-      if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
-        park(pipeline, "restart continuation could not confirm termination of the stalled host", attempt);
-        persist();
-        return true;
-      }
-    }
-    const accepted = await ports.resumeSeveredTurn?.({ conversationId: attempt.conversationId,
-      transcriptPath: attempt.agentPath, clientMessageId, project: pipeline.project, cwd: pipeline.repoDir, policy: "queue",
-      text: "Your turn was interrupted by a Delegatus restart. Continue from your current work, finish it, and report your verdict with stage_report; use the fenced JSON fallback only if that tool is unavailable or returns an error." });
-    if (accepted !== true) park(pipeline, "restart continuation was refused; retry-stage to start a fresh attempt", attempt);
-    else pipeline.stateDetail = "interrupted stage received one restart continuation";
-  } catch {
-    park(pipeline, "restart continuation delivery could not be confirmed; retry-stage after checking the conversation", attempt);
-  }
-  persist();
-  return true;
+  return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null);
 }
-/** Silence after the continuation before the attempt parks for the operator.
-    Generous on purpose: a resumed agent writes its next record in seconds, so
-    anything past this is a host that will not answer at all. */
+/** Silence after a legacy continuation before the attempt parks for the operator. */
 const SEVERED_TURN_PARK_SILENCE_MS = 10 * 60_000;
 const SEVERED_TURN_PARK_DETAIL =
-  "the stage turn was cut when the runtime host was replaced, and one controller continuation did not resume it";
+  "the legacy restart continuation did not resume the stage; retry-stage to start a fresh attempt";
 const SEVERED_TURN_RESUMED_DETAIL = "stage turn cut by a deploy; the controller sent one continuation";
-const SEVERED_TURN_CONTINUATION_TEXT =
-  "A Delegatus deploy replaced the runtime host and cut this turn in the middle of its work."
-  + " Nothing answered it, so the pipeline controller is resuming you once."
-  + " Every background command, monitor and tool call that was in flight died with the previous host:"
-  + " re-run whatever you still need, then report the stage's completion with stage_report."
-  /* The attempt is still open, so the call works: the fenced block stays the
-     fallback in the stage wrapper's own terms (#1797, agent-prompt-contract.md C1). */
-  + " Only if that call returns an error or the tool is absent, end the turn with the fenced JSON block instead.";
-
 async function reconcileSeveredStageTurn(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -3430,14 +3417,14 @@ async function reconcileSeveredStageTurn(
   if (attempt.state !== "running" || attempt.paneId || !conversationId || !attempt.agentPath) return "continue";
   const epoch = await ports.runtimeHostEpoch?.() ?? null;
   if (epoch === null) return "continue";
+  if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return "continue";
   const clearWitness = (): void => {
     if (attempt.severedTurn === undefined) return;
     delete attempt.severedTurn;
     if (pipeline.stateDetail === SEVERED_TURN_RESUMED_DETAIL) pipeline.stateDetail = null;
   };
   /* An attempt launched before the witness existed adopts the generation it is
-     seen under: nothing about it says a succession happened, and a continuation
-     on a guess is the one thing this must never send. */
+     seen under: nothing about it says a succession happened. */
   if (attempt.hostEpoch === undefined || attempt.hostEpoch === epoch) {
     if (attempt.hostEpoch !== epoch || attempt.severedTurn !== undefined) {
       attempt.hostEpoch = epoch;
@@ -3462,18 +3449,8 @@ async function reconcileSeveredStageTurn(
   const lastRecordAt = durable.lastRecordAt ?? durable.message?.ts ?? null;
   const witness = attempt.severedTurn?.epoch === epoch ? attempt.severedTurn : null;
   if (!witness) {
-    /* The sighting is not the succession: the epoch changed at some point
-       between the previous tick and this one, and a record written inside that
-       window — the runtime's own interrupted-turn continuation, an operator's
-       "continue" — would otherwise become the baseline this measures silence
-       from. So the witness arms only on a transcript that was ALREADY silent
-       by the whole resume bound when the new epoch was first seen. That is
-       what makes the newest record older than the change rather than merely
-       older than the sighting, and it is the production shape exactly: every
-       cut lane went quiet minutes before its succession. A transcript that
-       moved more recently than that, or that carries no timestamp to judge,
-       gets no continuation at all — the generation is adopted and the attempt
-       is left alone, however long it then sits inside one tool call. */
+    /* Arm only when the transcript was already silent for the full bound at
+       first sighting. Recent or undated evidence is not enough to replace it. */
     const sightedAt = ports.now();
     const silentAtSighting = lastRecordAt !== null
       && unixMs(sightedAt) - lastRecordAt >= SEVERED_TURN_RESUME_SILENCE_MS;
@@ -3490,38 +3467,17 @@ async function reconcileSeveredStageTurn(
     adopt();
     return "continue";
   }
-  if (conversationId && ports.conversationDeliveryOutstanding?.(conversationId) === true) return "continue";
+  if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return "continue";
   const nowMs = unixMs(ports.now());
   if (witness.resumedAt === undefined) {
     if (nowMs - unixMs(witness.sightedAt) < SEVERED_TURN_RESUME_SILENCE_MS) return "continue";
-    /* A cut the Viewer release recorded has its one continuation from the
-       successor's startup (#1835); a second one from here would compete with
-       it. Only a continuation that queue refused for good leaves this one. */
-    const releaseCut = deployCutOf(attempt, ports);
-    if (releaseCut && releaseCut.state !== "failed") return "continue";
-    /* Stable across ticks and processes, so a replay cannot mint a second
-       continuation even if this record never reaches disk. */
-    const clientMessageId = `stage-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${epoch}`;
-    const resumed = await ports.resumeSeveredTurn?.({
-      conversationId,
-      transcriptPath: attempt.agentPath,
-      clientMessageId,
-      text: SEVERED_TURN_CONTINUATION_TEXT,
-      project: pipeline.project,
-      cwd: pipeline.repoDir,
-    });
-    /* A refused admission leaves the continuation owed; the next tick asks
-       again under the same identity. */
-    if (resumed !== true) return "continue";
-    witness.resumedAt = ports.now();
-    witness.clientMessageId = clientMessageId;
-    attempt.restartRecovery = {
-      bootId: `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`,
-      requestedAt: witness.resumedAt, clientMessageId, lastRecordAt: witness.silentSince,
-    };
-    pipeline.stateDetail = SEVERED_TURN_RESUMED_DETAIL;
-    persist();
-    return "handled";
+    const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
+    const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+    if (attempt.state !== "running" || attempt.conversationId !== conversationId
+      || latest?.turn !== "busy" || latest.launchOnly
+      || (latest.lastRecordAt ?? latest.message?.ts ?? null) !== witness.silentSince) return "continue";
+    return await replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, latest.lastRecordAt ?? null)
+      ? "handled" : "continue";
   }
   if (nowMs - unixMs(witness.resumedAt) < SEVERED_TURN_PARK_SILENCE_MS) return "continue";
   park(pipeline, SEVERED_TURN_PARK_DETAIL, attempt);
@@ -4082,12 +4038,15 @@ async function tickRunStage(
          so the spawn digest is stable across restarts; a migrated pre-v3
          attempt (input === null with no recorded activation) keeps the legacy
          positional scan byte-identically. */
-      const prompt = renderStagePrompt(
+      const stagePrompt = renderStagePrompt(
         pipeline,
         bound,
         attempt.effectiveRole,
         attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline),
       );
+      const prompt = attempt.restartContext
+        ? `${stagePrompt}\n\nThis is a fresh attempt because stage attempt ${attempt.restartContext.previousAttempt} was interrupted by a Delegatus restart. Continue the same stage input and use its transcript for reference: ${attempt.restartContext.transcriptPath}.`
+        : stagePrompt;
       /* The retried attempt supersedes its predecessor's round (issue #383):
          the prior attempt of the SAME stage that carries a conversation. */
       const priorAttempt = runFor(pipeline, stage.id)?.attempts.filter((candidate) => !candidate.historical).at(-2) ?? null;

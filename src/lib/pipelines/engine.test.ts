@@ -15891,7 +15891,7 @@ test.each([
   { engine: "codex", interruption: "idle" }, { engine: "claude", interruption: "idle" },
   { engine: "codex", interruption: "dead" }, { engine: "claude", interruption: "dead" },
   { engine: "codex", interruption: "stalled" }, { engine: "claude", interruption: "stalled" },
-] as const)("restart resumes $engine $interruption once, then parks a second interruption", async ({ engine, interruption }) => {
+] as const)("restart creates one fresh $engine attempt after $interruption, then parks another interruption", async ({ engine, interruption }) => {
   const h = harness();
   await create(h.ports, [{ id: "build", kind: "run", engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol", prompt: "Build", next: null }] as never);
   await tickPipelines([], h.ports);
@@ -15902,26 +15902,36 @@ test.each([
   savePipelines([before]);
   const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
   h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
-  const sent: string[] = [];
-  const policies: (string | undefined)[] = [];
+  let oldConversationMessages = 0;
   const restarted = { ...h.ports,
     restartRecoveryBootId: () => "boot-after-crash",
     conversationTurnInterrupted: async () => interruption,
-    resumeSeveredTurn: async (input: { text: string; policy?: string }) => { sent.push(input.text); policies.push(input.policy); return true; },
+    resumeSeveredTurn: async () => { oldConversationMessages += 1; return true; },
   };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
-  expect(sent).toHaveLength(1);
-  // Runtime evidence can become stale before delivery. Queueing lets a host
-  // that started another turn finish its current work without interruption.
-  expect(policies).toEqual(["queue"]);
-  expect(sent[0]).toContain("Delegatus restart");
-  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(oldConversationMessages).toBe(0);
+  expect(h.calls).toContain(`stop-host:build:${attempt.n}:${attempt.conversationId}`);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  const recoveryBootId = "boot-after-crash:unknown";
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", restartRecovery: { bootId: recoveryBootId, replacementAttempt: 2 } });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "pending", restartContext: { previousAttempt: 1, transcriptPath: attempt.agentPath }, restartRecovery: { bootId: recoveryBootId, replacedAttempt: 1 } });
+  await tickPipelines([], restarted);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.cwd).toBe(loadPipelines()[0]!.worktreeDir);
+  expect(h.spawnInputs[1]!.prompt).toContain("Build");
+  expect(h.spawnInputs[1]!.prompt).toContain("interrupted by a Delegatus restart");
+  expect(h.spawnInputs[1]!.prompt).toContain(attempt.agentPath!);
   await tickPipelines([entry(attempt.agentPath!)], { ...restarted });
-  expect(sent).toHaveLength(1);
-  h.advanceWallClock(11 * 60_000);
-  await tickPipelines([entry(attempt.agentPath!)], { ...restarted });
+  expect(oldConversationMessages).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  const afterReplacement = loadPipelines()[0]!;
+  const replacement = afterReplacement.runs[0]!.attempts[1]!;
+  replacement.paneId = null;
+  savePipelines([afterReplacement]);
+  h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  await tickPipelines([entry(replacement.agentPath!)], restarted);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
-  expect(loadPipelines()[0]!.stateDetail).toContain("restart continuation");
+  expect(loadPipelines()[0]!.stateDetail).toContain("automatic restart attempt");
 });
 
 test.each(["idle-to-working", "busy-to-terminal"] as const)("restart recovery drops stale evidence for %s before dispatch", async (race) => {
@@ -15933,11 +15943,6 @@ test.each(["idle-to-working", "busy-to-terminal"] as const)("restart recovery dr
   const attempt = lane.runs[0]!.attempts[0]!;
   attempt.paneId = null;
   savePipelines([lane]);
-  if (race === "busy-to-terminal") {
-    const report = await engineModule.reportStageCompletion({ verdict: "pass", findings: [], summary: "Work finished" },
-      { kind: "agent", role: "builder", conversationId: attempt.conversationId }, h.ports);
-    expect(report.error).toBeUndefined();
-  }
   const firstRecordAt = Date.parse(attempt.startedAt!) + 1;
   h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: firstRecordAt });
   let releaseEpoch!: () => void;
@@ -16017,7 +16022,7 @@ test("restart recovery reads restored idle and dead turns from the runtime snaps
 });
 
 
-test("restart recovery preserves working turns and pending continuations and parks unconfirmed host termination", async () => {
+test("restart recovery preserves working turns and pending deliveries and parks unconfirmed host termination", async () => {
   const h = harness();
   await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
   await tickPipelines([], h.ports);
@@ -16046,7 +16051,7 @@ test("restart recovery preserves working turns and pending continuations and par
 });
 
 
-test("restart resumes a report's interrupted turn and settles its verdict without another attempt", async () => {
+test("restart leaves a recorded stage report authoritative until its verdict is written", async () => {
   const h = harness();
   await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
   await tickPipelines([], h.ports);
@@ -16063,7 +16068,9 @@ test("restart resumes a report's interrupted turn and settles its verdict withou
   const restarted: PipelinePorts = { ...h.ports, restartRecoveryBootId: () => "report-boot",
     conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
-  expect(sends).toBe(1);
+  expect(sends).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("running");
   const finalEntry = h.finish(attempt.agentPath!, "pass");
   const message = h.messages.get(attempt.agentPath!)!;
   h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message, lastRecordAt: message.ts });
@@ -16121,6 +16128,7 @@ test.each(["pending", "deploy"] as const)("restart-parked retry preserves its %s
   attempt.paneId = null;
   savePipelines([stored]);
   h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  h.setStageHost(attempt.conversationId!, { outcome: "unconfirmed", operationId: null, detail: "termination is not confirmed" });
   const restarted: PipelinePorts = { ...h.ports, conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => false };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
@@ -16136,7 +16144,7 @@ test.each(["pending", "deploy"] as const)("restart-parked retry preserves its %s
 });
 
 
-test.each([true, false])("restart recovery shares a runtime-host continuation only in its own boot: %s", async (sameBoot) => {
+test.each([true, false])("restart recovery does not message the old conversation for a severed turn: %s", async (sameBoot) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -16155,15 +16163,15 @@ test.each([true, false])("restart recovery shares a runtime-host continuation on
     restartRecoveryBootStartedAt: () => Date.parse(at) + (sameBoot ? -1000 : 1000),
     conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
-  expect(sends).toBe(sameBoot ? 0 : 1);
+  expect(sends).toBe(0);
   h.advanceWallClock(11 * 60_000);
   await tickPipelines([entry(attempt.agentPath!)], restarted);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  expect(sends).toBe(sameBoot ? 0 : 1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.length).toBe(sameBoot ? 1 : 2);
+  expect(sends).toBe(0);
 });
 
 
-test.each([true, false])("restart counts a delivered deploy continuation only in its own boot: %s", async (sameBoot) => {
+test.each([true, false])("restart replaces a delivered deploy-cut stage without messaging its old conversation: %s", async (sameBoot) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -16181,11 +16189,11 @@ test.each([true, false])("restart counts a delivered deploy continuation only in
     conversationTurnInterrupted: async () => "idle" as const,
     resumeSeveredTurn: async () => { sends += 1; return true; } };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
-  expect(sends).toBe(sameBoot ? 0 : 1);
+  expect(sends).toBe(0);
   h.advanceWallClock(11 * 60_000);
   await tickPipelines([entry(attempt.agentPath!)], restarted);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  expect(sends).toBe(sameBoot ? 0 : 1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.length).toBe(2);
+  expect(sends).toBe(0);
 });
 
 test("restart leaves a worker adopted after dead evidence running", async () => {

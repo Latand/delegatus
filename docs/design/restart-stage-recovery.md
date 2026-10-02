@@ -14,17 +14,20 @@ no heartbeat record. An uncertain pre-restart wake was also retained until
 its existing fence expired. Stall detection and trigger generation were working;
 delivery admission prevented the seat from receiving those wakes.
 
-A running structured attempt now receives one durable continuation reservation
-per Viewer/runtime-host boot when a readable open-turn artifact agrees with
-positive idle, dead, or confirmed stalled runtime evidence. Stalled hosts must
-confirm termination before delivery. Pending deliveries, deploy continuations,
-permission requests, terminal turns and unknown evidence retain their
-existing authority. Continuations queue behind work that resumed after the
-runtime snapshot. A recorded report remains authoritative when its resumed turn
-ends. A failed admission or a second interruption after ten minutes
-parks with an explicit reason. Retry requires the caller's stage and attempt,
-positive stalled evidence, and confirmed host termination; it preserves the
-checkout. Surviving process identities continue to fence replacement attempts.
+A running structured attempt gets at most one automatic fresh attempt per
+Viewer/runtime-host boot when a readable open-turn artifact agrees with positive
+idle, dead, or confirmed stalled runtime evidence. Recovery confirms termination
+through the existing process identity fence, records the interrupted attempt as
+failed, and launches a new conversation on the same checkout with the same bound
+stage definition and input. The new prompt includes a short restart note and the
+previous transcript path for reference. Pending deliveries, deploy continuations,
+permission requests, terminal turns and unknown evidence retain their existing
+authority. Newer transcript progress or terminal evidence withdraws a stale
+recovery decision before a replacement is reserved. A second interruption of
+the replacement during the same boot parks with an explicit reason and wakes the
+seat. Retry requires the caller's stage and attempt, positive stalled evidence,
+and confirmed host termination; it preserves the checkout. Surviving process
+identities continue to fence replacement attempts.
 
 The seat clock checks immediately at boot. A newly confirmed lane stall can
 attempt ordinary wake delivery despite a missing MCP heartbeat, so the delivery
