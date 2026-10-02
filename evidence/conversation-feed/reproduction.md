@@ -22,7 +22,9 @@ assistant-row projection, live handoff, processing errors, parser and transcript
 ordering. The DOM live-tool suite covers tool/prose interleaving, same-node
 completion/reconnect/echo, composer follow-up ordering and omission labels.
 Additional regressions prove single-occurrence matching of idless replies,
-retirement after eviction, and source order for multi-row canonical echoes.
+retirement after eviction, source order for multi-row canonical echoes, the
+shared eight-row live bound, incremental markdown, and seat speaker continuity
+after a deputy on both desktop and phone.
 
 Rendered evidence uses the existing `kanbanBoard.browser.test.tsx` driver and
 `issue1695Evidence.fixture.tsx`, cases `conversation feed delayed launch echo`
@@ -35,3 +37,37 @@ tool argument drives the processing exception without changing production code.
 No history-loading behavior changes. Compatibility with the current #2448 head
 is rehearsed separately in a scratch merge; its results are recorded in
 `compatibility.json` and the pull request description.
+
+Final focused verification: 529 passing tests across 17 exact paths. The mounted
+LogFeed suite contributes 15 tests, including completion, reconnect, delayed
+echo, source ordering, markdown and deputy boundaries. A fresh independent
+review of the full diff reported no findings and passed 197 checks.
+
+The local checks also exercise the production Viewer build, its 23 server
+modules and real HTTP root, MCP size budgets, runtime-host succession and
+negative controls. Native Codex checks pass 1,075 tests for each of 0.154.0 and
+0.159.0 after separating the pre-existing failing delivery fixture suite below.
+The publication privacy gate is run with `--require-known-values` and
+`--check-commits` before push. Hosted CI is not awaited.
+
+## Existing check failures, reproduced independently of this change
+
+- ESLint reports the same seven ref-access errors and eleven warnings on base
+  and head. Diagnostics match after removing file locations and shifted line
+  numbers. The new helper and regression files introduce no lint errors.
+- `LogFeed.deliveryUncertainty.dom.test.tsx` uses a runtime session without
+  `sessionKey`; polling reaches `retainedSettledTurnId` and fails on both base
+  and head. The complete old suite does not finish within the isolated runner's
+  bound. It is excluded from the 529-pass count.
+- `structuredDelivery.integration.test.ts` returns 40 pass / 2 fail on both
+  base and head: the automatic delivery retry cancellation and failed kill
+  projection cases have invalid owned-process fixtures. This entire file was
+  checked separately from the two native-version matrices, without changing
+  product code or weakening its ownership guard.
+- The independent review also confirmed the unchanged
+  `liveTurnStallPath.dom.test.tsx` fails before handoff processing because its
+  projected runtime list is empty on both base and head.
+
+The documented hook escape is used for these reproduced baseline failures;
+privacy, type checking, rendered checks and the remaining local gates are run
+explicitly. These are not reported as a fully green aggregate pre-push hook.

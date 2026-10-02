@@ -1,0 +1,228 @@
+{
+  "sourceHead": "bacf85740040dc83a5fe40dffaea138c2441c085",
+  "historyHead": "189a7c0963e03c6791ce51c427e2efc436d2cc87",
+  "scratchMergeHead": "6114f63c0f21b686ed1e645a72680dd2f9b1a779",
+  "historyBranch": "fix/long-conversation-history",
+  "historyPr": 2448,
+  "sourceMerge": "automatic; no conflicts in parse.ts or LogFeed.tsx",
+  "overlaps": [
+    {
+      "path": "src/components/LogFeed.tsx",
+      "hunk": "feed row wrappers",
+      "resolution": "Retain this change's live-row attributes and the history branch's content-visibility class condition."
+    },
+    {
+      "path": "src/components/feed/parse.ts",
+      "hunk": "consume processing catch, adjacent reset/startKeys changes",
+      "resolution": "Retain the split JSON/processing catches and the history branch's stable-key/prepend state. Git merged these automatically."
+    },
+    {
+      "path": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "hunk": "appended describe blocks at end of file",
+      "resolution": "The only textual conflict: preserve both delivery outcome settlement and older history of a long conversation blocks, each with its closing delimiter."
+    }
+  ],
+  "checks": {
+    "units": {
+      "passed": 440,
+      "failed": 0,
+      "paths": [
+        "src/components/conversation/outbox.test.ts",
+        "src/components/conversation/assistantRows.test.ts",
+        "src/components/conversation/liveTurnHandoff.test.ts",
+        "src/components/feed/processingError.test.ts",
+        "src/components/feed/parse.test.ts",
+        "src/components/feed/transcriptOrder.test.ts",
+        "src/components/feed/prependJoin.parse.test.ts",
+        "src/lib/logRead.test.ts",
+        "src/components/Viewer.test.ts",
+        "src/components/feed/scrollMemory.test.ts"
+      ]
+    },
+    "dom": {
+      "passed": 76,
+      "failed": 0,
+      "skipped": 4,
+      "paths": [
+        "src/components/LogFeed.liveToolRows.dom.test.tsx",
+        "src/components/LogFeed.prependAnchor.dom.test.tsx",
+        "src/components/Viewer.deepLink.dom.test.tsx",
+        "src/components/feed/visibleAnswerRows.dom.test.ts",
+        "src/components/feedTopEdge.dom.test.ts",
+        "src/components/feed/FeedItem.mobile.dom.test.tsx",
+        "src/components/feed/FeedItem.actions.render.test.tsx"
+      ]
+    },
+    "types": "passed",
+    "feedBrowser": {
+      "passed": 2,
+      "failed": 0,
+      "locales": [
+        "en",
+        "uk"
+      ],
+      "widths": [
+        1440,
+        390
+      ],
+      "readings": [
+        {
+          "locale": "en",
+          "width": 1440,
+          "retainedNode": true,
+          "answerRows": 1,
+          "echoShift": 0,
+          "position": {
+            "x": 795,
+            "y": 666.15625,
+            "width": 498,
+            "height": 68.84375
+          }
+        },
+        {
+          "locale": "en",
+          "width": 1440,
+          "processingError": true,
+          "turnError": true,
+          "deliveryError": true,
+          "overflow": false
+        },
+        {
+          "locale": "en",
+          "width": 390,
+          "retainedNode": true,
+          "answerRows": 1,
+          "echoShift": 0,
+          "position": {
+            "x": 13,
+            "y": 209.75,
+            "width": 364,
+            "height": 91.75
+          }
+        },
+        {
+          "locale": "en",
+          "width": 390,
+          "processingError": true,
+          "turnError": true,
+          "deliveryError": true,
+          "overflow": false
+        },
+        {
+          "locale": "uk",
+          "width": 1440,
+          "retainedNode": true,
+          "answerRows": 1,
+          "echoShift": 0,
+          "position": {
+            "x": 795,
+            "y": 666.15625,
+            "width": 498,
+            "height": 68.84375
+          }
+        },
+        {
+          "locale": "uk",
+          "width": 1440,
+          "processingError": true,
+          "turnError": true,
+          "deliveryError": true,
+          "overflow": false
+        },
+        {
+          "locale": "uk",
+          "width": 390,
+          "retainedNode": true,
+          "answerRows": 1,
+          "echoShift": 0,
+          "position": {
+            "x": 13,
+            "y": 209.75,
+            "width": 364,
+            "height": 113.5
+          }
+        },
+        {
+          "locale": "uk",
+          "width": 390,
+          "processingError": true,
+          "turnError": true,
+          "deliveryError": true,
+          "overflow": false
+        }
+      ]
+    },
+    "historyDesktop": {
+      "passed": 1,
+      "failed": 0,
+      "assertions": 19,
+      "driver": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "case": "older history of a long conversation",
+      "readings": [
+        {
+          "cpu": 1,
+          "reachedStartMs": 6077,
+          "markedNodes": 300,
+          "loads": 10,
+          "historyStart": 0,
+          "frames": 333,
+          "over50": 5,
+          "over100": 1,
+          "maxFrameMs": 117,
+          "longTaskMaxMs": 88,
+          "keptNodes": 300,
+          "rows": 2800,
+          "contentVisibility": "auto"
+        },
+        {
+          "cpu": 4,
+          "reachedStartMs": 12335,
+          "markedNodes": 400,
+          "loads": 10,
+          "historyStart": 0,
+          "frames": 224,
+          "over50": 65,
+          "over100": 36,
+          "maxFrameMs": 550,
+          "longTaskMaxMs": 355,
+          "keptNodes": 400,
+          "rows": 2800,
+          "contentVisibility": "auto"
+        }
+      ],
+      "cpuAffinity": [
+        3,
+        7,
+        8,
+        11,
+        12,
+        21
+      ]
+    },
+    "historyPhone": {
+      "passed": 1,
+      "failed": 0,
+      "assertions": 5,
+      "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+      "case": "older history on the phone",
+      "readings": {
+        "gestures": 90,
+        "reachedStartMs": 49360,
+        "loads": 7,
+        "rows": 800,
+        "kept": 120,
+        "marked": 120,
+        "frames": 2751,
+        "over100": 6,
+        "maxFrameMs": 283
+      }
+    }
+  },
+  "isolation": "Every test command names exact paths and an isolated LLV_STATE_DIR; browser fixtures bind ephemeral ports.",
+  "notes": [
+    "The empty handoff bypass keeps history-only panes from scheduling another render on each prepend. Earlier composed desktop runs failed the frame limit; the unchanged driver passed after this correction.",
+    "Four existing prepend-anchor DOM cases remain skipped; the real desktop and phone history drivers exercise the rendered seam.",
+    "No changes from the history branch were added to the product branch. Hosted CI was not awaited.",
+    "A later unpinned run on the shared host had one 200ms frame while its longest task was 119ms. The final unmodified desktop driver passed with affinity to six initially idle CPUs; timing assertions were not relaxed for that result."
+  ]
+}
