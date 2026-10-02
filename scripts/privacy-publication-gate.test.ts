@@ -31,6 +31,28 @@ import {
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
+const packageVersionSamples = [
+  ["pkg", "1.2.3"].join("@"),
+  ["@scope/pkg", "1.2.3"].join("@"),
+  ["delegatus", "1.9.0"].join("@"),
+  ["fixture-package", "1.2.3"].join("@"),
+  ["pkg", "1.2.3-beta.1"].join("@"),
+  ["pkg", "1.2.3-beta.1+sha"].join("@"),
+  ["pkg", "1.2.3+sha"].join("@"),
+  ["pkg", "1.2.3-beta"].join("@"),
+  ["pkg", "1.2.3-beta.rc.1+sha.2"].join("@"),
+  `Inspect \`${["pkg", "1.2.3"].join("@")}\`.`,
+];
+const versionLookingRealAddresses = [
+  ["a", "1.2.3.com"].join("@"),
+  ["someone", "b.io"].join("@"),
+  ...["com", "target", "укр", "xn--j1amh"].flatMap((tld) => [
+    ["a", `1.2.3.${tld}`].join("@"),
+    ["a", `1.2.3-beta.${tld}`].join("@"),
+  ]),
+  [JSON.stringify(["someone", "b.io"].join("@")), "1.2.3"].join("@"),
+  ...["\u200B", "\u0375α", "・カ", "१२३"].map((label) => ["a", `1.2.3.${label}.com`].join("@")),
+];
 const systemdUnitSamples = [
   ["user", "1000.service"].join("@"),
   ["delegatus", "review.service"].join("@"),
@@ -3600,6 +3622,34 @@ describe("mergeBoundaryReview", () => {
     });
     return result.stdout.toString().trim();
   }
+
+  test.each(packageVersionSamples)("package versions pass files, commit messages and identities (%#)", (specifier) => {
+    const repo = gitRepo();
+    writeFileSync(join(repo, "packages.md"), `bun add -g ${specifier}\n`);
+    commit(repo, `chore: install ${specifier}`, { email: specifier, name: "Fixture Tool" });
+
+    expect(sensitiveClasses(specifier).has("email_address")).toBe(false);
+    expect(commitMessageFindings(repo, "main").size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main").findings.size).toBe(0);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(result.stderr.toString()).toBe("");
+  });
+
+  test.each(versionLookingRealAddresses)("version-like real domains fail files, commit messages and identities (%#)", (address) => {
+    const repo = gitRepo();
+    writeFileSync(join(repo, "packages.md"), address);
+    commit(repo, `chore: inspect ${address}`, { email: address, name: "Fixture Person" });
+
+    expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
+    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address: 3\n");
+    expect(result.stdout.toString()).not.toContain(address);
+    expect(result.stderr.toString()).toBe("");
+  });
 
   test.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", (unit) => {
     const repo = gitRepo();
