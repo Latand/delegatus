@@ -2359,6 +2359,10 @@ export function createMcpToolService(
       const typedTool = toolName as McpToolName;
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       const effectiveArgs = normalized.args;
+      if (typedTool === "search_memory" && typeof effectiveArgs.clientRequestId === "string"
+        && effectiveArgs.clientRequestId.trim().length > 256) {
+        return failure(typedTool, null, "invalid_request", "clientRequestId must be at most 256 characters for search_memory", false);
+      }
       const callStartedAt = performance.now();
       const phaseDurations: Partial<Record<McpTimingPhase, number>> = {};
       context = { ...context, recordTiming: (phase, milliseconds) => {
@@ -3554,7 +3558,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     limit: boundedNumericInput("search_transcripts", "limit"),
   }).passthrough(),
   search_memory: z.object({
-    clientRequestId: clientRequestIdSchema,
+    clientRequestId: clientRequestIdSchema.max(256, "clientRequestId must be at most 256 characters for the bounded memory response"),
     query: z.string().trim().min(1).max(2000).optional().describe("Terms to match in the shared memory index. Supply query or id."),
     id: z.string().regex(/^m_[a-zA-Z0-9_]+$/).max(64).optional().describe("Open one search hit and record its opened outcome in the local ledger."),
     project: z.string().trim().min(1).max(256).optional().describe("Canonical project key; includes that project's entries and global entries. Omit for cross-project search."),

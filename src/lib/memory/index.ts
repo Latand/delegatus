@@ -135,7 +135,7 @@ export class MemoryIndex {
     return result;
   }
 
-  search(input: { query: string; project?: string; kind?: MemoryKind; limit?: number }) {
+  search(input: { query: string; project?: string; kind?: MemoryKind; limit?: number; maxBytes?: number }) {
     const terms = input.query.match(/[\p{L}\p{N}_]+/gu)?.slice(0, 16) ?? [];
     if (!terms.length) return { items: [], truncated: false };
     const db = this.database();
@@ -155,24 +155,30 @@ export class MemoryIndex {
         flags: JSON.parse(item.flags) as string[],
       };
       page.items.push(hit);
-      if (Buffer.byteLength(JSON.stringify(page)) > MEMORY_RESPONSE_BYTES) {
+      if (Buffer.byteLength(JSON.stringify(page)) > Math.min(MEMORY_RESPONSE_BYTES, input.maxBytes ?? MEMORY_RESPONSE_BYTES)) {
         page.items.pop(); page.truncated = true; break;
       }
     }
     return page;
   }
 
-  open(id: string, requestId: string, conversationId: string | null, project?: string) {
+  open(id: string, requestId: string, conversationId: string | null, project?: string, maxBytes = MEMORY_RESPONSE_BYTES) {
     const db = this.database();
     this.normalizeProjects(db);
     const canonical = project ? canonicalProject(project) : null;
     const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project = ? OR scope = 'global')").get(id, canonical, canonical);
     if (!item) return null;
-    const at = new Date().toISOString();
     const ledgerKey = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
-    db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
+    const recordOpened = () => {
+      const at = new Date().toISOString();
+      db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
+    };
     const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: JSON.parse(item.flags) as string[] };
-    if (Buffer.byteLength(JSON.stringify({ item: opened })) <= MEMORY_RESPONSE_BYTES) return opened;
+    const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);
+    if (Buffer.byteLength(JSON.stringify({ item: opened })) <= budget) {
+      recordOpened();
+      return opened;
+    }
 
     // Raw UTF-8 caps do not bound JSON: control characters expand to six bytes
     // when serialized. Keep the source pointer intact and trim the least
@@ -188,7 +194,7 @@ export class MemoryIndex {
         const middle = Math.floor((low + high) / 2);
         const candidate = byteBound(original, middle);
         truncated[field] = candidate;
-        if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= MEMORY_RESPONSE_BYTES) {
+        if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= budget) {
           best = candidate;
           low = middle + 1;
         } else {
@@ -196,9 +202,12 @@ export class MemoryIndex {
         }
       }
       truncated[field] = best;
-      if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= MEMORY_RESPONSE_BYTES) return truncated;
+      if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= budget) {
+        recordOpened();
+        return truncated;
+      }
     }
-    return truncated;
+    return null;
   }
 
   offers(id: string) {

@@ -10,7 +10,7 @@ test("search_memory registers and forwards bounded project/kind search to the Vi
   };
   expect(MCP_TOOL_NAMES as readonly string[]).toContain("search_memory");
   const result = await viewerMcpBindings(undefined, control).search_memory({ clientRequestId: "memory-search", query: "widget cache", project: "project-a", kind: "preference", limit: 999 });
-  expect(reads).toEqual(["/api/search/memory?q=widget+cache&project=project-a&kind=preference&limit=20"]);
+  expect(reads).toEqual(["/api/search/memory?q=widget+cache&project=project-a&kind=preference&maxBytes=15912&limit=20"]);
   expect(result).toEqual(page);
 });
 
