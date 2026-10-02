@@ -43,6 +43,90 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("batched turn settlement", () => {
+  browserTest("retained terminal events settle desktop and phone before a different turn starts", async () => {
+    const out = path.resolve(".artifacts/batched-turn-settlement");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        for (const lateTurn of ["running", "unknown"] as const) {
+          const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width === 390, isMobile: width === 390 });
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          try {
+            await context.addInitScript(({ locale }) => {
+              localStorage.setItem("llv_lang", locale);
+              // The fixture installs its silent transport. Capture its runtime
+              // source and drive the real bus's canonical event entry point.
+              let installed = window.EventSource;
+              Object.defineProperty(window, "EventSource", { configurable: true,
+                get: () => installed,
+                set: (Source: typeof EventSource) => {
+                  installed = class extends Source {
+                    constructor(url: string | URL) {
+                      super(url);
+                      if (String(url).startsWith("/api/runtime/stream")) {
+                        Object.assign(window, { settlementSource: this });
+                        setTimeout(() => this.onopen?.(new Event("open")), 0);
+                      }
+                    }
+                  };
+                },
+              });
+            }, { locale });
+            await page.goto(`${server.base}?runtime=structured#c=conversation_search-ver-2`);
+            const stateSelector = width === 390 ? "[data-mobile2-chat-state]" : '[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]';
+            await page.locator(stateSelector).waitFor();
+            if (width === 390) expect(await page.locator(stateSelector).innerText()).toContain(translate(locale, "mobile2.chat.stateWorking"));
+            await page.waitForFunction(() => Boolean((window as unknown as { settlementSource?: EventSource }).settlementSource?.onmessage));
+            const initialCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            const send = async (successor: boolean) => page.evaluate(({ lateTurn, successor }) => {
+              const source = (window as unknown as { settlementSource: EventSource }).settlementSource;
+              const conversationId = "conversation_search-ver-2";
+              const events = successor ? [{ kind: "turn-started", revision: 5, payload: { conversationId, turnId: "turn-2" } }]
+                : [
+                  { kind: "turn-started", revision: 2, payload: { conversationId, turnId: "turn-1" } },
+                  { kind: "turn-ended", revision: 3, payload: { conversationId, turnId: "turn-1", outcome: "completed" } },
+                  { kind: "session-status", revision: 4, payload: { conversationId, turn: lateTurn, activeTurnId: lateTurn === "running" ? "turn-1" : null } },
+                ];
+              for (const event of events) source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({
+                schemaVersion: 1, seq: 100 + event.revision, eventId: `settlement-${event.revision}`,
+                scope: { type: "session", id: conversationId }, ...event,
+              }) }));
+            }, { lateTurn, successor });
+            await send(false);
+            await page.waitForFunction(({ width, working }) => width === 390
+              ? !document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working)
+              : !document.querySelector('[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]'),
+            { width, working: translate(locale, "mobile2.chat.stateWorking") });
+            const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            if (width === 1440) {
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
+              expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
+            }
+            const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${lateTurn}.png`) });
+            await send(true);
+            if (width === 1440) {
+              await page.locator(stateSelector).waitFor();
+              expect(await page.locator("[data-bar-working]").innerText()).toBe(initialCount!);
+            } else {
+              await page.waitForFunction((working) => document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working), translate(locale, "mobile2.chat.stateWorking"));
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ locale, width, lateTurn, initialCount, settledCount, phoneState, pageErrors });
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("shipped role defaults rendered evidence", () => {
   browserTest("default xhigh rows keep their chosen effort without a downgrade nudge in every locale and layout", async () => {
     const out = path.resolve(".artifacts/role-defaults");
