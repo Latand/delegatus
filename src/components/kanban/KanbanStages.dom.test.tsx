@@ -273,15 +273,16 @@ test("the lane row's head opens Stages; the pipeline actions are a group in the 
   /* One ⋯ per card: the lane draws none of its own. */
   expect(card(host).querySelector("[data-pipeline-menu]")).toBeNull();
   click(laneMenu(host));
-  expect([...host.querySelectorAll(".menu .head")].map((node) => node.textContent)).toEqual(["Move to", "Colour", "Pipeline actions"]);
+  expect([...host.querySelectorAll(".menu .head")].map((node) => node.textContent)).toEqual(["Move to", "Priority", "Colour", "Pipeline actions"]);
   const labels = menuLabels(host);
   const start = labels.findIndex(([label]) => label === "Expand stages");
-  expect(labels.slice(start, start + 6)).toEqual([
+  expect(labels.slice(start, start + 7)).toEqual([
     ["Expand stages", false, null],
     ["Attach PR or issue to the pipeline…", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
     ["Retry a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Skip a stage", true, "Only while the pipeline waits on a stage for a decision"],
+    ["Finishes the task", false, "When the pipeline completes and its PR merges, the task moves to Done."],
     ["Close the pipeline", false, "Stops its agents. Uncommitted work stays in the worktree."],
   ]);
   /* The card's own items stay around the group: its links before, Hide after. */
@@ -855,7 +856,7 @@ test("one folded line under the first message names what the controller adds at 
   expect(text.startsWith("[previous stage output: not produced yet]\n\nPinned task:\nRestore search results\n")).toBe(true);
   expect(text).toContain("Pinned specification and acceptance criteria:\nNo separate pinned specification was supplied.");
   expect(text).toContain("Role preset: cleaner (claude/opus, high).");
-  expect(text).toContain('{"status":"pass","findings":[],"confidence":0.9}');
+  expect(text).toContain('{"status":"pass","findings":[]}');
   expect(text).not.toContain("Merge once the alias swap is verified.");
   click(card(host).querySelector("[data-open-stages]"));
   await tick();
@@ -1040,3 +1041,25 @@ test("a lane stopped after its last fix offers Accept as is and Review again; ea
   expect(receiptTexts(host).at(-1)).toBe("Accepted «Restore search results after the index rebuild» as is");
 });
 
+test.each(["running", "passed", "failed", "needs_decision"] as const)("desktop stage agent row opens the latest %s attempt and earlier conversations", async (state) => {
+  const p = searchPipeline();
+  p.state = state === "running" ? "running" : state === "passed" ? "completed" : "needs_decision";
+  const run = p.runs.find((run) => run.stageId === "verify")!;
+  run.attempts[1] = { ...run.attempts[1]!, state, report: { verdict: { status: "needs_decision", findings: [] }, summary: "Choose a layout.\nCompact or expanded?" } } as unknown as typeof run.attempts[number];
+  const { host } = mount(p);
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const stage = pane(host, "verify")!;
+  expect(stage.querySelector('[data-open-conversation="verify"]')?.textContent).toBe("Open agent");
+  expect(stage.querySelector('[data-stage-question]')?.textContent ?? null).toBe(state === "needs_decision" ? "Choose a layout.\nCompact or expanded?" : null);
+  click(stage.querySelector('[data-attempt="1"]'));
+  await tick();
+  expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
+  click(stage.querySelector('[data-open-conversation="verify"]'));
+  await tick();
+  expect(sheet(host)).toBeNull();
+  const reader = host.querySelector(`[data-kanban-reader="${idOf(verify2)}"]`);
+  expect(reader).toBeTruthy();
+  expect(reader!.closest('[data-stages-sheet]')).toBeNull();
+});

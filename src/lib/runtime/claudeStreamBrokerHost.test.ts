@@ -1,3 +1,4 @@
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
@@ -2696,4 +2697,81 @@ test("delayed replay echo during provider retry preserves unrelated Claude work 
   expect(child.inputs.filter(input => input.type === "user")).toHaveLength(1);
   expect(ledger.load("delayed-echo-session")[0]?.delivered).toBeTrue();
   await host.release();
+});
+
+ test("Claude host records injected OOM SIGKILL on its terminal row", async () => {
+  const memory = fakeAgentMemory();
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const captured: { args?: string[] } = {};
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, captured) });
+  try {
+    expect(captured.args).toContain("MemoryMax=16106127360");
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+  } finally { await host.release(); memory.dispose(); }
+});
+
+test("production memory wrapping preserves the provider-home revision guard before spawn", async () => {
+  const memory = fakeAgentMemory();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-provider-guard-"));
+  let wrapped = false;
+  const originalWrap = memory.cell.wrapSpawn.bind(memory.cell);
+  memory.cell.wrapSpawn = (...args) => { wrapped = true; return originalWrap(...args); };
+  try {
+    await expect(ClaudeStreamBrokerHost.start({ cwd: home, claudeConfigDir: home, providerAccount: true,
+      env: { NODE_ENV: "test", ANTHROPIC_BASE_URL: "http://127.0.0.1:9876", ANTHROPIC_AUTH_TOKEN: "fixture-memory-provider", ANTHROPIC_MODEL: "model-large" },
+      memoryCell: memory.cell })).rejects.toThrow();
+    expect(wrapped).toBe(false);
+  } finally { memory.dispose(); fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("forced scope retains Claude admission error during initial delivery", async () => {
+  const memory = fakeAgentMemory({ mode: "scope", admissionFailure: true });
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const store = new MemoryEventStore();
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", eventStore: store, deliveryLedger: new RecordingDeliveryLedger(), readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), readTranscript: () => [],
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, {}), processIdentity: () => "fixture-start", signalProcess: () => { throw new Error("ESRCH"); } });
+  try {
+    const delivery = host.send({ id: "initial", text: "begin" });
+    child.stderr.write("Failed to create bus connection: Connection refused");
+    child.emit("exit", 1, null); child.emit("close", 1, null);
+    await expect(delivery).rejects.toThrow("Failed to create bus connection: Connection refused");
+    expect((await host.health()).status).toBe("dead");
+  } finally { await host.release(); memory.dispose(); }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Claude fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, {}), processIdentity: memory.processIdentity,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } });
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    Object.assign(child, { signalCode: "SIGKILL" });
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog"
+      ? platform === "linux" ? [child.pid + 2, child.pid + 1] : [child.pid + 2, child.pid + 1, child.pid]
+      : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });

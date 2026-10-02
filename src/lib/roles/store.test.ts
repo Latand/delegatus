@@ -24,6 +24,7 @@ test("fresh installs and config:null resets restore every shipped role and varia
       cleaner: codex("gpt-6-luna", "medium"),
       "prod-auditor": codex("gpt-6.1-sol", "xhigh"),
       deployer: codex("gpt-6.1-sol", "medium"),
+      merger: codex("gpt-6.1-sol", "high"),
       maintainer: codex("gpt-6.1-sol", "medium"),
     };
     const expectedVariants = {

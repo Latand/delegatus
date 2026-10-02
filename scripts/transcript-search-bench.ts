@@ -4,7 +4,7 @@
  * corpus `transcript-search-fixture.ts` writes: the same three queries on every
  * surface the operator reaches it through.
  *
- *   LLV_STATE_DIR=<scratch> bun scripts/transcript-search-bench.ts <fixtureDir> [--repeat 5] [--json <file>] [--skip-mcp] [--skip-ui]
+ *   systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 -- flock /var/tmp/llv-heavy-gate.lock env LLV_STATE_DIR=<scratch> bun scripts/transcript-search-bench.ts <fixtureDir> [--repeat 5] [--json <file>] [--skip-mcp] [--skip-ui]
  *
  * Refuses to run without an explicit LLV_STATE_DIR so the index build can never
  * touch the operator's live `transcript-search.sqlite`, and the MCP host it
@@ -46,6 +46,7 @@ interface Cell {
   surface: "library" | "route" | "http" | "mcp" | "ui-fast" | "ui-slow";
   query: string;
   speaker: string;
+  order?: "newest" | "relevance";
   runs: number[];
   median: number;
   /** Requests the Viewer answered for the cell's runs (ui surfaces only). */
@@ -153,6 +154,21 @@ for (const query of queries) {
   }
 }
 
+for (const query of queries) {
+  for (const speaker of speakers) {
+    const runs: number[] = [];
+    let page;
+    for (let run = 0; run < repeat; run++) {
+      const start = performance.now();
+      page = searchTranscripts({ query, speaker, order: "relevance", limit: 6 });
+      runs.push(performance.now() - start);
+    }
+    cells.push({ surface: "library", order: "relevance", query, speaker: speaker ?? "all", runs, median: median(runs), total: page!.total });
+    if (query === manifest.probes.commonPair && median(runs) > 300) throw new Error("Relevance common-pair median exceeds 300 ms");
+    if (Buffer.byteLength(JSON.stringify(page)) > 6144) throw new Error("Six-conversation relevance page exceeds 6 KB");
+  }
+}
+
 if (!args.includes("--skip-mcp")) {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
@@ -172,21 +188,21 @@ if (!args.includes("--skip-mcp")) {
   await client.connect(transport);
   try {
     /* The tool has no speaker argument: it always searches both sides. */
-    for (const query of queries) {
+    for (const query of queries) for (const order of ["newest", "relevance"] as const) {
       const runs: number[] = [];
       let total = 0;
       for (let run = 0; run < repeat; run += 1) {
         const startedAt = performance.now();
         const result = await client.callTool({
           name: "search_transcripts",
-          arguments: { clientRequestId: `bench-${Date.now()}-${run}-${Math.random().toString(36).slice(2)}`, query, limit: 20 },
+          arguments: { clientRequestId: `bench-${Date.now()}-${run}-${Math.random().toString(36).slice(2)}`, query, order, limit: order === "relevance" ? 6 : 20 },
         });
         runs.push(performance.now() - startedAt);
         const structured = result.structuredContent as { ok?: boolean; total?: number; error?: string } | undefined;
         if (!structured?.ok) throw new Error(`search_transcripts failed: ${structured?.error ?? "no structured content"}`);
         total = structured.total ?? 0;
       }
-      cells.push({ surface: "mcp", query, speaker: "all", runs, median: median(runs), total });
+      cells.push({ surface: "mcp", order, query, speaker: "all", runs, median: median(runs), total });
     }
   } finally {
     await client.close().catch(() => {});
@@ -277,7 +293,7 @@ console.log("\n| surface | query | speaker | matches | median ms | runs (ms) |")
 console.log("| --- | --- | --- | --- | --- | --- |");
 for (const cell of cells) {
   const extra = cell.requests !== undefined ? ` (${cell.requests} req/run)` : "";
-  console.log(`| ${cell.surface} | ${label(cell.query)} | ${cell.speaker} | ${cell.total ?? ""} | ${Math.round(cell.median)}${extra} | ${cell.runs.map((run) => Math.round(run)).join(" / ")} |`);
+  console.log(`| ${cell.surface}${cell.order ? ` (${cell.order})` : ""} | ${label(cell.query)} | ${cell.speaker} | ${cell.total ?? ""} | ${Math.round(cell.median)}${extra} | ${cell.runs.map((run) => Math.round(run)).join(" / ")} |`);
 }
 if (jsonOut) {
   fs.writeFileSync(jsonOut, JSON.stringify({

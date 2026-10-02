@@ -93,7 +93,13 @@ What it does with work you accept:
   (the default), the orchestrator reports "PR ready" and merges only when you
   ask. On, Delegatus merges completed lanes itself once their checks are
   settled green, and the orchestrator leaves those alone and acts on a merge
-  that stopped. A red gate holds the merge either way.
+  that stopped. A red gate holds the merge either way. When two or more ready
+  PRs are authorized to merge, send one `merger` lane their `N@reviewedHead`
+  pairs, using a one-stage run pipeline or `spawn_agent`. Exclude every PR whose
+  live `merge.state` Delegatus holds. The merger lands clean patches as one
+  batch; `needs-review` sends a conflict resolution to an independent review
+  lane (including `git show --remerge-diff`) before a later batch, and `culprit`
+  returns to its lane as a finding. See [the merger procedure](merge-batch.md).
 - **A lane that finishes its task**: the orchestrator marks the lane whose PR
   delivers the whole task, and that task moves to Done when the lane completes
   (setting off) or its PR merges (on), once every other started lane on the

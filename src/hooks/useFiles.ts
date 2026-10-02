@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
@@ -11,13 +11,14 @@ import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
 import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
+import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import { FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
 import type { Flow } from "@/lib/flows/types";
 import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { TmuxEndpointHealth } from "@/lib/tmux";
+import type { StateWriteHealth } from "@/lib/state/diskFull";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
 
@@ -57,7 +58,7 @@ export interface FilesData {
   tasks: BoardTask[];
   /** Set when the server's pipelines store failed closed for this poll. */
   pipelinesError?: string;
-  systemHealth: { tmux: TmuxEndpointHealth };
+  systemHealth: FilesResponse["systemHealth"];
   conversationAliases: Record<string, string>;
   /** `spawn:<launchId>` → canonical conversation id (issue #569). */
   launchRoutes: Record<string, string>;
@@ -138,6 +139,8 @@ export interface FilesClientCache {
   /** Return only the representation previously certified for this request URL. */
   readScope(pinnedPath?: string | null): FilesData;
   revalidate(pinnedPath?: string | null, revision?: number, signal?: AbortSignal): Promise<FilesData>;
+  /** Read machine write health without scanning or building a representation. */
+  revalidateWriteHealth(signal?: AbortSignal): Promise<void>;
   subscribe(
     listener: (data: FilesData, priority?: "background" | "urgent") => void,
     pinnedPath?: string | null,
@@ -292,6 +295,26 @@ export function createFilesClientCache(
   hooks: { accessDenied?: () => void } = {},
 ): FilesClientCache {
   let snapshot = EMPTY;
+  // Write health describes the machine now, independently of a scope's row stamp.
+  let currentStateWrites: NonNullable<NonNullable<FilesData["systemHealth"]>["storage"]>["writes"];
+  let requestedWriteHealth = 0;
+  let appliedWriteHealth = 0;
+  const healthControllers = new Set<AbortController>();
+  const acceptWriteHealth = (writes: typeof currentStateWrites, request: number) => {
+    if (!writes || request < appliedWriteHealth) return;
+    appliedWriteHealth = request;
+    currentStateWrites = writes;
+  };
+  const writeHealthViews = new WeakMap<FilesData, FilesData>();
+  const withStateWrites = (data: FilesData): FilesData => {
+    if (!currentStateWrites || data.systemHealth?.storage?.writes === currentStateWrites) return data;
+    const held = writeHealthViews.get(data);
+    if (held?.systemHealth?.storage?.writes === currentStateWrites) return held;
+    const view = { ...data, systemHealth: { ...data.systemHealth,
+      storage: { ...data.systemHealth?.storage, incidents: data.systemHealth?.storage?.incidents ?? [], writes: currentStateWrites } } };
+    writeHealthViews.set(data, view);
+    return view;
+  };
   let disposed = false;
   const representations = new Map<string, Representation>();
   const listeners = new Map<
@@ -474,7 +497,7 @@ export function createFilesClientCache(
   };
 
   const exactScopeRepresentation = (requestScope: string): FilesData =>
-    withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(scopeRows(requestScope))));
+    withStateWrites(withCatalogFailures(withPipelineOverlays(withSpawnedOverlays(scopeRows(requestScope)))));
 
   const exactScopeSnapshot = (pinnedPath?: string | null): FilesData =>
     exactScopeRepresentation(filesApiUrl(undefined, pinnedPath));
@@ -486,7 +509,7 @@ export function createFilesClientCache(
     if (disposed) return;
     for (const [listener, scope] of listeners) {
       if (requestScope !== undefined) {
-        if (requestScope === scope) listener(withCatalogFailures(withSpawnedOverlays(snapshot)), priority);
+        if (requestScope === scope) listener(withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), priority);
         continue;
       }
       listener(exactScopeRepresentation(scope), priority);
@@ -566,13 +589,14 @@ export function createFilesClientCache(
      The scope keeps it as the server's representation — its ETag is what the
      next conditional request names — and shows the newest rows with its own
      pin rows; its listeners hear only if that changed what they see. */
-  const refuseOlder = (url: string, data: FilesData, etag: string | undefined, raw: RawFilesResponse | undefined, built: FilesBuilt | undefined): FilesData => {
-    const before = scopeRows(url);
+  const refuseOlder = (url: string, data: FilesData, etag: string | undefined, raw: RawFilesResponse | undefined, built: FilesBuilt | undefined, healthRequest?: number): FilesData => {
+    const before = exactScopeRepresentation(url);
+    if (healthRequest !== undefined) acceptWriteHealth(data.systemHealth?.storage?.writes, healthRequest);
     const previous = representations.get(url);
     rememberRepresentation(url, data, etag, raw, built);
     /* A 304 confirming the same old rows keeps the view it already had. */
     if (previous?.data === data && previous.forward) representations.get(url)!.forward = previous.forward;
-    const after = scopeRows(url);
+    const after = exactScopeRepresentation(url);
     if (after !== before && !disposed) {
       for (const [listener, scope] of listeners) {
         if (scope === url) listener(exactScopeRepresentation(url), "background");
@@ -643,6 +667,7 @@ export function createFilesClientCache(
       completionRetry.controller = new AbortController();
     }
     const generation = ++requestedGeneration;
+    const healthRequest = ++requestedWriteHealth;
     const representation = representations.get(url);
     /* Only a tab holding the server's exact representation can apply a delta
        to it; otherwise the conditional request asks for the whole body. */
@@ -734,10 +759,11 @@ export function createFilesClientCache(
     const incoming = built ? { ...parsedData, builtGeneration: built.generation } : parsedData;
     if (filesBuiltBefore(built, shownBuilt)) {
       const raw = Array.isArray(parsed) ? undefined : rawSharingRows(parsed as unknown as RawFilesResponse, incoming);
-      const refused = refuseOlder(url, incoming, etag ?? undefined, etag ? raw : undefined, built);
+      const refused = refuseOlder(url, incoming, etag ?? undefined, etag ? raw : undefined, built, healthRequest);
       scheduleOrCancelCompletionRetry(generationIncomplete, completionTargetGeneration, url, pinnedPath, revision, logicalGeneration ?? generation, completionRetryAttempt, completionRetry);
       return refused;
     }
+    acceptWriteHealth(incoming.systemHealth?.storage?.writes, healthRequest);
     retireConfirmedSpawnOverlays(incoming);
     /* A restarted server can acknowledge a pinned target generation with its
        global-only stale snapshot before the pin hydration resumes. Keep the
@@ -1006,14 +1032,50 @@ export function createFilesClientCache(
     };
   };
 
+  const revalidateWriteHealth = async (signal?: AbortSignal): Promise<void> => {
+    if (disposed || signal?.aborted) return;
+    const request = ++requestedWriteHealth;
+    const controller = new AbortController();
+    healthControllers.add(controller);
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    // Bound the whole fetch/body read even if the transport ignores AbortSignal.
+    let rejectAbort!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      rejectAbort = () => reject(new DOMException("storage health aborted", "AbortError"));
+      controller.signal.addEventListener("abort", rejectAbort, { once: true });
+    });
+    const read = async () => {
+      const response = await fetcher("/api/files?view=storage-health", { signal: controller.signal, cache: "no-store" });
+      if (disposed || controller.signal.aborted) return;
+      if (response.status === 401 || response.status === 403) hooks.accessDenied?.();
+      if (!response.ok) throw new Error(`storage health request failed: ${response.status}`);
+      const writes = await response.json() as StateWriteHealth;
+      if ((writes.state !== "ok" && writes.state !== "disk-full")
+        || (writes.freeBytes !== null && (typeof writes.freeBytes !== "number" || !Number.isFinite(writes.freeBytes)))
+        || (writes.since !== null && typeof writes.since !== "string")) throw new Error("invalid storage write health");
+      if (disposed || controller.signal.aborted || request < appliedWriteHealth) return;
+      const changed = !equalValue(currentStateWrites, writes);
+      acceptWriteHealth(writes, request);
+      if (changed) publish(undefined, "urgent");
+    };
+    try { await Promise.race([read(), cancelled]); }
+    finally {
+      signal?.removeEventListener("abort", abort);
+      controller.signal.removeEventListener("abort", rejectAbort);
+      healthControllers.delete(controller);
+    }
+  };
+
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    for (const controller of healthControllers) controller.abort();
     for (const requestScope of [...completionRetries.keys()]) cancelCompletionRetry(requestScope);
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -1207,24 +1269,52 @@ export function filesPollCadence(connection: "live" | "reconnecting" | "degraded
  * the tab hides is cancelled. What they would have fetched is remembered, and
  * the tab revalidates once — conditionally, usually as a delta — the moment it
  * is visible again. */
-export function useFiles(_project?: string | null, pinnedPath?: string | null): FilesData {
+export function boardPresenceUrl(project: string): string {
+  return "/api/files?project=" + encodeURIComponent(project);
+}
+
+export function useFiles(project?: string | null, pinnedPath?: string | null): FilesData {
+  // Catalog requests remain global. Presence has its own cheap HEAD heartbeat
+  // because a quiet live runtime stream performs no recurring catalog GET.
+  useEffect(() => {
+    if (!project) return;
+    const controller = new AbortController();
+    const heartbeat = () => {
+      if (documentHidden()) return;
+      void fetch(boardPresenceUrl(project), { method: "HEAD", cache: "no-store", signal: controller.signal }).catch(() => {});
+    };
+    heartbeat();
+    const timer = setInterval(heartbeat, 15_000);
+    document.addEventListener("visibilitychange", heartbeat);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", heartbeat);
+    };
+  }, [project]);
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
+  // A pin changes the subscription scope, while runtime turn settlements
+  // remain valid across that change for the same transcript generation.
+  const projectStatus = useMemo(() => createRuntimeFilesStatusProjection(), []);
   useEffect(() => {
     let alive = true;
     const cache = filesClientCache;
+    const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
+    const currentStatus = (next: FilesData) => bus ? projectStatus(next, bus.getState()) : next;
     const publishBackgroundData = (next: FilesData) => {
       if (!alive) return;
+      const projected = currentStatus(next);
       /* Scanner generations can change one live row inside a large catalog.
          Keep that reconciliation interruptible so reload, typing and board
          gestures do not wait behind a synchronous whole-Viewer render. */
       startTransition(() => {
-        if (alive) setData(next);
+        if (alive) setData(projected);
       });
     };
     const unsubscribeCache = cache.subscribe((next, priority) => {
       if (priority === "urgent") {
-        if (alive) setData(next);
+        if (alive) setData(currentStatus(next));
         return;
       }
       publishBackgroundData(next);
@@ -1290,17 +1380,25 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
     };
     void hydrateInitial();
 
-    /*
-     * Recurring poll cadence. With the runtime bus off (the default,
-     * landing-disabled slice) this stays a flat 10s poll — identical to before.
-     * With the bus healthy the recurring timer is removed entirely: freshness
-     * rides `files.revision` events (a debounced pure GET), satisfying "healthy
-     * SSE disables the recurring /api/files timer". When the bus degrades, the
-     * 10s fallback poll is restored.
-     */
+    /* Live catalog freshness rides files.revision. Write failures cannot emit
+       durable events, so live views separately read write-free health every 10s.
+       Degraded connections keep the existing full-catalog fallback poll. */
     let timer: ReturnType<typeof setInterval> | null = null;
     let mode: "poll" | "live" | null = null;
     let lastPollAt = 0;
+    let healthController: AbortController | null = null;
+    const healthTick = async () => {
+      if (!alive || mode !== "live" || documentHidden() || healthController) return;
+      const controller = new AbortController();
+      healthController = controller;
+      const timeout = setTimeout(() => controller.abort(), POLL_MS);
+      try { await cache.revalidateWriteHealth(controller.signal); }
+      catch { /* Retain known health; the next bounded read retries. */ }
+      finally {
+        clearTimeout(timeout);
+        if (healthController === controller) healthController = null;
+      }
+    };
     const pollTick = () => {
       const now = Date.now();
       if (documentHidden() && now - lastPollAt < HIDDEN_POLL_MS) return;
@@ -1311,7 +1409,8 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       if (next === mode) return;
       mode = next;
       if (timer) clearInterval(timer);
-      timer = next === "poll" ? setInterval(pollTick, POLL_MS) : null;
+      healthController?.abort();
+      timer = setInterval(next === "poll" ? pollTick : () => { void healthTick(); }, POLL_MS);
     };
 
     /* Flow, workflow and task mutations refresh out of band: strips and
@@ -1361,9 +1460,14 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
         scheduleRevisionHydration(hydrated ? 0 : FILES_REVISION_RETRY_MS);
       }
     };
-    if (isRuntimeUiEnabled() && typeof window !== "undefined") {
-      const bus = getRuntimeBus();
-      const applyConnection = () => setCadence(filesPollCadence(bus.getState().connection));
+    if (bus) {
+      const applyConnection = () => {
+        const runtime = bus.getState();
+        setCadence(filesPollCadence(runtime.connection));
+        // Session turn events carry status independently of files.revision and
+        // its coalesced inventory scan. Every useFiles surface sees this frame.
+        if (projectStatus.updateRuntime(runtime)) publishBackgroundData(cache.readScope(pinnedPath));
+      };
       applyConnection();
       unsubBus = bus.subscribe(applyConnection);
       unsubFiles = bus.subscribeFilesRevision((revision) => {
@@ -1380,6 +1484,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
 
     const onVisibility = () => {
       if (documentHidden()) {
+        healthController?.abort();
         /* A desktop keeps its (slower) feed while hidden. */
         if (!hiddenTrafficSuspended()) return;
         inflight.abort();
@@ -1388,6 +1493,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
         return;
       }
       cache.resumeCompletionRetries();
+      void healthTick();
       if (hydrateOnVisible) {
         hydrateOnVisible = false;
         owedWhileHidden = false;
@@ -1411,6 +1517,7 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       alive = false;
       document.removeEventListener("visibilitychange", onVisibility);
       inflight.abort();
+      healthController?.abort();
       if (timer) clearInterval(timer);
       if (initialRetryTimer) clearTimeout(initialRetryTimer);
       if (revisionTimer) clearTimeout(revisionTimer);
@@ -1424,6 +1531,9 @@ export function useFiles(_project?: string | null, pinnedPath?: string | null): 
       window.removeEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
       window.removeEventListener(FILES_CHANGED_EVENT, onChanged);
     };
-  }, [pinnedPath]);
-  return data.requestScope === requestScope ? data : filesClientCache.readScope(pinnedPath);
+  }, [pinnedPath, projectStatus]);
+  if (data.requestScope === requestScope) return data;
+  const scopedFallback = filesClientCache.readScope(pinnedPath);
+  const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
+  return bus ? projectStatus(scopedFallback, bus.getState()) : scopedFallback;
 }
