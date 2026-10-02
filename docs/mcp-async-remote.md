@@ -16,7 +16,7 @@ Publication also retains its original admission fence, so a pause before executi
 
 ## Measurement
 
-The audit's integration profile was rerun against main after the MCP answer-slimming merge and against this change. It uses the MCP SDK transport, loopback Viewer route handlers, 107 tasks, 27 pipelines, six attempts per stage and 1,000 transcript messages in private state. A deterministic external port delays each remote command by 1,200 ms. The baseline port blocks as the former production executor did; the candidate port yields while the controller checks remote state. Candidate concurrent reads run while a delayed provenance observation is in flight. Default attention still waits for the simulated browser arrival. These are controlled local measurements, not production percentiles.
+The audit's integration profile was rerun against main after the MCP answer-slimming merge and against this change. It uses the MCP SDK transport, loopback Viewer route handlers, 107 tasks, 27 pipelines, six attempts per stage and 1,000 transcript messages in private state. A deterministic external port delays each remote command by 1,200 ms. The baseline port blocks as the former production executor did; the candidate port yields while the controller checks remote state. Candidate concurrent reads run while a delayed provenance observation is in flight. Default attention still waits for the simulated browser arrival. These are controlled local measurements, not production percentiles. Generated private working-directory labels change the transcript size by nine bytes: 1,232,550 in the baseline and 1,232,559 in the candidate.
 
 | MCP scenario | Before p95 / max | After p95 / max | Samples |
 | --- | ---: | ---: | ---: |
