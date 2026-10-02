@@ -1,6 +1,8 @@
 /* Restart admission is read afresh for each role, including after web swaps. */
 import type { RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { pipelineRegistryHealth } from "@/lib/pipelines/store";
+import type { RegistryRecordIssue } from "@/lib/state/registryRecords";
 import type { StoredViewSession } from "@/lib/view/types";
 import type { Snapshot } from "./types";
 
@@ -11,6 +13,7 @@ export interface QuietBlockers {
   busy: boolean;
   unreadable: string | null;
   memoryMb: number | null;
+  registryIssues?: RegistryRecordIssue[];
 }
 export interface QuietPorts {
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
@@ -18,6 +21,7 @@ export interface QuietPorts {
   presence(now: number): readonly StoredViewSession[];
   memoryAvailableMb?(): number;
   controllerIdle?(): Promise<boolean>;
+  registryHealth?(): RegistryRecordIssue[];
 }
 export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number): Promise<{ quiet: boolean; blockers: QuietBlockers }> {
   const blockers: QuietBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: snapshot.busy !== null || snapshot.processes.web.state !== "healthy" || snapshot.processes.runtimeHost.state !== "healthy", unreadable: null, memoryMb: null };
@@ -33,6 +37,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   }
   try {
     blockers.stages = ports.pipelines().filter((pipeline) => pipeline.state === "running" && pipeline.cursor && ["spawning", "running", "reviewing", "committing"].includes(pipeline.cursor.state)).length;
+    blockers.registryIssues = (ports.registryHealth ?? pipelineRegistryHealth)();
     if (ports.controllerIdle && !await ports.controllerIdle()) blockers.busy = true;
     const latest = ports.presence(now).filter((session) => now - session.lastInteractionAt < 10 * 60_000).sort((a, b) => b.lastInteractionAt - a.lastInteractionAt)[0];
     blockers.operatorActiveAt = latest ? new Date(latest.lastInteractionAt).toISOString() : null;
