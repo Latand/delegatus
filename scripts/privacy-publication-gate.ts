@@ -591,7 +591,7 @@ const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
 // These contextual code points belong to valid IDNA labels. Detection keeps
 // them; the unit exemption below depends only on its positive ASCII boundary.
-const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u30FB-]|\\x[0-9a-f]{2})+`;
+const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u0F0B\u30FB-]|\\x[0-9a-f]{2})+`;
 const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
 const emailDomain = new RegExp(
   `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`,
@@ -605,6 +605,23 @@ const emailAddressSource =
 // terminal labels attributable: a prerelease can also spell a delegated TLD.
 // No delegated TLD starts with a digit, including a version's `3-beta` label.
 const numericVersionDomain = /^[0-9]+(?:\.[0-9]+)+(?:-[A-Z0-9-]+(?:\.[A-Z0-9-]+)*)?$/i;
+
+/* A regex match can stop before an IDNA-valid character it does not spell
+   out (for example U+0F0B, which IDNA maps to a label separator). Before
+   treating a numeric domain as a package version, ask IDNA whether the next
+   source character can continue it. The sentinel makes a single terminal
+   character a complete label for the IDNA check. */
+function hasIdnaDomainContinuation(domain: string, text: string, end: number): boolean {
+  const following = text[end];
+  // ASCII domain characters and separators are already consumed by
+  // emailDomain. ASCII punctuation such as `+` starts semver build metadata.
+  if (following === undefined || /^[\x00-\x7f]$/.test(following)) return false;
+  try {
+    return Boolean(domainToASCII(`${domain}${following}x`));
+  } catch {
+    return false;
+  }
+}
 
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
    resolve to anyone — the same reason `.invalid` is already skipped here.
@@ -684,7 +701,8 @@ function* emailOccurrences(text: string, source?: EmailTextView["source"]): Gene
     }
     // A quoted local part may itself contain an attributable mailbox.
     if (!match[1].startsWith('"') && numericVersionDomain.test(match[2])
-      && /^[0-9]/.test(match[2].split(".").at(-1)!)) continue;
+      && /^[0-9]/.test(match[2].split(".").at(-1)!)
+      && !hasIdnaDomainContinuation(match[2], text, pattern.lastIndex)) continue;
     if (domainNamesNobody(match[2])) continue;
     yield { address: match[0], domain: match[2], index: match.index, localPart: match[1] };
   }
