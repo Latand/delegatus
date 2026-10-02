@@ -1,281 +1,306 @@
-# Memory selection: 100 requested, seven eligible; Phase 3 remains no-go
+# Memory selection: 100 operator messages; no qualifying injection threshold
 
-Study date: 2026-10-02. This implements [Phase 2 of the design](../design/agent-memory.md#6-phased-plan), building on the merged read-only index, PR #2417, at base `5b046f54c`.
+Study date: 2026-10-02. Successor to the seven-first-request pilot on PR #2475,
+using the existing Phase 1 index and replay runner. **Keep on-demand search;
+Phase 3 automatic injection remains no-go on this evidence.** The reason is
+measured relevance across 100 operator messages. The corpus was large enough
+for the requested sample.
 
-**No-go for Phase 3.** The requested 100-prompt rerun exhausted the current
-index at **seven usable first requests** under the pilot's exclusion rules.
-They are the same seven requests as the pilot, so this is a repeated Jev
-measurement, with no increase in independent sample size. FTS found five
-helpful entries in 21 slots; Jev found one. The paired P@3 difference is
-**−19.05 percentage points**, with an exploratory 95% prompt-bootstrap
-interval of **[−38.10, −4.76] points**. Quality and minimum coverage both fail.
-These intervals do not establish a population-wide ranking from seven
-selected requests. Keep on-demand search; this evidence does not justify
-sending every prompt for selection.
+The sample contains **100 messages from 30 conversations**, 78 received by
+Claude and 22 by Codex, spanning five projects with operator input. All seven
+project keys in the transcript index were examined. There were **548 eligible
+operator events**, so no undersized-population exception was needed. The
+sample spans 2026-07-23 through 2026-10-02.
 
-New provider spend was **USD 0.000543102**. Cumulative pilot plus rerun spend
-was **USD 0.001101618**, including the single original reachability probe.
+Among 1,348 eligible retrieved candidates, contextual reviewers labelled ten
+potentially useful. Jev's best observed nonempty threshold, **0.70**, offered
+29 entries, of which one was useful: **3.45% precision**, 95% interval
+**[0.00%, 11.54%]**, and 10% candidate recall. At 0.90 and above it offered
+nothing. FTS's best observed precision was **1.76% at score 10**, with three
+useful entries among 170 offers. Neither arm approached the quality target.
+The study measures incremental relevance, not improvement in task completion.
 
-## Unchanged protocol and labelling rule
+## Population, authorship and sampling
 
-The hypothesis is that one Jev decision over a prompt and up to eight memory
-summaries can select at most three useful additions more precisely than FTS
-rank alone. No injection selects zero. The source of labels is the request
-and the bounded indexed memory body; no downstream agent response is used.
+The runner opens the transcript and memory SQLite indexes read-only, in read
+transactions. It considers **every indexed user message at every position**
+for both engines and every project. It reads each indexed source line for
+native metadata and the Claude delivery ledgers for admission-stamped origin;
+these reads do not instantiate live stores or refresh either index.
 
-The [labelled set](memory-selection.labels.json) contains paraphrases only,
-with one binary decision and rationale for every candidate. The rule is
-written in that file. A specific source pointer can help; broad topic overlap,
-redundant instructions, unsupported environment assumptions and superseded
-policies do not. Borderline cases count as false. This study estimates
-potential relevance; task-completion improvement remains unmeasured.
+Authorship uses delivery origin where available: agent-origin messages are
+excluded. Native `isMeta` and system-source records are excluded. The written
+legacy rule in `machineMessage` removes recognizable controller/seat ticks,
+pipeline and role scaffolds, recovery prompts, agent completion notices,
+review/fix round relays, compaction summaries and tool/system text. Older
+transcripts lack uniform positive authorship provenance: residual user-role
+text is included, with explicit legacy-template exclusions and a contextual
+sample audit. This is a reproducible operational classification, not proof
+that every unmarked historical record was physically typed by a person.
+The sample audit found two remaining machine relays; the final rule excludes
+them and the same deterministic sampler fills their places before scoring.
 
-Primary metric: helpful selections / (three slots × number of prompts),
-including empty slots. Also report helpful / offered (undefined for no
-injection), candidate recall and prompt coverage. This prevents an abstaining
-decider from winning by returning one easy item. Jev's threshold is 0.70,
-fixed before scores, with FTS order breaking ties. No threshold sweep.
+Transport markers, viewer selection envelopes and image path wrappers are
+stripped. A short reply, continuation, attachment-bearing request, pasted
+stakeholder conversation or operator-supplied log is retained with context.
+Image-description companion records contain no operator text and are excluded.
+Copies of the same native event are folded by UUID, or by engine/timestamp/body
+identity when there is no UUID; independently written repeated answers remain
+eligible. No minimum text length, first-turn filter or project whitelist is used.
 
-Operationalize the design's “margin worth the outbound text” conservatively:
-at least 10 percentage points better P@3 than the identical-candidate FTS arm,
-at least 15 points better precision among offered items, no lower candidate
-recall, and p99 end-to-end latency within 1.5 seconds. A promotion also needs
-at least 30 independent requests including five for each receiving engine;
-otherwise even a positive pilot remains no-go pending a representative test.
-These numerical thresholds are this study's predeclared choices; the design
-does not specify numerical thresholds.
-
-## Rerun sampling and exclusions
-
-Collection: **2026-10-02 17:32:32 UTC**. The runner opens the installation's
-transcript and Phase 1 memory indexes read-only in SQLite read transactions.
-It reads all indexed user messages from Claude and Codex; it never refreshes
-an index or scans additional transcript files. It skips launch instruction,
-environment and plugin preambles, then considers exactly the first request
-per transcript. An excluded first request never promotes a later message.
-Transport envelopes are stripped; exact prompt copies are folded.
-
-The collector now requests 100 by default. Within each engine/project
-stratum it sorts by SHA-256 of `memory-selection-v1` plus the prompt. It
-round-robins projects within each engine, then engines, without replacement;
-exhausted strata yield unused slots to the rest. Exact-copy provenance is
-chosen deterministically by message index then transcript path. This is
-balanced coverage sampling, with no claim of proportional population
-weighting. With only seven eligible requests, all were retained.
-
-| Collection count | Number |
+| Count | Value |
 | --- | ---: |
-| Indexed user messages examined | 4,459 |
-| Transcripts with a first non-preamble request | 1,049 |
-| Explicit pipeline/role boilerplate, ticks, test requests and relays excluded | 1,035 |
-| Context-only continuation requests excluded | 5 |
-| Requests needing an unavailable image excluded | 1 |
-| Exact duplicate requests excluded | 1 |
-| Short requests excluded | 0 |
-| Requested sample | **100** |
-| Eligible and sampled requests | **7** |
+| Indexed user records | 4,485 |
+| Indexed conversations with user records | 1,461 |
+| Machine/system/attachment-companion records | 3,916 |
+| Copies of eligible events | 21 |
+| Eligible operator events | **548** |
+| Sampled events | **100** |
 | Phase 1 memory entries | 7,673 |
 
-The sample contains six Codex requests and one Claude request, spanning two
-project keys (five and two requests), dated 2026-07-20 through 2026-10-02.
-Four are detailed briefs; three are shorter direct requests. A user-role
-brief does not prove human authorship. Explicit automation scaffolds are
-excluded, including many genuine tasks relayed through pipelines. The
-result is strongly selected. The remaining 93 requested observations are
-unavailable under this rule; no fabricated, later-turn or duplicate prompts
-were substituted. All seven requests and their candidates match the pilot
-exactly, despite the larger indexed population. Case IDs changed with the
-stratified ordering; pilot artifacts retain their original IDs.
+Project aliases below are assigned by sorted index project key. The private
+sample retains the mapping and source offsets; identities are not published.
+Zero-operator projects remain in this accounting.
 
-### Two retrieval policies, kept separate
+| Project alias | Receiving engine | Indexed records | Eligible events | Sample |
+| --- | --- | ---: | ---: | ---: |
+| project-1 | claude | 23 | 12 | 12 |
+| project-1 | codex | 2 | 0 | 0 |
+| project-2 | claude | 1 | 0 | 0 |
+| project-3 | claude | 15 | 5 | 5 |
+| project-3 | codex | 37 | 0 | 0 |
+| project-4 | claude | 655 | 156 | 21 |
+| project-4 | codex | 1705 | 264 | 20 |
+| project-5 | claude | 413 | 71 | 20 |
+| project-5 | codex | 1418 | 0 | 0 |
+| project-6 | claude | 165 | 38 | 20 |
+| project-6 | codex | 44 | 2 | 2 |
+| project-7 | claude | 3 | 0 | 0 |
+| project-7 | codex | 4 | 0 | 0 |
 
-**Literal Phase 1 query:** the first 16 alphanumeric/underscore terms, joined
-by AND, with the Phase 1 BM25 weights `(0, 5, 2, 1)`. After the experiment's
-scope/native filters it returned **zero candidates for all seven retained prompts**.
-Directly passing complete natural-language prompts into this API is therefore
-not a useful candidate generator in this rerun. An agent-written short
-`search_memory` query can behave differently; this result does not evaluate
-that interactive use.
+Sampling is equal allocation across nonempty **project × engine** strata,
+with unused slots redistributed as strata exhaust. Within a stratum, sort
+by SHA-256 of the fixed seed `memory-selection-v1`, transcript identity and
+message index; round-robin sorted strata until 100. This deliberately gives
+small projects coverage. Results describe this balanced sample, without
+claiming proportional estimates for the complete operator population.
 
-**Exploratory recall query:** the first 16 distinct terms of length at least
-four after a fixed English/Ukrainian/Russian stop list, joined by OR. It uses
-the same Phase 1 FTS tables, BM25 weights and date/id tie breaks. This query
-exists only in the replay runner. The production `search_memory` semantics
-are unchanged. This policy supplies candidates to **both** the FTS and Jev
-arms in the table below; the table makes no comparison between OR and AND.
+Each private case stores the message and **all preceding indexed turns** in
+chronological order, never a subsequent turn. There are 89.6 preceding turns
+per case on average. Repeated prompts in one conversation are dependent;
+uncertainty therefore resamples whole conversations.
 
-For both policies, retain the conversation's project plus global entries,
-exclude the receiving engine's entries and all `instruction` entries, fetch
-up to 80 ranked hits, collapse identical titles and Claude index/topic pairs
-by referenced filename, then retain eight. No conversation has a previous
-offer because these are first requests. Historical native prompt contents
-are unavailable, so excluding instruction entries is a conservative proxy
-for instruction deduplication; shared skills may already be discoverable
-through a native skill catalog. Explicitly requested skill pointers receive
-negative labels for redundancy.
+## Candidates, context and labels
 
-The recall policy yielded **51 candidates**: 36 project-scoped and 15 global;
-16 references, 14 preferences, six project facts and 15 skills. The kinds
-describe Phase 1 records; global skills are the cross-project contribution.
-No candidate from another project's private scope is admitted.
+For each case the runner retrieves the **top 30 surviving FTS candidates**
+from that conversation's project plus global entries. The receiving engine's
+own entries are removed. Near-native matches are also removed against all
+entries authored by that engine: token-set Jaccard similarity at least 0.80
+on title-plus-summary or body, requiring at least five tokens. Whole instruction
+entries already belonging to the launch context are excluded as in the pilot.
+Repeated Claude index pointers to the same memory file are folded. The index
+snapshot is contemporary with the experiment, not reconstructed as of each
+historical prompt; availability and applicability in the past remain limitations.
 
-These are current-index counterfactuals: 27 of 51 entries have recorded write
-dates later than the request. Imported file timestamps may also differ from
-when a fact originated. The study does **not** claim these memories were
-available when the historical request first ran. It asks whether the current
-index would offer useful additions if that request were replayed now.
+The recall query uses the current message followed by preceding turns newest
+first, the first 16 distinct non-stopword terms of length at least four, joined
+by OR, and Phase 1 BM25 weights `(0, 5, 2, 1)`. Both arms receive identical
+candidates. This extends the pilot's exploratory recall query; it does not
+change production `search_memory` semantics. The literal AND query remains
+a diagnostic. FTS confidence is **negative BM25**, so larger scores rank higher;
+it is an uncalibrated retrieval score, not a probability.
 
-### Deciders
+Three model reviewers adjudicated disjoint case sets before Jev scores existed.
+They read the current requests and offered summaries, relevant preceding
+exchanges, relevant candidate bodies, and searched older stored context for
+references and redundancy. They did not claim to read every byte of every
+long history or irrelevant skill body. Two replacement cases were adjudicated
+before scoring; labels of the 98 retained cases were mapped by exact source
+identity, with identical candidate memory IDs. This is single adjudication
+per case, without inter-rater agreement or downstream outcome validation.
 
-- **FTS:** choose the first three entries in the frozen candidate list.
-- **Jev:** one `typesafe/jev-1.13` request per prompt to the endpoint exported
-  by `src/lib/asks/jev.ts`. The existing `classifierText` and
-  `redactForClassifier` redact/bound the prompt and summaries. No memory body,
-  source path field, labels or subsequent conversation is sent. Each candidate
-  gets one `noul` statement asking whether it supplies a specific fact, rule
-  or reference that changes the task beyond information already in the prompt.
-  Keep scores at least 0.70, highest first, at most three. No retry or tuning.
-- **No injection:** return no entries without a retrieval or provider call.
+**Label rule:** helpful means the offered title and summary provide a specific,
+applicable fact, rule or reference that would change the next response/action
+beyond what the prompt and preceding conversation already provide. General
+topic overlap, inapplicable environments, already-known facts, superseded
+instructions and unsupported assumptions are false. Borderline cases are false.
+The [public labels](memory-selection.all-turns.labels.json) contain only
+scrubbed English paraphrases and explicit candidate judgments.
 
-The pilot labeler read every request and bounded candidate body before scoring.
-The rerun verified exact equality of all seven prompts and all 51 candidate
-records against the private pilot sample, then reused those frozen labels
-with the new stratified IDs. No label changed after inspecting pilot or rerun
-scores. The six positive labels are `p04/c1`, `p04/c3`, `p05/c1`,
-`p07/c1`, `p07/c2`, `p07/c8`.
-[`memory-selection.results.json`](memory-selection.results.json) records
-all numeric scores, costs, selections and timings without private text.
+Jev receives the redacted current message (up to 8,000 characters), a trailing
+16,000-character view of prior turns with role labels, and candidate titles
+(up to 160 characters) and summaries (up to 400). Each candidate gets a `noul`
+question about incremental usefulness. The full prefix stays in the private
+case for contextual review. **89 cases had older context omitted from Jev's
+view; no current message was truncated.** Omission is explicitly marked.
+This bounds the payload for Jev's [32K input window](https://openrouter.ai/typesafe/jev-1.13/).
+It also means this experiment does not measure a classifier receiving an
+unbounded full conversation. Older facts can explain additional false offers.
+Credential lines and opaque credential-shaped values are redacted before calls.
 
-## Rerun results and uncertainty
+## Confidence thresholds and injection budget
 
-| Decider, identical OR candidates | Offered | Helpful | P@3 | 95% interval | Helpful / offered | Candidate recall |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FTS rank | 21 | 5 | **23.81%** | **[4.76%, 47.62%]** | 23.81% | 83.33% |
-| Jev, threshold 0.70 | 7 | 1 | **4.76%** | **[0%, 14.29%]** | 14.29% | 16.67% |
-| No injection | 0 | 0 | **0%** | **[0%, 0%]** | undefined | 0% |
+The target, fixed before Jev scoring, is **at least 90% precision among offers**:
+automatic context should rarely send an agent irrelevant instructions. A
+candidate operating point must also have a **95% lower bound of at least 80%**
+and **at least 20 offers**, to avoid accepting a threshold on one lucky hit.
+Among qualifying points choose highest recall, then the lower threshold.
+**No FTS or Jev threshold qualifies. Recommend no automatic injection.**
+A Jev cutoff of 0.90 currently abstains completely; that establishes no
+precision guarantee and provides no reason to pay for it on every message.
 
-Jev minus FTS: **−19.05 percentage points**, 95% interval
-**[−38.10, −4.76] points**. FTS wins on three requests; four tie.
-Jev's precision among offered entries is 9.52 points lower. Prompt coverage
-is 100%, 71.43% and 0% for FTS, Jev and no injection respectively.
+Both arms sort candidates by their own score, retain those meeting the
+threshold, and offer at most **15 entries and 10,000 characters**. An entry
+that does not fit is skipped; smaller later entries may fit. Counts are set
+by confidence, with no fixed minimum. The measured offer is exactly
+`title + newline + summary + newline`, including separators. Character
+accounting uses JavaScript UTF-16 units, a conservative cap for Unicode code
+points. FTS thresholds are 0, 2, 5, 10, 15, 20, 30; Jev thresholds are 0,
+0.50, 0.70, 0.80, 0.90, 0.95, 0.99. No injection returns no entries.
 
-Intervals use 20,000 percentile bootstrap draws, xorshift32 seed 2475,
-resampling seven prompt clusters with replacement. All three slots travel
-with their prompt, and identical resampled indices are used for both arms
-in the paired contrast. Endpoints are the nearest-rank 2.5th and 97.5th
-percentiles. No injection has a structurally zero P@3 under this definition;
-its [0, 0] interval says nothing about downstream task success. These are
-approximate, conditional intervals: seven selected prompts, one labeler,
-shared candidate memories and only one Claude request severely limit their
-interpretation. They exclude labelling uncertainty, corpus selection bias
-and provider variation. The rerun is not pooled with the pilot as 14
-independent prompts. Bootstrap inference on this tiny corpus is exploratory.
+## Results with 95% intervals
 
-| Decider | Median latency | p99 latency |
+Precision is useful selections divided by all offers; recall is useful
+selections divided by all retrieved candidates labelled useful across cases. Recall is conditional on the retrieved pool, not all
+7,673 memories. Empty-offer precision is undefined. Means include all 100
+messages, including cases with no candidates or no offers. Brackets are 95%
+intervals; precision and recall are percentages.
+
+| Arm | Threshold | Offered | Precision % [95%] | Recall % [95%] | Mean entries [95%] | Mean characters [95%] |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| fts | 0 | 801 | 0.62 [0.10, 1.52] | 50.00 [11.11, 100.00] | 8.01 [6.47, 10.27] | 1700.22 [1385.46, 2151.44] |
+| fts | 2 | 774 | 0.65 [0.10, 1.55] | 50.00 [11.11, 100.00] | 7.74 [6.20, 9.98] | 1639.04 [1321.00, 2099.58] |
+| fts | 5 | 495 | 0.61 [0.00, 1.80] | 30.00 [0.00, 62.50] | 4.95 [3.68, 6.82] | 1081.36 [816.09, 1458.24] |
+| fts | 10 | 170 | 1.76 [0.00, 5.34] | 30.00 [0.00, 62.50] | 1.70 [0.88, 3.02] | 365.53 [193.39, 637.89] |
+| fts | 15 | 27 | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.27 [0.12, 0.52] | 60.03 [25.96, 114.54] |
+| fts | 20 | 9 | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.09 [0.03, 0.19] | 20.07 [6.36, 42.13] |
+| fts | 30 | 3 | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.03 [0.00, 0.09] | 8.53 [0.00, 24.30] |
+| jev | 0 | 801 | 1.25 [0.36, 2.43] | 100.00 [100.00, 100.00] | 8.01 [6.47, 10.27] | 1778.71 [1445.63, 2258.59] |
+| jev | 0.5 | 187 | 3.21 [0.46, 7.53] | 60.00 [16.67, 100.00] | 1.87 [1.23, 2.85] | 403.38 [258.84, 618.47] |
+| jev | 0.7 | 29 | 3.45 [0.00, 11.54] | 10.00 [0.00, 40.00] | 0.29 [0.15, 0.52] | 54.29 [27.41, 98.08] |
+| jev | 0.8 | 3 | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.03 [0.00, 0.07] | 5.94 [0.00, 14.49] |
+| jev | 0.9 | 0 | undefined | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] |
+| jev | 0.95 | 0 | undefined | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] |
+| jev | 0.99 | 0 | undefined | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] |
+| none | — | 0 | undefined | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] | 0.00 [0.00, 0.00] |
+
+Intervals use 2,000 percentile bootstrap resamples of the **30 conversation
+clusters**, xorshift32 seed 2475, with nearest-rank endpoints. All messages
+from a drawn conversation travel together; paired differences use the same
+resampled indices. Undefined denominators are omitted, with valid draw counts
+published. These intervals are conditional on the sampled corpus and labels;
+they exclude authorship error, labelling uncertainty, candidate-generation
+bias, provider variation and threshold-selection optimism. They are not
+simultaneous confidence bands over the sweep.
+
+There is **no qualifying operating point at which to claim a nonempty paired
+precision win**. At the predeclared high-confidence reference pair, Jev 0.90
+versus FTS score 10, the precision difference is undefined because Jev abstains;
+recall changes by −30 percentage points, 95% interval **[−62.50, 0.00]**.
+For an explicitly exploratory comparison of the best observed nonempty
+precision points, Jev 0.70 versus FTS 10 is **+1.68 percentage points**,
+95% paired interval **[−4.57, +10.00]**. Its recall is 20 points lower.
+This does not establish a Jev advantage or meet the quality target.
+
+## Latency, token limit and spend
+
+| Arm | Median | p99 |
 | --- | ---: | ---: |
-| FTS retrieval and frozen-rank choice | 4.26 ms | 12.64 ms |
-| Jev, same retrieval + decision request | 244.98 ms | 429.50 ms |
-| No-injection empty-return measurement | <0.001 ms | <0.001 ms |
+| FTS retrieval including scope/native filtering | 20.06 ms | 318.26 ms |
+| Same retrieval plus Jev HTTP/parse | 306.25 ms | 646.77 ms |
+| No injection, no retrieval or provider call | 0 ms | 0 ms |
 
-Retrieval is measured once at collection and reused by both ranking arms.
-Jev adds HTTP round-trip and response parsing; small local serialization
-and sorting overhead is outside these timers. No injection measures a local
-empty return, without retrieval, hooks or process startup. Nearest-rank p99
-is the maximum of seven observations. These are warm-process observations.
+These are warm-process measurements across all 100 cases, with no HTTP call
+for 14 empty pools. Selection/serialization overhead, process launch and live
+hook integration are outside the timers. p99 is nearest-rank observation 99
+of 100. The runner allows 30 seconds per call for measurement and never retries;
+this is not a proposed production-hook timeout.
 
-### Seven-prompt pilot, retained separately
+**Zero offers at every threshold exceed Codex's default 2,500-token
+`additionalContextLimit`**, both across all cases and within the 22 Codex
+cases. Counting uses `ceil(UTF-8 bytes / 4)` over the exact offer string,
+matching Codex's approximate byte-based accounting. This is a hook spill
+threshold, not an exact model-token measurement; [Codex documents the default
+and its per-handler behavior](https://learn.chatgpt.com/docs/hooks).
+The [string utility](https://github.com/openai/codex/blob/main/codex-rs/utils/string/src/truncate.rs)
+implements the approximation. Unicode and the full 10,000-character cap can
+exceed 2,500 approximate tokens in general; regression tests cover that case.
 
-The original collection at 16:52:16 UTC examined 4,349 user messages from
-1,017 first-request transcripts: 1,003 machine requests, five continuations,
-one attachment and one duplicate were excluded. It retained the same seven
-requests and 51 candidates. Original
-[pilot labels](memory-selection.pilot.labels.json) and
-[pilot receipts/results](memory-selection.pilot.results.json) are preserved
-unchanged. Pilot latency median/p99 was 2.32/5.68 ms for FTS and
-267.75/456.26 ms for Jev; no injection was below 0.001 ms.
-
-| Pilot arm | Offered | Helpful | P@3 | Helpful / offered | Candidate recall |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| FTS | 21 | 5 | 23.81% | 23.81% | 83.33% |
-| Jev | 8 | 2 | 9.52% | 25.00% | 33.33% |
-| No injection | 0 | 0 | 0% | undefined | 0% |
-
-The pilot's paired difference was −14.29 points. Its no-go was a pilot
-conclusion. The new call set selected one fewer helpful entry and remains
-below both quality margins. Both runs used the same model, threshold,
-question wording and labels. We did not tune to the rerun.
-
-### Errors illustrated with scrubbed paraphrases
-
-A workbook task needed a provenance trail and a pointer to newer workbooks;
-FTS found both and Jev selected neither. A prompt already named its SQL
-access skill, making the retrieved skill pointer redundant. Another prompt
-explicitly authorized an account, superseding the older account prohibition
-that Jev selected. A launcher investigation retrieved a restart warning for
-a different host without evidence that its topology applied. These examples
-illustrate incremental usefulness and applicability, not merely topic match.
-
-## Spend, receipts and safety
-
-| Measurement | Input tokens from provider | Sum of `usage.cost`, USD |
+| Spend item | Input tokens | USD from usage fields |
 | --- | ---: | ---: |
-| Original reachability probe, made once | 367 | 0.000015414 |
-| Seven pilot decisions | 12,931 | 0.000543102 |
-| Seven new rerun decisions | 12,931 | 0.000543102 |
-| **Cumulative: 15 actual HTTP calls** | **26,229** | **0.001101618** |
+| 86 new Jev decisions | 855,222 | **0.035919324** |
+| Reused original probe receipt; no new call | 367 | 0.000015414 |
+| This ledger including probe | 855,589 | **0.035934738** |
+| FTS / no injection | 0 | 0 |
 
-The rerun ledger reuses the original probe receipt; it does not send another
-probe. Its reported total is **0.000558516 USD**, including that reused
-receipt. Summing the two run totals would count the probe twice. Costs above
-come directly from Jev's `usage.cost` and `usage.input_tokens`, with no
-estimated token conversion or separate billing audit. All seven new requests
-completed; there are no unsettled reservations. FTS and no injection cost
-zero provider dollars.
+The previous pilot and seven-request repeat together spent $0.001101618,
+including the probe once. Total across those studies and these new decisions
+is **$0.037020942**. All 86 new calls completed and there are no unsettled
+reservations. The [public numeric results](memory-selection.all-turns.results.json)
+publish usage receipts, scores, selections, sizes and cluster IDs, so metrics
+can be recomputed without exposing source text.
 
-Each runner ledger is hard-capped at **USD 2.00** including its probe receipt.
-A single-writer lock spans the run. Before each sequential request the runner
-durably reserves the greater of USD 0.01 and the serialized request's UTF-8
-byte count plus 4,096 overhead tokens at the existing client's pinned price.
-This is a conservative bound under that price contract, not an account-wide
-provider quota. Success settles to actual usage cost; an ambiguous failure
-retains its reservation and blocks replay. An over-bound receipt blocks
-subsequent calls, including after restart. Completed ledgers reuse scores;
-changed samples or labels are refused. A new ledger is a separate budget;
-the cumulative actual spend across these two ledgers is also below USD 2.
+## Seven-first-request pilot and repeat, retained separately
 
-The authorized secret was loaded into `OPENROUTER_API_KEY` only for the runner
-process and never printed or committed. The runner requires that environment
-variable before calling the existing helper, preventing its secret-file
-fallback. Nothing was injected into live prompts, written to engine memory,
-or changed in installed Jev settings. Existing redaction bounds outbound
-prompts and summaries; it is not a general anonymizer of names. Bounded
-outbound selection was explicitly authorized. Public artifacts contain
-aggregates, opaque local case IDs and scrubbed paraphrases only; private
-samples, bodies, provenance and ledger input hashes remain outside the repo.
+The original pilot selected only seven first requests, six Codex and one
+Claude, from two project keys. Its fixed budget was eight candidates and
+three slots, with no preceding-conversation context and Jev threshold 0.70.
+The later first-request repeat examined more indexed messages but retained
+exactly the same seven requests. Neither is pooled with the current sample.
 
-## Reproduction and verification
+| Earlier run / arm | Offered | Helpful | Precision among offers | Candidate recall |
+| --- | ---: | ---: | ---: | ---: |
+| Pilot FTS | 21 | 5 | 23.81% | 83.33% |
+| Pilot Jev | 8 | 2 | 25.00% | 33.33% |
+| First-request repeat FTS | 21 | 5 | 23.81% | 83.33% |
+| First-request repeat Jev | 7 | 1 | 14.29% | 16.67% |
+
+Original [pilot labels](memory-selection.pilot.labels.json) and
+[pilot results](memory-selection.pilot.results.json), and the later
+[first-request labels](memory-selection.labels.json) and
+[first-request results](memory-selection.results.json), remain unchanged.
+Their no-go conclusions were limited pilots. The new study replaces the
+claim that only seven eligible operator prompts exist: there are 548 under
+the all-turn collection rule in this snapshot.
+
+## Safety and reproduction
+
+The existing runner was extended with version-2 collection, confidence budgets,
+native-store comparison and cluster metrics; its pilot replay functions and
+budget protections remain tested. It writes private samples, labels, receipts
+and public aggregate exports only. No engine memory, Jev setting, live prompt,
+index or runtime state is mutated by the replay.
+
+The authorized key is loaded from the local OpenRouter secret into
+`OPENROUTER_API_KEY` for the runner process only; it is never logged, saved in
+a ledger or published. Every sequential request durably reserves the greater
+of $0.01 and the full serialized request byte count plus 4,096 overhead tokens
+at the pinned input price. Admission refuses any call that would exceed the
+**$2.00 ledger cap**. A lock permits one runner. Missing/ambiguous receipts
+retain their reservation and block replay; an over-bound provider receipt
+blocks subsequent calls, also after restart. Sample, labels and serialized
+requests are hashed so changed inputs cannot reuse old decisions. This is a
+conservative bound at the pinned price, not a provider-enforced account quota.
 
 ```sh
-LLV_STATE_DIR="$(mktemp -d)" bun test scripts/memory-selection.test.ts
-bun scripts/memory-selection.ts collect "$TRANSCRIPT_DB" "$MEMORY_DB" "$PRIVATE_SAMPLE"
-bun scripts/memory-selection.ts local "$PRIVATE_SAMPLE" "$LABELS" "$LOCAL_RESULTS"
-bun scripts/memory-selection.ts jev "$PRIVATE_SAMPLE" "$LABELS" "$PAID_RESULTS" "$PRIVATE_LEDGER" "$EXISTING_PROBE"
+LLV_STATE_DIR="$PRIVATE_STATE" bun test scripts/memory-selection.test.ts
+LLV_STATE_DIR="$PRIVATE_STATE" bun scripts/memory-selection.ts collect "$TRANSCRIPT_DB" "$MEMORY_DB" "$PRIVATE_SAMPLE"
+# Adjudicate labels before scoring, then launch with the process-only key.
+LLV_STATE_DIR="$PRIVATE_STATE" bun scripts/memory-selection.ts jev "$PRIVATE_SAMPLE" "$LABELS" "$RESULTS" "$LEDGER" "$EXISTING_PROBE"
+# Re-export completed results offline, without reading any key or calling Jev.
+LLV_STATE_DIR="$PRIVATE_STATE" bun scripts/memory-selection.ts report "$PRIVATE_SAMPLE" "$LABELS" "$NEW_RESULTS" "$LEDGER"
 ```
 
-Set an isolated `LLV_STATE_DIR` for every command. The default collection
-limit is 100. Label the resulting sample before paid scoring. Paid commands
-require the authorized key in their process environment. Output files are
-exclusive-create; do not repeat the completed probe or create a fresh paid
-ledger just to export results. Retained private `sample.json`, `labels.json`,
-`ledger.json` and `results.json` bind this rerun; the pilot has separate
-retained private artifacts. Public JSON lets reviewers recompute selections,
-metrics, confidence intervals and spend, while the private index and raw
-prompts are intentionally not published. Replaying paraphrases would be a
-different experiment.
+Output paths are exclusive-create. `population` uses the same collector without
+candidate retrieval for authorship audits. Private samples retain the indexed
+source provenance and preceding turns; public files contain no real prompt
+text, personal identifiers, account names, hostnames or private paths.
 
-Exact-path tests cover 100-case stratification and validation, exclusions,
-read-only collection, paired intervals, both public artifact sets and budget
-failure/restart behavior. The remaining evidence gap is coverage: the current
-index cannot supply the requested 100 usable first prompts. Neither the
-pilot nor this repeat can authorize Phase 3; broader independent requests
-and independently adjudicated labels are still needed.
+Exact-path isolated tests verify all-turn inclusion, copy handling, the actual
+SQLite collection boundary, preceding-context ordering, 30-candidate retrieval,
+near-native matching, confidence/character caps, paired intervals, Unicode
+token overflow, provider failure/restart accounting and public-result
+reproduction. Targeted TypeScript and ESLint checks cover the touched runner
+and tests. The local privacy gate uses the fingerprint catalog,
+`--require-known-values` and `--check-commits` before push. Hosted CI is not
+part of this stage's completion gate.

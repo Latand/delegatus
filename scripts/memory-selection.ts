@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import {
   JEV_ENDPOINT, JEV_MODEL, JEV_INPUT_PRICE_USD, classifierText, redactForClassifier, classifyWithJev,
 } from "../src/lib/asks/jev";
+import { decodeCodexStructuredUserText } from "../src/lib/runtime/codexStructuredUserText";
 import { readOpenRouterApiKey } from "../src/lib/asks/settings";
 
 export const CAP_USD = 2;
@@ -17,18 +18,22 @@ const hash = (text: string) => crypto.createHash("sha256").update(text).digest("
 export interface Message {
   transcript_path: string; message_index: number; body: string; engine: string;
   project: string; timestamp: number | null;
+  byte_offset?: number; machineOrigin?: boolean; eventId?: string;
 }
 export interface Candidate {
   id: string; title: string; summary: string; body: string; engine: string;
-  kind: string; scope: string; writtenAt: string;
+  kind: string; scope: string; writtenAt: string; score?: number;
 }
 export interface Case {
   id: string; prompt: string; engine: string; candidates: Candidate[];
+  context?: Array<{ role: string; text: string }>; project?: string;
   retrievalMs: number; strictCount: number;
 }
 export interface Sample {
-  version: 1; seed: string; collectedAt: string; cases: Case[];
+  version: 1 | 2; seed: string; collectedAt: string; cases: Case[];
   counts: Record<string, number>;
+  audit?: Array<{ text: string; engine: string; path: string; index: number }>;
+  population?: Array<{ project: string; engine: string; indexed: number; operator: number; sampled: number }>;
 }
 export interface Labels {
   rule: string;
@@ -36,7 +41,10 @@ export interface Labels {
 }
 
 export function cleanEnvelope(text: string): string {
-  return text.replace(/<!-- llv:structured-user[\s\S]*?-->/g, "").trim();
+  const withoutAttachments = text.replace(/<image\b[^>]*>[\s\S]*?<\/image>/g, "").trimStart();
+  return decodeCodexStructuredUserText(withoutAttachments).text
+    .replace(/^\[viewer context[^\n]*\]\s*/i, "")
+    .replace(/^Тобі передали контекст іншого агента[^\n]*\n\n/, "").trim();
 }
 
 export function isPreamble(text: string): boolean {
@@ -103,8 +111,74 @@ export function samplePrompts(messages: Message[], limit: number) {
   return { rows, counts };
 }
 
+/** Authorship rules are structural, never based on length, language, topic,
+ * attachments or whether the message can stand alone. */
+export function machineMessage(text: string): boolean {
+  const body = cleanEnvelope(text);
+  const legacyRelay = /^(?:This session is being continued|Update for the upcoming live conversation|Operator (?:directive|explicitly|steering|clarification)|Builder (?:checkpoint|final checkpoint)|Topology checkpoint|SIZING VERDICT|Runbook оновлено|Completed: created private|Read-only production code architecture survey completed|STOP: оператор|User (?:now explicitly|screenshot)|Coordination update|TESTED_READY|Context from the operator|Next check, as finance|New standing rule from the operator|The (?:screenshot reviewer|reviewer failed)|Addendum to the|Correction from the operator|Process change to cut delays|You are now in an implement-review loop|You are the dedicated calculation|Preparation update only|PR #\d+ advanced|GO — deploy the exact prepared|Continue the accepted deployment instruction|Виконано: private repo|Виправив\. Причина — моя неповна міграція|Користувач (?:відкрив|каже)|Передача роботи (?:з локального|від оркестратора)|Увага: ми паралельно працюємо)/i.test(body);
+  return legacyRelay || !body || isPreamble(body) || /^(?:You are the board Maintainer|You are investigating the operator.s LIVE|Operator,|Раунд фіксів|Additional inputs from the orchestrator|Review job \d|While you were away the manager reported|\[Перевірений факт|Від локального оркестратора|From the Delegatus seat|Viewer spawn policy|Verification is complete\. All the pinned facts)/i.test(body) || /^(?:Agent finished:|\[Delegatus\]|Viewer restarted|A Viewer deployment|Your turn ended and the pipeline controller|This stage was cut|Continue the interrupted turn from the transcript|Orchestrator:|From the orchestrator:|Review round findings|Seat designation recovery|QA-RENDER|<codex_internal_context|<realtime_delegation|\[Image:|Operator rejects|Operator correction|Manager checked|Correction complet|OWNERSHIP_RELEASED|[A-Z]+ EXTERNAL ACCESS|Користувач (?:вимагає|явно|хоче|не може)|Уточнення від |Додаткові дані від оператора|[А-ЯІЄЇ][а-яієї]+ виправив|ТЕРМІНОВО|Нове завдання від|Прогрес dev clone|СТОП\. Користувач)/i.test(body) || /^(?:<subagent_notification|<task-notification|<local-command|<command-name|<system-reminder|\[Request interrupted|\[Tool Result|\[tool_result|Seat tick|Orchestrator seat tick)/i.test(body)
+    || /Pinned task:|Role prompt scaffold:|Relayed by the controller|<!-- llv:(?:seat|relay)|You are (?:a |an |the )?(?:fresh-context|Builder|Verifier|Architect|Deployer|Prod-auditor|orchestrator|reviewer)|send_message_to_orchestrator/i.test(body);
+}
+
+export function sampleOperatorPrompts(messages: Message[], limit = SAMPLE_LIMIT) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > SAMPLE_LIMIT) throw new Error("Invalid sample limit");
+  const seen = new Set<string>();
+  let copies = 0;
+  const eligible = messages.filter(m => {
+    if (m.machineOrigin || machineMessage(m.body)) return false;
+    const key = m.eventId ?? `${m.transcript_path}:${m.message_index}`;
+    if (seen.has(key)) { copies++; return false; }
+    seen.add(key); return true;
+  }).map(m => ({ ...m, body: cleanEnvelope(m.body) }));
+  // Every indexed occurrence is a population unit, including repeated short
+  // answers. No content deduplication can erase a separately written answer.
+  const strata = new Map<string, Message[]>();
+  for (const row of eligible) {
+    const key = row.engine + ":" + row.project;
+    if (!strata.has(key)) strata.set(key, []);
+    strata.get(key)!.push(row);
+  }
+  const keys = [...strata.keys()].sort();
+  for (const bucket of strata.values()) bucket.sort((a, b) =>
+    hash(SEED + a.transcript_path + ":" + a.message_index).localeCompare(hash(SEED + b.transcript_path + ":" + b.message_index)));
+  const rows: Message[] = [];
+  while (rows.length < limit && keys.some(k => strata.get(k)!.length)) {
+    for (const key of keys) if (rows.length < limit && strata.get(key)!.length) rows.push(strata.get(key)!.shift()!);
+  }
+  const projects = [...new Set(messages.map(m => m.project))].sort();
+  const population = projects.flatMap((project, i) => ["claude", "codex"].map(engine => ({
+    project: `project-${i + 1}`, engine,
+    indexed: messages.filter(m => m.project === project && m.engine === engine).length,
+    operator: eligible.filter(m => m.project === project && m.engine === engine).length,
+    sampled: rows.filter(m => m.project === project && m.engine === engine).length,
+  })).filter(r => r.indexed));
+  return { rows, population, eligible, projectIds: new Map(projects.map((p, i) => [p, `project-${i + 1}`])),
+    counts: { messages: messages.length, machine: messages.filter(m => m.machineOrigin || machineMessage(m.body)).length, copies, eligible: eligible.length,
+      requested: limit, sampled: rows.length, conversations: new Set(messages.map(m => m.transcript_path)).size } as Record<string, number> };
+}
+
+/** Close native-store match: normalized exact text or token Jaccard >= .8.
+ * Compare title+summary and body separately, ignoring tiny generic bodies. */
+const nativeTerms = new WeakMap<Candidate, [Set<string>, Set<string>]>();
+export function nativeMatch(a: Candidate, b: Candidate): boolean {
+  const terms = (s: string) => new Set((s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
+  const cached = (c: Candidate): [Set<string>, Set<string>] => {
+    let value = nativeTerms.get(c);
+    if (!value) { value = [terms(c.title + " " + c.summary), terms(c.body)]; nativeTerms.set(c, value); }
+    return value;
+  };
+  const aa = cached(a), bb = cached(b);
+  return aa.some((x, i) => {
+    const y = bb[i];
+    if (Math.min(x.size, y.size) < 5 || Math.min(x.size, y.size) / Math.max(x.size, y.size) < 0.8) return false;
+    const overlap = [...x].filter(t => y.has(t)).length;
+    return overlap / (x.size + y.size - overlap) >= 0.8;
+  });
+}
+
 /** Literal Phase 1 query is retained as a diagnostic. The experimental OR
- * query changes recall only; both ranking arms receive the same eight hits. */
+ * query changes recall only; both ranking arms receive the same hits (eight
+ * in the pilot, thirty in the all-turn rerun). */
 export function queryFor(text: string, mode: "strict" | "recall"): string | null {
   let terms: string[] = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
   if (mode === "recall") {
@@ -115,64 +189,120 @@ export function queryFor(text: string, mode: "strict" | "recall"): string | null
   return terms.length ? terms.map(term => `"${term}"`).join(mode === "strict" ? " AND " : " OR ") : null;
 }
 
-export function retrieve(db: Database, message: Message, mode: "strict" | "recall"): Candidate[] {
+const nativeStores = new WeakMap<Database, Map<string, Candidate[]>>();
+export function retrieve(db: Database, message: Message, mode: "strict" | "recall", expanded = false): Candidate[] {
   const query = queryFor(message.body, mode);
   if (!query) return [];
   const hits = db.query<Candidate & { sourcePath: string; sourceKind: string }, [string, string, string]>(`
-    SELECT e.id, e.title, e.summary, e.body, e.engine, e.kind, e.scope, e.writtenAt, e.sourcePath, e.sourceKind
+    SELECT e.id, e.title, e.summary, e.body, e.engine, e.kind, e.scope, e.writtenAt, e.sourcePath, e.sourceKind, -bm25(memory_fts, 0, 5, 2, 1) AS score
     FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
     WHERE memory_fts MATCH ? AND (e.project = ? OR e.scope = 'global')
       AND e.engine != ? AND e.kind != 'instruction'
-    ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT 80
+    ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id
   `).all(query, message.project, message.engine);
+  if (!nativeStores.has(db)) nativeStores.set(db, new Map());
+  const stores = nativeStores.get(db)!;
+  if (expanded && !stores.has(message.engine)) stores.set(message.engine,
+    db.query<Candidate, [string]>("SELECT * FROM memory_entries WHERE engine = ?").all(message.engine));
+  const native = expanded ? stores.get(message.engine)! : [];
   const seen = new Set<string>();
   return hits.filter(hit => {
+    if (native.some(own => nativeMatch(hit, own))) return false;
     const target = hit.sourceKind === "claude_index" ? hit.body.match(/\]\(([^)]+\.md)\)/)?.[1] :
       hit.sourceKind === "claude_memory" ? hit.sourcePath : null;
     const key = target ? `claude:${path.basename(target).toLowerCase()}` : hit.title.trim().toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key); return true;
-  }).slice(0, 8);
+  }).slice(0, expanded ? 30 : 8);
 }
 
-export function collect(transcripts: string, memories: string, limit = SAMPLE_LIMIT): Sample {
+/** Read-only join of Claude delivered UUIDs to admission-stamped origins.
+ * Does not instantiate the live ledger (which also exposes write methods). */
+function claudeOrigins(directory: string): Map<string, string> {
+  const origins = new Map<string, string>();
+  if (!fs.existsSync(directory)) return origins;
+  for (const name of fs.readdirSync(directory).filter(n => n.endsWith(".jsonl"))) {
+    const queued = new Map<string, string>();
+    for (const line of fs.readFileSync(path.join(directory, name), "utf8").split("\n").filter(Boolean)) {
+      const r = JSON.parse(line);
+      if (r.kind === "queued") queued.set(r.entry.id, r.entry.origin?.kind ?? (r.entry.selectedContext ? "operator" : "unknown"));
+      if (r.kind === "delivered" && r.engineMessageId && queued.has(r.entryId)) origins.set(r.engineMessageId, queued.get(r.entryId)!);
+    }
+  }
+  return origins;
+}
+
+export function collect(transcripts: string, memories: string, limit = SAMPLE_LIMIT, withCandidates = true): Sample {
   const t = new Database(transcripts, { readonly: true });
   const m = new Database(memories, { readonly: true });
   try {
     // Transactions hold stable SQLite snapshots, including the live WAL.
     t.exec("BEGIN"); m.exec("BEGIN");
     const messages = t.query<Message, []>(`SELECT m.transcript_path, m.message_index, m.body,
-      m.timestamp, f.engine, f.project FROM transcript_messages m
+      m.byte_offset, m.timestamp, f.engine, f.project FROM transcript_messages m
       JOIN transcript_files f ON f.path=m.transcript_path
       WHERE m.speaker='user' AND f.engine IN ('claude','codex')
       ORDER BY m.transcript_path, m.message_index`).all();
-    const sampled = samplePrompts(messages, limit);
+    const origins = claudeOrigins(path.join(path.dirname(transcripts), "claude-delivery-ledger"));
+    // The index has role but no authorship. Read only the indexed source line
+    // to distinguish native system/SDK relay metadata from operator turns.
+    for (const message of messages) {
+      if (message.byte_offset == null) continue;
+      let fd: number | undefined;
+      try {
+        fd = fs.openSync(message.transcript_path, "r");
+        const chunks: Buffer[] = [];
+        let offset = message.byte_offset;
+        for (;;) {
+          const chunk = Buffer.alloc(65536);
+          const n = fs.readSync(fd, chunk, 0, chunk.length, offset);
+          if (!n) break;
+          const end = chunk.subarray(0, n).indexOf(10);
+          chunks.push(chunk.subarray(0, end < 0 ? n : end));
+          if (end >= 0) break;
+          offset += n;
+        }
+        const record = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const origin = message.engine === "codex" ? decodeCodexStructuredUserText(message.body.replace(/<image\b[^>]*>[\s\S]*?<\/image>/g, "").trimStart()).origin?.kind
+          : origins.get(record.uuid);
+        message.machineOrigin = record.isMeta === true || record.promptSource === "system" || origin === "agent";
+        message.eventId = record.uuid ?? hash(message.engine + ":" + message.timestamp + ":" + message.body);
+      } catch { throw new Error("Indexed transcript provenance unavailable; collection refused"); }
+      finally { if (fd !== undefined) fs.closeSync(fd); }
+    }
+    const sampled = sampleOperatorPrompts(messages, limit);
     sampled.counts.memoryEntries = (m.query("SELECT count(*) AS n FROM memory_entries").get() as { n: number }).n;
     const cases = sampled.rows.map((message, index) => {
+      const context = t.query<{ role: string; text: string }, [string, number]>(
+        "SELECT speaker AS role, body AS text FROM transcript_messages WHERE transcript_path=? AND message_index<? ORDER BY message_index"
+      ).all(message.transcript_path, message.message_index).filter(turn => !isPreamble(turn.text));
+      // Latest request first, then prior turns newest-first for term extraction.
+      const queryMessage = { ...message, body: message.body + "\n" + context.slice().reverse().map(turn => turn.text).join("\n") };
       const started = performance.now();
-      const hits = retrieve(m, message, "recall");
+      const hits = withCandidates ? retrieve(m, queryMessage, "recall", true) : [];
       const retrievalMs = performance.now() - started;
-      return { id: `p${String(index + 1).padStart(2, "0")}`, prompt: message.body, engine: message.engine,
-        retrievalMs, strictCount: retrieve(m, message, "strict").length,
+      return { id: `p${String(index + 1).padStart(2, "0")}`, prompt: message.body, engine: message.engine, context, project: sampled.projectIds.get(message.project),
+        retrievalMs, strictCount: withCandidates ? retrieve(m, queryMessage, "strict", true).length : 0,
         candidates: hits.map((hit, i) => ({ ...hit, id: `c${i + 1}` })),
         // Private provenance is never included in the public results.
         source: { transcript: message.transcript_path, messageIndex: message.message_index, timestamp: message.timestamp,
           memoryIds: hits.map(hit => hit.id), project: message.project },
       };
     });
-    return { version: 1, seed: SEED, collectedAt: new Date().toISOString(), counts: sampled.counts, cases };
+    return { version: 2, seed: SEED, collectedAt: new Date().toISOString(), counts: sampled.counts, population: sampled.population, cases,
+      audit: sampled.eligible.map(m => ({ text: m.body, engine: m.engine, path: m.transcript_path, index: m.message_index })) };
   } finally { t.close(); m.close(); }
 }
 
 export function validateLabels(sample: Sample, labels: Labels): void {
-  if (sample.version !== 1 || sample.cases.length > SAMPLE_LIMIT || new Set(sample.cases.map(c => c.id)).size !== sample.cases.length) throw new Error("Invalid replay sample");
+  if (![1, 2].includes(sample.version) || sample.cases.length > SAMPLE_LIMIT || new Set(sample.cases.map(c => c.id)).size !== sample.cases.length) throw new Error("Invalid replay sample");
   if (!labels.rule?.trim() || labels.cases.length !== sample.cases.length || !sample.cases.length) throw new Error("Incomplete labels");
   if (new Set(labels.cases.map(c => c.id)).size !== labels.cases.length) throw new Error("Duplicate labels");
   for (const c of sample.cases) {
     if (!/^p\d+$/.test(c.id) || !c.prompt?.trim() || !["claude", "codex"].includes(c.engine) ||
-        !Number.isFinite(c.retrievalMs) || c.retrievalMs < 0 || !Number.isInteger(c.strictCount) || c.strictCount < 0 || c.strictCount > 8 ||
-        c.candidates.length > 8 || new Set(c.candidates.map(m => m.id)).size !== c.candidates.length ||
-        c.candidates.some(m => !/^c[1-8]$/.test(m.id) || typeof m.title !== "string" || typeof m.summary !== "string")) throw new Error("Invalid replay sample");
+        !Number.isFinite(c.retrievalMs) || c.retrievalMs < 0 || !Number.isInteger(c.strictCount) || c.strictCount < 0 || c.strictCount > (sample.version === 2 ? 30 : 8) ||
+        c.candidates.length > (sample.version === 2 ? 30 : 8) || new Set(c.candidates.map(m => m.id)).size !== c.candidates.length ||
+        c.candidates.some(m => !/^c(?:[1-9]|[12][0-9]|30)$/.test(m.id) || typeof m.title !== "string" || typeof m.summary !== "string")) throw new Error("Invalid replay sample");
     const label = labels.cases.find(l => l.id === c.id);
     if (!label || label.candidates.length !== c.candidates.length || new Set(label.candidates.map(l => l.id)).size !== label.candidates.length) throw new Error("Candidate labels differ");
     for (const candidate of c.candidates) {
@@ -234,13 +364,29 @@ export function confidenceIntervals(cases: Case[], labels: Labels, fts: string[]
     pairedJevMinusFts: { estimate: values.reduce((sum, [a, j]) => sum + j - a, 0) / values.length, interval: interval(draws[2]) } };
 }
 
+/** Credential-shaped pasted lines never leave in the evaluation request. */
+export function replayText(text: string): string {
+  return redactForClassifier(text)
+    .replace(/^.*(?:password|passwd|парол|api[_ -]?key|authorization|bearer|credential).*$/gim, "[credential line withheld]")
+    .replace(/\b(?=[A-Za-z0-9!@#$%^&*_-]{8,}\b)(?=[A-Za-z0-9!@#$%^&*_-]*[A-Z])(?=[A-Za-z0-9!@#$%^&*_-]*[a-z])(?=[A-Za-z0-9!@#$%^&*_-]*[0-9])[A-Za-z0-9!@#$%^&*_-]+/g, "[opaque value withheld]");
+}
+
+/** Keep the complete prefix privately; the decider gets a bounded trailing
+ * view because Jev has a 32K-token input window. Truncation is explicit. */
+export function contextView(c: Case): string {
+  const text = (c.context ?? []).map(t => `${t.role}: ${cleanEnvelope(t.text)}`).join("\n\n");
+  const safe = replayText(text);
+  return safe.length > 16_000 ? "[earlier context omitted]\n" + safe.slice(-16_000) : safe;
+}
+
 export function requestBody(c: Case) {
   return {
     model: JEV_MODEL,
-    state: { prompt: classifierText(c.prompt), memories: c.candidates.map(m => ({ id: m.id,
-      title: redactForClassifier(m.title).slice(0, 160), summary: redactForClassifier(m.summary).slice(0, 400) })) },
+    state: { prompt: c.context ? replayText(c.prompt).slice(0, 8000) : classifierText(c.prompt),
+      ...(c.context ? { context: contextView(c) } : {}), memories: c.candidates.map(m => ({ id: m.id,
+      title: replayText(m.title).slice(0, 160), summary: replayText(m.summary).slice(0, 400) })) },
     questions: Object.fromEntries(c.candidates.map(m => [m.id, { type: "noul", instructions:
-      `Memory ${m.id} contains a specific fact, rule or reference that should change how the agent carries out the prompt. It adds useful information beyond the prompt itself. A shared word or a general topic match alone is insufficient.` }])),
+      `Memory ${m.id} contains a specific fact, rule or reference that should change how the agent carries out the prompt. It adds useful information beyond the prompt and preceding conversation context. A shared word or a general topic match alone is insufficient.` }])),
   };
 }
 
@@ -255,7 +401,7 @@ export interface Receipt {
   id: string; reservedUsd: number; status: "reserved" | "complete";
   costUsd?: number; latencyMs?: number; scores?: Record<string, number>; inputTokens?: number;
 }
-interface Ledger { version: 1; sampleHash: string; labelsHash: string; receipts: Receipt[] }
+interface Ledger { version: 1; sampleHash: string; labelsHash: string; requestHash: string; receipts: Receipt[] }
 
 export function charged(receipts: Receipt[]): number {
   return receipts.reduce((sum, r) => {
@@ -302,14 +448,15 @@ export async function paidReplay(sample: Sample, labels: Labels, ledgerPath: str
   try {
     const sampleHash = hash(JSON.stringify(sample));
     const labelsHash = hash(JSON.stringify(labels));
+    const requestHash = hash(JSON.stringify(sample.cases.map(requestBody)));
     let ledger: Ledger;
     if (fs.existsSync(ledgerPath)) {
       ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
-      if (ledger.version !== 1 || ledger.sampleHash !== sampleHash || ledger.labelsHash !== labelsHash) throw new Error("Frozen replay inputs changed");
+      if (ledger.version !== 1 || ledger.sampleHash !== sampleHash || ledger.labelsHash !== labelsHash || ledger.requestHash !== requestHash) throw new Error("Frozen replay inputs changed");
     } else {
       const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
       if (probe.status !== "complete" || typeof probe.costUsd !== "number") throw new Error("Successful reachability probe with usage cost required");
-      ledger = { version: 1, sampleHash, labelsHash, receipts: [{ id: "probe", status: "complete", reservedUsd: 0.01,
+      ledger = { version: 1, sampleHash, labelsHash, requestHash, receipts: [{ id: "probe", status: "complete", reservedUsd: 0.01,
         costUsd: probe.costUsd, latencyMs: probe.latencyMs, inputTokens: probe.inputTokens }] };
       durable(ledgerPath, ledger);
     }
@@ -328,7 +475,7 @@ export async function paidReplay(sample: Sample, labels: Labels, ledgerPath: str
       durable(ledgerPath, ledger);
       const started = performance.now();
       // No retry. Do not print an error body: it can echo private request text.
-      const response = await request(JEV_ENDPOINT, { method: "POST", signal: AbortSignal.timeout(1500),
+      const response = await request(JEV_ENDPOINT, { method: "POST", signal: AbortSignal.timeout(30_000),
         headers: { Authorization: `Bearer ${auth}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!response.ok) throw new Error(`Jev HTTP ${response.status}; reservation retained`);
       const result = parseAnswer(await response.json(), c.candidates.map(m => m.id));
@@ -340,7 +487,114 @@ export async function paidReplay(sample: Sample, labels: Labels, ledgerPath: str
   } finally { fs.rmdirSync(lock); }
 }
 
+export const FTS_THRESHOLDS = [0, 2, 5, 10, 15, 20, 30];
+export const JEV_THRESHOLDS = [0, 0.5, 0.7, 0.8, 0.9, 0.95, 0.99];
+export const PRECISION_TARGET = 0.9;
+
+/** This exact representation is what is budgeted, measured and offered. */
+export function entryText(c: Candidate): string { return `${c.title}\n${c.summary}\n`; }
+export function budgetSelect(candidates: Candidate[], scores: Record<string, number>, threshold: number): string[] {
+  let characters = 0;
+  const selected: string[] = [];
+  for (const c of candidates.map((c, i) => ({ c, i })).filter(({ c }) => Number.isFinite(scores[c.id]) && scores[c.id] >= threshold)
+    .sort((a, b) => scores[b.c.id] - scores[a.c.id] || a.i - b.i).map(({ c }) => c)) {
+    const size = entryText(c).length;
+    if (characters + size > 10_000) continue;
+    selected.push(c.id); characters += size;
+    if (selected.length === 15) break;
+  }
+  return selected;
+}
+
+export function offerRows(sample: Sample, labels: Labels, selected: string[][]) {
+  return sample.cases.map((c, i) => {
+    const good = new Set(labels.cases.find(l => l.id === c.id)!.candidates.filter(l => l.helpful).map(l => l.id));
+    const text = c.candidates.filter(m => selected[i].includes(m.id)).map(entryText).join("");
+    return { offered: selected[i].length, helpful: selected[i].filter(id => good.has(id)).length,
+      available: good.size, characters: text.length,
+      // Codex uses ceil(UTF-8 bytes / 4) for the hook spill threshold.
+      approximateTokens: Math.ceil(Buffer.byteLength(text) / 4), caseId: c.id };
+  });
+}
+type OfferRow = ReturnType<typeof offerRows>[number];
+function aggregate(rows: OfferRow[]) {
+  const total = (key: "offered" | "helpful" | "available" | "characters") => rows.reduce((s, r) => s + r[key], 0);
+  const offered = total("offered"), helpful = total("helpful"), available = total("available");
+  return { precision: offered ? helpful / offered : null, recall: available ? helpful / available : null,
+    meanEntries: offered / rows.length, meanCharacters: total("characters") / rows.length };
+}
+
+/** Resample conversation clusters, retaining dependence between turns. */
+export function offerIntervals(rows: OfferRow[], clusters: string[], paired?: OfferRow[]) {
+  const groups = [...new Set(clusters)].map(key => clusters.flatMap((c, i) => c === key ? [i] : []));
+  let state = 2475;
+  const random = () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) / 4294967296; };
+  const draws: Record<string, number[]> = { precision: [], recall: [], meanEntries: [], meanCharacters: [] };
+  for (let b = 0; b < 2000; b++) {
+    const ids = groups.flatMap(() => groups[Math.floor(random() * groups.length)]);
+    const a = aggregate(ids.map(i => rows[i])), p = paired ? aggregate(ids.map(i => paired[i])) : null;
+    for (const key of Object.keys(draws) as Array<keyof typeof a>) {
+      if (a[key] !== null && (!p || p[key] !== null)) draws[key].push(a[key]! - (p ? p[key]! : 0));
+    }
+  }
+  return Object.fromEntries(Object.entries(draws).map(([key, d]) => [key, {
+    interval: [quantile(d, 0.025), quantile(d, 0.975)], validDraws: d.length,
+  }]));
+}
+
+export async function runExpanded(sample: Sample, labels: Labels, ledgerPath?: string, probePath?: string) {
+  validateLabels(sample, labels);
+  const ledger = ledgerPath && probePath ? await paidReplay(sample, labels, ledgerPath, probePath) : null;
+  return summarizeExpanded(sample, labels, ledger);
+}
+
+export function summarizeExpanded(sample: Sample, labels: Labels, ledger: Ledger | null) {
+  validateLabels(sample, labels);
+  if (ledger && (ledger.sampleHash !== hash(JSON.stringify(sample)) || ledger.labelsHash !== hash(JSON.stringify(labels))
+    || ledger.requestHash !== hash(JSON.stringify(sample.cases.map(requestBody))) || ledger.receipts.some(r => r.status !== "complete")
+    || sample.cases.some(c => c.candidates.length && !ledger.receipts.some(r => r.id === c.id && r.scores)))) {
+    throw new Error("Frozen replay inputs or completed receipts differ");
+  }
+  const clusters = sample.cases.map(c => (c as Case & { source?: { transcript: string } }).source?.transcript ?? c.id);
+  const arms = [
+    ...FTS_THRESHOLDS.map(threshold => ({ arm: "fts", threshold })),
+    ...(ledger ? JEV_THRESHOLDS.map(threshold => ({ arm: "jev", threshold })) : []),
+    { arm: "none", threshold: 0 },
+  ].map(({ arm, threshold }) => {
+    const selected = sample.cases.map(c => budgetSelect(c.candidates,
+      arm === "fts" ? Object.fromEntries(c.candidates.map(m => [m.id, m.score!])) :
+        arm === "jev" ? ledger!.receipts.find(r => r.id === c.id)?.scores ?? {} : {}, threshold));
+    const rows = offerRows(sample, labels, selected);
+    const times = sample.cases.map(c => arm === "none" ? 0 : c.retrievalMs + (arm === "jev" ? ledger!.receipts.find(r => r.id === c.id)?.latencyMs ?? 0 : 0));
+    return { arm, threshold, ...aggregate(rows), intervals: offerIntervals(rows, clusters),
+      tokenOverflow: rows.filter(r => r.approximateTokens > 2500).length,
+      codexTokenOverflow: rows.filter((r, i) => sample.cases[i].engine === "codex" && r.approximateTokens > 2500).length,
+      latencyMs: { median: quantile(times, 0.5), p99: quantile(times, 0.99) }, selected, rows };
+  });
+  const operating = ["fts", "jev"].map(arm => arms.filter(a => a.arm === arm && (a.precision ?? 0) >= PRECISION_TARGET && (a.intervals.precision.interval[0] ?? 0) >= 0.8 && a.rows.reduce((n, r) => n + r.offered, 0) >= 20)
+    .sort((a, b) => (b.recall ?? 0) - (a.recall ?? 0) || a.threshold - b.threshold)[0] ?? null);
+  const fts = operating[0] ?? arms.find(a => a.arm === "fts" && a.threshold === 10);
+  const jev = operating[1] ?? arms.find(a => a.arm === "jev" && a.threshold === 0.9);
+  const bestNonempty = ["fts", "jev"].map(arm => arms.filter(a => a.arm === arm && a.precision !== null)
+    .sort((a, b) => b.precision! - a.precision! || (b.recall ?? 0) - (a.recall ?? 0))[0]);
+  const [bestFts, bestJev] = bestNonempty;
+  return { version: 2, collectedAt: sample.collectedAt, counts: sample.counts, population: sample.population,
+    protocol: { seed: SEED, maxEntries: 15, maxCharacters: 10_000, candidates: 30, precisionTarget: PRECISION_TARGET, precisionLowerBound: 0.8, minimumOffers: 20,
+      model: JEV_MODEL, capUsd: CAP_USD, confidence: 0.95, bootstrapDraws: 2000, clusters: new Set(clusters).size },
+    arms, operating: operating.map(a => a ? { arm: a.arm, threshold: a.threshold } : null),
+    paired: fts && jev ? { ftsThreshold: fts.threshold, jevThreshold: jev.threshold, estimate: jev.precision === null || fts.precision === null ? null : jev.precision - fts.precision, intervals: offerIntervals(jev.rows, clusters, fts.rows) } : null,
+    exploratoryPaired: bestFts && bestJev ? { ftsThreshold: bestFts.threshold, jevThreshold: bestJev.threshold,
+      estimate: bestJev.precision! - bestFts.precision!, intervals: offerIntervals(bestJev.rows, clusters, bestFts.rows) } : null,
+    spendUsd: ledger ? charged(ledger.receipts) : 0, calls: ledger?.receipts ?? [],
+    cases: sample.cases.map((c, i) => ({ id: c.id, engine: c.engine, project: c.project,
+      conversation: `conversation-${[...new Set(clusters)].indexOf(clusters[i]) + 1}`,
+      contextTurns: c.context?.length ?? 0, contextTruncated: contextView(c).startsWith("[earlier context omitted]"), promptTruncated: c.prompt.length > 8000, retrievalMs: c.retrievalMs,
+      candidates: c.candidates.map(m => ({ id: m.id, score: m.score, characters: entryText(m).length, bytes: Buffer.byteLength(entryText(m)) })) })),
+  };
+}
+
 export async function run(sample: Sample, labels: Labels, ledgerPath?: string, probePath?: string) {
+  if (sample.version === 2) return runExpanded(sample, labels, ledgerPath, probePath);
   validateLabels(sample, labels);
   const fts = sample.cases.map(c => c.candidates.slice(0, 3).map(m => m.id));
   const empty = sample.cases.map(() => [] as string[]);
@@ -379,18 +633,26 @@ async function main() {
     const record = { status: "complete", costUsd: result.costUsd, inputTokens: result.inputTokens, latencyMs: performance.now() - started };
     durable(args[0], record);
     console.log(JSON.stringify(record));
-  } else if (command === "collect" && args.length === 3) {
-    const sample = collect(args[0], args[1]);
+  } else if ((command === "collect" || command === "population") && args.length === 3) {
+    const sample = collect(args[0], args[1], SAMPLE_LIMIT, command === "collect");
     fs.writeFileSync(args[2], JSON.stringify(sample, null, 2) + "\n", { flag: "wx", mode: 0o600 });
     console.log(JSON.stringify(sample.counts));
+  } else if (command === "report" && args.length === 4) {
+    const [samplePath, labelsPath, outputPath, ledgerPath] = args;
+    const sample = JSON.parse(fs.readFileSync(samplePath, "utf8")) as Sample;
+    const labels = JSON.parse(fs.readFileSync(labelsPath, "utf8")) as Labels;
+    const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as Ledger;
+    const result = summarizeExpanded(sample, labels, ledger);
+    fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    console.log(JSON.stringify({ prompts: sample.cases.length, spendUsd: result.spendUsd, offline: true }));
   } else if ((command === "local" && args.length === 3) || (command === "jev" && args.length === 5)) {
     const [samplePath, labelsPath, outputPath, ledgerPath, probePath] = args;
     const sample = JSON.parse(fs.readFileSync(samplePath, "utf8")) as Sample;
     const labels = JSON.parse(fs.readFileSync(labelsPath, "utf8")) as Labels;
     const result = await run(sample, labels, ledgerPath, probePath);
     fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-    console.log(JSON.stringify({ prompts: sample.cases.length, spendUsd: result.spendUsd, jev: result.jev !== null }));
-  } else throw new Error("Usage: probe PROBE | collect TRANSCRIPT_DB MEMORY_DB PRIVATE_SAMPLE | local SAMPLE LABELS OUTPUT | jev SAMPLE LABELS OUTPUT LEDGER PROBE");
+    console.log(JSON.stringify({ prompts: sample.cases.length, spendUsd: result.spendUsd, jev: Boolean(ledgerPath) }));
+  } else throw new Error("Usage: report SAMPLE LABELS OUTPUT LEDGER | probe PROBE | collect TRANSCRIPT_DB MEMORY_DB PRIVATE_SAMPLE | local SAMPLE LABELS OUTPUT | jev SAMPLE LABELS OUTPUT LEDGER PROBE");
 }
 
 if (import.meta.main) main().catch(error => {

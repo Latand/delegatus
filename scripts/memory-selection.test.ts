@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { CAP_USD, charged, collect, metrics, paidReplay, parseAnswer, queryFor, requestBody,
-  confidenceIntervals, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
+  confidenceIntervals, sampleOperatorPrompts, machineMessage, nativeMatch, budgetSelect, entryText, offerRows, offerIntervals, contextView, replayText, summarizeExpanded, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
 
 const roots: string[] = [];
 const priorKey = process.env.OPENROUTER_API_KEY;
@@ -23,7 +23,7 @@ test("sampling skips launch metadata, never promotes a later turn and folds copi
   const result = samplePrompts([
     message("# AGENTS.md instructions", 0), message(c.prompt, 1), message("Later content", 2),
     message("You are a Builder. Implement a long machine generated assignment.", 0, "two"), message(c.prompt, 1, "two"),
-    message("<!-- llv:structured-user -->" + c.prompt, 0, "copy"),
+    message("<!-- llv:structured-user -->\n" + c.prompt, 0, "copy"),
     message("Short", 0, "short"), message(c.prompt, 1, "short"),
     message("<recommended_plugins>runtime metadata", 0, "three"), message(c.prompt + " Again.", 1, "three"),
   ], 32);
@@ -106,9 +106,9 @@ test("collect opens indexes read-only and leaves bytes unchanged", () => {
   const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite");
   memoryDb(mp).close();
   const db = new Database(tp);
-  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT)");
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
   db.query("INSERT INTO transcript_files VALUES (?,?,?)").run("one", "codex", "project-a");
-  db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?)").run("one", 0, c.prompt, 1, "user"); db.close();
+  db.query("INSERT INTO transcript_messages(transcript_path,message_index,body,timestamp,speaker) VALUES (?,?,?,?,?)").run("one", 0, c.prompt, 1, "user"); db.close();
   const before = [fs.readFileSync(mp), fs.readFileSync(tp)];
   const collected = collect(tp, mp);
   expect(collected.cases).toHaveLength(1);
@@ -237,4 +237,134 @@ test.each(["", ".pilot"])("public %s label/receipt artifacts reproduce every sel
   expect(results.spendUsd).toBeLessThan(CAP_USD);
   if (!suffix) expect(results.confidenceIntervals).toEqual(confidenceIntervals(cases, publishedLabels,
     results.cases.map((row: { fts: string[] }) => row.fts), results.cases.map((row: { jev: string[] }) => row.jev)));
+});
+
+
+test("all-turn population preserves short replies and excludes only known machine origins", () => {
+  const rows = [message("# AGENTS.md instructions"), message("Так", 1), message("yes", 2),
+    message("Seat tick: do scheduled work", 3), message("Agent finished: job", 4),
+    { ...message("ordinary looking relay", 5), machineOrigin: true },
+    { ...message("yes", 6), eventId: "event-a" }, { ...message("yes", 6, "copy"), eventId: "event-a" }];
+  const result = sampleOperatorPrompts(rows);
+  expect(result.counts).toMatchObject({ eligible: 3, machine: 4, copies: 1, sampled: 3 });
+  expect(result.rows.map(r => r.message_index).sort()).toEqual([1, 2, 6]);
+  expect(machineMessage("You are the board Maintainer for one project")).toBeTrue();
+  expect(machineMessage("Operator, 30.09, verbatim: task")).toBeTrue();
+  expect(machineMessage("Раунд фіксів 3 по PR: fix the findings")).toBeTrue();
+  expect(machineMessage("Use the screenshot to fix this")).toBeFalse();
+});
+
+test("native near-duplicates are rejected without rejecting tiny shared words", () => {
+  const original = { ...candidate("a"), title: "Attach socket handlers", summary: "before first writing bytes to a network connection", body: "one two three four five six seven eight nine ten" };
+  expect(nativeMatch(original, { ...original, id: "b", body: original.body + " extra" })).toBeTrue();
+  expect(nativeMatch(candidate("a"), { ...candidate("b"), title: "unrelated", summary: "no overlap", body: "private" })).toBeFalse();
+});
+
+test("confidence selection stops at 15 entries and 10000 characters including separators", () => {
+  const candidates = Array.from({ length: 30 }, (_, i) => ({ ...candidate(`c${i + 1}`), summary: "x".repeat(700) }));
+  const scores = Object.fromEntries(candidates.map((c, i) => [c.id, 1 - i / 100]));
+  const selected = budgetSelect(candidates, scores, 0.8);
+  expect(selected.length).toBeLessThanOrEqual(15);
+  expect(candidates.filter(c => selected.includes(c.id)).reduce((s, c) => s + entryText(c).length, 0)).toBeLessThanOrEqual(10000);
+  expect(selected).not.toContain("c22");
+  expect(budgetSelect(candidates, scores, 1.1)).toEqual([]);
+  const small = candidates.map(c => ({ ...c, summary: "short" }));
+  expect(budgetSelect(small, scores, 0)).toHaveLength(15);
+});
+
+test("offer precision, recall and size intervals preserve paired identity and Unicode byte cost", () => {
+  const expanded = { ...sample, cases: [{ ...c, candidates: [{ ...candidate("c4"), summary: "ї".repeat(6000) }] }] };
+  const rows = offerRows(expanded, labels, [["c4"]]);
+  expect(rows[0].approximateTokens).toBeGreaterThan(2500);
+  expect(rows[0].characters).toBeLessThan(10000);
+  const same = offerIntervals(rows, ["conversation-a"], rows);
+  expect(same.precision.interval).toEqual([0, 0]);
+  expect(same.meanCharacters.interval).toEqual([0, 0]);
+  const empty = offerIntervals(offerRows(expanded, labels, [[]]), ["a"]);
+  expect(empty.precision.interval).toEqual([null, null]);
+  expect(empty.recall.interval).toEqual([0, 0]);
+});
+
+test("context view preserves role order and explicitly marks truncation; credentials are withheld", () => {
+  const contextual = { ...c, context: [{ role: "user", text: "earlier work ".repeat(1700) }, { role: "assistant", text: "Latest decision" }] };
+  expect(contextView(contextual)).toStartWith("[earlier context omitted]");
+  expect(contextView(contextual)).toEndWith("assistant: Latest decision");
+  const value = ["Fixture", "Only", "12345"].join("");
+  expect(replayText("password: " + value)).not.toContain(value);
+  expect(replayText(value)).not.toContain(value);
+  expect(requestBody(contextual).state.context).toBe(contextView(contextual));
+});
+
+
+test("expanded collection keeps the prefix before later operator turns and never looks ahead", () => {
+  const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite");
+  memoryDb(mp).close();
+  const db = new Database(tp);
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
+  db.query("INSERT INTO transcript_files VALUES (?,?,?)").run("one", "codex", "project-a");
+  const add = db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,NULL)");
+  add.run("one", 0, "Pinned task: a generated pipeline assignment", 1, "user");
+  add.run("one", 1, "The socket problem remains", 2, "assistant");
+  add.run("one", 2, "Continue", 3, "user");
+  add.run("one", 3, "Future answer must not affect labels", 4, "assistant");
+  db.close();
+  const result = collect(tp, mp);
+  expect(result.cases).toHaveLength(1);
+  expect(result.cases[0].prompt).toBe("Continue");
+  expect(result.cases[0].context!.map(t => t.text)).toEqual(["Pinned task: a generated pipeline assignment", "The socket problem remains"]);
+  expect(result.cases[0].candidates.length).toBeGreaterThan(0);
+});
+
+test("expanded FTS returns top thirty after native duplicate filtering", () => {
+  const db = memoryDb(":memory:");
+  try {
+    for (let i = 0; i < 40; i++) {
+      const id = `extra-${i}`, body = `socket connection error handler lifecycle rule number ${i}`;
+      db.query("INSERT INTO memory_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)").run(id, id, body, body, "claude", "failure", "global", "2026-01-01", "", `${id}.md`, "claude_memory");
+      db.query("INSERT INTO memory_fts VALUES (?,?,?,?)").run(id, id, body, body);
+    }
+    const first = retrieve(db, message("socket"), "recall", true);
+    expect(first).toHaveLength(30);
+    expect(first.every(m => Number.isFinite(m.score))).toBeTrue();
+    expect(first.map(m => m.score)).toEqual(first.map(m => m.score).sort((a, b) => b! - a!));
+  } finally { db.close(); }
+});
+
+
+test("all-turn public evidence independently reproduces every confidence arm and interval", () => {
+  const results = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.all-turns.results.json", import.meta.url), "utf8")) as ReturnType<typeof summarizeExpanded>;
+  const publishedLabels = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.all-turns.labels.json", import.meta.url), "utf8")) as Labels;
+  expect(results.counts.sampled).toBe(100);
+  expect(results.population!.reduce((n, p) => n + p.operator, 0)).toBe(results.counts.eligible);
+  expect(results.counts.messages).toBe(results.counts.machine + results.counts.copies + results.counts.eligible);
+  for (const arm of results.arms) {
+    const rows = results.cases.map((c, i) => {
+      const scores: Record<string, number> = arm.arm === "fts" ? Object.fromEntries(c.candidates.map(m => [m.id, m.score!])) :
+        arm.arm === "jev" ? results.calls.find(r => r.id === c.id)?.scores ?? {} : {};
+      const ranked = c.candidates.filter(m => scores[m.id] >= arm.threshold).sort((a, b) => scores[b.id] - scores[a.id]);
+      const selected: string[] = []; let characters = 0, bytes = 0;
+      for (const m of ranked) if (selected.length < 15 && characters + m.characters <= 10000) {
+        selected.push(m.id); characters += m.characters; bytes += m.bytes;
+      }
+      expect(arm.selected[i]).toEqual(selected);
+      const good = publishedLabels.cases.find(l => l.id === c.id)!.candidates.filter(l => l.helpful).map(l => l.id);
+      return { caseId: c.id, offered: selected.length, helpful: selected.filter(id => good.includes(id)).length,
+        available: good.length, characters, approximateTokens: Math.ceil(bytes / 4) };
+    });
+    expect(arm.rows).toEqual(rows);
+    expect(arm.intervals).toEqual(offerIntervals(rows, results.cases.map(c => c.conversation)));
+    const total = (key: "offered" | "helpful" | "available" | "characters") => rows.reduce((n, r) => n + r[key], 0);
+    expect(arm.precision).toBe(total("offered") ? total("helpful") / total("offered") : null);
+    expect(arm.recall).toBe(total("helpful") / total("available"));
+    expect(arm.meanEntries).toBe(total("offered") / 100);
+    expect(arm.meanCharacters).toBe(total("characters") / 100);
+    expect(arm.tokenOverflow).toBe(rows.filter(r => r.approximateTokens > 2500).length);
+  }
+  expect(results.spendUsd).toBe(charged(results.calls));
+  expect(results.spendUsd).toBeLessThan(2);
+  expect(results.calls.every(r => r.status === "complete")).toBeTrue();
+  expect(results.operating).toEqual([null, null]);
+  const fts = results.arms.find(a => a.arm === "fts" && a.threshold === results.exploratoryPaired!.ftsThreshold)!;
+  const jev = results.arms.find(a => a.arm === "jev" && a.threshold === results.exploratoryPaired!.jevThreshold)!;
+  expect(results.exploratoryPaired!.intervals).toEqual(offerIntervals(jev.rows, results.cases.map(c => c.conversation), fts.rows));
 });
