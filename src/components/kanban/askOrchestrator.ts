@@ -35,9 +35,17 @@ export function holdCardInPlace(card: HTMLElement, change: () => void, schedule:
  * The card button's whole effect: attach the task to its project's orchestrator
  * composer as a chip and make sure that composer is on screen (the seat expands;
  * the shell opens the dock when the board shows one), without the board moving
- * away from the card. Pressed again, it takes the chip back off.
+ * away from the card. Pressed again, it takes the chip back off. `onAttached`
+ * runs once the chip is on: the board says so at the card, because holding the
+ * card in place leaves a folded seat's composer above the viewport.
  */
-export function askOrchestratorAboutTask(card: HTMLElement | null, project: string, chip: TaskChip, attached = false): void {
+export function askOrchestratorAboutTask(
+  card: HTMLElement | null,
+  project: string,
+  chip: TaskChip,
+  attached = false,
+  onAttached?: (chip: TaskChip) => void,
+): void {
   /* A task already attached is taken back off: the button is a toggle, so the
      operator can undo it on the card they pressed, wherever the composer is. */
   if (attached) {
@@ -46,7 +54,7 @@ export function askOrchestratorAboutTask(card: HTMLElement | null, project: stri
   }
   const attach = () => {
     expandKanbanSeat(project);
-    addTaskChip(project, chip);
+    if (addTaskChip(project, chip)) onAttached?.(chip);
   };
   if (card) holdCardInPlace(card, attach);
   else attach();

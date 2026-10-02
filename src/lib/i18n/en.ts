@@ -1642,6 +1642,7 @@ export const en = {
   "taskChip.open": "Open «{title}» on the board",
   "taskChip.remove": "Remove «{title}» from the message",
   "taskChip.added": "«{title}» is attached to the orchestrator's message",
+  "taskChip.show": "Show",
   "taskChip.full": "8 tasks are already attached; send the message or take one off first",
   /* #1166 the delivered orchestrator mandate. The seat sends it; the operator
      never typed it, so the row names what it is instead of quoting 8 KB back

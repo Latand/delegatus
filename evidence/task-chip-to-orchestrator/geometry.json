@@ -7,6 +7,13 @@
     "pressed": "true",
     "topBefore": 207,
     "topAfter": 207,
+    "receipt": {
+      "text": "«Worker waiting for a seat» is attached to the orchestrator's message",
+      "action": "Show",
+      "inView": true,
+      "seatInView": false
+    },
+    "composerInView": true,
     "chip": {
       "text": "About the task:Worker waiting for a seat",
       "width": 654,
@@ -33,6 +40,13 @@
     "pressed": "true",
     "topBefore": 207,
     "topAfter": 207,
+    "receipt": {
+      "text": "«Worker waiting for a seat» прикріплено до повідомлення оркестратору",
+      "action": "Показати",
+      "inView": true,
+      "seatInView": false
+    },
+    "composerInView": true,
     "chip": {
       "text": "Про задачу:Worker waiting for a seat",
       "width": 654,

@@ -1590,6 +1590,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "taskChip.open": "Відкрити «{title}» на дошці",
   "taskChip.remove": "Прибрати «{title}» з повідомлення",
   "taskChip.added": "«{title}» прикріплено до повідомлення оркестратору",
+  "taskChip.show": "Показати",
   "taskChip.full": "Уже прикріплено 8 задач; надішліть повідомлення або зніміть одну",
   /* #1166 — доставлений мандат оркестратора. */
   "mandateCard.title": "Мандат",
