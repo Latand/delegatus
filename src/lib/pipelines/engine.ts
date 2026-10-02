@@ -4347,7 +4347,9 @@ async function tickRunStage(
     pipeline.stateDetail = null;
     persist();
   }
-  if (entry && structuredActive !== false && paneActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
+  // A persisted provider wait owns recovery even when startup restores an idle
+  // host behind a stale open-turn scan. Let its controller inspect durable progress.
+  if (!attempt.providerWait && entry && structuredActive !== false && paneActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
 
   if (!canSpendRecoveryCheck()) return;
 

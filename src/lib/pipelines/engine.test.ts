@@ -17531,3 +17531,108 @@ test("restart recovers a newer interrupted turn after a provider continuation ev
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.sends).toHaveLength(1);
 });
+
+test.each(["codex", "claude"] as const)("a persisted provider cut recovers once behind a restored idle open scan (%s)", async (engine) => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const h = harness();
+  await runningStructuredStage(h);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  const timestamp = new Date(Date.parse(attempt.startedAt!) + 1).toISOString();
+  const transcript = stageTranscript(`provider-idle-${engine}`, engine === "codex" ? [
+    { type: "event_msg", timestamp, payload: { type: "task_started", turn_id: "open-before-crash" } },
+    { type: "response_item", timestamp, payload: { type: "function_call", name: "exec_command", call_id: "unfinished", arguments: "{}" } },
+  ] : [
+    { type: "user", timestamp, message: { role: "user", content: "run this stage" } },
+    { type: "assistant", timestamp, message: { role: "assistant", stop_reason: null,
+      content: [{ type: "tool_use", id: "unfinished", name: "Bash", input: { command: "build" } }] } },
+  ]);
+  expect(await durableStageTurnEvidence(engine, transcript)).toMatchObject({ turn: "busy", message: null });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `provider-idle-${engine}-registry.json`));
+  const launchProfile = emptyLaunchProfile({ cwd: "/repo", project: "viewer" });
+  registry.reconcileConversations([{ engine, path: transcript, accountId: "account-a", launchProfile,
+    turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: timestamp }]);
+  const conversation = registry.conversationForPath(transcript)!;
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine, sessionId: generation.id }, artifactPath: transcript, cwd: "/repo",
+    accountId: "account-a", launchProfile, status: "idle", host: null,
+    structuredHost: { kind: engine === "codex" ? "codex-app-server" : "claude-broker", endpoint: "stdio:fixture",
+      process: null, eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1,
+      activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: "fixture", pendingAction: null });
+  attempt.agentPath = transcript;
+  attempt.conversationId = conversation.id;
+  attempt.sessionId = generation.id;
+  attempt.hostEpoch = 1;
+  attempt.effectiveRole.engine = engine;
+  attempt.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+  lane.stages[0]!.effectiveRole = { ...attempt.effectiveRole };
+  savePipelines([lane]);
+  const originalPaths = h.ports.pathForConversation;
+  h.ports.pathForConversation = (id) => id === conversation.id ? transcript : originalPaths(id);
+  const originalAllowed = h.ports.sourcePathAllowed;
+  h.ports.sourcePathAllowed = (file) => file === transcript || originalAllowed(file);
+  h.ports.durableTurnEvidence = async (kind, file) => file === transcript
+    ? await durableStageTurnEvidence(kind, file) : h.durableTurns.get(file) ?? null;
+  h.setConversationActive(false);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.condition.kind).toBe("host_death");
+  h.advanceWallClock(60_000);
+  const open = { ...entry(transcript), activity: "live" as const, activityReason: "jsonl_turn_open" as const };
+  // Reload the registry as startup does, retaining the persisted cut in the pipeline store.
+  setAgentRegistryForTests(new AgentRegistry(registry.filename));
+  try {
+    await withRuntimeSnapshot(() => ({ runtime: { hostEpoch: 2 }, sessions: [
+      { conversationId: conversation.id, host: "alive", turn: "idle", attentionIds: [] },
+    ] }), async () => {
+      for (let tick = 0; tick < 5; tick += 1) {
+        const production = defaultPipelinePorts();
+        expect(await production.conversationTurnInterrupted!(conversation.id)).toBe("idle");
+        expect(await production.conversationAgentActive(conversation.id)).toBeNull();
+        const recovered: PipelinePorts = { ...h.ports,
+          conversationAgentActive: production.conversationAgentActive,
+          conversationTurnInterrupted: production.conversationTurnInterrupted,
+          conversationHostUnavailableSince: production.conversationHostUnavailableSince,
+          runtimeHostEpoch: production.runtimeHostEpoch,
+          restartRecoveryBootId: () => "provider-idle-restoration",
+        };
+        await tickPipelines([open], recovered);
+        h.advanceWallClock(5 * 60_000);
+      }
+    });
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]!.providerRecoveries?.filter((item) => item.action === "relaunch")).toHaveLength(1);
+    expect(attempts[0]!.restartRecovery).toBeUndefined();
+    expect(attempts[0]!.severedTurn).toBeUndefined();
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(h.calls.filter((call) => call.startsWith("stop-host:"))).toHaveLength(1);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["codex", "claude"] as const)("an open scan keeps a provider continuation fenced by pending delivery (%s)", async (engine) => {
+  const f = await providerRecoveryHarness(engine, "stream_disconnected", "stream disconnected");
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  f.h.setConversationActive(null);
+  const recovered: PipelinePorts = { ...f.h.ports,
+    restartRecoveryBootId: () => "pending-provider",
+    conversationTurnInterrupted: async () => "idle",
+    conversationDeliveryOutstanding: () => true,
+    conversationDeliveryCompleted: () => false,
+  };
+  const open = { ...entry(attempt.agentPath!), activity: "live" as const, activityReason: "jsonl_turn_open" as const };
+  for (let tick = 0; tick < 3; tick += 1) {
+    await tickPipelines([open], recovered);
+    f.advance(60_000);
+  }
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.sends).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.actionAt).toBeDefined();
+});
