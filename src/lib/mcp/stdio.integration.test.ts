@@ -56,6 +56,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
   const environment = Object.fromEntries(Object.entries(process.env)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string"
       && !entry[0].startsWith("LLV_")
+      && !entry[0].startsWith("DELEGATUS_")
       && !entry[0].startsWith("NEXT_PUBLIC_")));
   const directories = {
     HOME: path.join(sandbox, "home"),
@@ -135,6 +136,26 @@ async function callSpawn(client: Client, clientRequestId: string, extra: Record<
     },
   });
 }
+
+test("the real stdio server releases retained handles when its client disappears", async () => {
+  const sandbox = sandboxDir("llv-mcp-eof-");
+  const ready = path.join(sandbox, "ready");
+  const child = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import { startViewerMcpServer } from "./src/lib/mcp/server";
+    await startViewerMcpServer();
+    // Model a retained domain timer/socket independently of incidental imports.
+    setInterval(() => {}, 1000);
+    fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+  `], { cwd: process.cwd(), env: isolatedEnvironment(sandbox), stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(ready) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+  expect(fs.existsSync(ready)).toBe(true);
+  expect(child.exitCode).toBeNull();
+  child.stdin.end();
+  const exited = await Promise.race([child.exited, Bun.sleep(2500).then(() => "still alive")]);
+  expect(exited).toBe(0);
+}, 15_000);
 
 test("store reads stay independent of a slow host, held pipeline lease and same-client HTTP call", async () => {
   const sandbox = sandboxDir("llv-mcp-read-latency-");
@@ -246,7 +267,7 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
     ]));
     expect(retirement.description).toContain("designated seat");
     expect((retirement.inputSchema.properties?.callerLaunchId as { description: string }).description).toContain("Optional");
-    expect(retirement.inputSchema.required).not.toContain("callerLaunchId");
+    expect(retirement.inputSchema.required ?? []).not.toContain("callerLaunchId");
 
     const first = await session.client.callTool({
       name: "list_flows",
