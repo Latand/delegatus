@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { CAP_USD, charged, collect, metrics, paidReplay, parseAnswer, queryFor, requestBody,
+import { CAP_USD, charged, collect, metrics, paidReplay, parseAnswer, queryFor, requestBody, agentSendBodies, markAgentRelays,
   confidenceIntervals, sampleOperatorPrompts, machineMessage, nativeMatch, budgetSelect, entryText, offerRows, offerIntervals, contextView, replayText, summarizeVariants, REQUEST_VARIANTS, graphScores, cleanEnvelope, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
 
 const roots: string[] = [];
@@ -485,4 +485,64 @@ test("native subsecond events survive while mirrored event copies are folded", (
   lines.forEach((line, i) => { db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,?)").run(transcript, i, "Please continue.", 1, "user", offset); offset += Buffer.byteLength(line); });
   db.close();
   expect(collect(tp, mp).counts).toMatchObject({ messages: 3, copies: 1, eligible: 2, sampled: 2 });
+});
+
+test("sender provenance excludes four legacy relays while genuine operator turns survive", () => {
+  const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite");
+  memoryDb(mp).close();
+  // Scrubbed forms of audit positions 99, 100, 115 and 446. None has a
+  // recognizable machine template; authorship comes from the earlier send.
+  const bodies = ["Parser checkpoint: the isolated fixture is ready.",
+    "New operator assignment: start the synthetic accounting module.",
+    "The demo is prepared. Inspect the three calculation cases.",
+    "The local check completed. Continue with the bounded follow-up."];
+  bodies.forEach(body => expect(machineMessage(body)).toBeFalse());
+  const sent = (input: string, timestamp = "2026-01-01T00:00:00.100Z") => ({ type: "response_item", timestamp,
+    payload: { type: "custom_tool_call", name: "exec", input } });
+  const command = `python - <<'PY'\nimport json, urllib.request\ntext='''${bodies[1]}'''\nurl='http://127.0.0.1:8898/api/tmux?k=fixture'\nbody={'path':'fixture','text':text}\nreq=urllib.request.Request(url,data=json.dumps(body,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method='POST')\nPY`;
+  const sends = [sent(`const r = await tools.mcp__viewer__send_message_to_orchestrator({project:"fixture",text:${JSON.stringify(bodies[0])}});`),
+    sent(`const r = await tools.exec_command({cmd:${JSON.stringify(command)}});`),
+    ...bodies.slice(2).map(text => sent(`const r = await tools.mcp__viewer__send_message({conversationId:"fixture",text:${JSON.stringify(text)}});`)),
+    sent('await tools.mcp__viewer__send_message({text:"A later send cannot author this turn."});', "2026-01-02T00:00:00Z"),
+    sent('function unused() { return tools.mcp__viewer__send_message({text:"An uncalled helper is not a send."}); }')];
+  const sender = path.join(dir, "sender.jsonl"), receiver = path.join(dir, "receiver.jsonl");
+  fs.writeFileSync(sender, sends.map(r => JSON.stringify(r) + "\n").join(""));
+  const texts = [...bodies, bodies[0], "A later send cannot author this turn.", "An uncalled helper is not a send.", "Please check the parser."];
+  const records = texts.map((text, i) => ({ type: "user", timestamp: "2026-01-01T00:00:00.900Z", uuid: `turn-${i}`,
+    ...(i === 4 ? { origin: { kind: "human" } } : { promptSource: "sdk" }), message: { role: "user", content: text } }));
+  const lines = records.map(r => JSON.stringify(r) + "\n");
+  fs.writeFileSync(receiver, lines.join(""));
+  const db = new Database(tp);
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT,size INTEGER); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
+  db.query("INSERT INTO transcript_files VALUES (?,?,?,?)").run(sender, "codex", "project-a", fs.statSync(sender).size);
+  db.query("INSERT INTO transcript_files VALUES (?,?,?,?)").run(receiver, "claude", "project-a", fs.statSync(receiver).size);
+  let offset = 0;
+  texts.forEach((text, i) => { db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,?)").run(receiver, i, text, 1767225600, "user", offset); offset += Buffer.byteLength(lines[i]); });
+  db.close();
+  const result = collect(tp, mp);
+  expect(result.counts).toMatchObject({ messages: 8, senderConfirmed: 4, machine: 4, eligible: 4, sampled: 4 });
+  expect(result.cases.map(c => c.prompt).sort()).toEqual(texts.slice(4).sort());
+});
+
+test("native sender calls are read only within the indexed snapshot and never from quoted user text", () => {
+  const body = "Please inspect the isolated fixture.";
+  const claude = { type: "assistant", timestamp: "2026-01-01T00:00:00Z",
+    message: { content: [{ type: "tool_use", name: "mcp__viewer__send_message", input: { text: body } }] } };
+  const codex = { type: "response_item", timestamp: claude.timestamp,
+    payload: { type: "function_call", name: "mcp__viewer__send_message_to_orchestrator", arguments: JSON.stringify({ text: body }) } };
+  expect(agentSendBodies(claude)).toEqual([body]);
+  expect(agentSendBodies(codex)).toEqual([body]);
+  expect(agentSendBodies({ ...claude, type: "user" })).toEqual([]);
+  expect(agentSendBodies({ ...codex, payload: { ...codex.payload, type: "message", role: "user" } })).toEqual([]);
+  for (const input of ['tools.mcp__viewer__send_message({text:"old", ...replacement})',
+    'tools.mcp__viewer__send_message({text:"old", text:replacement})',
+    'tools.mcp__viewer__send_message({text:"old", [key]:replacement})']) {
+    expect(agentSendBodies({ ...codex, payload: { type: "custom_tool_call", name: "exec", input } })).toEqual([]);
+  }
+  const transcript = path.join(root(), "sender.jsonl");
+  const before = JSON.stringify({ type: "user", text: "No sends yet" }) + "\n";
+  fs.writeFileSync(transcript, before + JSON.stringify(codex) + "\n");
+  const rows = [{ ...message(body), timestamp: 1767225601 }];
+  expect(markAgentRelays(rows, [{ path: transcript, size: Buffer.byteLength(before) }])).toBe(0);
+  expect(markAgentRelays(rows, [{ path: transcript, size: fs.statSync(transcript).size }])).toBe(1);
 });

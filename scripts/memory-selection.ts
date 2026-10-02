@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import ts from "typescript";
 import { Database } from "bun:sqlite";
 import {
   JEV_ENDPOINT, JEV_MODEL, JEV_INPUT_PRICE_USD, classifierText, redactForClassifier, classifyWithJev,
@@ -18,7 +19,7 @@ const hash = (text: string) => crypto.createHash("sha256").update(text).digest("
 export interface Message {
   transcript_path: string; message_index: number; body: string; engine: string;
   project: string; timestamp: number | null;
-  byte_offset?: number; machineOrigin?: boolean; operatorOrigin?: boolean; eventId?: string;
+  byte_offset?: number; machineOrigin?: boolean; operatorOrigin?: boolean; eventId?: string; nativeTimestamp?: number;
 }
 export interface Candidate {
   id: string; title: string; summary: string; body: string; engine: string;
@@ -239,6 +240,101 @@ function claudeOrigins(directory: string): Map<string, string> {
   return origins;
 }
 
+/** Literal outbound text is sender provenance, unlike words that merely sound
+ * like an agent. Inspect known legacy call shapes; never execute logged code. */
+export function agentSendBodies(record: Record<string, unknown>): string[] {
+  const bodies: string[] = [];
+  const send = (name: string, args: Record<string, unknown> | null | undefined) => {
+    if (/^(?:mcp__viewer__)?send_message(?:_to_orchestrator)?$/.test(name) && typeof args?.text === "string") bodies.push(args.text);
+  };
+  const payload = record.payload as Record<string, unknown> | undefined;
+  if (record.type === "assistant") {
+    const message = record.message as { content?: Array<{ type: string; name: string; input: Record<string, unknown> }> } | undefined;
+    for (const block of message?.content ?? []) if (block.type === "tool_use") send(block.name, block.input);
+  }
+  if (record.type !== "response_item" || !payload) return bodies;
+  if (payload.type === "function_call" && typeof payload.arguments === "string") {
+    try { send(String(payload.name), JSON.parse(payload.arguments)); } catch { /* Not a literal JSON call. */ }
+  }
+  if (payload.type !== "custom_tool_call" || !/^(?:functions\.)?exec$/.test(String(payload.name)) || typeof payload.input !== "string") return bodies;
+  const source = ts.createSourceFile("logged-send.ts", payload.input, ts.ScriptTarget.Latest, true);
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionLike(node)) return;
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.expression.getText(source) === "tools" && node.arguments.length === 1 && ts.isObjectLiteralExpression(node.arguments[0])) {
+      const args: Record<string, string> = {};
+      // Spreads/computed keys may overwrite text or cmd at runtime.
+      if (node.arguments[0].properties.some(p => ts.isSpreadAssignment(p) || (p.name && ts.isComputedPropertyName(p.name)))) return;
+      for (const property of node.arguments[0].properties) {
+        if (ts.isShorthandPropertyAssignment(property)) delete args[property.name.text];
+        if (ts.isPropertyAssignment(property) && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) {
+          if (ts.isStringLiteral(property.initializer) || ts.isNoSubstitutionTemplateLiteral(property.initializer)) args[property.name.text] = property.initializer.text;
+          else delete args[property.name.text];
+        }
+      }
+      send(node.expression.name.text, args);
+      // The historical tmux sender used a Python heredoc with a literal text
+      // assignment and an explicit JSON POST. Support only that static shape.
+      const cmd = args.cmd;
+      if (node.expression.name.text === "exec_command" && cmd && /^python(?:3)?\s+-\s+<</.test(cmd)
+        && /url\s*=\s*['"]http:\/\/127\.0\.0\.1:\d+\/api\/tmux\?/.test(cmd)
+        && /body\s*=\s*\{[^\n]*['"]text['"]\s*:\s*text\b/.test(cmd)
+        && /urllib\.request\.Request\(url,data=json\.dumps\(body,ensure_ascii=False\)\.encode\(\),headers=\{[^\n]*\},method=['"]POST['"]\)/.test(cmd)) {
+        const literal = cmd.match(/^text=('''|""")([\s\S]*?)\1\s*$/m)?.[2];
+        // Escaped Python strings need a Python parser; do not guess their value.
+        if (literal && !literal.includes("\\")) bodies.push(literal);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return bodies;
+}
+
+/** Stream only source files named by the index. Full body equality and an
+ * earlier sender timestamp corroborate legacy relays lacking origin stamps. */
+export function markAgentRelays(messages: Message[], sources: Array<{ path: string; size: number }>): number {
+  const unresolved = new Map<string, Message[]>();
+  for (const message of messages) if (!message.operatorOrigin && !message.machineOrigin && !machineMessage(message.body)) {
+    const key = hash(cleanEnvelope(message.body));
+    unresolved.set(key, [...(unresolved.get(key) ?? []), message]);
+  }
+  const sent = new Map<string, number>();
+  for (const source of sources) {
+    const fd = fs.openSync(source.path, "r"), decoder = new TextDecoder();
+    let pending = "", offset = 0;
+    const inspect = (line: string) => {
+      if (!/send_message|\/api\/tmux/.test(line)) return;
+      let record: Record<string, unknown>;
+      try { record = JSON.parse(line); } catch { return; } // A snapshot may end mid-record.
+      const time = typeof record.timestamp === "string" ? Date.parse(record.timestamp) / 1000 : NaN;
+      if (!Number.isFinite(time)) return;
+      for (const text of agentSendBodies(record)) {
+        const key = hash(cleanEnvelope(text));
+        if (unresolved.has(key)) sent.set(key, Math.min(sent.get(key) ?? Infinity, time));
+      }
+    };
+    try {
+      const buffer = Buffer.alloc(1024 * 1024);
+      while (offset < source.size) {
+        const n = fs.readSync(fd, buffer, 0, Math.min(buffer.length, source.size - offset), offset);
+        if (!n) break;
+        offset += n; pending += decoder.decode(buffer.subarray(0, n), { stream: true });
+        let end: number;
+        while ((end = pending.indexOf("\n")) >= 0) { inspect(pending.slice(0, end)); pending = pending.slice(end + 1); }
+      }
+      inspect(pending + decoder.decode());
+    } finally { fs.closeSync(fd); }
+  }
+  let count = 0;
+  for (const [key, rows] of unresolved) for (const message of rows) {
+    const time = sent.get(key);
+    const received = message.nativeTimestamp ?? message.timestamp;
+    if (time !== undefined && received !== null && time < received) { message.machineOrigin = true; count++; }
+  }
+  return count;
+}
+
 export function collect(transcripts: string, memories: string, limit = SAMPLE_LIMIT, withCandidates = true): Sample {
   const t = new Database(transcripts, { readonly: true });
   const m = new Database(memories, { readonly: true });
@@ -270,6 +366,7 @@ export function collect(transcripts: string, memories: string, limit = SAMPLE_LI
           offset += n;
         }
         const record = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (typeof record.timestamp === "string" && Number.isFinite(Date.parse(record.timestamp))) message.nativeTimestamp = Date.parse(record.timestamp) / 1000;
         const origin = message.engine === "codex" ? decodeCodexStructuredUserText(message.body.replace(/<image\b[^>]*>[\s\S]*?<\/image>/g, "").trimStart()).origin?.kind
           : origins.get(record.uuid);
         const nativeHuman = (typeof record.origin === "string" ? record.origin : record.origin?.kind) === "human"
@@ -289,7 +386,13 @@ export function collect(transcripts: string, memories: string, limit = SAMPLE_LI
       } catch { throw new Error("Indexed transcript provenance unavailable; collection refused"); }
       finally { if (fd !== undefined) fs.closeSync(fd); }
     }
+    // Older index fixtures need no disk scan; production files carry a size
+    // captured by indexing, which also bounds reads of actively growing logs.
+    const columns = t.query<{ name: string }, []>("PRAGMA table_info(transcript_files)").all();
+    const senderConfirmed = columns.some(c => c.name === "size")
+      ? markAgentRelays(messages, t.query<{ path: string; size: number }, []>("SELECT path, size FROM transcript_files WHERE engine IN ('claude','codex')").all()) : 0;
     const sampled = sampleOperatorPrompts(messages, limit);
+    sampled.counts.senderConfirmed = senderConfirmed;
     sampled.counts.memoryEntries = (m.query("SELECT count(*) AS n FROM memory_entries").get() as { n: number }).n;
     const cases = sampled.rows.map((message, index) => {
       const context = t.query<{ role: string; text: string }, [string, number]>(

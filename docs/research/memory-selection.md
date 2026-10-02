@@ -1,16 +1,16 @@
 # Memory selection: grounded Jev improves filtering; automatic injection remains unvalidated
 
-Study date: 2026-10-02. Successor to the seven-first-request pilot on PR #2475. The final comparison uses **100 operator messages across all indexed projects**, with full preceding context retained privately and identical candidate labels for every arm. The population contains **595 eligible events**, so the full requested sample is available.
+Study date: 2026-10-02. Successor to the seven-first-request pilot on PR #2475. The final comparison uses **100 operator messages across all indexed projects**, with full preceding context retained privately and identical candidate labels for every arm. The corrected frozen population contains **588 eligible events**, so the full requested sample is available.
 
 **Request design changes the conclusion:** grounded Jev reaches 37.5% precision / 30% recall at 0.50, compared with original Jev’s 6.15% / 80% and FTS score 10’s 1.84% / 30%. Grounded at 0.70 retains one useful memory with no observed false offers. This supports further work on the grounded request; it cannot establish reliable automatic injection from one offer. Graph gating loses that useful offer. Total spend, including all earlier experiments, is **$0.194018286 of the $2.00 cap**.
 
 ## Population, authorship and sampling
 
-The runner reads the transcript and Phase 1 SQLite indexes in read-only transactions. It considers every indexed user message at every position, in every project, for Claude and Codex. Native source lines and Claude delivery receipts identify agent-origin, system and meta messages. Explicit operator provenance takes precedence over topic or tool-name heuristics. Native queued-human provenance also takes precedence over a generic metadata flag; authenticated agent delivery remains excluded. Exact machine control envelopes still exclude seat ticks, pipeline scaffolds, recovery notices and relays. Historical records without provenance use the written legacy-template rule in `machineMessage`; residual user-role text is included. This operational classification has uncertainty because older transcripts lack uniform authorship metadata.
+The runner reads the transcript and Phase 1 SQLite indexes in read-only transactions. It considers every indexed user message at every position, in every project, for Claude and Codex. Native source lines and Claude delivery receipts identify agent-origin, system and meta messages. Explicit operator provenance takes precedence over topic or tool-name heuristics. Native queued-human provenance also takes precedence over a generic metadata flag; authenticated agent delivery remains excluded. Exact machine control envelopes still exclude seat ticks, pipeline scaffolds, recovery notices and relays. Historical records without provenance use the written legacy-template rule in `machineMessage`, followed by full-body matching against earlier agent send calls. The latter reads indexed transcript prefixes and statically extracts literal `send_message`, `send_message_to_orchestrator`, and the legacy Python JSON POST to `/api/tmux`; it never executes logged code. Explicit operator provenance takes precedence over this matching too. Residual user-role text is included. This operational classification has uncertainty because older transcripts lack uniform authorship metadata, dynamic send expressions are not reconstructed, and unmarked human reuse of an earlier sent body can remain ambiguous.
 
 Transport markers, image-path wrappers and voice bridge digests are removed while preserving the operator's actual text after a digest. Short replies, continuations, attachments and operator-supplied logs remain eligible. Image-description companion records, tool results and system/hook text are excluded. Native event copies are folded by native event ID, or engine/precise-native-timestamp/body identity when there is no ID; records without either retain their source-position identity; separately written repeated replies remain eligible. No first-turn filter, minimum length or project whitelist is used.
 
-The final snapshot contains **4,497 user records, 1,467 conversations, 3,881 excluded machine records, 21 copied events and 595 eligible operator events**. It contains 7,675 memory entries. The requested population is large enough to sample 100. Five of seven project keys contain operator input; all seven are accounted for below. Project aliases follow sorted index keys; private paths and identities are withheld.
+The corrected frozen snapshot contains **4,497 user records, 1,467 conversations, 3,891 excluded machine records, 18 copied events and 588 eligible operator events**. It contains 7,675 memory entries. The requested population is large enough to sample 100. Five of seven project keys contain operator input; all seven are accounted for below. Project aliases follow sorted index keys; private paths and identities are withheld.
 
 | Project | Engine | Indexed | Operator | Sample |
 | --- | --- | --- | --- | --- |
@@ -19,8 +19,8 @@ The final snapshot contains **4,497 user records, 1,467 conversations, 3,881 exc
 | project-2 | claude | 1 | 0 | 0 |
 | project-3 | claude | 16 | 6 | 6 |
 | project-3 | codex | 37 | 0 | 0 |
-| project-4 | claude | 655 | 157 | 20 |
-| project-4 | codex | 1705 | 305 | 20 |
+| project-4 | claude | 655 | 153 | 20 |
+| project-4 | codex | 1705 | 302 | 20 |
 | project-5 | claude | 415 | 74 | 20 |
 | project-5 | codex | 1427 | 0 | 0 |
 | project-6 | claude | 165 | 39 | 20 |
@@ -30,7 +30,9 @@ The final snapshot contains **4,497 user records, 1,467 conversations, 3,881 exc
 
 Sampling round-robins sorted project × engine strata without replacement, redistributing unused slots when small strata exhaust. Within each stratum, SHA-256 of seed `memory-selection-v1`, transcript identity and message index fixes the order. This balances project coverage rather than estimating population-weighted traffic. The sample has **78 Claude and 22 Codex messages from 30 conversations**. Each private case stores the current message and all preceding indexed turns in chronological order, never subsequent turns. Mean preceding history is 89.54 turns.
 
-The first all-turn collection had 548 eligible events. Review found that broad prose heuristics could reject genuine operator messages and that a voice digest could hide an operator suffix. Those rules were corrected before the comparison below. All arms were rerun on the same final 100 cases; earlier calls count toward the shared dollar cap. Ninety-three case labels were retained by exact source identity and identical candidate IDs/content. Seven replacements were adjudicated before this run. The intermediate all-turn metrics are superseded. A final native queued-human regression fix changed no sampled input: a read-only audit found no such envelopes in this index. A subsequent precise-timestamp deduplication fix also leaves the frozen population unchanged: no eligible copy group contains different native timestamps.
+The first all-turn collection had 548 eligible events. Review found that broad prose heuristics could reject genuine operator messages and that a voice digest could hide an operator suffix. Those rules were corrected before the comparison below. All arms were rerun on the same final 100 cases; earlier calls count toward the shared dollar cap. Ninety-three case labels were retained by exact source identity and identical candidate IDs/content. Seven replacements were adjudicated before this run. The intermediate all-turn metrics are superseded. A final native queued-human regression fix changed no sampled input: a read-only audit found no such envelopes in this index.
+
+The sender-provenance correction audits the frozen 595-event population. It excludes six confirmed agent relays, including the four reported by review; four mirrored occurrences of those relays move from copied events to machine records. Reapplying the existing native-ID deduplication also folds one previously retained copy: the two records share a native message ID despite different timestamps. Thus eligible events fall by seven, machine records rise by ten, and copied events fall by three. All affected events belong to project-4. Regenerating the seeded sample from the corrected population preserves all 100 source identities in order, prompts, context, candidates and labels. Scoring was not rerun; the original immutable receipts still reproduce every selection, interval and cost below. The live index has since grown, so a fresh live collection is a separate population, not a replacement for this frozen experiment.
 
 ## Candidates and labels
 
@@ -187,7 +189,7 @@ Original [pilot labels](memory-selection.pilot.labels.json) and
 [first-request labels](memory-selection.labels.json) and
 [first-request results](memory-selection.results.json), remain unchanged.
 Their no-go conclusions were limited pilots. The new study replaces the
-claim that only seven eligible operator prompts exist: there are 595 under
+claim that only seven eligible operator prompts exist: there are 588 under
 the all-turn collection rule in this snapshot.
 
 
