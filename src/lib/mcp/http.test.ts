@@ -38,7 +38,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const route = await import("@/app/api/mcp/route");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
-const { productionViewerControlDependencies, sendDownstreamKey, viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { productionViewerControlDependencies, sendDownstreamKey, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("./bindings");
 
 interface Delivery {
   capability: string | null;
@@ -53,6 +53,7 @@ let deliveries: Delivery[] = [];
     then lost on the way back, as when the stable listener loses its upstream
     mid-answer during a deploy. */
 let loseNextAnswer = false;
+let loseNextDeliveryAnswer = false;
 /** When set, the delivery route holds its answer until the bindings' request
     to it is abandoned, and resolves this with how long it waited. */
 let holdDelivery: ((waitedMs: number) => void) | null = null;
@@ -74,6 +75,10 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
       if (url.pathname === "/api/tmux" && request.method === "POST") {
         const body = await request.json() as { clientMessageId: string };
         deliveries.push({ capability: request.headers.get("x-llv-spawn-capability"), clientMessageId: body.clientMessageId });
+        if (loseNextDeliveryAnswer) {
+          loseNextDeliveryAnswer = false;
+          return new Response('{"ok":', { headers: { "content-type": "application/json" } });
+        }
         const operationId = `op_${body.clientMessageId.slice(-12)}`;
         return Response.json({ ok: true, operationId, outcome: "queued", receipt: { operationId, status: "queued" } });
       }
@@ -135,6 +140,7 @@ afterAll(() => {
 beforeEach(() => {
   deliveries = [];
   loseNextAnswer = false;
+  loseNextDeliveryAnswer = false;
 });
 
 async function httpClient(headers: Record<string, string>): Promise<Client> {
@@ -157,6 +163,128 @@ function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<stri
 function send(client: Client, clientRequestId: string, to: Agent = bob) {
   return client.callTool({ name: "send_message", arguments: { clientRequestId, conversationId: to.conversationId, text: "hello over http" } });
 }
+
+async function inMemoryAgentClient() {
+  process.env.LLV_SPAWN_CAPABILITY = alice.capability;
+  const store = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "reconnect-receipts.sqlite"));
+  const service = createMcpToolService(viewerMcpBindings(), store, viewerMcpToolPolicy(), {
+    recovery: viewerMcpRecoverableTools(),
+  });
+  const server = createViewerMcpServer(service);
+  const client = new Client({ name: "control-reconnect-regression", version: "1.0.0" });
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+  return { client, server, store, service };
+}
+
+test("the first MCP send after an idle connection closes reaches either target exactly once", async () => {
+  const { client, server } = await inMemoryAgentClient();
+  try {
+    expect(payloadOf(await send(client, "idle-warm"))).toMatchObject({ ok: true });
+    // Close every pooled HTTP connection while the MCP session stays alive.
+    await listener!.stop(true);
+    listener = serveViewer(port);
+    expect(payloadOf(await send(client, "idle-target"))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "idle-sibling", alice))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "idle-target"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries.map(delivery => delivery.clientMessageId)).toEqual([
+      sendDownstreamKey("idle-warm"), sendDownstreamKey("idle-target"), sendDownstreamKey("idle-sibling"),
+    ]);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+    delete process.env.LLV_SPAWN_CAPABILITY;
+  }
+});
+
+test("an MCP send survives a refused connection during a brief Viewer restart", async () => {
+  const { client, server } = await inMemoryAgentClient();
+  let restarted: Promise<void> = Promise.resolve();
+  try {
+    expect(payloadOf(await send(client, "restart-warm"))).toMatchObject({ ok: true });
+    await listener!.stop(true);
+    restarted = Bun.sleep(250).then(() => { listener = serveViewer(port); });
+    const result = payloadOf(await send(client, "restart-first-send"));
+    expect(result).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "restart-first-send"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries.map(delivery => delivery.clientMessageId)).toEqual([
+      sendDownstreamKey("restart-warm"), sendDownstreamKey("restart-first-send"),
+    ]);
+  } finally {
+    await restarted;
+    await Promise.all([client.close(), server.close()]);
+    delete process.env.LLV_SPAWN_CAPABILITY;
+  }
+});
+
+test("an exhausted reconnect leaves the original MCP send key available for retry", async () => {
+  const { client, server, store } = await inMemoryAgentClient();
+  try {
+    expect(payloadOf(await send(client, "outage-warm"))).toMatchObject({ ok: true });
+    await listener!.stop(true);
+    listener = null;
+    const result = payloadOf(await send(client, "outage-send"));
+    expect(result).toMatchObject({
+      ok: false, retryable: true,
+      error: expect.stringContaining(origin),
+      details: { outcome: "not-executed", nextAction: "retry-same-key", endpoint: origin, lastResponseAgeMs: expect.any(Number) },
+    });
+    expect(await store.lookup("send_message:outage-send")).toBeNull();
+    expect(deliveries).toHaveLength(1);
+    listener = serveViewer(port);
+    expect(payloadOf(await send(client, "outage-send"))).toMatchObject({ ok: true, replayed: false });
+    expect(payloadOf(await send(client, "outage-send"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries.map(delivery => delivery.clientMessageId)).toEqual([
+      sendDownstreamKey("outage-warm"), sendDownstreamKey("outage-send"),
+    ]);
+  } finally {
+    if (!listener) listener = serveViewer(port);
+    await Promise.all([client.close(), server.close()]);
+    delete process.env.LLV_SPAWN_CAPABILITY;
+  }
+}, 15_000);
+
+test("a send with a lost acceptance answer keeps its original claim and never reconnects by resending", async () => {
+  const { client, server, store } = await inMemoryAgentClient();
+  try {
+    loseNextDeliveryAnswer = true;
+    expect(payloadOf(await send(client, "lost-delivery-answer"))).toMatchObject({ ok: false, code: "outcome_unknown" });
+    expect(await store.lookup("send_message:lost-delivery-answer")).toMatchObject({ stage: "dispatching" });
+    expect(payloadOf(await send(client, "lost-delivery-answer"))).toMatchObject({ ok: false, code: "outcome_unknown" });
+    expect(payloadOf(await client.callTool({ name: "send_message", arguments: {
+      clientRequestId: "lost-delivery-answer", conversationId: bob.conversationId, text: "hello over http", recoveryOnly: true,
+    } }))).toMatchObject({ ok: false, code: "outcome_unknown" });
+    expect(payloadOf(await client.callTool({ name: "send_message", arguments: {
+      clientRequestId: "lost-delivery-answer", conversationId: bob.conversationId, text: "changed",
+    } }))).toMatchObject({ ok: false, code: "idempotency_conflict" });
+    expect(deliveries).toEqual([{ capability: alice.capability, clientMessageId: sendDownstreamKey("lost-delivery-answer") }]);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+    delete process.env.LLV_SPAWN_CAPABILITY;
+  }
+});
+
+test("cancellation during a refused-connection backoff releases the unadmitted send", async () => {
+  const { client, server, store, service } = await inMemoryAgentClient();
+  const args = { clientRequestId: "cancel-refused-send", conversationId: bob.conversationId, text: "cancel before sending" };
+  try {
+    await listener!.stop(true);
+    listener = null;
+    const controller = new AbortController();
+    const cancelled = service.callTool("send_message", args, { signal: controller.signal, deadlineAt: Date.now() + 2_000 });
+    const timer = setTimeout(() => controller.abort(new Error("fixture cancellation")), 25);
+    const result = await cancelled.finally(() => clearTimeout(timer));
+    expect(result).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "retry-same-key" } });
+    expect(await store.lookup("send_message:cancel-refused-send")).toBeNull();
+    expect(deliveries).toHaveLength(0);
+    listener = serveViewer(port);
+    expect(await service.callTool("send_message", args)).toMatchObject({ ok: true, replayed: false });
+    expect(deliveries).toEqual([{ capability: alice.capability, clientMessageId: sendDownstreamKey("cancel-refused-send") }]);
+  } finally {
+    if (!listener) listener = serveViewer(port);
+    await Promise.all([client.close(), server.close()]);
+    delete process.env.LLV_SPAWN_CAPABILITY;
+  }
+});
 
 async function rawPost(headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(new URL("/api/mcp", origin), {

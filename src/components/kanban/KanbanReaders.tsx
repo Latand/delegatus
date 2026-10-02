@@ -23,6 +23,7 @@ import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
 import { engineWord } from "./identityMarks";
+import { isLaunchedConversation } from "../launchedConversations";
 import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
 import { pipelineActionOptions } from "./stagesModel";
@@ -440,7 +441,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       onSpawnRetry={retryLaunch}
       chrome={{
         header,
-        className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}`,
+        className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}${isLaunchedConversation(file) ? " launched" : ""}`,
         attributes: {
           tabIndex: "-1",
           "data-kanban-reader": readerKey,

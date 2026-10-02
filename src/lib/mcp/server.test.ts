@@ -1734,6 +1734,7 @@ describe("MCP tool service", () => {
         "link_task_to_pipeline",
         "list_conversations",
         "search_transcripts",
+        "search_memory",
         "get_conversation",
         "conversation_deliverability",
         "conversation_messages",
@@ -1827,6 +1828,7 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
     const schema = (await client.listTools()).tools.find((tool) => tool.name === "pipeline_action")!.inputSchema;
     expect(schema.properties).toMatchObject({
       stage: { type: "object" },
+      after: { type: "string" },
       edge: { enum: ["pass", "fail"] },
       maxRounds: { type: "integer" },
       onExhausted: { enum: ["advance", "stop-after-fix", "park"] },
@@ -1836,11 +1838,11 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
     });
     expect(JSON.stringify(schema.properties!.to)).toContain("null");
     const stage = { id: "review", kind: "run", prompt: "Review", next: null, role: { roleId: "reviewer" } };
-    const add = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-add", pipelineId: "pipeline_fixture", action: "add-stage", stage } });
+    const add = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-add", pipelineId: "pipeline_fixture", action: "add-stage", stage, after: "build" } });
     const edge = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-edge", pipelineId: "pipeline_fixture", action: "set-edge", stageId: "review", edge: "pass", to: null } });
     expect(add.structuredContent).toMatchObject({ ok: true });
     expect(edge.structuredContent).toMatchObject({ ok: true });
-    expect(seen).toMatchObject([{ stage }, { edge: "pass", to: null }]);
+    expect(seen).toMatchObject([{ stage, after: "build" }, { edge: "pass", to: null }]);
     expect(typeof seen[0]!.stage).toBe("object");
     expect(seen[1]!.to).toBeNull();
   } finally {
