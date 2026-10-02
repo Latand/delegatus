@@ -3179,11 +3179,11 @@ function fixerSelfFailCanGoToReview(
   // that check passed on the head. Another check passing cannot clear it.
   const explicitlyBlocked = /\bblocked\s*:/i.test(completion);
   const reason = explicitlyBlocked ? completion : completion
-    // Remove only the correlated historical result. Keep any other clause in
-    // the sentence: it may describe a check that still blocks the fixer.
-    .replace(/\b[^.\n]*?\bfailed on (?:the )?base\b\s*(?:[,;]\s*)?(?:(?:and|but)\s+)?(?:(?:they|it|these tests|those tests)\s+)?passed on (?:the )?head\b/gi, "")
+    // Remove only the correlated historical result phrase. Keep the subject
+    // and all surrounding clauses so a neighboring blocker remains visible.
+    .replace(/\bfailed on (?:the )?base\b\s*(?:[,;]\s*)?(?:(?:and|but)\s+)?(?:(?:they|it|these tests|those tests)\s+)?passed on (?:the )?head\b/gi, "")
     // Red/green evidence describes a resolved failure, not a present stop.
-    .replace(/\b[^.\n]*?\bfailed before (?:the )?fix\b\s*(?:[,;]\s*)?(?:and\s+)?passed (?:on (?:the )?head|after (?:the )?fix)\b/gi, "")
+    .replace(/\bfailed before (?:the )?fix\b\s*(?:[,;]\s*)?(?:and\s+)?passed (?:on (?:the )?head|after (?:the )?fix)\b/gi, "")
     .replace(/\b(?:not blocked|no blockers?)\b/gi, "");
   if (/\bblocked\s*:|\b(?:I am|we are|stage is|fixer is)\s+blocked\b|\b(?:cannot|can't|unable to)\s+(?:build|compile|run\b[^\n.]*\b(?:checks?|tests?)|fix\b[^\n.]*\b(?:handed|finding))|\b(?:handed finding|fix)\b[^\n.]*\bimpossible\b|\b(?:build|checks?|tests?)\s+(?:failed|failing|fail)\b/i.test(reason)) return false;
   const head = currentPipelineBranchHead(pipeline, ports.exec);

@@ -756,6 +756,8 @@ test.each([
   { label: "test coverage finding", summary: "Handed findings fixed; checks passed.", finding: "Tests fail to cover cancellation in fix.txt:1", expected: "review" },
   { label: "explicit current failure after the fix", summary: "Blocked: integration tests failed before fix and still fail on head; TypeScript passed.", finding: "unresolved integration failure", expected: "park" },
   { label: "current failure beside historical base evidence", summary: "Regression tests failed on base and passed on head, but cannot run required integration checks.", finding: "unresolved integration failure", expected: "park" },
+  { label: "current failure before historical base evidence", summary: "Cannot run required integration checks; regression tests failed on base and passed on head.", finding: "unresolved integration failure", expected: "park" },
+  { label: "current head failure before historical fix evidence", summary: "Integration tests fail on head; regression tests failed before fix and passed after fix.", finding: "unresolved integration failure", expected: "park" },
 ].flatMap((scenario) => ["fenced verdict", "recorded report", "reported plus fenced completion"].map((settlement) => ({ ...scenario, settlement }))))("a fixer handles $label through a $settlement settlement", async ({ summary, finding, settlement, expected }) => {
   const fixture = await realWorktreeLane("fixer-blocker-wording", [
     { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
