@@ -600,41 +600,23 @@ const emailDomain = new RegExp(
 const emailAddressSource =
   `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
 
-// Package versions have numeric dotted labels, optionally a prerelease.
-// Build metadata starts at `+`, outside a mailbox domain. Keep alphabetic
-// terminal labels attributable: a prerelease can also spell a delegated TLD.
-// No delegated TLD starts with a digit, including a version's `3-beta` label.
-const numericVersionDomain = /^[0-9]+(?:\.[0-9]+)+(?:-[A-Z0-9-]+(?:\.[A-Z0-9-]+)*)?$/i;
+// Only complete RAW package-version tokens earn this exemption. Mask the
+// version portion before decoding or Markdown projection so neither can turn
+// a rejected source boundary or encoded spelling into an accepted token.
+const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?`;
+const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:])`;
 
-/* A regex match can stop before an IDNA-valid character it does not spell
-   out (for example U+0F0B, which IDNA maps to a label separator). Before
-   treating a numeric domain as a package version, ask IDNA whether the next
-   source character can continue it. The sentinel makes a single terminal
-   character a complete label for the IDNA check. */
-function hasIdnaDomainContinuation(domain: string, text: string, end: number): boolean {
-  const followingCodePoint = text.codePointAt(end);
-  const following = followingCodePoint === undefined ? undefined : String.fromCodePoint(followingCodePoint);
-  if (following === undefined) return false;
-  // A recognized ASCII separator can still precede an IDNA-valid label that
-  // the mailbox regex cannot spell (for example `.🄰`, which IDNA maps to `.a`).
-  // Check that whole continuation; a bare sentence-ending period has no label.
-  if (following === "." || /^[\u3002\uFF0E\uFF61]$/u.test(following)) {
-    const suffix = text.slice(end).match(/^[^\s/@<>"'`()\[\]{};,!?]+/u)?.[0] ?? "";
-    const label = suffix.replace(/^[.\u3002\uFF0E\uFF61]+/u, "");
-    if (!label) return false;
-    try {
-      return Boolean(domainToASCII(`${domain}${suffix}x`));
-    } catch {
-      return false;
-    }
-  }
-  // Other ASCII punctuation such as `+` starts semver build metadata.
-  if (/^[\x00-\x7f]$/.test(following)) return false;
-  try {
-    return Boolean(domainToASCII(`${domain}${following}x`));
-  } catch {
-    return false;
-  }
+function maskRawPackageVersions(text: string): string {
+  const pattern = new RegExp(
+    `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@(${packageVersionSource})${packageVersionBoundary}`,
+    "gi",
+  );
+  return text.replace(pattern, (token: string, localPart: string, version: string) => {
+    if (localPart.startsWith('"') || version.endsWith(".")) return token;
+    // Keep the local text and @ available to detection: a preceding mailbox
+    // must retain its original boundary. Preserve all line offsets too.
+    return localPart + "@" + " ".repeat(version.length);
+  });
 }
 
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
@@ -686,6 +668,7 @@ function markdownEmailView(decoded: string): EmailTextView {
 }
 
 function emailTextViews(text: string): EmailTextView[] {
+  text = maskRawPackageVersions(text);
   const preserved = decodeSensitiveText(text, true).text;
   const canonical = canonicalSensitiveText(text).text.replaceAll("\0", "\n");
   return [{ text }, { text: preserved }, { text: canonical }, markdownEmailView(preserved), markdownEmailView(canonical)];
@@ -713,10 +696,6 @@ function* emailOccurrences(text: string, source?: EmailTextView["source"]): Gene
           && (sourceFollowing === undefined || systemdUnitBoundary.test(sourceFollowing))) continue;
       }
     }
-    // A quoted local part may itself contain an attributable mailbox.
-    if (!match[1].startsWith('"') && numericVersionDomain.test(match[2])
-      && /^[0-9]/.test(match[2].split(".").at(-1)!)
-      && !hasIdnaDomainContinuation(match[2], text, pattern.lastIndex)) continue;
     if (domainNamesNobody(match[2])) continue;
     yield { address: match[0], domain: match[2], index: match.index, localPart: match[1] };
   }
