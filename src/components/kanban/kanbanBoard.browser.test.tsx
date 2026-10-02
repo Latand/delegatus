@@ -11,7 +11,7 @@ import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
-import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -13680,6 +13680,195 @@ describe("seat panel carries no internal noise", () => {
   }, 1_800_000);
 });
 
+describe("a new conversation's first message is a normal row", () => {
+  /*
+   * The rendered evidence for docs/design/first-bubble-no-raw-json.md: the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=first-message&case=<p|s|f>`,
+   * the window every conversation renders, at 1440 and 1280, light and dark,
+   * English and Ukrainian.
+   *
+   *   (p) a plain spawn's prompt: Pending -> Delivered -> Transcript arrived ->
+   *       Answered, the raw recovery envelope fed on the pending steps
+   *   (s) a seat: the create draft with Confirm actually pressed, so the real
+   *       provisional card is built, then the same steps
+   *   (f) a failed launch: the only state allowed to be red
+   *
+   * A MutationObserver installed before the first step records, across every
+   * mutation, whether the envelope text, a red element outside the failure
+   * line and its chip, or an operator bubble for a seat's mandate ever showed.
+   * Per step: one first-message row, the same node and the same left edge and
+   * width as at Pending, no horizontal overflow and no zero-width control.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "first message is a normal row"
+   *
+   * Readings go to `evidence/first-message/desktop.json`; frames to
+   * `.artifacts/first-message/`.
+   */
+  const OUT = path.resolve(".artifacts/first-message");
+  const EVIDENCE = path.resolve("evidence/first-message");
+  const SEAT = "[data-kanban-seat]";
+  const FRAMES = [{ width: 1440, height: 900 }, { width: 1280, height: 800 }] as const;
+  const HIDE_TOAST = "[data-attention-toast] { display: none !important; }";
+  const PLAIN_LINE = "Fix the failing export test.";
+  const MANDATE_LINE = "Keep the project moving.";
+
+  type Evidence = { advanceFirstMessage(): number };
+  /* Red as drawn: a `danger` utility with no hover/focus variant, inside the feed. */
+  const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
+  const watch = (page: Page) => page.evaluate(([seat, red]) => {
+    const reds = (0, eval)(red as string) as (root: Element) => Element[];
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
+    (window as unknown as { __fm: typeof sink }).__fm = sink;
+    const scan = () => {
+      const root = document.querySelector(`${seat} [data-orchestrator-panel]`);
+      if (!root) return;
+      if (/structured launch recovery|"phase"|\{\s*"/.test((root as HTMLElement).innerText)) sink.envelope = true;
+      for (const el of reds(root)) {
+        if (el.closest("[data-outbox-failure], [data-launch-chip]")) continue;
+        const mark = (el.outerHTML ?? "").slice(0, 160);
+        if (!sink.danger.includes(mark)) sink.danger.push(mark);
+      }
+      sink.outboxMax = Math.max(sink.outboxMax, root.querySelectorAll("[data-outbox-entry]").length);
+      sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
+      sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
+      /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
+      const state = `panel ${root.getAttribute("data-orchestrator-state")}, outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}, feed ${root.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? "none"}, draft ${root.querySelector("[data-orchestrator-draft]") ? "yes" : "no"}`;
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);
+      /* After the first card: a state with no card (the first message gone) or with the create draft back (the Confirm flashed). */
+      if (sink.mandateMax >= 1 && (!root.querySelector("[data-mandate-card]") || root.querySelector("[data-orchestrator-draft]")) && !sink.lapses.includes(state)) sink.lapses.push(state);
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    scan();
+  }, [SEAT, RED] as const);
+
+  const readPane = (page: Page, line: string, mark: boolean) => page.evaluate(({ seat, line, mark, red }) => {
+    const reds = (0, eval)(red) as (root: Element) => Element[];
+    const root = document.querySelector(`${seat} [data-orchestrator-panel]`)!;
+    const visible = (root as HTMLElement).innerText;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(line));
+    const card = root.querySelector<HTMLElement>("[data-mandate-card]");
+    const first = rows[0] ?? card;
+    if (mark && first) first.setAttribute("data-fm-mark", "1");
+    const rect = first ? first.getBoundingClientRect() : null;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    return {
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      danger: reds(root).filter((el) => !el.closest("[data-outbox-failure], [data-launch-chip]")).length,
+      rows: rows.length,
+      outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
+      userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
+      rowState: rows[0]?.getAttribute("data-message-row") ?? null,
+      sameNode: first ? first.hasAttribute("data-fm-mark") : null,
+      rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+      failureLines: root.querySelectorAll("[data-outbox-failure]").length,
+      failureText: root.querySelector("[data-outbox-failure] [data-outbox-status]")?.textContent ?? null,
+      errorChips: [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')].map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      overflowX: Math.max(document.documentElement.scrollWidth - innerWidth, (root as HTMLElement).scrollWidth - (root as HTMLElement).clientWidth),
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answered: (root.textContent ?? "").includes("Looking at the export test."),
+    };
+  }, { seat: SEAT, line, mark, red: RED });
+
+  browserTest("cases p, s and f hold one clean row at 1440 and 1280, light and dark, en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/first-message-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const viewport of FRAMES) for (const kind of ["p", "s", "f"] as const) {
+        const label = `${kind}-${viewport.width}-${scheme}-${lang}`;
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const line = kind === "s" ? MANDATE_LINE : PLAIN_LINE;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=first-message&case=${kind}`, viewport, scheme, lang);
+        try {
+          await page.addStyleTag({ content: HIDE_TOAST });
+          if (kind === "s") {
+            await page.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+            await watch(page);
+            await page.locator("[data-orchestrator-confirm]").first().click();
+            await page.waitForSelector(`${SEAT} [data-mandate-card], ${SEAT} [data-outbox-entry]`, { state: "attached", timeout: 20_000 });
+          } else {
+            await page.waitForSelector(`${SEAT} [data-orchestrator-panel]`, { state: "attached", timeout: 20_000 });
+            await page.waitForFunction((seat) => Boolean(document.querySelector(`${seat} [data-feed-state]`)), SEAT, { timeout: 15_000 });
+            await watch(page);
+          }
+          const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
+          const readings: Array<Record<string, unknown>> = [];
+          let pendingRect: { left: number; width: number; top: number } | null = null;
+          /* The seat's mandate opened at Pending (a real click on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
+          for (const [index, step] of steps.entries()) {
+            if (index > 0) {
+              await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
+              if (step === "answered") await page.waitForFunction((seat) => (document.querySelector(`${seat} [data-orchestrator-panel]`)?.textContent ?? "").includes("Looking at the export test."), SEAT, { timeout: 25_000 });
+              else await page.waitForTimeout(1_800);
+            } else await page.waitForTimeout(600);
+            const read = await readPane(page, line, index === 0);
+            await page.screenshot({ path: path.join(OUT, `${label}-${step}.png`) });
+            readings.push({ step, ...read });
+            const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator(`${SEAT} [data-mandate-card] summary`).first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            }
+            if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
+            if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
+            if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);
+            if (read.zeroWidthControls.length) failures.push(`${at}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+            if (kind === "f") {
+              if (read.rows !== 1 || read.failureLines !== 1) failures.push(`${at}: ${read.rows} rows and ${read.failureLines} failure lines`);
+              if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${at}: error chips ${JSON.stringify(read.errorChips)}`);
+              if (read.failureText?.includes("runtime host unavailable")) failures.push(`${at}: the failure line prints the raw reason`);
+              continue;
+            }
+            if (read.errorChips.length) failures.push(`${at}: an error chip ${JSON.stringify(read.errorChips)}`);
+            if (kind === "p") {
+              if (read.rows !== 1) failures.push(`${at}: ${read.rows} rows carry the prompt`);
+              if (index > 0 && read.sameNode !== true) failures.push(`${at}: the prompt row is a different node than at pending`);
+              if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
+              if (index === 0 && read.rect) pendingRect = read.rect;
+              if (pendingRect && read.rect && (Math.abs(read.rect.left - pendingRect.left) > 1 || Math.abs(read.rect.width - pendingRect.width) > 1 || (index < 3 && Math.abs(read.rect.top - pendingRect.top) > 1))) failures.push(`${at}: the row moved from ${JSON.stringify(pendingRect)} to ${JSON.stringify(read.rect)}`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
+          }
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
+          if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
+          if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
+          if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
+          if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
+          if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card or the create draft: ${JSON.stringify(seen.lapses)}`);
+          frames[label] = { readings, seen, pageErrors };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});
+
 describe("done task retention", () => {
   browserTest("old staffed completions leave desktop and 390px board; task lists retain them", async () => {
     const out = path.resolve("evidence/board-done-retention");
@@ -14536,6 +14725,16 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+// The focused common-path case shares its assertions with the phone driver.
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 1440 in en and uk", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/seat-handover/desktop-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    try { await captureSeatMandateHandover(browser, server.base, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 describe("state writes disk-full alert", () => {
