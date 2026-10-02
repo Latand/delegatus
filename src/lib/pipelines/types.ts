@@ -422,6 +422,8 @@ export type PipelineStageAttempt = {
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
   controllerWait?: PipelineBoundedWait;
+  outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
+  memoryWait?: PipelineBoundedWait;
   /** Bounded wait for the remote pipeline branch after an approved review
       whose final remote read the network failed (#1692). Same shape and
       arithmetic as `controllerWait`, kept apart because that wait ends the

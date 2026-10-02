@@ -87,6 +87,8 @@ function decisionText(t: TFunction, reason: ConversationReason): string {
     case "launch":
       return reason.header ? t("attention.decisionLaunchReason", { reason: reason.header }) : t("attention.decisionLaunch");
     /* The agent's own sentence, as it asked it. */
+    case "memory":
+      return memoryReasonText(t, reason);
     case "ask":
       return reason.header ? t("attention.decisionAskNamed", { ask: reason.header }) : t("needs.ask");
   }
@@ -138,7 +140,7 @@ export function needLabel(t: TFunction, need: NeedReason): string {
 }
 
 /** A conversation reason in the card's words: shorter than the toast's line. */
-export function conversationNeedText(t: TFunction, reason: Pick<ConversationReason, "kind" | "header">): string {
+export function conversationNeedText(t: TFunction, reason: Pick<ConversationReason, "kind" | "header" | "memory">): string {
   switch (reason.kind) {
     case "decision":
       return t("mobile2.board.badgeDecision");
@@ -152,6 +154,8 @@ export function conversationNeedText(t: TFunction, reason: Pick<ConversationReas
       return t("needs.delivery");
     case "launch":
       return t("needs.launch");
+    case "memory":
+      return memoryReasonText(t, reason);
     case "ask":
       return t("needs.ask");
   }
@@ -180,4 +184,13 @@ export function clearedByText(t: TFunction, by: DismissedBy): string {
   if (by.kind === "gateway") return t("needs.clearedByGateway");
   const role = by.role?.trim();
   return role ? roleNameById(t, role) : t("needs.clearedByAgent");
+}
+
+function memoryReasonText(t: TFunction, reason: Pick<ConversationReason, "header" | "memory">): string {
+  const memory = reason.memory;
+  const gb = (memory?.limitBytes ?? 0) / 2 ** 30;
+  const limit = gb < 10 ? String(Number(gb.toFixed(1))) : String(Math.round(gb));
+  const label = t(memory?.fatal ? "attention.memoryKilled" : "attention.memoryProcess");
+  const size = t(memory?.limit === "system" ? "attention.memorySystem" : "attention.memoryLimit", { limit });
+  return [label, reason.header, size].filter(Boolean).join(" · ");
 }
