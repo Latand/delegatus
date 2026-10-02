@@ -120,6 +120,7 @@ export function VoiceComposerHost({ files = NO_FILES }: { files?: readonly FileE
             deadHost={props.deadHost}
             sendBlockedReason={props.sendBlockedReason}
             placeholder={props.placeholder}
+            taskChipsFor={props.taskChipsFor}
             dockNode={getVoiceComposerCardNode(cardId)}
           />
         );

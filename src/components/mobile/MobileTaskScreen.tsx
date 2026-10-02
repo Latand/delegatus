@@ -1,7 +1,7 @@
 "use client";
 
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
-import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, Bot, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -19,6 +19,8 @@ import { remoteCardFor, useRemoteFeed, type RemoteCard } from "@/components/kanb
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
+import { addTaskChip } from "@/components/orchestrator/taskChips";
+import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
@@ -34,6 +36,7 @@ import { workLinkUrl, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
+import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
@@ -539,6 +542,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const tickNotice = task ? isSeatTickNotice(task.text) : false;
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
+  const chipTitle = taskChipTitle(title);
 
   /* ── Edits ────────────────────────────────────────────────────────────── */
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -656,6 +660,21 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         null,
         { error: true },
       );
+    });
+  };
+  /* «Ask»: this task becomes a chip in the project's orchestrator composer,
+     and the operator goes to the seat's conversation to say what about it. The
+     screen is pushed over the board, so ‹ from the seat comes back here. */
+  const askOrchestrator = () => {
+    if (!task) return;
+    if (!addTaskChip(props.project, { id: task.id, title: chipTitle, color: task.color ?? null, icon: task.icon ?? null })) {
+      showReceipt(t("taskChip.full"), null, { error: true });
+      return;
+    }
+    void designatedManagerConversationId(props.project).then((seatId) => {
+      const seat = seatId ? files.find((entry) => entry.conversationId === seatId) : undefined;
+      if (seat) props.onOpenConversation(seat);
+      else showReceipt(t("taskChip.added", { title: receiptTitle }));
     });
   };
   const addAgent = () => {
@@ -988,6 +1007,17 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         <span className="min-w-0 truncate">{t(STATUS_LABEL[status])}</span>
         <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
       </button>
+      <span className="flex min-w-0 items-center gap-2">
+      <button
+        type="button"
+        data-phone-task-ask-orchestrator=""
+        aria-label={t("taskChip.askAria", { title: receiptTitle })}
+        className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-accent/50 px-4 text-body font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        onClick={askOrchestrator}
+      >
+        <Bot className="h-4 w-4" aria-hidden />
+        {t("taskChip.ask")}
+      </button>
       {remote ? <RemoteHostPill remote={remote} /> : props.onAddAgent ? (
         <button
           type="button"
@@ -1000,6 +1030,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
           {t("kanban.addAgent")}
         </button>
       ) : null}
+      </span>
     </div>
   ) : undefined;
 

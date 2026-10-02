@@ -1644,6 +1644,20 @@ export const en = {
      only, so nothing announces "nothing selected" anywhere (#1148). */
   "selectedContext.stale": "stale",
   "selectedContext.ariaSelected": "Selected card: {name} (project {project})",
+  /* Task chips: a card's button attaches the task to the orchestrator's next
+     message; the composer draws the chip and the sent row keeps it. */
+  "taskChip.ask": "Ask",
+  "taskChip.askAria": "Ask the orchestrator about «{title}»",
+  "taskChip.askHint": "Add this task to the orchestrator's next message",
+  "taskChip.askOnHint": "Attached to the orchestrator's next message; press to take it off",
+  "taskChip.label": "About the task:",
+  "taskChip.list": "Tasks attached to this message",
+  "taskChip.aria": "Task: {title}",
+  "taskChip.open": "Open «{title}» on the board",
+  "taskChip.remove": "Remove «{title}» from the message",
+  "taskChip.added": "«{title}» is attached to the orchestrator's message",
+  "taskChip.show": "Show",
+  "taskChip.full": "8 tasks are already attached; send the message or take one off first",
   /* #1166 the delivered orchestrator mandate. The seat sends it; the operator
      never typed it, so the row names what it is instead of quoting 8 KB back
      at them as their own words. */

@@ -4,6 +4,7 @@ import { act } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
+import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { translate, type TFunction } from "@/lib/i18n";
 import { parseRuntimeCommand } from "@/lib/runtime/commands";
 import { useNativeQueue, type NativeQueueDependencies } from "@/hooks/useNativeQueue";
@@ -904,3 +905,38 @@ test("the queue yields to the conversation above the composer, and scrolls its o
   expect(list.querySelector('[data-testid="native-queue-start"]')).toBeNull();
   expect(host.querySelector('[data-testid="native-queue-start"]')).not.toBeNull();
 });
+
+
+const TASK_REF = { id: "task_native", title: "Fix __init__.py (#42)" };
+const TASK_CONTEXT = { version: 1 as const, state: "none" as const, capturedAt: "2026-10-02T09:00:00.000Z", tasks: [TASK_REF] };
+
+test("task queue rows show badges and clean words; editing preserves wire and structured references", async () => {
+  entries = [record("a", { versions: [{ revision: 1, operationId: "op-a", text: taskReferencePrelude([TASK_REF]) + "\nstart this one", images: [], contentDigest: "digest", selectedContext: TASK_CONTEXT }] })];
+  items = [submission("a")];
+  await mount();
+  expect(rows()[0]!.textContent).toContain("start this one");
+  expect(rows()[0]!.textContent).not.toContain("task reference");
+  expect(rows()[0]!.querySelector('[data-task-badge="task_native"]')).not.toBeNull();
+  await click(rows()[0]!.querySelector('[data-testid="native-queue-edit"]'));
+  const field = host.querySelector<HTMLTextAreaElement>('[data-testid="native-queue-edit-field"]')!;
+  expect(field.value).toBe("start this one");
+  field.value = "start it now";
+  await click(host.querySelector('[data-testid="native-queue-save"]'));
+  expect(writes[0]).toMatchObject({ text: taskReferencePrelude([TASK_REF]) + "\nstart it now", selectedContext: TASK_CONTEXT });
+});
+
+for (const locale of ["en", "uk"] as const) {
+  test(`unresolved and refused task queue previews use badges and operator words in ${locale}`, async () => {
+    await mount();
+    await act(async () => { root.render(<NativeQueuePanel view={{ rows: [], nativeStale: false, canStart: false, activeTurnId: null, reorderable: [], notice: null }} loading={false} error={null} thread={{ model: null, effort: null }} cardId="conversation_queue" unresolved={[
+      { key: "unknown-task", text: taskReferencePrelude([TASK_REF]) + "\nstart this one", imageCount: 0 },
+      { key: "refused-task", text: taskReferencePrelude([TASK_REF]) + "\nstart this one", imageCount: 0, refused: "refused" },
+    ]} mintKey={() => "key-preview"} submit={async () => ({ ok: true })} onRefresh={async () => {}} t={(key, params) => translate(locale, key, params)} />); });
+    for (const selector of ['[data-testid="native-queue-unresolved-row"]', '[data-testid="native-queue-refused-row"]']) {
+      const row = host.querySelector(selector)!;
+      expect(row.textContent).toContain("start this one");
+      expect(row.textContent).not.toContain("task reference");
+      expect(row.querySelector('[data-task-badge="task_native"]')).not.toBeNull();
+    }
+  });
+}

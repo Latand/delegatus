@@ -406,6 +406,8 @@
 .host-chip-icon { width: 12px; height: 12px; flex: none; color: var(--color-info); }
 .host-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card .album svg { width: 14px; height: 14px; color: var(--color-muted); }
+.kb .card .ask svg { width: 14px; height: 14px; color: var(--color-accent); }
+.kb .card .ask.on { background: var(--color-accent-soft); color: var(--color-accent); }
 .kb .card .album .album-new { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; color: var(--color-accent); white-space: nowrap; }
 .kb .card .album .album-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
 .kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
@@ -1616,10 +1618,15 @@
 .hold-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .hold-actions button { padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px; }
 @media (pointer: coarse) { .hold-editor input, .hold-editor select, .hold-actions button { min-height: 44px; } }
-/* A resting card keeps its note quiet; the existing task focus/reader shows
-   the full text below the description without repeating it under the title. */
+/* Keyboard focus and an open reader expose the full note. Pointer focus keeps
+   the compact note; a note already expanded by the keyboard holds its geometry
+   until the pointer click has landed, even on a neighbouring card. */
 .kb .card [data-task-note="full"] { display: none; }
-.kb .card:not(.folded):focus-within [data-task-note="full"],
+.kb .card:not(.folded):has(:focus-visible) [data-task-note="full"],
+.kb .card:not(.folded):focus-visible [data-task-note="full"],
+.kb .card:not(.folded)[data-note-pointer-full] [data-task-note="full"],
 .kb .card:not(.folded).has-reader [data-task-note="full"] { display: flex; }
-.kb .card:not(.folded):focus-within [data-task-note="compact"],
+.kb .card:not(.folded):has(:focus-visible) [data-task-note="compact"],
+.kb .card:not(.folded):focus-visible [data-task-note="compact"],
+.kb .card:not(.folded)[data-note-pointer-full] [data-task-note="compact"],
 .kb .card:not(.folded).has-reader [data-task-note="compact"] { display: none; }
