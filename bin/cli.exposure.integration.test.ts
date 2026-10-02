@@ -183,6 +183,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/envAlias.mjs"), path.join(bin, "envAlias.mjs")),
     copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
     copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
+    copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),
     copyFile(path.resolve("bin/internalService.mjs"), path.join(bin, "internalService.mjs")),
     copyFile(path.resolve("bin/skillLinks.mjs"), path.join(bin, "skillLinks.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),

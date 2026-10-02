@@ -9,6 +9,8 @@ import path from "node:path";
    touch. */
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-spawn-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
+const OLD_RUNTIME_SOCKET = process.env.LLV_RUNTIME_HOST_SOCKET;
+process.env.LLV_RUNTIME_HOST_SOCKET = path.join(SANDBOX, "runtime.sock");
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
 const { after } = await import("next/server");
@@ -16,6 +18,13 @@ const { reportSpawnHeaders, reportSpawnOverrides, startDeferredSpawnWork } = awa
 const { SCHEDULED_REPORT_SESSION_CLASS } = await import("@/lib/agent/mcpAllowlist");
 const { TELEGRAM_REPORT_PROJECT } = await import("./reportLineage");
 const { reportConversationTitle } = await import("./reportPrompt");
+const { saveTelegramSession, writeTelegramConnection, readTelegramSession, readTelegramConnection } = await import("./sessionStore");
+const session = saveTelegramSession("invented-local-report-session");
+writeTelegramConnection({
+  version: 1, status: "connected", credentialRef: session.credentialRef,
+  identity: null, lastHealthCheckAt: new Date().toISOString(),
+  errorCode: null, identityIdUpgradedAt: null,
+});
 
 /** An invented run id, in the shape the runner mints. Assembled rather than
     written out: the publication privacy gate refuses any literal with the
@@ -34,6 +43,8 @@ const { resetTeamStoreForTests, teamStore } = await import("@/lib/team/store");
 import type { NextRequest } from "next/server";
 
 afterAll(() => {
+  if (OLD_RUNTIME_SOCKET === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  else process.env.LLV_RUNTIME_HOST_SOCKET = OLD_RUNTIME_SOCKET;
   resetTeamStoreForTests();
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -146,6 +157,8 @@ test("the report class decides the whole capability surface admission reserves",
      no agent caller, no lineage parent and no role, so it classified as an
      operator root and was handed Computer Use beside viewer + telegram. The
      class states an exact surface; everything decided from it has to follow. */
+  expect(readTelegramConnection().credentialRef).toBe(session.credentialRef);
+  expect(Boolean(readTelegramSession()?.connectorToken)).toBe(true);
   const captured = capturingRegistry();
   const dependencies = {
     ...productionSpawnCommandDependencies,
