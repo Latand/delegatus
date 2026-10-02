@@ -398,7 +398,7 @@ export class SelfUpdateService {
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       const admissionSnapshot = await this.snapshot();
       if (green.state !== "green" || !this.auto.enabled || this.auto.pending || this.slice.available?.sha !== target.sha
-        || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
+        || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
         this.auto = { ...this.auto, rollbackPointer: existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null, rollbackCaptured: true };
@@ -460,7 +460,7 @@ export class SelfUpdateService {
       this.autoBlockers = admissionProbe.blockers;
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
       const admissionRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
-      if (!this.auto.enabled || this.auto.pending || activeRestartGate(gateFile) !== gateId || !admissionProbe.quiet
+      if (!this.auto.enabled || this.active() || this.auto.pending || activeRestartGate(gateFile) !== gateId || !admissionProbe.quiet
         || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== record.launcher.pid
         || admissionRecord.launcher.startIdentity !== record.launcher.startIdentity || admissionRecord.requestFile !== record.requestFile
         || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
@@ -627,7 +627,7 @@ export class SelfUpdateService {
       const admissionSnapshot = await this.snapshot();
       const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now()) : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
-      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !admissionProbe?.quiet || !this.auto.enabled || this.checking
+      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !admissionProbe?.quiet || !this.auto.enabled || this.active()
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
         || admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };

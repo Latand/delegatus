@@ -151,6 +151,63 @@ test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-bu
   }
 });
 
+test("automatic build admission rechecks a manual restart during snapshot Git", async () => {
+  const h = scenario();
+  const checkout = join(h.dir, "build-admission-checkout"); mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha, dir: checkout }));
+  const available = { sha: TARGET, short: TARGET.slice(0, 7), version: "2", date: "" };
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), available }, update: null, autoPending: null }));
+  let starts = 0, finishBuild!: () => void;
+  const buildWait = new Promise<void>((resolve) => { finishBuild = resolve; });
+  const runner = { state: idleUpdate(), start: async () => {
+    starts++; runner.state = { ...idleUpdate(), state: "running", trigger: "auto" }; await buildWait;
+  }, retry: async () => {}, restore: () => {}, logPath: () => "" };
+  h.deps.buildEnv = () => ({}); h.deps.createRunner = () => runner;
+  h.deps.requestRestart = () => { writeFileSync(h.record.requestFile, "manual request"); return "manual-restart"; };
+  const service = h.service(), originalSnapshot = service.snapshot;
+  let snapshots = 0;
+  service.snapshot = async () => {
+    const view = { ...await originalSnapshot(), installed: { sha, short: sha.slice(0, 7), version: "1", date: "" } };
+    if (++snapshots === 2) await headOf(checkout);
+    return view;
+  };
+  (service as unknown as { buildSnapshot: () => Promise<Snapshot> }).buildSnapshot = service.snapshot;
+  const bin = join(h.dir, "build-admission-bin"); mkdirSync(bin);
+  const entered = join(bin, "entered"), released = join(bin, "released"), count = join(bin, "count");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$BUILD_ADMISSION_COUNT" ] || n=$(cat "$BUILD_ADMISSION_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$BUILD_ADMISSION_COUNT"\nif [ "$n" = 2 ]; then touch "$BUILD_ADMISSION_ENTERED"; while [ ! -f "$BUILD_ADMISSION_RELEASED" ]; do sleep 0.01; done; fi\nexec "$BUILD_ADMISSION_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, BUILD_ADMISSION_COUNT: process.env.BUILD_ADMISSION_COUNT,
+    BUILD_ADMISSION_ENTERED: process.env.BUILD_ADMISSION_ENTERED, BUILD_ADMISSION_RELEASED: process.env.BUILD_ADMISSION_RELEASED,
+    BUILD_ADMISSION_GIT: process.env.BUILD_ADMISSION_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, BUILD_ADMISSION_COUNT: count, BUILD_ADMISSION_ENTERED: entered,
+    BUILD_ADMISSION_RELEASED: released, BUILD_ADMISSION_GIT: git });
+  let tick: ReturnType<SelfUpdateService["autoTick"]> | undefined;
+  try {
+    tick = service.autoTick();
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    expect(await service.restart("web")).toMatchObject({ ok: true });
+    expect(service.active()).toBe(true);
+    writeFileSync(released, ""); await tick;
+    expect(starts).toBe(0);
+    expect(readFileSync(h.record.requestFile, "utf8")).toBe("manual request");
+  } finally {
+    writeFileSync(released, ""); await tick; await service.setAuto(false);
+    finishBuild(); await buildWait; await Bun.sleep(0); service.stop();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
 test.each(["build", "restart"] as const)("disabling auto during Git prevents a new automatic %s", async (action) => {
   const h = scenario();
   const checkout = join(h.dir, "tick-checkout"); mkdirSync(checkout);
