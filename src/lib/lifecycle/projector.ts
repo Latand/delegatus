@@ -157,6 +157,14 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
             summary: `${run.stageId} started`,
           });
         }
+        for (const recovery of attempt.providerRecoveries ?? []) {
+          if (recovery.action === "park") continue;
+          events.push({ ...lineage,
+            key: `pipeline:${pipeline.id}:stage:${run.stageId}:attempt:${attempt.n}:provider:${recovery.at}:${recovery.action}`,
+            type: recovery.action === "wait" ? "stage_waiting" : "stage_relaunched",
+            at: recovery.at, summary: recovery.summary,
+          });
+        }
         const type = ATTEMPT_EVENT_TYPE[attempt.state];
         if (!type) continue;
         const at = attempt.completedAt ?? attempt.startedAt ?? pipeline.createdAt;

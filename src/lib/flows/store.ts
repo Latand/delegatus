@@ -138,7 +138,10 @@ function reviveCachedFlows(flows: Flow[]): Flow[] {
   return flows.map((flow) => ({
     ...flow,
     hostClaim: flow.hostClaim ? { ...flow.hostClaim } : null,
-    rounds: flow.rounds.map((round) => ({ ...round })),
+    rounds: flow.rounds.map((round) => ({
+      ...round,
+      providerLimitWait: round.providerLimitWait ? { ...round.providerLimitWait } : undefined,
+    })),
   }));
 }
 
