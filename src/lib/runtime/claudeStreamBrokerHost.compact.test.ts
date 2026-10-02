@@ -62,8 +62,9 @@ class MemoryDeliveryLedger implements ClaudeDeliveryLedger {
     this.states.set(sessionId, states);
   }
 
-  confirmDelivered(sessionId: string, entryId: string): void {
+  confirmDelivered(sessionId: string, entryId: string): "accepted" {
     this.records.push(`delivered:${entryId}`);
+    return "accepted";
   }
 }
 

@@ -21,6 +21,7 @@ import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_
 import {
   claudeCliAuthStatus,
   ClaudeStreamBrokerHost,
+  type ClaudeDeliveryConfirmation,
   FileClaudeDeliveryLedger,
   NATIVE_MULTI_AGENT_DENY_FLAG,
   type ClaudeDeliveryLedger,
@@ -86,6 +87,7 @@ class FailingEventStore implements RuntimeEventStore {
 
 class RecordingDeliveryLedger implements ClaudeDeliveryLedger {
   readonly order: string[] = [];
+  readonly refusedConfirmations = new Set<string>();
   private readonly states = new Map<string, ClaudeDeliveryState[]>();
 
   load(sessionId: string): ClaudeDeliveryState[] {
@@ -99,13 +101,17 @@ class RecordingDeliveryLedger implements ClaudeDeliveryLedger {
     this.states.set(sessionId, states);
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): ClaudeDeliveryConfirmation {
     this.order.push(`confirmed:${entryId}`);
+    if (this.refusedConfirmations.has(entryId)) return "refused";
     const state = this.states.get(sessionId)?.find((candidate) => candidate.entry.id === entryId);
     if (state) {
       state.delivered = true;
       state.engineMessageId = engineMessageId;
+      state.confirmation = confirmation;
+      return "accepted";
     }
+    return "refused";
   }
 }
 
@@ -169,6 +175,40 @@ function fakeSpawn(
     return child as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("ledger replay retains the first UUID allocation and accepts its legacy upgrade and a later distinct echo", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-allocation-replay-"));
+  try {
+    const sessionId = "allocation-replay";
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    ledger.recordQueued(sessionId, { id: "first", text: "same instruction" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "second", text: "same instruction" }, "turn-started");
+    const filename = path.join(directory, `${sessionId}.jsonl`);
+    const delivered = (entryId: string, engineMessageId: string) => JSON.stringify({
+      kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(),
+    }) + "\n";
+    // Legacy confirmation can be upgraded for the same owner and UUID.
+    fs.appendFileSync(filename, delivered("first", "first-user"));
+    expect(ledger.confirmDelivered(sessionId, "first", "first-user", "inferred")).toBe("accepted");
+    // A conflicting append may already exist from overlapping old writers.
+    fs.appendFileSync(filename, delivered("second", "first-user") + delivered("first", "other-user")
+      + delivered("first", "first-user"));
+    const reopened = new FileClaudeDeliveryLedger(directory);
+    expect(reopened.load(sessionId).map((state) => ({
+      id: state.entry.id, delivered: state.delivered, uuid: state.engineMessageId, confirmation: state.confirmation,
+    }))).toEqual([
+      { id: "first", delivered: true, uuid: "first-user", confirmation: "inferred" },
+      { id: "second", delivered: false, uuid: undefined, confirmation: undefined },
+    ]);
+    expect(reopened.confirmDelivered(sessionId, "first", "first-user", "inferred")).toBe("already-confirmed");
+    expect(reopened.confirmDelivered(sessionId, "second", "first-user")).toBe("refused");
+    expect(reopened.confirmDelivered(sessionId, "second", "second-user")).toBe("accepted");
+    expect(new FileClaudeDeliveryLedger(directory).load(sessionId).map((state) => state.engineMessageId))
+      .toEqual(["first-user", "second-user"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test.each([
   { sandbox: "full", readOnly: false },
@@ -1012,6 +1052,62 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test("a replayed canonical UUID cannot settle an identical later send", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-reused-uuid-"));
+    const sessionId = "reused-uuid-session";
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    ledger.recordQueued(sessionId, { id: "send-A", text: "same text" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "send-B", text: "same text" }, "queued-next-turn");
+    expect(ledger.confirmDelivered(sessionId, "send-A", "canonical-A", "inferred")).toBe("accepted");
+
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "same text", uuid: "canonical-A", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    try {
+      const sendB = host.send({ id: "send-B", text: "same text" });
+      let outcome: unknown;
+      void sendB.then((value) => { outcome = value; }, (error) => { outcome = error; });
+      child.emitJson({ type: "user", isReplay: true, session_id: sessionId, uuid: "canonical-A", message: { role: "user", content: [{ type: "text", text: "same text" }] } });
+      await Promise.resolve();
+      expect(outcome).toBeUndefined();
+      expect(ledger.load(sessionId).find((state) => state.entry.id === "send-B")?.delivered).toBeFalse();
+
+      child.emitJson({ type: "user", isReplay: true, session_id: sessionId, uuid: "canonical-B", message: { role: "user", content: [{ type: "text", text: "same text" }] } });
+      expect(await sendB).toEqual({ outcome: "queued-next-turn", turnId: "send-B" });
+      expect(ledger.load(sessionId).find((state) => state.entry.id === "send-B")).toMatchObject({ delivered: true, engineMessageId: "canonical-B" });
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("adoption leaves a delivery pending when its canonical confirmation is refused", async () => {
+    const sessionId = "refused-adoption-session";
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, { id: "refused", text: "seen in transcript" }, "turn-started");
+    ledger.refusedConfirmations.add("refused");
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "seen in transcript", uuid: "claimed-elsewhere", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    try {
+      expect(ledger.load(sessionId).find((state) => state.entry.id === "refused")?.delivered).toBeFalse();
+    } finally {
+      await host.release();
+    }
+  });
+
   test("confirms image delivery when the provider transcodes the direct user echo", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);
@@ -1174,6 +1270,28 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(confirmedChild.inputs).toHaveLength(0);
     expect(confirmedLedger.order).toContain("confirmed:confirmed");
     await confirmed.release();
+  });
+
+  test("adoption leaves a same-text turn unassigned until one operation has bound evidence", async () => {
+    const sessionId = "ambiguous-adoption-session";
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, { id: "ambiguous-A", text: "same text" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "ambiguous-B", text: "same text" }, "turn-started");
+    ledger.confirmDelivered(sessionId, "ambiguous-B", "only-canonical-user", "operation-bound");
+    const child = new FakeClaude(ledger);
+    const adopted = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "same text", uuid: "only-canonical-user", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    expect(ledger.load(sessionId).map(({ delivered }) => delivered)).toEqual([false, true]);
+    expect(await adopted.send({ id: "ambiguous-B", text: "same text" })).toEqual({ outcome: "turn-started", turnId: "ambiguous-B" });
+    expect(child.inputs).toHaveLength(0);
+    expect(ledger.load(sessionId).find((state) => state.entry.id === "ambiguous-A")?.delivered).toBeFalse();
+    await adopted.release();
   });
 
   test("restart transcript reconciliation confirms a provider-transcoded image delivery", async () => {
@@ -1374,6 +1492,40 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(await host.send({ id: "managed-entry", text: "managed prompt" })).toEqual({ outcome: "turn-started", turnId: "managed-entry" });
     expect(child.inputs).toHaveLength(0);
     await host.release();
+  });
+
+  test.each(["given", "real"])("resume through a symlink reconciles a transcript encoded from the %s cwd", async (form) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-symlink-resume-"));
+    let host: ClaudeStreamBrokerHost | undefined;
+    try {
+      const real = path.join(directory, "disk", "repository-pipeline");
+      const link = path.join(directory, "Projects");
+      fs.mkdirSync(real, { recursive: true });
+      fs.symlinkSync(path.dirname(real), link, "junction");
+      const cwd = path.join(link, "repository-pipeline");
+      const projects = path.join(directory, "home", ".claude", "projects");
+      const sessionId = "symlink-resume-session";
+      const recorded = form === "real" ? fs.realpathSync.native(cwd) : cwd;
+      const transcript = path.join(projects, recorded.replace(/[^A-Za-z0-9]/g, "-"), `${sessionId}.jsonl`);
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      fs.writeFileSync(transcript, JSON.stringify({
+        type: "user", cwd: recorded, uuid: "delivered-user", timestamp: "2026-09-30T18:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "already delivered" }] },
+      }) + "\n");
+      const ledger = new RecordingDeliveryLedger();
+      ledger.recordQueued(sessionId, { id: "pending-entry", text: "already delivered" }, "turn-started");
+      const child = new FakeClaude(ledger);
+      host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+        cwd, claudeProjectsDir: projects, deliveryLedger: ledger, eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(child, {}),
+      });
+      expect(ledger.load(sessionId).filter((delivery) => delivery.delivered)).toHaveLength(1);
+      expect(child.inputs).toHaveLength(0);
+    } finally {
+      await host?.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("adopts a resume successor whose transcript carries a tool-result user turn with a pending delivery", async () => {

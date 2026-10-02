@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import { claudeTranscriptPath, headCwd, headSessionStartedAt, slugifyCwd } from "./transcript";
 
@@ -21,9 +22,58 @@ describe("slugifyCwd", () => {
 });
 
 describe("claudeTranscriptPath", () => {
+  test("finds Claude's real-cwd transcript through a symlinked worktree parent", () => {
+    const home = path.join(tmp, "observation-home");
+    const projects = path.join(home, ".claude", "projects");
+    const disk = path.join(tmp, "disk");
+    const repo = path.join(disk, "repository");
+    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(repo, { recursive: true });
+    for (const args of [
+      ["init", repo],
+      ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "fixture"],
+      ["-C", repo, "worktree", "add", "--detach", path.join(disk, "repository-pipeline")],
+    ]) expect(spawnSync("git", args).status).toBe(0);
+    fs.symlinkSync(disk, path.join(home, "Projects"), "junction");
+    const cwd = path.join(home, "Projects", "repository-pipeline");
+    // A child started in this cwd sees the physical path, as Claude does.
+    const child = spawnSync(process.execPath, ["-e", "process.stdout.write(process.cwd())"], { cwd });
+    expect(child.status).toBe(0);
+    const realCwd = child.stdout.toString();
+    expect(realCwd).toBe(fs.realpathSync.native(cwd));
+    const transcript = path.join(projects, realCwd.replace(/[^A-Za-z0-9]/g, "-"), "session.jsonl");
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, JSON.stringify({ cwd: realCwd, type: "user", message: { role: "user", content: "ready" } }) + "\n");
+    expect(claudeTranscriptPath(cwd, "session", projects)).toBe(transcript);
+    expect(fs.readFileSync(claudeTranscriptPath(cwd, "session", projects), "utf8")).toContain("ready");
+  });
+
   test("builds the ~/.claude/projects path for a session id", () => {
     const expected = path.join(os.homedir(), ".claude", "projects", "-tmp-demo", "abc.jsonl");
     expect(claudeTranscriptPath("/tmp/demo", "abc")).toBe(expected);
+  });
+
+  test("retains a readable transcript encoded from the given cwd", () => {
+    const real = path.join(tmp, "legacy-disk");
+    const given = path.join(tmp, "legacy-link");
+    const projects = path.join(tmp, "legacy-projects");
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, given, "junction");
+    const legacy = path.join(projects, slugifyCwd(given), "legacy.jsonl");
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, "{}\n");
+    expect(claudeTranscriptPath(given, "legacy", projects)).toBe(legacy);
+    expect(claudeTranscriptPath(given, "fresh", projects)).toBe(path.join(projects, slugifyCwd(fs.realpathSync.native(real)), "fresh.jsonl"));
+    const physical = path.join(projects, slugifyCwd(fs.realpathSync.native(real)), "legacy.jsonl");
+    fs.mkdirSync(path.dirname(physical), { recursive: true });
+    fs.writeFileSync(physical, "{}\n");
+    expect(claudeTranscriptPath(given, "legacy", projects)).toBe(physical);
+  });
+
+  test("keeps the recorded cwd when the directory is gone", () => {
+    const gone = path.join(tmp, "deleted-worktree");
+    const projects = path.join(tmp, "gone-projects");
+    expect(claudeTranscriptPath(gone, "gone", projects)).toBe(path.join(projects, slugifyCwd(gone), "gone.jsonl"));
   });
 });
 
