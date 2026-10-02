@@ -67,6 +67,7 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
         sendBlockedReason={sendBlockedReason}
         placeholder={t("composer.placeholderOrchestrator", { project: projectName })}
         primaryPlace
+        taskChipsFor={file.project}
       />
     </div>
   );
