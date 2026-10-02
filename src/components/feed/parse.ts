@@ -3633,7 +3633,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
 
   /** The signature of the state this line left behind, or null while anything
-      is open that a later line could still change or read. */
+      is open that a later line could still change or read.
+
+      A Codex rollout of chained tool calls is open nearly everywhere: the
+      context ledger holds a round until the next response's usage lands, and
+      that usage rewrites rows born before this line, so a point recorded inside
+      the chain would be retired anyway. Over four real rollouts (500 to 1,300
+      lines) the ledger alone blocked 95% or more of the lines, an open turn
+      alone about 0.2%. Such a transcript parses its window whole on every older
+      page, as before the join. */
   const quietSignature = (): string | null => {
     if (!jsonl || turnOpen || failedResponseSeq !== null || plainBlock || lastPlainCall || pendingCodexUsers.length
       || codexAssistantRecord || codexCompacted || execWindow || pendingExecs.size || execPairingOverflow

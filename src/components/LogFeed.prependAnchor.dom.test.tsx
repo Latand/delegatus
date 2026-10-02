@@ -141,6 +141,25 @@ test("a previous conversation response cannot reveal more rows in the new projec
   expect(host.querySelectorAll("[data-feed-key]").length).toBe(1500);
 });
 
+test("a load that settles with the reader already at the top reveals its rows without a scroll event", async () => {
+  const scroller = await mount();
+  file = { ...file, path: file.path + "-settle" };
+  tail = { ...tail, lines: Array.from({ length: 1700 }, (_, i) => message(`settle-${i}`, i % 2 ? "assistant" : "user")),
+    linesStart: 0, hasMore: true, prependGen: 0 };
+  render(); await wait(); render();
+  for (let frames = 0; frames < 40 && host.querySelectorAll("[data-feed-key]").length < 1500; frames += 1) { await wait(); render(); }
+  const settled = host.querySelectorAll("[data-feed-key]").length;
+  expect(settled).toBe(1500);
+  /* A prefetch is in flight when the reader reaches the top: the scroll
+     handler skips the reveal because the load is pending. */
+  tail = { ...tail, loadingOlder: true }; render();
+  scroller.scrollTop = 0;
+  /* The load settles with its rows hidden. Nothing moves the scroller. */
+  tail = { ...tail, loadingOlder: false }; render();
+  for (let frames = 0; frames < 10 && host.querySelectorAll("[data-feed-key]").length <= settled; frames += 1) { await wait(); render(); }
+  expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThan(settled);
+});
+
 test("an unmounted pending load cannot change the replacement pane", async () => {
   await mount(); request(); const oldFinish = finish;
   flushSync(() => root!.unmount()); root = undefined; host.remove(); restoreGeometry();

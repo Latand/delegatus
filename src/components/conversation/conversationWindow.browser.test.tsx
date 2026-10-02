@@ -1695,6 +1695,7 @@ describe("older history of a long conversation keeps its rows, its frames and it
   interface WalkReading {
     cpu: number;
     loads: number;
+    historyStart: number;
     reachedStartMs: number;
     frames: number;
     over50: number;
@@ -1738,7 +1739,8 @@ describe("older history of a long conversation keeps its rows, its frames and it
           });
           const startedAt = Date.now();
           await scroller.hover();
-          for (let step = 0; step < 200; step += 1) {
+          let reached = false;
+          for (let step = 0; step < 400; step += 1) {
             await page.evaluate(() => (document.querySelector("[data-log-feed-scroller]") as HTMLElement).focus({ preventScroll: true }));
             await page.keyboard.press("Home");
             await page.waitForTimeout(30);
@@ -1746,7 +1748,7 @@ describe("older history of a long conversation keeps its rows, its frames and it
               const el = document.querySelector("[data-log-feed-scroller]") as HTMLElement;
               return /start of the conversation/.test(el.textContent ?? "") && el.scrollTop < 5;
             });
-            if (atStart) break;
+            if (atStart) { reached = true; break; }
           }
           const reachedStartMs = Date.now() - startedAt;
           await page.waitForTimeout(300);
@@ -1756,6 +1758,7 @@ describe("older history of a long conversation keeps its rows, its frames and it
             const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
             return {
               loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+              historyStart: (window as unknown as { llvHistory: { start: () => number } }).llvHistory.start(),
               frames: frames.length,
               over50: frames.filter((ms) => ms > 50).length,
               over100: frames.filter((ms) => ms > 100).length,
@@ -1768,6 +1771,10 @@ describe("older history of a long conversation keeps its rows, its frames and it
             };
           });
           expect(pageErrors).toEqual([]);
+          /* The walk ends at the start of the history, never by running out of
+             presses: a walk stuck on a stalled auto-reveal must fail here. */
+          expect(reached).toBe(true);
+          expect(reading.historyStart).toBe(0);
           readings.push({ cpu, reachedStartMs, markedNodes, ...reading });
           fs.writeFileSync(path.join(OUT, "walk.json"), JSON.stringify(readings, null, 2));
           await page.screenshot({ path: path.join(OUT, `at-start-cpu${cpu}.png`) });
