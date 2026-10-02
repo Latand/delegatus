@@ -131,6 +131,33 @@ for (const statuses of [[503, 200], [503, 503, 503], [403]]) {
   });
 }
 
+for (const status of [408, 429, 500, 502, 503, 504]) {
+  test(`Bun 1.4 advisory HTTP ${status} retries as unavailable`, async () => {
+    const f = fixture([]);
+    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error("error: POST https://registry.example/-/npm/v1/security/advisories/bulk - ${status}"); process.exit(1);`);
+    const result = await f.start().result();
+    expect(result.status).toBe(1);
+    expect(result.sleeps).toEqual(["5", "10"]);
+    expect(result.text).toContain("Advisory service unavailable after 3 attempts");
+  });
+}
+
+for (const diagnostic of [
+  "error: POST https://registry.example/-/npm/v1/security/advisories/bulk - 403",
+  "error: POST https://registry.example/another-endpoint - 503",
+  "error: POST https://registry.example/-/npm/v1/security/advisories/bulk - 503\nerror: invalid lockfile",
+  "high: error: POST https://registry.example/-/npm/v1/security/advisories/bulk - 503",
+]) {
+  test(`Bun 1.4 refuses non-transient or mixed diagnostics: ${JSON.stringify(diagnostic)}`, async () => {
+    const f = fixture([]);
+    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error(${JSON.stringify(diagnostic)}); process.exit(1);`);
+    const result = await f.start().result();
+    expect(result.status).toBe(1);
+    expect(result.sleeps).toEqual([]);
+    expect(result.text).toContain("unrecognized error");
+  });
+}
+
 for (const [scenario, status] of [["advisory", 1], ["unknown", 42], ["403", 1], ["mixed", 1], ["signal", 143]] as const) {
   test(`${scenario} fails promptly and preserves the child status`, async () => {
     const result = await fixture([scenario, "success"]).start().result();
