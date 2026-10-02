@@ -2,6 +2,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -137,6 +138,79 @@ test("an oversized structured spawn launches with its full prompt in a stable re
   await executeSpawnRequest(request(), dependencies);
   expect(deliveredPrompt).toBe(firstReference);
   expect(fs.readFileSync(file!, "utf8")).toContain(original);
+});
+
+test("ordinary Git commits exclude private structured prompts under tracked inclusion rules", async () => {
+  const envKeys = ["LLV_SPAWN_TRANSPORT", "LLV_STRUCTURED_HOSTS", "LLV_RUNTIME_EVENTS", "LLV_RUNTIME_HOST_SOCKET", "NEXT_PUBLIC_RUNTIME_UI"] as const;
+  const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = statePath("private-prompt-runtime.sock");
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  const cwd = statePath("private-prompt-publication-cwd");
+  const ignoreDir = path.join(cwd, ".artifacts", "pipeline-stage-inputs");
+  fs.mkdirSync(ignoreDir, { recursive: true });
+  fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 1;\n");
+  fs.writeFileSync(path.join(ignoreDir, ".gitignore"), "!*.md\n");
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet", "--initial-branch=main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "noreply@example.com");
+  git("config", "commit.gpgSign", "false");
+  git("add", "source.ts", ".artifacts/pipeline-stage-inputs/.gitignore");
+  git("commit", "--quiet", "-m", "fixture base");
+
+  let deliveredPrompt = "";
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.spawnStructuredConversation = async (input) => {
+    deliveredPrompt = input.prompt;
+    return {
+      ok: true,
+      target: null,
+      path: null,
+      effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default",
+      launchId: input.receipt.launchId,
+      conversationId: input.receipt.conversationId,
+      launched: true,
+      retrySafe: false,
+      initialMessage: "delivered",
+      state: "settled",
+    };
+  };
+  const privatePrompt = `Private controller input\n${"Sensitive worker brief. ".repeat(2_000)}`.trim();
+  try {
+    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: `attempt_${crypto.randomUUID()}`, title: "Private structured launch", engine: "claude", cwd, prompt: privatePrompt, mcpServers: [] }),
+    }), dependencies);
+
+    expect(response.status).toBe(202);
+    const privateFile = deliveredPrompt.match(/Full structured first message file: (.+)\n/)?.[1];
+    expect(privateFile).toBeDefined();
+    expect(fs.readFileSync(privateFile!, "utf8")).toBe(privatePrompt);
+    const ignoreContents = fs.readFileSync(path.join(ignoreDir, ".gitignore"), "utf8");
+    expect(ignoreContents.startsWith("!*.md\n")).toBe(true);
+    expect(ignoreContents.trimEnd().endsWith("*")).toBe(true);
+    fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 2;\n");
+    git("add", "-A");
+    git("commit", "--quiet", "-m", "ordinary worker commit");
+
+    const committedFiles = git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n");
+    expect(committedFiles).toContain("source.ts");
+    expect(committedFiles.filter((file) => file.startsWith(".artifacts/pipeline-stage-inputs/") && !file.endsWith("/.gitignore"))).toEqual([]);
+    expect(committedFiles).not.toContain(path.relative(cwd, privateFile!).split(path.sep).join("/"));
+    expect(git("show", "--format=", "HEAD")).not.toContain(privatePrompt);
+  } finally {
+    for (const key of envKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
+  }
 });
 
 test("a catalog generation change cannot admit the previously selected home", async () => {

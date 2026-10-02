@@ -21,17 +21,48 @@ export function prepareControllerArtifactDirectory(worktreeDir: string): string 
   ensureDirectory(artifactRoot);
   ensureDirectory(directory);
 
-  const localIgnore = path.join(directory, ".gitignore");
+  ensureCatchAllIgnore(path.join(directory, ".gitignore"));
+  return directory;
+}
+
+function ensureCatchAllIgnore(filename: string): void {
+  const noFollow = fs.constants.O_NOFOLLOW;
+  let descriptor: number;
   try {
-    fs.writeFileSync(localIgnore, "*\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+    descriptor = openExistingIgnore(filename, noFollow);
   } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
-    const ignore = fs.lstatSync(localIgnore);
-    if (!ignore.isFile() || ignore.isSymbolicLink()) {
-      throw new Error("pipeline controller artifact ignore file must be a regular file");
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+    try {
+      descriptor = fs.openSync(filename,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR | fs.constants.O_APPEND | noFollow,
+        0o600);
+    } catch (createError) {
+      if (!(createError && typeof createError === "object" && "code" in createError && createError.code === "EEXIST")) throw createError;
+      descriptor = openExistingIgnore(filename, noFollow);
     }
   }
-  return directory;
+
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error("pipeline controller artifact ignore file must be a regular file");
+    }
+    const contents = fs.readFileSync(descriptor, "utf8");
+    const lastRule = contents.split(/\r?\n/).reverse()
+      .find((line) => line.trim() !== "" && !line.trimStart().startsWith("#"));
+    if (lastRule !== "*") {
+      fs.writeSync(descriptor, `${contents.length > 0 && !contents.endsWith("\n") ? "\n" : ""}*\n`);
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function openExistingIgnore(filename: string, noFollow: number | undefined): number {
+  const stat = fs.lstatSync(filename);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("pipeline controller artifact ignore file must be a regular file");
+  }
+  return fs.openSync(filename, fs.constants.O_RDWR | fs.constants.O_APPEND | (noFollow ?? 0));
 }
 
 function assertDirectoryOrMissing(directory: string): void {
