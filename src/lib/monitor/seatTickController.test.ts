@@ -2227,6 +2227,103 @@ test("a canceled PR refresh keeps its outage run in durable state", async () => 
   expect(secondGap).toMatchObject({ gap: "command-failed", reported: false, since });
 });
 
+test("a canceled successful PR refresh clears recovered outage accounting and starts the next run fresh", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-recovery-")), "state.json");
+  const running = { ...OPEN_LANE[0]!, id: "running-lane" };
+  const previousSince = new Date(NOW - 3 * 60 * MINUTE).toISOString();
+  const gap = standingGap({ since: previousSince, attempts: 24, reported: true });
+  const rig = harness({ stateFile, pipelines: [...FINISHED_LANE, running], state: { ...OVERDUE, pullRequestGap: gap } });
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, pullRequestGap: gap }, stateFile);
+
+  let attempt = 1;
+  let reads = 0;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.openPullRequests = async () => {
+    reads++;
+    /* Both reads succeed, but the running lane advances during each one. The
+       second freshness fence cancels this wake after recovery was observed. */
+    const nextAttempt = ++attempt;
+    const current = pipelines();
+    rig.deps.sources!.pipelines = () => current.map(lane => lane.id === running.id
+      ? { ...lane, runs: [{ stageId: "build", attempts: [{ n: nextAttempt, state: "running", startedAt: new Date(NOW + nextAttempt * MINUTE).toISOString() }] }] as never }
+      : lane);
+    return { ok: true, pullRequests: [] };
+  };
+
+  const canceled = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(canceled).toMatchObject({ verdict: "error", delivery: null });
+  expect(reads).toBe(2);
+  expect(rig.sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toBeNull();
+
+  const firstFailure = harness({ stateFile, pipelines: [...FINISHED_LANE, running], now: NOW + 65 * MINUTE,
+    pullRequestsUnavailable: "command-failed" });
+  await runSeatTickCheck(PROJECT, firstFailure.deps);
+  const freshRun = readSeatTickState(PROJECT, stateFile).pullRequestGap;
+  expect(freshRun).toMatchObject({ gap: "command-failed", reported: false, attempts: 1 });
+  expect(freshRun!.since).toBe(new Date(NOW + 65 * MINUTE).toISOString());
+
+  const secondFailure = harness({ stateFile, pipelines: [...FINISHED_LANE, running], now: NOW + 130 * MINUTE,
+    pullRequestsUnavailable: "command-failed" });
+  await runSeatTickCheck(PROJECT, secondFailure.deps);
+  expect(secondFailure.cards.filter(entry => entry.card.kind === "source-unreadable")).toHaveLength(1);
+  expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toMatchObject({
+    gap: "command-failed", reported: true, attempts: 2, since: freshRun!.since,
+  });
+});
+
+test("a wake interrupted before dispatch refreshes its agenda and note before original-key replay", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "undispatched-alarm-")), "state.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE, settings: promptSettings() });
+  const beginDispatch = spyOn(SeatTickAccounting.prototype, "beginDispatch").mockImplementationOnce(() => {
+    throw new Error("interrupted after durable wake preparation");
+  });
+  try {
+    await runSeatTickCheck(PROJECT, first.deps);
+  } finally {
+    beginDispatch.mockRestore();
+  }
+  const prepared = readSeatTickState(PROJECT, stateFile).outstandingWake!;
+  expect(prepared).toBeTruthy();
+  expect(prepared.dispatch).toBeUndefined();
+  expect(first.sent).toEqual([]);
+
+  const replacement = "Use the release monitor note now.";
+  const retry = harness({ stateFile, pipelines: [{ ...OPEN_LANE[0]!, id: "current-lane" }], wakeState: "absent",
+    now: NOW + 5 * MINUTE, settings: { ...promptSettings(), monitorPrompt: replacement } });
+  await runSeatTickCheck(PROJECT, retry.deps);
+  expect(retry.sent).toHaveLength(1);
+  expect(retry.sent[0]!.clientMessageId).toBe(prepared.clientMessageId);
+  expect(retry.sent[0]!.text).not.toContain(OPEN_LANE[0]!.id);
+  expect(retry.sent[0]!.text).toContain("current-lane");
+  expect(retry.sent[0]!.text).toContain(replacement);
+  expect(retry.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+});
+
+test("an undispatched wake whose agenda settled is cleared without delivery credit", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "settled-undispatched-alarm-")), "state.json");
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() };
+  writeSeatTickState(PROJECT, initial, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE });
+  const beginDispatch = spyOn(SeatTickAccounting.prototype, "beginDispatch").mockImplementationOnce(() => {
+    throw new Error("interrupted after durable wake preparation");
+  });
+  try {
+    await runSeatTickCheck(PROJECT, first.deps);
+  } finally {
+    beginDispatch.mockRestore();
+  }
+  expect(readSeatTickState(PROJECT, stateFile).outstandingWake?.dispatch).toBeUndefined();
+
+  const retry = harness({ stateFile, pipelines: [], wakeState: "absent", now: NOW + 5 * MINUTE });
+  await runSeatTickCheck(PROJECT, retry.deps);
+  expect(retry.sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile)).toMatchObject({
+    outstandingWake: null, lastWakeAt: OVERDUE.lastWakeAt, eventsThrough: 0,
+  });
+});
+
 test("an absent refused alarm refreshes its agenda and note under its original key", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "fresh-alarm-")), "state.json");
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);

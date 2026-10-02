@@ -1044,19 +1044,28 @@ async function reconcileOutstandingWake(context: {
        still the one it was prepared for. A row that moved on belongs to the
        controller that moved it; a seat that moved is the next check's to
        release. */
-    if (wake.dispatch?.state === "refused" && context.refreshWake && state.accounting) {
+    if (context.refreshWake && state.accounting) {
       const payload = await context.refreshWake(state, wake);
       const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
       const fresh = accounting.readState();
-      if (fresh.outstandingWake?.clientMessageId !== wake.clientMessageId || fresh.outstandingWake.dispatch?.token !== wake.dispatch.token) return fresh;
+      const current = fresh.outstandingWake;
+      if (!current || current.clientMessageId !== wake.clientMessageId || current.conversationId !== wake.conversationId
+        || current.seatEpoch !== wake.seatEpoch || current.operationId !== wake.operationId
+        || current.dispatch?.state !== wake.dispatch?.state || current.dispatch?.token !== wake.dispatch?.token) return fresh;
       if (!payload) {
-        accounting.settleAbsent(wake);
+        if (wake.dispatch?.state === "refused") accounting.settleAbsent(wake);
+        else accounting.cancelUndispatched(wake);
         return accounting.readState();
       }
-      // Revision checking and the refused dispatch token fence concurrent refreshes.
-      accounting.writeState({ ...fresh, outstandingWake: { ...fresh.outstandingWake, ...payload } });
+      // The state revision and dispatch identity fence concurrent refreshes and admissions.
+      accounting.writeState({ ...fresh, outstandingWake: { ...current, ...payload } });
       state = accounting.readState();
       wake = state.outstandingWake!;
+    } else if (!wake.dispatch) {
+      /* A durable wake with no admission record may be the exact restart
+         boundary between preparation and dispatch. Without a fresh source
+         reader it cannot safely replay its frozen agenda. */
+      return state;
     }
     const held = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project).readState() : state;
     const authority = context.sources.seatFor(context.project).active;
@@ -1246,7 +1255,7 @@ export async function runSeatTickCheck(
     return await check(canonical, policy, dependencies, appendRecord);
   } catch (error) {
     let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
-    if (error instanceof SeatTickEvidenceRefreshCanceledError && error.pullRequestGap) {
+    if (error instanceof SeatTickEvidenceRefreshCanceledError) {
       const readState = dependencies.readState ?? readSeatTickState;
       const writeState = dependencies.writeState ?? writeSeatTickState;
       try {
