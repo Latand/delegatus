@@ -1,0 +1,17 @@
+{
+  "commit": "22534207a805770880cd8020e51ca106155ccf95",
+  "frames": {
+    "1440-en-clean-navigate": {
+      "hydrationWarnings": 1,
+      "pageErrors": 1,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    }
+  },
+  "failures": [
+    "1440-en-clean-navigate: 1 hydration warnings",
+    "1440-en-clean-navigate: 1 page errors"
+  ]
+}

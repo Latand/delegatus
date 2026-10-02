@@ -11,7 +11,7 @@ import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
-import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -43,13 +43,137 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("batched turn settlement", () => {
+  browserTest("retained terminal events settle desktop and phone before a different turn starts", async () => {
+    const out = path.resolve(".artifacts/batched-turn-settlement");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        for (const lateTurn of ["running", "unknown"] as const) {
+          const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width === 390, isMobile: width === 390 });
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          try {
+            await context.addInitScript(({ locale }) => {
+              localStorage.setItem("llv_lang", locale);
+              // The fixture installs its silent transport. Capture its runtime
+              // source and drive the real bus's canonical event entry point.
+              let installed = window.EventSource;
+              Object.defineProperty(window, "EventSource", { configurable: true,
+                get: () => installed,
+                set: (Source: typeof EventSource) => {
+                  installed = class extends Source {
+                    constructor(url: string | URL) {
+                      super(url);
+                      if (String(url).startsWith("/api/runtime/stream")) {
+                        Object.assign(window, { settlementSource: this });
+                        setTimeout(() => this.onopen?.(new Event("open")), 0);
+                      }
+                    }
+                  };
+                },
+              });
+            }, { locale });
+            await page.goto(`${server.base}?runtime=structured#c=conversation_search-ver-2`);
+            const stateSelector = width === 390 ? "[data-mobile2-chat-state]" : '[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]';
+            await page.locator(stateSelector).waitFor();
+            if (width === 390) expect(await page.locator(stateSelector).innerText()).toContain(translate(locale, "mobile2.chat.stateWorking"));
+            await page.waitForFunction(() => Boolean((window as unknown as { settlementSource?: EventSource }).settlementSource?.onmessage));
+            const initialCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            const send = async (successor: boolean) => page.evaluate(({ lateTurn, successor }) => {
+              const source = (window as unknown as { settlementSource: EventSource }).settlementSource;
+              const conversationId = "conversation_search-ver-2";
+              const events = successor ? [{ kind: "turn-started", revision: 5, payload: { conversationId, turnId: "turn-2" } }]
+                : [
+                  { kind: "turn-started", revision: 2, payload: { conversationId, turnId: "turn-1" } },
+                  { kind: "turn-ended", revision: 3, payload: { conversationId, turnId: "turn-1", outcome: "completed" } },
+                  { kind: "session-status", revision: 4, payload: { conversationId, turn: lateTurn, activeTurnId: lateTurn === "running" ? "turn-1" : null } },
+                ];
+              for (const event of events) source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({
+                schemaVersion: 1, seq: 100 + event.revision, eventId: `settlement-${event.revision}`,
+                scope: { type: "session", id: conversationId }, ...event,
+              }) }));
+            }, { lateTurn, successor });
+            await send(false);
+            await page.waitForFunction(({ width, working }) => width === 390
+              ? !document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working)
+              : !document.querySelector('[data-kanban-reader="conversation_search-ver-2"] [data-turn-status="running"]'),
+            { width, working: translate(locale, "mobile2.chat.stateWorking") });
+            const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
+            if (width === 1440) {
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
+              expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
+            }
+            const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${lateTurn}.png`) });
+            await send(true);
+            if (width === 1440) {
+              await page.locator(stateSelector).waitFor();
+              expect(await page.locator("[data-bar-working]").innerText()).toBe(initialCount!);
+            } else {
+              await page.waitForFunction((working) => document.querySelector("[data-mobile2-chat-state]")?.textContent?.includes(working), translate(locale, "mobile2.chat.stateWorking"));
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ locale, width, lateTurn, initialCount, settledCount, phoneState, pageErrors });
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("shipped role defaults rendered evidence", () => {
+  browserTest("default xhigh rows keep their chosen effort without a downgrade nudge in every locale and layout", async () => {
+    const out = path.resolve(".artifacts/role-defaults");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator('[data-mapping-row="reviewer"]').waitFor();
+          await page.locator('[data-mapping-group="rare"] > button').click();
+          const rows: Record<string, unknown>[] = [];
+          expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
+          expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
+          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
+          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
+            const row = page.locator(`[data-mapping-row="${id}"]`);
+            await row.scrollIntoViewIfNeeded();
+            const effort = await row.locator("select").nth(1).inputValue();
+            const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
+            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
+            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
+            expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
+            rows.push({ id, effort, cost, nudge: false });
+          }
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          cases.push({ locale, width, rows, overflow, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/role-defaults", { recursive: true });
+      fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("linked boards M3 remote agents", () => {
   browserTest("an unbound remote agent remains visible in an empty phone Inbox", async () => {
     const out = path.resolve(".artifacts/linked-boards-m3-empty-inbox");
     fs.mkdirSync(out, { recursive: true });
     const project = `repo-${"a".repeat(32)}`;
     const server = await serveEvidenceFixture(out, undefined, {
-      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false }] },
+      "/api/links/agents": { agents: [{ k: `a:${"3".repeat(16)}`, p: project, t: "copilot agent", e: "copilot", m: "model", st: "working", at: Date.now(), peer: "Machine B", stale: false, asOf: Date.now() }] },
     });
     const browser = await chromium.launch(LAUNCH);
     try {
@@ -77,9 +201,9 @@ describe("linked boards M3 remote agents", () => {
     const now = Date.now();
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/links/agents": { agents: [
-        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: false,
+        { k: `a:${"1".repeat(16)}`, p: project, t: "Review the sync budget", e: "claude", m: "claude-opus-5", st: "working", task: "t-search", at: now - 180_000, peer: "Machine B", stale: true, asOf: now,
           pl: { id: "pipeline-1", state: "running", stage: "review", stageState: "running" } },
-        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: true, asOf: now - 960_000 },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "codex agent", e: "codex", m: "gpt-6-sol", st: "done", at: now - 600_000, peer: "Machine B", stale: false, asOf: now - 960_000 },
       ] },
     });
     const browser = await chromium.launch(LAUNCH);
@@ -95,6 +219,7 @@ describe("linked boards M3 remote agents", () => {
           expect(await bound.locator("[data-remote-agent]").isVisible()).toBe(false);
           await bound.locator("summary").click();
           expect(await bound.locator("[data-remote-agent]").count()).toBe(1);
+          expect(await bound.locator('[data-stale="true"]').count()).toBe(0);
           expect(await bound.locator("button, a, input").count()).toBe(0);
           const geometry = await bound.evaluate((node) => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth > node.clientWidth + 1 }));
           expect(geometry.width).toBeLessThanOrEqual(width);
@@ -765,7 +890,7 @@ describe("#1695 K1+K2 kanban board", () => {
       }
 
       /* + Task and + Agent (#1695 K9a): the new task is an inline card at the top of Inbox and lands there, the
-         bar's + Agent opens a draft on a card of its own, and a card's + Agent opens one on that card. Each draft
+         bar's + Agent opens a draft on a card of its own in Assigned, where its launch lands, and a card's + Agent opens one on that card. Each draft
          pane stays inside its card at reading width, and nothing pushes the page sideways. */
       const create = await openFixture(browser, base, VIEWPORTS[1], "light");
       try {
@@ -811,7 +936,7 @@ describe("#1695 K1+K2 kanban board", () => {
 
         if (composerFirst.column !== "inbox" || !composerFirst.first || !composerFirst.focused) failures.push(`k9a: the new task card ${JSON.stringify(composerFirst)}`);
         if (creates.length !== 1 || creates[0]!.placement !== "unplaced" || creates[0]!.clientRequestId !== "present") failures.push(`k9a: + Task wrote ${JSON.stringify(creates)}`);
-        if (barDraft.column !== "inbox" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
+        if (barDraft.column !== "assigned" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
         if (!cardDraft.inside || cardDraft.paneWidth > 780 || cardDraft.prompt !== "Repair old links in the release notes") failures.push(`k9a: the card's draft ${JSON.stringify(cardDraft)}`);
         if (pageOverflow > 0) failures.push(`k9a: the page scrolls sideways by ${pageOverflow} px`);
         if (create.pageErrors.length) failures.push(`k9a: page errors ${create.pageErrors.join(" | ")}`);
@@ -12949,9 +13074,9 @@ describe("model glyphs in place of the stage dot", () => {
   const WORD_HOSTS = new Set(["pnode", "pane-head"]);
   /* The model words a host's accessible text must carry: the catalogue's short
      label, which the identity sentence and the identity line both print. */
-  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
   /* The pane head's glyph names itself with the catalogue's full label. */
-  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
   /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
   const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
   /* The legend: every word on the three cards hidden, so only the drawings
@@ -13639,6 +13764,195 @@ describe("seat panel carries no internal noise", () => {
   }, 1_800_000);
 });
 
+describe("a new conversation's first message is a normal row", () => {
+  /*
+   * The rendered evidence for docs/design/first-bubble-no-raw-json.md: the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=first-message&case=<p|s|f>`,
+   * the window every conversation renders, at 1440 and 1280, light and dark,
+   * English and Ukrainian.
+   *
+   *   (p) a plain spawn's prompt: Pending -> Delivered -> Transcript arrived ->
+   *       Answered, the raw recovery envelope fed on the pending steps
+   *   (s) a seat: the create draft with Confirm actually pressed, so the real
+   *       provisional card is built, then the same steps
+   *   (f) a failed launch: the only state allowed to be red
+   *
+   * A MutationObserver installed before the first step records, across every
+   * mutation, whether the envelope text, a red element outside the failure
+   * line and its chip, or an operator bubble for a seat's mandate ever showed.
+   * Per step: one first-message row, the same node and the same left edge and
+   * width as at Pending, no horizontal overflow and no zero-width control.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "first message is a normal row"
+   *
+   * Readings go to `evidence/first-message/desktop.json`; frames to
+   * `.artifacts/first-message/`.
+   */
+  const OUT = path.resolve(".artifacts/first-message");
+  const EVIDENCE = path.resolve("evidence/first-message");
+  const SEAT = "[data-kanban-seat]";
+  const FRAMES = [{ width: 1440, height: 900 }, { width: 1280, height: 800 }] as const;
+  const HIDE_TOAST = "[data-attention-toast] { display: none !important; }";
+  const PLAIN_LINE = "Fix the failing export test.";
+  const MANDATE_LINE = "Keep the project moving.";
+
+  type Evidence = { advanceFirstMessage(): number };
+  /* Red as drawn: a `danger` utility with no hover/focus variant, inside the feed. */
+  const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
+  const watch = (page: Page) => page.evaluate(([seat, red]) => {
+    const reds = (0, eval)(red as string) as (root: Element) => Element[];
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
+    (window as unknown as { __fm: typeof sink }).__fm = sink;
+    const scan = () => {
+      const root = document.querySelector(`${seat} [data-orchestrator-panel]`);
+      if (!root) return;
+      if (/structured launch recovery|"phase"|\{\s*"/.test((root as HTMLElement).innerText)) sink.envelope = true;
+      for (const el of reds(root)) {
+        if (el.closest("[data-outbox-failure], [data-launch-chip]")) continue;
+        const mark = (el.outerHTML ?? "").slice(0, 160);
+        if (!sink.danger.includes(mark)) sink.danger.push(mark);
+      }
+      sink.outboxMax = Math.max(sink.outboxMax, root.querySelectorAll("[data-outbox-entry]").length);
+      sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
+      sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
+      /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
+      const state = `panel ${root.getAttribute("data-orchestrator-state")}, outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}, feed ${root.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? "none"}, draft ${root.querySelector("[data-orchestrator-draft]") ? "yes" : "no"}`;
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);
+      /* After the first card: a state with no card (the first message gone) or with the create draft back (the Confirm flashed). */
+      if (sink.mandateMax >= 1 && (!root.querySelector("[data-mandate-card]") || root.querySelector("[data-orchestrator-draft]")) && !sink.lapses.includes(state)) sink.lapses.push(state);
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    scan();
+  }, [SEAT, RED] as const);
+
+  const readPane = (page: Page, line: string, mark: boolean) => page.evaluate(({ seat, line, mark, red }) => {
+    const reds = (0, eval)(red) as (root: Element) => Element[];
+    const root = document.querySelector(`${seat} [data-orchestrator-panel]`)!;
+    const visible = (root as HTMLElement).innerText;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(line));
+    const card = root.querySelector<HTMLElement>("[data-mandate-card]");
+    const first = rows[0] ?? card;
+    if (mark && first) first.setAttribute("data-fm-mark", "1");
+    const rect = first ? first.getBoundingClientRect() : null;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    return {
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      danger: reds(root).filter((el) => !el.closest("[data-outbox-failure], [data-launch-chip]")).length,
+      rows: rows.length,
+      outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
+      userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
+      rowState: rows[0]?.getAttribute("data-message-row") ?? null,
+      sameNode: first ? first.hasAttribute("data-fm-mark") : null,
+      rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+      failureLines: root.querySelectorAll("[data-outbox-failure]").length,
+      failureText: root.querySelector("[data-outbox-failure] [data-outbox-status]")?.textContent ?? null,
+      errorChips: [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')].map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      overflowX: Math.max(document.documentElement.scrollWidth - innerWidth, (root as HTMLElement).scrollWidth - (root as HTMLElement).clientWidth),
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answered: (root.textContent ?? "").includes("Looking at the export test."),
+    };
+  }, { seat: SEAT, line, mark, red: RED });
+
+  browserTest("cases p, s and f hold one clean row at 1440 and 1280, light and dark, en and uk", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/first-message-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const viewport of FRAMES) for (const kind of ["p", "s", "f"] as const) {
+        const label = `${kind}-${viewport.width}-${scheme}-${lang}`;
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const line = kind === "s" ? MANDATE_LINE : PLAIN_LINE;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=first-message&case=${kind}`, viewport, scheme, lang);
+        try {
+          await page.addStyleTag({ content: HIDE_TOAST });
+          if (kind === "s") {
+            await page.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+            await watch(page);
+            await page.locator("[data-orchestrator-confirm]").first().click();
+            await page.waitForSelector(`${SEAT} [data-mandate-card], ${SEAT} [data-outbox-entry]`, { state: "attached", timeout: 20_000 });
+          } else {
+            await page.waitForSelector(`${SEAT} [data-orchestrator-panel]`, { state: "attached", timeout: 20_000 });
+            await page.waitForFunction((seat) => Boolean(document.querySelector(`${seat} [data-feed-state]`)), SEAT, { timeout: 15_000 });
+            await watch(page);
+          }
+          const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
+          const readings: Array<Record<string, unknown>> = [];
+          let pendingRect: { left: number; width: number; top: number } | null = null;
+          /* The seat's mandate opened at Pending (a real click on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
+          for (const [index, step] of steps.entries()) {
+            if (index > 0) {
+              await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
+              if (step === "answered") await page.waitForFunction((seat) => (document.querySelector(`${seat} [data-orchestrator-panel]`)?.textContent ?? "").includes("Looking at the export test."), SEAT, { timeout: 25_000 });
+              else await page.waitForTimeout(1_800);
+            } else await page.waitForTimeout(600);
+            const read = await readPane(page, line, index === 0);
+            await page.screenshot({ path: path.join(OUT, `${label}-${step}.png`) });
+            readings.push({ step, ...read });
+            const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator(`${SEAT} [data-mandate-card] summary`).first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(OUT, `${label}-${step}-open.png`) });
+            }
+            if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
+            if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
+            if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);
+            if (read.zeroWidthControls.length) failures.push(`${at}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+            if (kind === "f") {
+              if (read.rows !== 1 || read.failureLines !== 1) failures.push(`${at}: ${read.rows} rows and ${read.failureLines} failure lines`);
+              if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${at}: error chips ${JSON.stringify(read.errorChips)}`);
+              if (read.failureText?.includes("runtime host unavailable")) failures.push(`${at}: the failure line prints the raw reason`);
+              continue;
+            }
+            if (read.errorChips.length) failures.push(`${at}: an error chip ${JSON.stringify(read.errorChips)}`);
+            if (kind === "p") {
+              if (read.rows !== 1) failures.push(`${at}: ${read.rows} rows carry the prompt`);
+              if (index > 0 && read.sameNode !== true) failures.push(`${at}: the prompt row is a different node than at pending`);
+              if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
+              if (index === 0 && read.rect) pendingRect = read.rect;
+              if (pendingRect && read.rect && (Math.abs(read.rect.left - pendingRect.left) > 1 || Math.abs(read.rect.width - pendingRect.width) > 1 || (index < 3 && Math.abs(read.rect.top - pendingRect.top) > 1))) failures.push(`${at}: the row moved from ${JSON.stringify(pendingRect)} to ${JSON.stringify(read.rect)}`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
+          }
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
+          if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
+          if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
+          if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
+          if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
+          if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card or the create draft: ${JSON.stringify(seen.lapses)}`);
+          frames[label] = { readings, seen, pageErrors };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});
+
 describe("done task retention", () => {
   browserTest("old staffed completions leave desktop and 390px board; task lists retain them", async () => {
     const out = path.resolve("evidence/board-done-retention");
@@ -13813,6 +14127,145 @@ describe("Codex service tier rendered evidence", () => {
   }, 120_000);
 });
 
+describe("linked board sync health", () => {
+  browserTest("open links show waiting, successful sync and honest failure in both directions", async () => {
+    const out = path.resolve(".artifacts/linked-board-sync-health");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links": { self: { label: "Machine B", publicUrl: "https://board.example.test", check: null }, state: "ok", entry: { port: 8897, publishable: true }, keyOn: true },
+      "/api/links/shared": { shared: { v: 1, all: false, projects: [] }, known: [], states: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {};
+    try {
+      for (const [width, locale] of [[1440, "en"], [1440, "uk"], [390, "en"], [390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        let phase = "waiting";
+        try {
+          await page.clock.install();
+          const status = () => ({ lastCall: phase === "waiting" ? null : Date.now() - (phase === "stale" ? 20 * 60_000 : 10_000), state: phase === "failing" ? "failing" : "active", error: phase === "failing" ? "malformed" : null });
+          await page.route("**/api/links/peers", (route) => route.fulfill({ json: { peers: [{ id: "peer", label: "Machine A", url: "https://peer.example.test", ...status(), ...(phase === "revoked" ? { state: "revoked", error: "revoked", lastCall: Date.now() - 60_000 } : {}) }] } }));
+          await page.route("**/api/links/grants", (route) => route.fulfill({ json: { grants: [{ id: "grant", label: "Machine A", today: 3, sevenDays: 12, ...status() }] } }));
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-linked-settings")));
+          await page.locator('[data-linked-sync="waiting"]').first().waitFor();
+          expect(await page.locator('[data-linked-sync="waiting"]').count()).toBe(2);
+          // An operator who opens the dialog to check sync sees a sync line without scrolling.
+          const firstTop = await page.locator("[data-linked-sync]").first().evaluate((node) => node.getBoundingClientRect().bottom);
+          expect(firstTop).toBeLessThan(await page.evaluate(() => innerHeight));
+          const reading: Record<string, { colour: string; text: string }> = {};
+          for (const next of ["synced", "stale", "failing"]) {
+            phase = next;
+            await page.clock.fastForward(5000);
+            await page.locator(`[data-linked-sync="${next}"]`).first().waitFor();
+            expect(await page.locator(`[data-linked-sync="${next}"]`).count()).toBe(2);
+            reading[next] = await page.locator(`[data-linked-sync="${next}"]`).first().evaluate((node) => ({ colour: getComputedStyle(node).color, text: node.textContent ?? "" }));
+            if (next !== "failing") expect(reading[next].text).not.toMatch(/\d{1,2}[/.]\d{1,2}[/.]\d{4}|\b[AP]M\b/);
+            if (locale === "uk") expect(reading[next].text).toMatch(/[А-Яа-яІіЇїЄє]/);
+            if (next === "failing") {
+              expect(await page.locator('[data-linked-peer-error="malformed"]').count()).toBe(1);
+              expect(await page.locator('[data-linked-grant-error="malformed"]').count()).toBe(1);
+            }
+          }
+          // Fresh, stale and failing differ in both computed colour and wording.
+          expect(new Set(Object.values(reading).map((entry) => entry.colour)).size).toBe(3);
+          expect(new Set(Object.values(reading).map((entry) => entry.text)).size).toBe(3);
+          await page.locator('[data-linked-grant]').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-${locale}.png`) });
+          phase = "revoked";
+          await page.clock.fastForward(5000);
+          const revokedLine = page.locator('[data-linked-peer="revoked"] [data-linked-sync]');
+          await revokedLine.waitFor();
+          expect(await revokedLine.getAttribute("data-linked-sync")).toBe("failing");
+          const revoked = await revokedLine.evaluate((node) => ({ colour: getComputedStyle(node).color, text: node.textContent ?? "" }));
+          expect(revoked.colour).toBe(reading.failing.colour);
+          expect(revoked.colour).not.toBe(reading.synced.colour);
+          expect(revoked.text).toBe(translate(locale, "links.syncFailing", { ago: locale === "uk" ? "1 хвилину тому" : "1 minute ago" }));
+          await revokedLine.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-revoked.png`) });
+          evidence[`${width}-${locale}`] = { reading, revoked, firstSyncBottom: firstTop, statuses: await page.locator('[data-linked-sync]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-linked-sync"))), pageErrors };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/linked-board-sync-health", { recursive: true });
+      fs.writeFileSync("evidence/linked-board-sync-health/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("board host chips distinguish fresh, stale and failing sync on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/linked-board-sync-health");
+    fs.mkdirSync(out, { recursive: true });
+    const self = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+    const stage = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const [width, locale] of [[1440, "en"], [1440, "uk"], [390, "en"], [390, "uk"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=synced-task`, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        let phase = "synced";
+        let lastCall: number | null = Date.now() - 60_000;
+        try {
+          await page.route("**/api/links/agents**", (route) => route.fulfill({ json: {
+            agents: [], lanes: [], self, hosts: { [stage]: { label: "Stage", linked: phase !== "offline", state: phase === "failing" ? "failing" : "active",
+              lastCall } },
+          } }));
+          await page.evaluate(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { [`repo-${"a".repeat(32)}`]: true }, placement: "top", width: null })));
+          const readings: Record<string, { text: string; colour: string; clipped: boolean }> = {};
+          for (const next of ["synced", "stale", "failing", "waiting", "offline"]) {
+            phase = next;
+            lastCall = next === "waiting" ? null : Date.now() - (next === "stale" ? 1_200_000 : next === "failing" ? 7_200_000 : 60_000);
+            await page.reload();
+            if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            const chip = page.locator(width === 390 ? '[data-phone-card-host]' : '.host-chip').first();
+            await chip.waitFor();
+            await chip.scrollIntoViewIfNeeded();
+            if (next === "offline") {
+              expect(await chip.textContent()).toBe(translate(locale, "kanban.remote.notLinked", { host: "Stage" }));
+            } else {
+              const cue = chip.locator(`span[data-remote-sync="${next}"]`);
+              await cue.waitFor();
+              readings[next] = await cue.evaluate((node) => ({ text: node.textContent ?? "", colour: getComputedStyle(node).color,
+                clipped: node.parentElement!.scrollWidth > node.parentElement!.clientWidth + 1 }));
+              const expectedTone = next === "synced" ? "success" : next === "stale" ? "warning" : next === "failing" ? "danger" : "muted";
+              const toneColour = await page.evaluate((tone) => {
+                const probe = document.createElement("span");
+                probe.style.color = `var(--color-${tone})`;
+                document.body.append(probe);
+                const colour = getComputedStyle(probe).color;
+                probe.remove();
+                return colour;
+              }, expectedTone);
+              expect(readings[next].colour).toBe(toneColour);
+              expect(readings[next].text).toContain("Stage");
+              expect(readings[next].clipped).toBe(false);
+              if (locale === "uk") expect(readings[next].text).toMatch(/[А-Яа-яІіЇїЄє]/);
+            }
+            expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+            await page.screenshot({ path: path.join(out, `board-${width}-${locale}-${next}.png`) });
+          }
+          // A cached success ages even if subsequent local feed reads fail.
+          phase = "synced";
+          lastCall = Date.now() - 60_000;
+          await page.reload();
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('span[data-remote-sync="synced"]').first().waitFor();
+          await page.route("**/api/links/agents**", (route) => route.fulfill({ status: 503, json: { error: "unavailable" } }));
+          await page.clock.install();
+          await page.clock.fastForward(900_000);
+          await page.locator('span[data-remote-sync="stale"]').first().waitFor();
+          expect(await page.locator('span[data-remote-sync="synced"]').count()).toBe(0);
+          expect(new Set(["synced", "stale", "failing"].map((state) => readings[state].text)).size).toBe(3);
+          expect(new Set(["synced", "stale", "failing"].map((state) => readings[state].colour)).size).toBe(3);
+          expect(pageErrors).toEqual([]);
+          cases.push({ width, locale, readings, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/linked-board-sync-health", { recursive: true });
+      fs.writeFileSync("evidence/linked-board-sync-health/board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+});
 /*
  * A task another machine runs (docs/design/synced-task-card.md §5-§7): the
  * remote look, the host chip where "+ Agent" was, the owner's lanes drawn by
@@ -14014,10 +14467,10 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     return { notice, failed: maintenanceCardText(locale, failed, "UTC"), live: maintenanceCardText(locale, live, "UTC") };
   }
 
-  const tickAnswer = () => ({
+  const tickAnswer = (reason = "a release afternoon") => ({
     project: "atlas", changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
-    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason: "a release afternoon", monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
-    effective: { enabled: true, wakeIntervalMinutes: 30, reason: "a release afternoon", monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
+    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
+    effective: { enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
     defaults: {}, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
     policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
     state: { lastCheckAt: stamp(2), lastWakeAt: stamp(20), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
@@ -14037,6 +14490,197 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     ],
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
+
+  browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/seat-tick-instructions");
+    fs.mkdirSync(out, { recursive: true });
+    let storedReason = "a release afternoon";
+    /* Read once per case. The board stamps `until` and `updatedAt` from the clock, and a record whose stamps move
+       between two reads looks changed to the panel, which then discards the draft a refusal is meant to keep. */
+    let frozenAnswer = tickAnswer(storedReason);
+    const answerWith = (reason: string) => ({
+      ...frozenAnswer,
+      settings: { ...frozenAnswer.settings, reason },
+      effective: { ...frozenAnswer.effective, reason },
+    });
+    let putRequests = 0;
+    let releaseSettingsRead = () => {};
+    let markSettingsReadStarted = () => {};
+    let settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+    let settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          putRequests += 1;
+          const body = await request.json() as { reason?: string; enabled?: boolean };
+          if ((body.reason?.length ?? 0) > 500) {
+            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+          }
+          if (body.enabled === false && !body.reason?.trim()) {
+            return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
+          }
+          if (typeof body.reason === "string") storedReason = body.reason;
+        } else {
+          markSettingsReadStarted();
+          await settingsReadGate;
+        }
+        return Response.json(answerWith(storedReason));
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const english = "Read the incoming chat and answer questions, correcting anything inaccurate. Sort incoming tasks by priority and start them properly.";
+    const ukrainian = "Дивись що пишуть в чат і відповідай на питання, поправляй якщо щось неправильно. Розбирай задачі з вхідних по пріорітетам і правильно запускай.";
+
+    async function openPanel(page: Page, phone: boolean) {
+      if (phone) {
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+        const control = page.locator("[data-phone-task-tick-open]");
+        await control.waitFor();
+        await control.click();
+        await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+      } else {
+        const fold = page.locator("[data-seat-collapse]");
+        if (await fold.count()) await fold.first().click();
+        await page.locator("[data-open-seat-tick]").click();
+        await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+      }
+    }
+
+    async function assertVisible(page: Page, expected: string, label: string, state: string) {
+      const field = page.locator("[data-seat-tick-reason]");
+      expect(await field.inputValue(), `${label} ${state} keeps the complete instruction`).toBe(expected);
+      const geometry = await field.evaluate((node) => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+      expect(geometry.scrollHeight, `${label} ${state} text is fully visible`).toBeLessThanOrEqual(geometry.clientHeight + 1);
+      await field.screenshot({ path: path.join(SHOTS, `${label}-${state}.png`) });
+      return geometry;
+    }
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const phone of [false, true]) {
+        const width = phone ? 390 : 1440;
+        const label = `${phone ? "phone-390" : "desktop-1440"}-${lang}`;
+        const shortText = lang === "en" ? english : ukrainian;
+        const repeatedText = Array.from({ length: 4 }, () => shortText).join("\n");
+        const prefix = repeatedText.slice(0, 499).trimEnd();
+        const text = `${prefix}${"x".repeat(500 - prefix.length)}`;
+        storedReason = "a release afternoon";
+        frozenAnswer = tickAnswer(storedReason);
+        settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+        settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+          try {
+            if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
+            else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+            await openPanel(page, phone);
+            const field = page.locator("[data-seat-tick-reason]");
+            await settingsReadStarted;
+            expect(await field.isDisabled(), `${label} instructions stay disabled during the initial settings read`).toBe(true);
+            releaseSettingsRead();
+            await page.waitForFunction(() => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]");
+              return field !== null && !field.disabled;
+            });
+            await field.fill(text);
+            const edited = await assertVisible(page, text, label, "edited");
+            expect(text.length, `${label} boundary instruction length`).toBe(500);
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(storedReason.length, `${label} server fixture stores the full instruction`).toBe(500);
+            const saved = await assertVisible(page, text, label, "saved");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-saved-panel.png`) });
+            const requestsBeforeOverage = putRequests;
+            await field.fill(`${text}x`);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe("501");
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toContain(lang === "en" ? "501 / 500 characters" : "501 / 500 символів");
+            expect(await page.locator("[data-seat-tick-over-limit]").textContent()).toContain(lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1");
+            const viewportWidth = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth }));
+            expect(viewportWidth.page, `${label} over-limit page has no horizontal overflow`).toBeLessThanOrEqual(viewportWidth.viewport);
+            expect(putRequests, `${label} counter appears before a request`).toBe(requestsBeforeOverage);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit.png`) });
+            await page.locator("[data-seat-tick-save]").click();
+            const overLimitMessage = page.locator("[data-seat-tick-error]");
+            await overLimitMessage.waitFor();
+            const overLimitError = await overLimitMessage.textContent();
+            expect(overLimitError).toContain(lang === "en" ? "«Instructions for every wake» is 501 characters" : "«Вказівки на кожне пробудження» перевищують ліміт 500 символів: 501");
+            expect(overLimitError, `${label} refusal names the field the panel shows`).not.toContain("(reason)");
+            expect(await field.inputValue(), `${label} the refused draft stays in the field`).toBe(`${text}x`);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent(), `${label} the counter survives the refusal`).toContain(lang === "en" ? "501 / 500 characters" : "501 / 500 символів");
+            const overLimitReading = await page.locator("[data-seat-tick-character-count]").textContent();
+            await page.screenshot({ path: path.join(SHOTS, `${label}-over-limit-refusal.png`) });
+            await field.fill("");
+            await page.locator("[data-seat-tick-enabled]").click();
+            await page.locator("[data-seat-tick-save]").click();
+            const requiredMessage = page.locator("[data-seat-tick-error]");
+            await requiredMessage.waitFor();
+            const requiredError = await requiredMessage.textContent();
+            expect(requiredError).toContain(lang === "en" ? "«Instructions for every wake» is required" : "«Вказівки на кожне пробудження» потрібні");
+            expect(requiredError, `${label} refusal names the field the panel shows`).not.toContain("(reason)");
+            if (lang === "en") expect(requiredError).not.toContain("the seat");
+            expect(await field.inputValue(), `${label} the emptied field stays empty after the refusal`).toBe("");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-missing-instructions-refusal.png`) });
+            expect(pageErrors, `${label} errors while saving`).toEqual([]);
+            cases.push({ label, edited, saved, overLimit: overLimitReading, putRequests });
+          } finally { await context.close(); }
+        }
+        {
+          settingsReadStarted = new Promise<void>((resolve) => { markSettingsReadStarted = resolve; });
+          settingsReadGate = new Promise<void>((resolve) => { releaseSettingsRead = resolve; });
+          const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+          try {
+            if (phone) await page.locator('[data-phone-kanban-tab="inbox"]').waitFor();
+            else await page.waitForSelector(card("t-tick-notice"), { timeout: 30_000 });
+            await openPanel(page, phone);
+            await settingsReadStarted;
+            expect(await page.locator("[data-seat-tick-reason]").isDisabled(), `${label} reopened instructions wait for the settings read`).toBe(true);
+            releaseSettingsRead();
+            await page.waitForFunction((expected) => {
+              const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]");
+              return field !== null && field.value === expected;
+            }, text);
+            const reopened = await assertVisible(page, text, label, "reopened");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-reopened-panel.png`) });
+            expect(pageErrors, `${label} errors after reopening`).toEqual([]);
+            cases.push({ label, reopened });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(SHOTS, "instructions-readings.json"), `${JSON.stringify(cases, null, 2)}\n`);
+  }, 180_000);
+
+  async function instructionReading(page: Page, lang: "en" | "uk") {
+    const field = page.locator("[data-seat-tick-reason]");
+    await field.scrollIntoViewIfNeeded();
+    const label = lang === "en" ? "Instructions for every wake" : "Вказівки на кожне пробудження";
+    const helper = lang === "en"
+      ? "The agent receives these instructions on every wake: what to do next and when to stop."
+      : "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися.";
+    expect(await field.getAttribute("aria-describedby")).toBeTruthy();
+    expect(await field.locator("..").textContent()).toContain(label);
+    const hint = page.locator("[data-seat-tick-instructions-hint]");
+    expect(await hint.textContent()).toContain(helper);
+    expect(await field.inputValue()).toBe("a release afternoon");
+    const geometry = await hint.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const text = range.getBoundingClientRect();
+      return { left: box.left, right: box.right, textLeft: text.left, textRight: text.right, textHeight: text.height, height: box.height, viewport: innerWidth };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.textLeft).toBeGreaterThanOrEqual(geometry.left - 1);
+    expect(geometry.textRight).toBeLessThanOrEqual(geometry.right + 1);
+    expect(geometry.textHeight).toBeLessThanOrEqual(geometry.height + 1);
+    return { label, helper: await hint.textContent(), geometry };
+  }
 
   browserTest("the notice card is titled after the setting and opens the panel; the run cards keep their time visible; en and uk, light and dark, 1440 and 390", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
@@ -14085,6 +14729,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
                 };
                 return {
                   notice: clamp("t-tick-notice"), failed: clamp("t-tick-failed"), live: clamp("t-tick-live"),
+                  noticeBody: text('[data-kanban-board] .card[data-id="task:t-tick-notice"] .desc'),
                   failedBody: text('[data-kanban-board] .card[data-id="task:t-tick-failed"] .desc'),
                   noticeButton: text('[data-open-seat-tick]'),
                 };
@@ -14100,8 +14745,9 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
               await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
               await page.waitForTimeout(500);
               const unfoldedAfter = (await seat.getAttribute("data-collapsed")) === "0";
+              const instructions = await instructionReading(page, lang);
               await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-panel.png`) });
-              readings.push({ label, ...read, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
+              readings.push({ label, ...read, instructions, foldedBefore, unfoldedAfter, popoverOpened: true, pageErrors });
               expect(pageErrors, `${label} page errors`).toEqual([]);
             } finally { await context.close(); }
           }
@@ -14130,8 +14776,9 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
               await control.click();
               await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
               await page.waitForTimeout(700);
+              const instructions = await instructionReading(page, lang);
               await page.screenshot({ path: path.join(SHOTS, `${label}-notice-opens-tick-sheet.png`) });
-              readings.push({ label, phone: true, controlHeight, tickSheetOpened: true, pageErrors });
+              readings.push({ label, phone: true, instructions, controlHeight, tickSheetOpened: true, pageErrors });
               expect(pageErrors, `${label} page errors`).toEqual([]);
             } finally { await context.close(); }
           }
@@ -14143,11 +14790,12 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.controlHeight, `${entry.label} the tick control is a 44 px target`).toBeGreaterThanOrEqual(44);
       expect(entry.tickSheetOpened, `${entry.label} the tick sheet opened`).toBe(true);
     }
-    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
+    const desk = readings.filter((entry) => !entry.phone) as Array<{ label: string; notice: { text: string }; noticeBody: string; failed: { text: string; timeShown: boolean | null }; live: { text: string; timeShown: boolean | null }; failedBody: string; noticeButton: string; foldedBefore: boolean; unfoldedAfter: boolean }>;
     for (const entry of desk) {
       const en = entry.label.endsWith("-en");
       /* The notice is titled after the setting, in the card's own language. */
       expect(entry.notice.text, `${entry.label} notice title`).toMatch(en ? /^Tick: every 30 min until \d{2}:\d{2}$/ : /^Тікер: кожні 30 хв до \d{2}:\d{2}$/);
+      expect(entry.noticeBody, `${entry.label} instructions card label`).toContain(en ? "Instructions for every wake:" : "Вказівки на кожне пробудження:");
       expect(entry.noticeButton, `${entry.label} notice button`).toBe(translate(en ? "en" : "uk", "kanban.tickNotice.open"));
       /* The run cards lead with their time, and the time is on screen even where
          the column is too narrow for the whole title. */
@@ -14161,4 +14809,671 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       expect(entry.unfoldedAfter, `${entry.label} the request unfolded the seat`).toBe(true);
     }
   }, 600_000);
+});
+
+describe("agent memory isolation", () => {
+  browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
+    const out = path.resolve(".artifacts/agent-memory-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 1440, height: 900 },  colorScheme: "light", reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${locale}&memory=1&open=1`);
+          const row = page.locator("[data-needs-you-panel] [data-needs-you-row]").filter({ hasText: locale === "en" ? "Killed: out of memory" : "Зупинено: нестача пам’яті" });
+          await row.waitFor({ timeout: 15000 });
+          expect(await row.innerText()).toContain(locale === "en" ? "build · limit 15 GB" : "build · ліміт 15 ГБ");
+          await row.scrollIntoViewIfNeeded();
+          const geometry = await row.evaluate((element) => ({ width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, overflow: document.documentElement.scrollWidth > innerWidth }));
+          expect(geometry.right).toBeLessThanOrEqual(1440);
+          expect(geometry.overflow).toBeFalse();
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+          cases.push({ locale, ...geometry, errors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/agent-memory", { recursive: true });
+      fs.writeFileSync("evidence/agent-memory/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
+
+// The focused common-path case shares its assertions with the phone driver.
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 1440 in en and uk", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/seat-handover/desktop-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    try { await captureSeatMandateHandover(browser, server.base, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
+describe("state writes disk-full alert", () => {
+  browserTest("desktop alert stays clear of header and composer in both schemes and locales", async () => {
+    const out = path.resolve(".artifacts/self-update-reload/state-writes");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?state-disk-full=1`, VIEWPORT, scheme, locale, "reduce");
+        try {
+          const alert = page.locator("[data-state-writes-alert]");
+          await alert.waitFor();
+          expect(await alert.count()).toBe(1);
+          const geometry = await alert.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const overlaps = [...document.querySelectorAll('header, [data-mobile2-bar], textarea')].filter((other) => {
+              const b = other.getBoundingClientRect();
+              return b.width && b.height && box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top;
+            }).length;
+            return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom, overlaps, clipped: el.scrollHeight > el.clientHeight };
+          });
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.y).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(VIEWPORT.width);
+          expect(geometry.bottom).toBeLessThanOrEqual(VIEWPORT.height);
+          expect(geometry.overlaps).toBe(0);
+          expect(geometry.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `desktop-${scheme}-${locale}.png`) });
+          readings.push({ scheme, locale, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/state-lease-recovery", { recursive: true });
+      fs.writeFileSync("evidence/state-lease-recovery/desktop.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+/*
+ * Launch layout shifts (docs/design/launch-render-polish.md). A launch is read
+ * the way the operator watches it: the draft is opened, the first prompt sent
+ * and the page left alone until the turn ends, while a PerformanceObserver
+ * records every layout shift the page makes. The page is the real Viewer over
+ * the fixture's `launch-cls` scenario, which answers the spawn, the files poll
+ * and the transcript on a clock (receipt, `spawn:` projection, adoption, tool
+ * rows, prose, the turn's end). The sum of the shifts no input explains, from
+ * the send to the turn's end, is the launch's cumulative layout shift.
+ *
+ *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "launch layout shift"
+ *
+ * LLV_LAUNCH_CLS_LABEL names the record (`before` or `after`); the readings go
+ * to `evidence/launch-render-polish/cls-<label>.json`.
+ */
+type Shift = { at: number; value: number; sources: string[]; mandate: boolean };
+/* Chrome's layout-shift entries, from here on, each with the nodes that moved. */
+async function installShiftObserver(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean }> };
+    w.__shifts = [];
+    const describeNode = (node: Node | null) => node instanceof Element ? `${node.tagName}.${String(node.getAttribute("class") ?? "").split(/\s+/).slice(0, 2).join(".")}${node.getAttribute("data-status") ? `[${node.getAttribute("data-status")}]` : ""}` : "?";
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as unknown as Array<{ startTime: number; value: number; hadRecentInput: boolean; sources?: Array<{ node: Node | null }> }>) {
+        w.__shifts.push({
+          at: entry.startTime, value: entry.value, recent: entry.hadRecentInput, sources: (entry.sources ?? []).slice(0, 3).map((source) => describeNode(source.node)),
+          /* A shift of the orchestrator's mandate bubble: its hand-over is the first-bubble lane's (#2006, #2415). */
+          mandate: (entry.sources ?? []).some((source) => (source.node?.textContent ?? "").trimStart().startsWith("You are this project's orchestrator")),
+        });
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
+}
+/* The shifts no input explains, from `from` (a `performance.now()` reading) on. */
+function collectShifts(page: Page, from: number): Promise<Shift[]> {
+  return page.evaluate((start) => (window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean }> }).__shifts
+    .filter((entry) => entry.at >= start && !entry.recent)
+    .map((entry): Shift => ({ at: Math.round(entry.at - start), value: Number(entry.value.toFixed(4)), sources: entry.sources, mandate: entry.mandate })), from);
+}
+
+describe("launch layout shift rendered evidence", () => {
+  const LAUNCH_CLS_LIMIT = 0.1;
+  const label = process.env.LLV_LAUNCH_CLS_LABEL?.trim() || "after";
+  const viewports = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("sending a first prompt shifts the page by less than 0.1 at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const viewport of viewports) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: viewport.width, height: viewport.height }, "light", "en", "no-preference", viewport.touch);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id], [data-phone-card]", { state: "attached", timeout: 20_000 });
+          await installShiftObserver(page);
+          if (viewport.touch) {
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-menu-row="new-agent"]');
+          } else {
+            /* A project the operator is launching its first agents in has no seat open over the board. */
+            const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+            if (await seat.count()) await seat.click();
+            await page.waitForTimeout(600);
+            await page.click('[data-bar-control][aria-label="Create"]');
+            await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+          }
+          const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
+          await prompt.waitFor({ timeout: 10_000 });
+          /* The runtime the operator chose is Haiku at low effort, on Claude. */
+          await page.selectOption('select[aria-label="Agent model"]', "haiku");
+          await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
+          await prompt.fill("Read the README and tell me what this project does");
+          await page.waitForTimeout(800);
+          const sentAt = await page.evaluate(() => {
+            /* A scroll moves the content as visibly as a shift, and the layout-shift metric does not count it: the
+               Assigned column's scroll position is sampled from the send to the turn's end. */
+            const w = window as unknown as { __scrolls: number[] };
+            w.__scrolls = [];
+            const body = document.querySelector<HTMLElement>('.col-body[data-status="assigned"]');
+            if (body) {
+              w.__scrolls.push(body.scrollTop);
+              setInterval(() => w.__scrolls.push(body.scrollTop), 50);
+            }
+            return performance.now();
+          });
+          await page.getByRole("button", { name: "Launch the agent" }).first().click();
+          /* The fixture's turn ends 10.8 s after the receipt is asked for; the page is left alone until then. */
+          await page.waitForTimeout(14_000);
+          const shifts = await collectShifts(page, sentAt);
+          const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          const largest = [...shifts].sort((a, b) => b.value - a.value).slice(0, 8);
+          await page.screenshot({ path: path.join(out, `${label}-${viewport.name}.png`) });
+          const handOff = viewport.touch ? null : await page.evaluate(() => {
+            const scrolls = (window as unknown as { __scrolls: number[] }).__scrolls;
+            const body = document.querySelector<HTMLElement>('.col-body[data-status="assigned"]')!;
+            const head = body.querySelector<HTMLElement>('.card[data-id^="task:"] .head')?.getBoundingClientRect();
+            const view = body.getBoundingClientRect();
+            return {
+              scrollFrom: scrolls[0] ?? 0, scrollDrift: Math.max(0, ...scrolls.map((value) => Math.abs(value - (scrolls[0] ?? 0)))),
+              headTop: head ? Math.round(head.top) : null, headBottom: head ? Math.round(head.bottom) : null, columnTop: Math.round(view.top), columnBottom: Math.round(view.bottom),
+              headVisible: Boolean(head && head.top >= view.top - 0.5 && head.bottom <= view.bottom + 0.5),
+            };
+          });
+          /* Opening a second draft beside the launched agent must leave that agent in the window. */
+          let secondDraft: Record<string, unknown> | null = null;
+          if (!viewport.touch) {
+            await page.click('[data-bar-control][aria-label="Create"]');
+            await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+            await page.locator('[data-kanban-draft] textarea[aria-label="First prompt text"]').first().waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(800);
+            secondDraft = await page.evaluate(() => {
+              const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
+              const box = reader?.getBoundingClientRect();
+              const visibleWidth = box ? Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) : 0;
+              const visibleHeight = box ? Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0)) : 0;
+              return box ? { top: Math.round(box.top), left: Math.round(box.left), width: Math.round(box.width), visibleShare: Number(((visibleWidth * visibleHeight) / (box.width * box.height)).toFixed(3)), viewportHeight: window.innerHeight } : null;
+            });
+            await page.screenshot({ path: path.join(out, `${label}-${viewport.name}-second-draft.png`) });
+          }
+          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest, handOff, secondDraft, pageErrors });
+          expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
+          if (handOff && label === "after") {
+            expect(handOff.headVisible, `${viewport.name} the launched card's head stays in view after the hand-off`).toBe(true);
+            expect(handOff.scrollDrift, `${viewport.name} the Assigned column does not scroll at the hand-off`).toBeLessThanOrEqual(2);
+          }
+          if (secondDraft && label === "after") {
+            expect(secondDraft.visibleShare, `${viewport.name} the launched agent stays in the window while a second draft opens`).toBeGreaterThan(0.6);
+          }
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+    fs.writeFileSync(`evidence/launch-render-polish/cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings }, null, 2)}\n`);
+    for (const reading of readings as Array<{ viewport: string; cls: number }>) {
+      if (label === "after") expect(reading.cls, `${reading.viewport} cumulative layout shift of one launch`).toBeLessThan(LAUNCH_CLS_LIMIT);
+    }
+  }, 240_000);
+
+  /* A launch made while the operator reads another agent in Assigned: the draft opens beside that agent and
+     the launched card lands under it, so the agent being read neither moves nor leaves the window, when the
+     draft opens or when the launch hands off. */
+  browserTest("launching while an agent is read in Assigned keeps that agent in the window and shifts by less than 0.1 at 1440", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: 1440, height: 900 }, "light", "en", "no-preference", false);
+      try {
+        await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+        await installShiftObserver(page);
+        const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+        if (await seat.count()) await seat.click();
+        await page.waitForTimeout(600);
+        /* The agent the operator is reading: the first task card in Assigned, opened from its tile. */
+        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]').first();
+        const readId = await card.getAttribute("data-id");
+        await card.locator(".tile").first().click();
+        const readerOf = `.card[data-id="${readId}"] [data-kanban-reader]`;
+        await page.locator(readerOf).first().waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(600);
+        await page.click('[data-bar-control][aria-label="Create"]');
+        await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
+        const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
+        await prompt.waitFor({ timeout: 10_000 });
+        await page.selectOption('select[aria-label="Agent model"]', "haiku");
+        await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
+        await prompt.fill("Read the README and tell me what this project does");
+        await page.waitForTimeout(800);
+        const sentAt = await page.evaluate((selector) => {
+          /* The share of the read agent's reader in the window, sampled from the send to the turn's end. */
+          const w = window as unknown as { __readerShare: number[] };
+          w.__readerShare = [];
+          const share = () => {
+            const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+            if (!box || !box.width || !box.height) return 0;
+            const width = Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0));
+            const height = Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0));
+            return (width * height) / (box.width * box.height);
+          };
+          w.__readerShare.push(share());
+          setInterval(() => w.__readerShare.push(share()), 50);
+          return performance.now();
+        }, readerOf);
+        await page.getByRole("button", { name: "Launch the agent" }).first().click();
+        await page.waitForTimeout(14_000);
+        const shifts = await collectShifts(page, sentAt);
+        const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+        await page.screenshot({ path: path.join(out, `${label}-read-launch-desktop-1440.png`) });
+        const state = await page.evaluate(() => {
+          const shares = (window as unknown as { __readerShare: number[] }).__readerShare;
+          return { minShare: Number(Math.min(...shares).toFixed(3)), samples: shares.length };
+        });
+        const launchedBelow = await page.evaluate((id) => {
+          const cards = [...document.querySelectorAll<HTMLElement>('.col-body[data-status="assigned"] .card[data-id^="task:"]')];
+          const read = cards.findIndex((entry) => entry.dataset.id === id);
+          const launched = cards.findIndex((entry) => entry.dataset.id === "task:t-launch");
+          return { read, launched };
+        }, readId);
+        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: launchedBelow, pageErrors };
+        fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+        fs.writeFileSync(`evidence/launch-render-polish/read-launch-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings: [reading] }, null, 2)}\n`);
+        expect(pageErrors, "page errors").toEqual([]);
+        if (label === "after") {
+          expect(state.minShare, "the agent being read stays in the window from the send to the turn's end").toBeGreaterThan(0.6);
+          expect(launchedBelow.launched, "the launched card stands right under the agent being read").toBe(launchedBelow.read + 1);
+          expect(cls, "cumulative layout shift of a launch made beside a read agent").toBeLessThan(LAUNCH_CLS_LIMIT);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
+  /* Creating an orchestrator from the project's draft: the same clock as a launch (`?scenario=seat-create-cls`).
+     The page is left alone from Confirm to the first rows of the seat's transcript, while the layout shifts
+     and the composer's runtime pill are recorded. The pill must read the effort the draft chose from the first
+     frame it exists in: reading the engine's lowest tier first and the chosen one a poll later is the
+     Light to High flip the operator saw. */
+  browserTest("creating an orchestrator shifts the page by less than 0.1 at 1440 and 390 and its effort pill never changes word", async () => {
+    const out = path.resolve(".artifacts/launch-render-polish");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Array<Record<string, unknown> & { viewport: string; cls: number; clsWithoutMandate: number }> = [];
+    try {
+      for (const viewport of viewports) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-create-cls`, { width: viewport.width, height: viewport.height }, "light", "en", "no-preference", viewport.touch);
+        try {
+          if (viewport.touch) {
+            await page.click("[data-mobile2-seat-open]");
+            await page.waitForSelector('[data-mobile2-sheet="rotate"] [data-orchestrator-confirm], [data-mobile2-sheet="rotate"] button[type="submit"]', { timeout: 20_000 });
+          } else {
+            await page.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+          }
+          await page.waitForTimeout(800);
+          const chosen = (await page.locator("[data-orchestrator-runs-on-value]").first().textContent())?.match(/(\w+) effort/)?.[1] ?? null;
+          expect(chosen, `${viewport.name} the draft names its effort`).not.toBeNull();
+          const word = viewport.touch ? chosen! : translate("en", `reasoningTier.${chosen}` as Parameters<typeof translate>[1]);
+          const others = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+            .filter((tier) => tier !== chosen)
+            .map((tier) => (viewport.touch ? tier : translate("en", `reasoningTier.${tier}` as Parameters<typeof translate>[1])));
+          await installShiftObserver(page);
+          /* Every distinct text the composer's runtime pill draws, with the time it first drew it. */
+          await page.evaluate(() => {
+            const w = window as unknown as { __pills: Array<{ at: number; text: string }> };
+            w.__pills = [];
+            const read = () => {
+              for (const pill of document.querySelectorAll("[data-runtime-pill]")) {
+                const text = (pill.textContent ?? "").replace(/\s+/g, " ").trim();
+                if (text && !w.__pills.some((entry) => entry.text === text)) w.__pills.push({ at: performance.now(), text });
+              }
+            };
+            new MutationObserver(read).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+            read();
+          });
+          const sentAt = await page.evaluate(() => performance.now());
+          await page.locator('[data-orchestrator-confirm], [data-mobile2-sheet="rotate"] button[type="submit"]').first().click();
+          if (viewport.touch) {
+            /* The phone's create sheet stays over the board once the seat is live; the operator closes it and opens
+               the seat's conversation from its card, which is where the composer and its pill are drawn. */
+            await page.waitForTimeout(1_500);
+            await page.locator('[data-mobile2-sheet="rotate"] button[aria-label="Close"]').click();
+            await page.click("[data-mobile2-seat-open]");
+            await page.waitForTimeout(10_500);
+          } else {
+            /* Adoption is 2.4 s after the receipt; the tool rows and prose follow for ten seconds. */
+            await page.waitForTimeout(12_000);
+          }
+          const shifts = await collectShifts(page, sentAt);
+          const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          /* The mandate bubble's own hand-over is read apart: the first-bubble lane (#2006, #2415) owns it. */
+          const clsWithoutMandate = Number(shifts.filter((entry) => !entry.mandate).reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
+          const pills = await page.evaluate(() => (window as unknown as { __pills: Array<{ at: number; text: string }> }).__pills.map((entry) => entry.text));
+          /* The seat header and the composer's pill name one model and one tier the same way. */
+          const names = await page.evaluate(() => ({
+            header: (document.querySelector("[data-orchestrator-model]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+            pill: (document.querySelector("[data-runtime-pill]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+          }));
+          await page.screenshot({ path: path.join(out, `${label}-seat-${viewport.name}.png`) });
+          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), clsWithoutMandate, chosen, pills, names, pageErrors });
+          expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
+          if (label === "after") {
+            if (names.header) {
+              const headerModel = names.header.split(" · ")[0]!;
+              expect(names.pill, `${viewport.name} the seat header's model name is the composer pill's`).toContain(headerModel);
+              expect(names.header, `${viewport.name} the seat header names the tier as the pill does`).toContain(word);
+            }
+            expect(pills.length, `${viewport.name} the composer drew a runtime pill`).toBeGreaterThan(0);
+            for (const text of pills) {
+              expect(text, `${viewport.name} the runtime pill reads the chosen effort from its first frame`).toContain(word);
+              for (const other of others) expect(text, `${viewport.name} the runtime pill never reads ${other}`).not.toMatch(new RegExp(`\\b${other}\\b`));
+            }
+          }
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
+    fs.writeFileSync(`evidence/launch-render-polish/seat-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings }, null, 2)}\n`);
+    for (const reading of readings) {
+      if (label === "after") expect(reading.clsWithoutMandate, `${reading.viewport} cumulative layout shift of creating an orchestrator, the mandate bubble's hand-over apart`).toBeLessThan(LAUNCH_CLS_LIMIT);
+    }
+  }, 240_000);
+});
+
+describe("task chip: the card's Ask button puts a task in the orchestrator's composer", () => {
+  /*
+   * Rendered evidence for the card's one «Ask» button. With the seat folded, a press on a card in the Assigned
+   * column attaches the task as a chip above the seat's composer (never as text in the input), unfolds the seat,
+   * and leaves the card where it was on the screen. A second card adds a second chip, × takes one back out, and
+   * the longer Ukrainian label holds in the narrowest card foot.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task chip"
+   *
+   * Measurements go to `evidence/task-chip-to-orchestrator/geometry.json`; frames to `.artifacts/task-chip/`.
+   */
+  const OUT = path.resolve(".artifacts/task-chip");
+  const EVIDENCE = path.resolve("evidence/task-chip-to-orchestrator");
+  const FOLDED = JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null, topWidths: {}, sideWidths: {} });
+
+  browserTest("task chip: a mouse press keeps Ask in place on a note card and the card below it", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const focusTarget of ["card", "control"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, VIEWPORT, "light", locale, "reduce");
+        try {
+          const note = page.locator(card("t-note"));
+          await note.waitFor();
+          for (const [id, expectedChips] of [["t-note", 1], ["t-pending", 2]] as const) {
+            // Losing focus from the note must also leave its neighbour in place.
+            if (id === "t-pending") {
+              await note.focus();
+              await page.keyboard.press("Tab");
+              if (focusTarget === "card") await page.keyboard.press("Shift+Tab");
+              await note.locator('[data-task-note="full"]').waitFor();
+            }
+            const ask = page.locator(`[data-ask-orchestrator="task:${id}"]`);
+            await ask.scrollIntoViewIfNeeded();
+            const before = (await ask.boundingBox())!;
+            await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+            await page.mouse.down();
+            const during = (await ask.boundingBox())!;
+            await ask.evaluate(element => element.addEventListener("mouseup", () => {
+              element.setAttribute("data-test-release-top", String(element.getBoundingClientRect().top));
+            }, { once: true }));
+            // Release at the original pointer coordinates, as a physical mouse does.
+            await page.mouse.up();
+            const releaseTop = await ask.getAttribute("data-test-release-top");
+            const pressed = await ask.getAttribute("aria-pressed");
+            const chips = await page.locator("[data-orchestrator-conversation] [data-task-chip]").count();
+            cases.push({ locale, focusTarget, id, before, during, releaseTop, pressed, chips });
+            if (releaseTop === null || Math.abs(Number(releaseTop) - before.y) > 0.5 || Math.abs(during.y - before.y) > 0.5) failures.push(`${locale} ${focusTarget} ${id}: Ask moved during the mouse press`);
+            if (pressed !== "true" || chips !== expectedChips) failures.push(`${locale} ${id}: pressed=${pressed}, chips=${chips}`);
+            await page.screenshot({ path: path.join(OUT, `note-ask-${locale}-${focusTarget}-${id}.png`) });
+          }
+          if (pageErrors.length) failures.push(`${locale}: ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(EVIDENCE, "note-press.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, cases }, null, 2)}\n`);
+  }, 120_000);
+
+  browserTest("task chip: pressing Ask on a card adds a chip to the seat's composer, unfolds the seat and keeps the card in place", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const passes: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string>) => translate(lang, key, vars);
+        const record: Record<string, unknown> = { lang };
+        passes.push(record);
+        const opened = await openFixture(browser, `${server.base}?scenario=seat-noise`, VIEWPORT, "light", lang);
+        const { page } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.evaluate((folded) => localStorage.setItem("llv:kanban-seat:v2", folded), FOLDED);
+          await page.reload();
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const ids = await page.$$eval('.card[data-id^="task:"] [data-ask-orchestrator]', (nodes) => nodes.map((node) => node.getAttribute("data-ask-orchestrator")!));
+          record.askButtons = ids.length;
+          if (ids.length < 2) { failures.push(`${lang}: expected an Ask button on every task card, found ${ids.length}`); continue; }
+          const [first, second] = ids as [string, string];
+          const top = (id: string) => page.$eval(`.card[data-id="${id}"]`, (node) => Math.round(node.getBoundingClientRect().top * 10) / 10);
+          const seatState = () => page.$eval("[data-kanban-seat]", (node) => node.getAttribute("data-collapsed"));
+          const foldedBefore = await seatState() === "1";
+          await page.$eval(`.card[data-id="${first}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          const topBefore = await top(first);
+          await page.click(`[data-ask-orchestrator="${first}"]`);
+          await page.waitForSelector("[data-orchestrator-conversation] [data-task-chip]", { timeout: 10_000 });
+          await page.waitForTimeout(600);
+          const topAfter = await top(first);
+          const seatAfter = await seatState();
+          const pressed = await page.$eval(`[data-ask-orchestrator="${first}"]`, (node) => node.getAttribute("aria-pressed"));
+          /* Nothing has scrolled the seat into view yet: what the operator sees at the press is the receipt. */
+          const receipt = await page.$eval("[data-kanban-receipt]", (node) => {
+            const rect = node.getBoundingClientRect();
+            const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+            return {
+              text: node.querySelector(".msg")?.textContent?.trim() ?? "",
+              action: node.querySelector(".act")?.textContent?.trim() ?? "",
+              inView: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth,
+              seatInView: seat.top >= 0 && seat.bottom <= innerHeight,
+            };
+          }).catch(() => null);
+          await page.click("[data-kanban-receipt] .act");
+          await page.waitForTimeout(600);
+          const composerInView = await page.$eval("[data-kanban-seat] textarea", (node) => {
+            const rect = node.getBoundingClientRect();
+            return rect.top >= 48 && rect.bottom <= innerHeight && document.activeElement === node;
+          });
+          const chip = await page.$eval("[data-orchestrator-conversation] [data-task-chip]", (node) => ({
+            text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            width: Math.round(node.getBoundingClientRect().width),
+            inView: node.getBoundingClientRect().top >= 0 && node.getBoundingClientRect().bottom <= innerHeight,
+            cut: [node, ...node.querySelectorAll<HTMLElement>("*")].some((child) => child.scrollWidth > child.clientWidth + 1 && getComputedStyle(child).overflow !== "visible" && !child.classList.contains("truncate")),
+          }));
+          const draft = await page.$eval("[data-orchestrator-conversation] textarea", (node) => (node as HTMLTextAreaElement).value);
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chip-${lang}.png`) });
+          await page.$eval(`.card[data-id="${second}"]`, (node) => node.scrollIntoView({ block: "center" }));
+          await page.click(`[data-ask-orchestrator="${second}"]`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length === 2);
+          await page.$eval("[data-kanban-seat]", (node) => node.scrollIntoView({ block: "start" }));
+          await page.locator("[data-kanban-seat]").screenshot({ path: path.join(OUT, `chips-two-${lang}.png`) });
+          await page.screenshot({ path: path.join(OUT, `board-${lang}.png`) });
+          const removed = await page.evaluate(async () => {
+            const before = document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length;
+            document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-task-chip-remove]")!.click();
+            await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+            return { before, after: document.querySelectorAll("[data-orchestrator-conversation] [data-task-chip]").length };
+          });
+          const footFit = await page.$$eval('.card[data-id^="task:"] .foot', (foots) => foots.filter((foot) => foot.scrollWidth > foot.clientWidth + 1).length);
+          const ask = await page.$eval(`[data-ask-orchestrator="${second}"]`, (node) => ({ label: node.getAttribute("aria-label"), text: node.textContent?.trim(), height: Math.round(node.getBoundingClientRect().height) }));
+          Object.assign(record, { foldedBefore, seatAfter, pressed, topBefore, topAfter, receipt, composerInView, chip, draft, removed, footOverflow: footFit, ask });
+          if (!foldedBefore) failures.push(`${lang}: the seat was not folded before the press`);
+          if (Math.abs(topAfter - topBefore) > 2) failures.push(`${lang}: the card moved ${topAfter - topBefore} px when the seat unfolded`);
+          if (seatAfter !== "0") failures.push(`${lang}: the seat is still folded after the press`);
+          if (!receipt || !receipt.inView || !/^«.+»/.test(receipt.text) || receipt.action !== tr("taskChip.show")) failures.push(`${lang}: no visible receipt at the press ${JSON.stringify(receipt)}`);
+          if (!composerInView) failures.push(`${lang}: the receipt's ${tr("taskChip.show")} did not bring the composer into view`);
+          if (pressed !== "true") failures.push(`${lang}: the card's button does not read as pressed`);
+          if (draft !== "") failures.push(`${lang}: the input holds "${draft}" after the press`);
+          if (!chip.inView || chip.cut) failures.push(`${lang}: the chip ${JSON.stringify(chip)}`);
+          if (removed.before !== 2 || removed.after !== 1) failures.push(`${lang}: × ${JSON.stringify(removed)}`);
+          if (footFit > 0) failures.push(`${lang}: ${footFit} card foot(s) overflow sideways`);
+          if (ask.text !== tr("taskChip.ask")) failures.push(`${lang}: the button says "${ask.text}"`);
+          if (opened.pageErrors.length) failures.push(`${lang}: page errors ${opened.pageErrors.join(" | ")}`);
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    /* The record is written only by a run that held: a failing run must not leave
+       its numbers where a reviewer reads them as the outcome. */
+    expect(failures).toEqual([]);
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(passes, null, 2)}\n`);
+  }, 300_000);
+});
+
+
+describe("task chip native queue presentation", () => {
+  browserTest("task chip queue badges and clean editor fit desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/task-chip-native-queue");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-queue-preview`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          /* Recovery is exercised after a normal reload; it also gives headless
+             Chromium a fresh paint of the mixed-locale text. */
+          await page.reload();
+          const panel = page.locator('[data-testid="native-queue-panel"]');
+          await panel.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          await page.waitForTimeout(1000);
+          for (const selector of ['[data-testid="native-queue-row"]', '[data-testid="native-queue-unresolved-row"]', '[data-testid="native-queue-refused-row"]']) {
+            const row = panel.locator(selector);
+            expect(await row.textContent()).not.toContain("task reference");
+            expect(await row.textContent()).toContain("start this one");
+            const wordsFit = await row.evaluate((node) => {
+              const words = node.querySelector("p")!.lastElementChild!;
+              const range = document.createRange(); range.selectNodeContents(words);
+              const box = range.getBoundingClientRect(); const parent = words.parentElement!.getBoundingClientRect();
+              const style = getComputedStyle(words);
+              return box.width > 0 && box.height > 0 && box.top >= parent.top && box.bottom <= parent.bottom + 1
+                && style.visibility === "visible" && style.opacity === "1";
+            });
+            expect(wordsFit).toBeTrue();
+            expect(await row.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          }
+          const deputyHead = page.locator('[data-deputy-head]');
+          expect(await deputyHead.textContent()).toContain("start this one");
+          expect(await deputyHead.textContent()).not.toContain("task reference");
+          expect(await deputyHead.locator('[data-task-badge="task_native"]').textContent()).toBe("Fix __init__.py (#42)");
+          expect(await page.locator('[data-seat-deputy-chip]').getAttribute("title")).toBe("start this one");
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          await panel.locator('[data-testid="native-queue-edit"]').click();
+          const field = panel.locator('[data-testid="native-queue-edit-field"]');
+          expect(await field.inputValue()).toBe("start this one");
+          await page.waitForTimeout(1000);
+          expect(await panel.locator('[data-testid="native-queue-row"] [data-task-badge]').count()).toBe(1);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-edit.png`) });
+          cases.push({ locale, width, cleanPreview: true, wordsWithinBounds: true, cleanEdit: true, cleanDeputy: true, badge: "Fix __init__.py (#42)", overflow: false });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/task-chip-to-orchestrator", { recursive: true });
+    fs.writeFileSync("evidence/task-chip-to-orchestrator/native-queue.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 120_000);
+});
+
+describe("passive task status note", () => {
+  browserTest("notes stay within two lines on desktop and phone, with full text in the task", async () => {
+    const out = path.resolve(".artifacts/card-status-note");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const surface = page.locator(width === 390 ? '[data-phone-card="task:t-note"]' : card("t-note"));
+          await surface.waitFor();
+          await surface.scrollIntoViewIfNeeded();
+          const line = surface.locator('[data-task-note="compact"]');
+          const text = await line.locator("[data-task-note-text]").textContent();
+          const geometry = await line.locator("[data-task-note-text]").evaluate(element => {
+            const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+            return { height: rect.height, lineHeight: parseFloat(style.lineHeight), clamp: style.webkitLineClamp, fullHeight: element.scrollHeight };
+          });
+          expect(geometry.clamp).toBe("2");
+          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight * 2 + 1);
+          expect(geometry.fullHeight).toBeGreaterThan(geometry.height);
+          expect(await line.locator("button,input,textarea").count()).toBe(0);
+          expect(await line.locator("time").textContent()).toBeTruthy();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-card.png`) });
+          if (width === 390) await surface.click();
+          else await surface.focus();
+          const full = page.locator('[data-task-note="full"]').filter({ hasText: text! }).first();
+          await full.waitFor();
+          expect(await full.locator("[data-task-note-text]").textContent()).toBe(text);
+          expect(await full.locator("[data-task-note-text]").evaluate(element => getComputedStyle(element).webkitLineClamp)).toBe("none");
+          await full.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-task.png`) });
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          if (width === 1440) {
+            // A folded task retains its compact note even with a reader open.
+            await surface.locator("button.fold").click();
+            await surface.evaluate(element => element.classList.add("has-reader"));
+            expect(await line.isVisible()).toBe(true);
+            expect(await surface.locator('[data-task-note="full"]').count()).toBe(0);
+          }
+          cases.push({ locale, width, geometry, overflow, passive: true, fullText: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/card-status-note", { recursive: true });
+      fs.writeFileSync("evidence/card-status-note/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });

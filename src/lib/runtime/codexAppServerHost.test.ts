@@ -1,3 +1,4 @@
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -168,6 +169,7 @@ class FakeAppServer extends EventEmitter {
   /* Rejects full-history thread/resume the way paginated threads do; a resume
      with excludeTurns succeeds and omits thread.turns. */
   paginatedResume = false;
+  shellPolicy: Record<string, unknown> = {};
   mcpServers: Record<string, unknown> = {
     playwright: { command: "npx", enabled: true },
     "telegram-readonly": { command: "uv", enabled: true },
@@ -275,6 +277,7 @@ class FakeAppServer extends EventEmitter {
     if (method === "config/read") return this.respond(message.id, {
       config: {
         mcp_servers: this.mcpServers,
+        shell_environment_policy: this.shellPolicy,
       },
     });
     if (method === "thread/start" || method === "thread/resume") {
@@ -1523,6 +1526,32 @@ describe("CodexAppServerHost", () => {
     await textOnlyHost.release();
   });
 
+  test.each([false, true])("Codex launches carry publication settings through the child allowlist (keyed filters: %s)", async (keyedFilters) => {
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    const email = ["no-reply", "build.example.invalid"].join("@");
+    const server = new FakeAppServer();
+    server.shellPolicy = {
+      inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
+      ...(keyedFilters ? { filters: { PATH: "include", HOME: "include", "PRIVATE_*": "exclude" } } : { include_only: ["PATH", "HOME"] }),
+    };
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
+    });
+    try {
+      expect(captured.options?.env).toMatchObject({
+        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+      });
+      const git = { GIT_AUTHOR_NAME: "Build Agent", GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: "Build Agent", GIT_COMMITTER_EMAIL: email };
+      expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
+        shell_environment_policy: { set: git, ...(keyedFilters
+          ? { filters: Object.fromEntries(Object.keys(git).map((key) => [key, "include"])) }
+          : { include_only: ["PATH", "HOME", ...Object.keys(git)] }) },
+      } });
+    } finally { await host.release(); }
+  });
+
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
@@ -1552,6 +1581,10 @@ describe("CodexAppServerHost", () => {
       NODE_ENV: "test",
       PATH: process.env.PATH,
       CODEX_HOME: "/codex-home",
+      GIT_AUTHOR_NAME: "Delegatus",
+      GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
+      GIT_COMMITTER_NAME: "Delegatus",
+      GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
@@ -2071,6 +2104,73 @@ describe("CodexAppServerHost", () => {
     expect((await replay.next()).value).toEqual({ kind: "turn-ended", turnId: "history-turn", status: "completed", seq: 8 });
     expect(() => host.attach(0)).toThrow("runtime replay begins at sequence 6");
     await host.release();
+  });
+
+  test.each([false, true])("overlapping first-delivery retries start one Codex turn per launch (first dispatch: %s)", async (firstDispatch) => {
+    const server = new FakeAppServer("launch-retry-thread");
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    const entry = { id: "spawn_launch_retry", text: "apply the approved change" };
+    const evidence = firstDispatch ? { operationId: entry.id, writerClaim: "launch-writer", firstDispatch: true as const } : undefined;
+    try {
+      const receipts = await Promise.all([host.send(entry, evidence), host.send(entry, evidence), host.send(entry, evidence)]);
+      expect(server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer"))
+        .toHaveLength(1);
+      for (const receipt of receipts) expect(receipt).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+      expect(await host.send(entry)).toEqual(receipts[0]);
+    } finally {
+      await host.release();
+    }
+  });
+
+  test("a launch retry awaiting its first user echo neither steers nor accepts another payload", async () => {
+    const server = new FakeAppServer("launch-echo-thread");
+    server.autoCompleteUserMessage = false;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    const entry = { id: "spawn_launch_echo", text: "apply the approved change" };
+    const first = host.send(entry);
+    const requests = () => server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer");
+    try {
+      await waitForCondition(() => requests().length > 0, "first turn never started");
+      const retry = host.send(entry);
+      await expect(host.send({ ...entry, text: "another instruction" })).rejects.toThrow("different payload");
+      await Bun.sleep(10);
+      server.notify("item/completed", {
+        threadId: "launch-echo-thread", turnId: "turn-1",
+        item: { type: "userMessage", clientId: entry.id, content: (requests()[0].params as { input: unknown }).input },
+      });
+      expect(await first).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+      expect(await retry).toEqual(await first);
+      expect(requests()).toHaveLength(1);
+    } finally {
+      await host.release();
+      await first.catch(() => {});
+    }
+  });
+
+  test("an uncertain first turn start refuses launch retries without a second engine write", async () => {
+    const server = new FakeAppServer("launch-timeout-thread", "launch-timeout-thread", false, [], undefined, null, ["turn/start"]);
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server), requestTimeoutMs: 10,
+    });
+    const entry = { id: "spawn_launch_timeout", text: "apply the approved change" };
+    try {
+      const results = await Promise.allSettled([host.send(entry), host.send(entry)]);
+      expect(results.map(result => result.status)).toEqual(["rejected", "rejected"]);
+      for (const result of results) {
+        if (result.status === "rejected") expect(String(result.reason)).toContain("outcome is uncertain");
+      }
+      expect(await host.send(entry)).toEqual({ outcome: "rejected", reason: "dead-host" });
+      expect(server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer"))
+        .toHaveLength(1);
+    } finally {
+      await host.release();
+    }
   });
 
   test("confirms a retried queue entry from its persisted client id", async () => {
@@ -5508,4 +5608,68 @@ describe("Codex launch service tier", () => {
       expect(server.requests.some(request => request.method === "thread/start")).toBeFalse();
     }
   });
+});
+
+test("Codex host records injected OOM SIGKILL on its terminal row", async () => {
+  const memory = fakeAgentMemory();
+  const child = new FakeAppServer("memory-thread");
+  const captured: { args?: string[] } = {};
+  const host = await CodexAppServerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), ...ownedFakeProcess,
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, captured) });
+  try {
+    expect(captured.args).toContain("MemorySwapMax=0");
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+  } finally { await host.release(); memory.dispose(); }
+});
+
+test("auto scope admission failure is explicit and forced scope keeps the runner diagnostic", async () => {
+  const { AgentMemoryCell, GIB } = await import("./agentMemory");
+  for (const mode of ["auto", "scope"] as const) {
+    const server = new FakeAppServer("scope-failure", "scope-failure", false, [], undefined, null, ["initialize"]);
+    const cell = new AgentMemoryCell({ mechanism: "scope", mode, platform: "linux", limitBytes: GIB, budgetBytes: 2 * GIB, reserveBytes: GIB, totalBytes: 3 * GIB,
+      score: 500, unit: "delegatus-agent-rejected.scope", slice: "delegatus-agents-test.slice", viewerUnit: null, systemdVersion: 255 }, { cgroupForPid: () => null });
+    const start = CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), memoryCell: cell, ...ownedFakeProcess,
+      spawnProcess: (...args) => {
+        const child = fakeSpawn(server)(...args);
+        setTimeout(() => { server.stderr.write("Failed to create bus connection: Connection refused"); server.emit("exit", 1, null); server.emit("close", 1, null); }, 1);
+        return child;
+      } });
+    try {
+      await expect(start).rejects.toThrow(mode === "auto" ? "agent memory scope launch failed before exec; retry shortly" : "Connection refused");
+      expect(server.requests.some(request => request.method === "turn/start")).toBeFalse();
+    } finally { cell.close(); }
+  }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Codex fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeAppServer("watchdog-thread");
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child), processIdentity: memory.processIdentity, pidAlive: memory.pidAlive,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } });
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    Object.assign(child, { signalCode: "SIGKILL" });
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog"
+      ? platform === "linux" ? [child.pid + 2, child.pid + 1] : [child.pid + 2, child.pid + 1, child.pid]
+      : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });

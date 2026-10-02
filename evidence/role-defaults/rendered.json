@@ -1,0 +1,133 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1280,
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1280,
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    }
+  ]
+}

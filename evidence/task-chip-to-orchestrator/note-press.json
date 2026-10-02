@@ -1,0 +1,169 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "cases": [
+    {
+      "locale": "en",
+      "focusTarget": "card",
+      "id": "t-note",
+      "before": {
+        "x": 463.8125,
+        "y": 460,
+        "width": 54.1875,
+        "height": 28
+      },
+      "during": {
+        "x": 463.8125,
+        "y": 460,
+        "width": 54.1875,
+        "height": 28
+      },
+      "releaseTop": "460",
+      "pressed": "true",
+      "chips": 1
+    },
+    {
+      "locale": "en",
+      "focusTarget": "card",
+      "id": "t-pending",
+      "before": {
+        "x": 463.8125,
+        "y": 691.4375,
+        "width": 54.1875,
+        "height": 28
+      },
+      "during": {
+        "x": 463.8125,
+        "y": 691.4375,
+        "width": 54.1875,
+        "height": 28
+      },
+      "releaseTop": "691.4375",
+      "pressed": "true",
+      "chips": 2
+    },
+    {
+      "locale": "en",
+      "focusTarget": "control",
+      "id": "t-note",
+      "before": {
+        "x": 463.8125,
+        "y": 460,
+        "width": 54.1875,
+        "height": 28
+      },
+      "during": {
+        "x": 463.8125,
+        "y": 460,
+        "width": 54.1875,
+        "height": 28
+      },
+      "releaseTop": "460",
+      "pressed": "true",
+      "chips": 1
+    },
+    {
+      "locale": "en",
+      "focusTarget": "control",
+      "id": "t-pending",
+      "before": {
+        "x": 463.8125,
+        "y": 691.4375,
+        "width": 54.1875,
+        "height": 28
+      },
+      "during": {
+        "x": 463.8125,
+        "y": 691.4375,
+        "width": 54.1875,
+        "height": 28
+      },
+      "releaseTop": "691.4375",
+      "pressed": "true",
+      "chips": 2
+    },
+    {
+      "locale": "uk",
+      "focusTarget": "card",
+      "id": "t-note",
+      "before": {
+        "x": 290,
+        "y": 459.9375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "during": {
+        "x": 290,
+        "y": 459.9375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "releaseTop": "459.9375",
+      "pressed": "true",
+      "chips": 1
+    },
+    {
+      "locale": "uk",
+      "focusTarget": "card",
+      "id": "t-pending",
+      "before": {
+        "x": 438.984375,
+        "y": 696.375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "during": {
+        "x": 438.984375,
+        "y": 696.375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "releaseTop": "696.375",
+      "pressed": "true",
+      "chips": 2
+    },
+    {
+      "locale": "uk",
+      "focusTarget": "control",
+      "id": "t-note",
+      "before": {
+        "x": 290,
+        "y": 459.9375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "during": {
+        "x": 290,
+        "y": 459.9375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "releaseTop": "459.9375",
+      "pressed": "true",
+      "chips": 1
+    },
+    {
+      "locale": "uk",
+      "focusTarget": "control",
+      "id": "t-pending",
+      "before": {
+        "x": 438.984375,
+        "y": 696.375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "during": {
+        "x": 438.984375,
+        "y": 696.375,
+        "width": 79.015625,
+        "height": 28
+      },
+      "releaseTop": "696.375",
+      "pressed": "true",
+      "chips": 2
+    }
+  ]
+}

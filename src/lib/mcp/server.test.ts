@@ -1734,6 +1734,7 @@ describe("MCP tool service", () => {
         "link_task_to_pipeline",
         "list_conversations",
         "search_transcripts",
+        "search_memory",
         "get_conversation",
         "conversation_deliverability",
         "conversation_messages",
@@ -1774,8 +1775,10 @@ describe("MCP tool service", () => {
         "telegram_bot_send_document",
         "telegram_bot_messages",
       ]);
+      const optionalReadKeys = new Set(["message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits"]);
       for (const tool of listed.tools) {
-        expect(tool.inputSchema.required).toContain("clientRequestId");
+        if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
+        else expect(tool.inputSchema.required).toContain("clientRequestId");
       }
       const spawnSchema = listed.tools.find((tool) => tool.name === "spawn_agent")?.inputSchema;
       expect(spawnSchema?.properties).toHaveProperty("cwd");
@@ -1827,6 +1830,7 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
     const schema = (await client.listTools()).tools.find((tool) => tool.name === "pipeline_action")!.inputSchema;
     expect(schema.properties).toMatchObject({
       stage: { type: "object" },
+      after: { type: "string" },
       edge: { enum: ["pass", "fail"] },
       maxRounds: { type: "integer" },
       onExhausted: { enum: ["advance", "stop-after-fix", "park"] },
@@ -1836,11 +1840,11 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
     });
     expect(JSON.stringify(schema.properties!.to)).toContain("null");
     const stage = { id: "review", kind: "run", prompt: "Review", next: null, role: { roleId: "reviewer" } };
-    const add = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-add", pipelineId: "pipeline_fixture", action: "add-stage", stage } });
+    const add = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-add", pipelineId: "pipeline_fixture", action: "add-stage", stage, after: "build" } });
     const edge = await client.callTool({ name: "pipeline_action", arguments: { clientRequestId: "graph-edge", pipelineId: "pipeline_fixture", action: "set-edge", stageId: "review", edge: "pass", to: null } });
     expect(add.structuredContent).toMatchObject({ ok: true });
     expect(edge.structuredContent).toMatchObject({ ok: true });
-    expect(seen).toMatchObject([{ stage }, { edge: "pass", to: null }]);
+    expect(seen).toMatchObject([{ stage, after: "build" }, { edge: "pass", to: null }]);
     expect(typeof seen[0]!.stage).toBe("object");
     expect(seen[1]!.to).toBeNull();
   } finally {
@@ -1873,6 +1877,24 @@ test("#774 tool schemas publish the closed sets their servers enforce", () => {
     clientRequestId: "snapshot-extra-key",
     unknown: true,
   }).success).toBe(false);
+});
+
+test("seat_tick_settings publishes the panel instruction contract through tools/list", async () => {
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((name) => [name, async () => ({})])) as unknown as McpToolBindings;
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "tick-contract-test", version: "1.0.0" });
+  try {
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const tool = (await client.listTools()).tools.find((entry) => entry.name === "seat_tick_settings")!;
+    expect(tool.description).toContain("operator instructions on every scheduler-fired wake");
+    expect(tool.inputSchema.properties!.reason).toMatchObject({
+      description: TOOL_INPUT_SCHEMAS.seat_tick_settings.shape.reason.description,
+    });
+    expect(JSON.stringify(tool.inputSchema.properties!.reason)).toContain("every wake");
+    expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-contract", reason: "Prioritize incoming tasks." }).success).toBe(true);
+    expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-clear", reason: null }).success).toBe(true);
+  } finally { await client.close(); await server.close(); }
 });
 
 /* ── ORIGINAL-KEY RECOVERY (#1490) ─────────────────────────────────────── */

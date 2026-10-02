@@ -272,7 +272,7 @@ test("an identified caller that holds no seat and owns no project names none, ra
 
 test("the module's rules hold verbatim, and a refusal stores nothing", async () => {
   const refusals = [
-    [{ project: PROJECT, enabled: false }, "a reason is required when the tick is disabled or its wake interval is changed"],
+    [{ project: PROJECT, enabled: false }, "instructions (reason) are required when the tick is disabled or its wake interval changes"],
     [{ project: PROJECT, wakeIntervalMinutes: -5, reason: "why" }, "wakeIntervalMinutes must be a positive number of minutes, or null for the default"],
     [{ project: PROJECT, wakeIntervalMinutes: SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES + 1, reason: "far too long" }, `must be at most ${SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES}`],
     [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `the limit is ${SEAT_TICK_PROMPT_LIMIT}`],
@@ -297,10 +297,24 @@ test("an expiry, and restoring the default with no reason, go through the same r
 
   const restored = await (await put({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null })).json() as SeatTickSettingsAnswer;
   expect(restored.changed).toBe(true);
-  expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: null, until: null });
+  expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: "a deploy is running", until: null });
   expect(restored.cardText).toBeNull();
-  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null });
+  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: "a deploy is running", until: null });
   expect(settingsRevision()).toBeGreaterThan(before!);
+});
+
+test("PUT and GET retain default-cadence instructions, and clearing them preserves the seat note", async () => {
+  const reason = "Handle the incoming tasks by priority.";
+  const monitorPrompt = "Track the active lanes.";
+  const saved = await put({ project: PROJECT, reason, monitorPrompt });
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).settings).toMatchObject({ reason, monitorPrompt, wakeIntervalMinutes: null });
+  const read = await GET(new NextRequest(`http://localhost/api/monitor/seat-tick/settings?project=${PROJECT}`));
+  expect((await read.json()).settings).toMatchObject({ reason, monitorPrompt });
+  const cleared = await put({ project: PROJECT, reason: null });
+  expect(cleared.status).toBe(200);
+  expect((await cleared.json()).settings).toMatchObject({ reason: null, monitorPrompt });
+  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ reason: null, monitorPrompt });
 });
 
 test("a change with no fields is a read, as the tool's is", async () => {

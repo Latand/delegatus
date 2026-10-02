@@ -1,0 +1,66 @@
+[
+  {
+    "key": "390-en",
+    "bar": {
+      "label": "Ask the orchestrator about «Retire the systemd install path»",
+      "text": "Ask",
+      "height": 44,
+      "width": 80,
+      "inside": true,
+      "overflow": 0,
+      "siblings": [
+        {
+          "text": "Inbox",
+          "right": 101
+        },
+        {
+          "text": "Ask",
+          "right": 277
+        },
+        {
+          "text": "Agent",
+          "right": 378
+        }
+      ]
+    },
+    "opened": true,
+    "chip": {
+      "text": "About the task:Retire the systemd install path",
+      "inView": true,
+      "removeHeight": 28,
+      "draft": ""
+    }
+  },
+  {
+    "key": "390-uk",
+    "bar": {
+      "label": "Спитати оркестратора про «Retire the systemd install path»",
+      "text": "Спитати",
+      "height": 44,
+      "width": 109,
+      "inside": true,
+      "overflow": 0,
+      "siblings": [
+        {
+          "text": "Вхідні",
+          "right": 106
+        },
+        {
+          "text": "Спитати",
+          "right": 278
+        },
+        {
+          "text": "Агент",
+          "right": 378
+        }
+      ]
+    },
+    "opened": true,
+    "chip": {
+      "text": "Про задачу:Retire the systemd install path",
+      "inView": true,
+      "removeHeight": 28,
+      "draft": ""
+    }
+  }
+]

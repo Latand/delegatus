@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 32;
+export const ORCHESTRATOR_PROMPT_VERSION = 36;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -291,15 +291,11 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   that names no parent is a duplicate card, and a reviewer that names one
  *   joins the caller's card beside the reviewed work's
  *   (`membership.test.ts`, `spawnRecovery.integration.test.ts`);
- * - the CROSS-PROJECT refusal belongs to `create_pipeline` and
- *   `pipeline_action: "link-task"`, which validate against the pipeline's own
- *   project at the store seam (`pipelineTaskLinkError` in `store.ts`, called
- *   from `engine.ts`). A spawn's explicit target carries its own project —
- *   `launchMembership.ts` commits it with an EMPTY project — so the guard in
- *   `membership.ts` compares against nothing and a SINGLE foreign id is
- *   admitted. The directive and the `spawn_agent` schema say this per tool;
- *   do not restate it as one rule for both (`membership.test.ts` pins the
- *   admission, `launchMembership.test.ts` pins the empty project);
+ * - the CROSS-PROJECT refusal belongs to both launch tools and
+ *   `pipeline_action: "link-task"`. Pipelines validate at the store seam
+ *   (`pipelineTaskLinkError`); spawns share that predicate through
+ *   `spawnTaskProjectError`, resolving aliases and comparing against cwd before
+ *   the MCP claim and HTTP launch reservation (spawnRecovery.integration.test.ts);
  * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
  *   `link_task_to_pipeline` writes one assignment row and leaves that list
  *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
@@ -333,7 +329,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every launch of that pipeline — each stage, retry and fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
 - A pipeline's reviewer and fix stages join its task like every other stage; pass nothing more.
-- Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card.
+- Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline and spawn_agent both refuse a task belonging to another project after project aliases are resolved.
 
 EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
 
@@ -425,15 +421,16 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks".
 - The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
 - A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs.
-- Role parameters carry short values (a lens, a pull request reference, a one-line list of claims); the brief carries everything else.
+- Role params hold short values (lens, PR reference, one-line claims); the brief holds the rest.
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks are settled green, one lane at a time, and nobody reads a spent budget's kept findings first; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on a stopped one (merge.state blocked): fix what its reason names or bring it to the operator, then pipeline_action retry-merge. A pull request no lane of yours carries follows the same setting: off, report it ready; on, merge it at the bar. Never merge red; a pull request that calls a premise unverified, assumed or synthetic goes to the operator.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A pull request is ready when its lane's reviews passed on its final head, or spent their budget with the last fix passed and you have read the findings they kept; the project's required checks are green; and you have read its body. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green, and nobody reads a spent budget's kept findings first; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.
-- Keep the outcome's one task card current with update_task.
+- Keep the task current.
+- update_task note on changes: why parked, waiting on whom/what, runs now; brief, plain operator language.
 
 ## Pipeline stage contract
-A pipeline is a graph of stages, and array order means nothing: each stage names its successors. Each stage is {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: a stage you never wire reaches nothing.
-Review pairs a read-only reviewer, onFail: {to: "<fix stage id>", maxRounds}, and a fix stage whose next returns to it. maxRounds counts failing reviews. onExhausted governs exhaustion: advance (default) runs the last fix, follows the reviewer's pass edge or completes, and keeps findings marked "budget spent". stop-after-fix waits in needs_review after the fix. park stops before it. Use stop-after-fix only when the operator asked to look before merge. The handoff happens once per stage; a later failure parks.
+Stages are a graph; array order controls presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
+Review pairs a read-only reviewer with onFail:{to:"<fix stage id>",maxRounds} and a fix whose next returns to it. maxRounds counts failing reviews. advance (default) runs the last fix: a terminal gate (next:null) re-checks once, pass completes, fail parks with "budget spent: N findings left". A nonterminal gate follows its pass edge with unreviewed findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.
 Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.
 The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.
 src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
@@ -499,22 +496,22 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
   const registry = (roles as RegistryRoleDefinitions).registry;
   const registryStatus = registry
     ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
-    : "Registry health: unknown (caller did not provide a registry snapshot).";
+    : "Registry health: unknown (no snapshot).";
   const overriddenNote = overriddenScaffoldNote(roles);
   return [
     ORCHESTRATOR_ROLE_TABLE_HEADING,
-    "A stage or spawn that omits engine, model and effort runs its role's row.",
+    "Omitting engine, model and effort runs the role's row.",
     "| role | engine | model | effort | access | for |",
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.",
+    "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.",
     "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
     "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
     "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
     "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
-    "- create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 and quote it with the size you chose and why.",
+    "- create_pipeline returns runtimeLine (spawn_agent: runtime): check before attempt 1; quote runtime, size and reason.",
     ...(overriddenNote ? [overriddenNote] : []),
   ].join("\n");
 }

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
-import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
@@ -25,10 +25,11 @@ export interface ExecResult {
   signal?: NodeJS.Signals | null;
 }
 
-export type ExecPort = (command: string, args: string[], cwd: string) => ExecResult;
+/** Optional environment overrides apply to this child command only. */
+export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>) => ExecResult;
 
-export const realExec: ExecPort = (command, args, cwd) => {
-  const res = spawnSync(command, args, { cwd, encoding: "utf8" });
+export const realExec: ExecPort = (command, args, cwd, env) => {
+  const res = spawnSync(command, args, { cwd, encoding: "utf8", env: { ...process.env, ...env } });
   if (res.error) return { code: null, stdout: "", stderr: res.error.message };
   return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "", ...(res.signal ? { signal: res.signal } : {}) };
 };
@@ -189,8 +190,7 @@ export function finishMerge(wf: Workflow, exec: ExecPort): FinishResult {
   if (current !== wf.baseBranch) {
     return { ok: false, error: `the repo checkout is on ${current}; check out ${wf.baseBranch} before merging` };
   }
-  const identity = controllerCommitIdentityArgs(exec, wf.repoDir);
-  const merge = exec("git", [...identity, "merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir);
+  const merge = exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir, controllerCommitIdentityEnv());
   if (merge.code !== 0) {
     /* Leave the checkout clean: an aborted merge is retryable after the user
        resolves whatever blocked it. */

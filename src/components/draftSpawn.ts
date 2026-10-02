@@ -1,5 +1,6 @@
 import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
 import { derivedSpawnTitle, durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
 /* The draft spawn lifecycle, as a pure module the pane renders from.
  *
@@ -391,11 +392,16 @@ export function admittedSpawn(attempt: Pick<SpawnAttempt, "conversationId" | "la
  * own. Null when the receipt cannot prove a structured conversation (tmux
  * transport, missing identity, terminal failure/conflict) — those keep the
  * legacy transcript watch.
+ *
+ * `mandate` marks the prompt as a seat's mandate (#2006): the window renders it
+ * as Delegatus's mandate card and seeds no operator bubble for it, so a seat's
+ * first paint is already the card the server's projection brings later.
  */
 export function provisionalSpawnFile(
   attempt: SpawnAttempt,
   outcome: Extract<SpawnOutcome, { kind: "launched" }>,
   project: string,
+  mandate?: MandateDelivery,
 ): FileEntry | null {
   if (!outcome.structured || !outcome.conversationId || !outcome.launchId) return null;
   if (outcome.state === "failed" || outcome.state === "conflict") return null;
@@ -424,6 +430,7 @@ export function provisionalSpawnFile(
           ["prompt"]: attempt.prompt,
           promptImages: attempt.request?.images.length ?? 0,
           promptAt: attempt.at,
+          ...(mandate ? { mandate } : {}),
         }
       : {}),
   };
@@ -446,6 +453,12 @@ export function provisionalSpawnFile(
     proc: null,
     pid: null,
     model: attempt.request?.model || null,
+    /* The chosen runtime rides the first paint: without it the composer's
+       pill reads the scale's lowest tier until the server's projection of the
+       same launch brings the effort, and the label jumps (Light -> High). */
+    ...(attempt.request?.model ? { launchModel: attempt.request.model } : {}),
+    ...(attempt.request?.effort ? { effort: attempt.request.effort } : {}),
+    ...(typeof attempt.request?.fast === "boolean" ? { fast: attempt.request.fast } : {}),
     pendingQuestion: null,
     waitingInput: null,
     conversationId: outcome.conversationId,

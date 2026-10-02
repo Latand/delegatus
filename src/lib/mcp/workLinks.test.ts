@@ -52,7 +52,7 @@ test("pipeline_action attach-link takes #2059, 2059 and a URL as one link, and g
     expect(answer.workLinks.links).toEqual([expect.objectContaining({ number: 2059, source: "manual", via: ["manual"] })]);
     if (index === 0) expect(answer.changedFields).toContain("workLinks");
   }
-  const read = await bindings.get_pipeline({ clientRequestId: "work-links-read", pipelineId }) as { workLinks: Links; pipeline: { workLinks: unknown[] } };
+  const read = await bindings.get_pipeline({ clientRequestId: "work-links-read", full: true, pipelineId }) as { workLinks: Links; pipeline: { workLinks: unknown[] } };
   expect(read.pipeline.workLinks).toHaveLength(1);
   expect(read.workLinks.links[0]).toMatchObject({ kind: "pr", url: "https://github.com/acme/widgets/pull/2059" });
   const compact = await bindings.get_pipeline({ clientRequestId: "work-links-read-compact", pipelineId, compact: true }) as { pr?: string };

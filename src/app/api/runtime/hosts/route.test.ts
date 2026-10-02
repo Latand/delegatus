@@ -1,10 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
+import * as registryModule from "@/lib/agent/registry";
+import { AgentRegistry } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
-import { systemBootEpoch } from "@/lib/processIdentity";
+import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { noteSessionTargets, resetResourcesForTests, type StructuredHostKillRef } from "@/lib/resources";
 
 import { POST } from "./route";
@@ -17,6 +23,7 @@ import { POST } from "./route";
  * nothing here opens the registry or the runtime either.
  */
 const fixtures: ChildProcess[] = [];
+const ownedPids = new Set<number>();
 
 function spawnFixtureTree(): { pid: number; startIdentity: string } {
   const child = spawn("/bin/sh", ["-c", "sleep 30 & sleep 30 & wait"], { detached: true, stdio: "ignore" });
@@ -64,6 +71,10 @@ function post(body: unknown, headers: Record<string, string> = {}): NextRequest 
 }
 
 afterEach(() => {
+  for (const pid of ownedPids) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+  ownedPids.clear();
   for (const child of fixtures.splice(0)) {
     try {
       if (child.pid) process.kill(-child.pid, "SIGKILL");
@@ -73,6 +84,75 @@ afterEach(() => {
   }
   resetResourcesForTests();
 });
+
+test("retrying a partial kill uses durable survivors and retires only after the child is gone", async () => {
+  const sessionId = crypto.randomUUID();
+  const cwd = process.cwd();
+  const artifactPath = `/sessions/${sessionId}.jsonl`;
+  let childPid = 0;
+  const parentScript = [
+    "const { spawn } = require('node:child_process');",
+    "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });",
+    "console.log(child.pid);",
+    "setInterval(() => {}, 1000);",
+  ].join(" ");
+  const root = spawn(process.execPath, ["-e", parentScript], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+  fixtures.push(root);
+  await new Promise<void>((resolve, reject) => {
+    root.once("error", reject);
+    root.stdout!.once("data", chunk => { childPid = Number(String(chunk).trim()); resolve(); });
+  });
+  if (!root.pid || !Number.isSafeInteger(childPid) || childPid <= 1) throw new Error("fixture tree did not start");
+  ownedPids.add(root.pid);
+  ownedPids.add(childPid);
+  const rootIdentity = captureProcessIdentity(root.pid);
+  const childIdentity = captureProcessIdentity(childPid);
+  if (!rootIdentity || !childIdentity) throw new Error("fixture identities could not be captured");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-resource-retry-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const registrySpy = spyOn(registryModule, "agentRegistry").mockReturnValue(registry);
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "test", status: "live", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: `stdio:${root.pid}`, process: rootIdentity,
+      eventCursor: 1, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null,
+      pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+  });
+  const target = `structured:codex:${sessionId}`;
+  noteSessionTargets([{ target, ref: ref({
+    pid: root.pid, startIdentity: rootIdentity.startIdentity!, bootEpoch: rootIdentity.bootEpoch!,
+    engine: "codex", sessionId, seat: false, turnBusy: false,
+  }) }]);
+  const originalKill = process.kill.bind(process);
+  let refuseChild = true;
+  const signalSpy = spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    if (pid === childPid && refuseChild && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    }
+    return originalKill(pid, signal as NodeJS.Signals);
+  }) as typeof process.kill);
+  try {
+    const first = await POST(post({ action: "kill", target, intent: "row" }));
+    expect(first.status).toBe(500);
+    expect(procBackend.pidAlive(root.pid)).toBeFalse();
+    expect(procBackend.processIdentity(childPid)).toBe(childIdentity.startIdentity);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]?.structuredTerminationSurvivors).toContainEqual(childIdentity);
+
+    refuseChild = false;
+    const retry = await POST(post({ action: "kill", target, intent: "row" }));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ ok: true, target });
+    expect(procBackend.pidAlive(childPid)).toBeFalse();
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
+      status: "dead", structuredHost: null, structuredTerminationSurvivors: [],
+    });
+  } finally {
+    signalSpy.mockRestore();
+    registrySpy.mockRestore();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 15_000);
 
 test("a target outside the last snapshot is refused before any signal", async () => {
   const tree = spawnFixtureTree();

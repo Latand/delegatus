@@ -52,16 +52,14 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
-    { id: "haiku", label: "Haiku", shortLabel: "Haiku", use: "general" },
+    // The `haiku` alias names the one Haiku shipping today, as the transcript
+    // does once it records the resolved id, so the live chip and the reloaded
+    // card spell the model the same way.
+    { id: "haiku", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
   ],
   codex: [
-    // Astra leads the list because it is the account's own default, and the
-    // head is what runtimeProfile falls back to for a conversation on an
-    // uncatalogued model — it agrees with defaultModelFor below. Its `review`
-    // use is shared with Sol on purpose: the account describes Astra as its
-    // most capable model, and Sol keeps the role it already held, having been
-    // left in the list with no upgrade target. The GPT-6 Sol and Luna rows
-    // follow Astra and mirror the uses of their 5.6 namesakes.
+    // Catalogue order is independent of the shipped launch fallback below.
+    // Astra and Terra remain selectable for explicit launches.
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
     { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
@@ -97,11 +95,10 @@ export function validateLaunchModel(engine: "claude" | "codex" | "copilot", mode
   };
 }
 
-/** A fresh Codex conversation starts on the architecture/review profile —
-    the model the account itself reports as default. */
+/** The shipped fresh-launch fallback; explicit catalogue selections stay available. */
 export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string {
   if (engine === "copilot") return COPILOT_AUTO_MODEL;
-  return engine === "codex" ? CODEX_ASTRA_MODEL : "opus";
+  return engine === "codex" ? CODEX_GPT61_SOL_MODEL : "opus";
 }
 
 const CLAUDE_MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"] as const;
@@ -147,7 +144,12 @@ const CLAUDE_VERSIONED_MODEL = /^(?:claude-)?(fable|mythos|opus|sonnet|haiku)-(\
 export function modelDisplayName(engine: string, model: string): string {
   if (engine !== "claude") return model;
   const match = CLAUDE_VERSIONED_MODEL.exec(model.trim().toLowerCase());
-  if (!match) return model;
+  if (!match) {
+    /* A launch alias (`haiku`, `opus`) is what a live conversation records
+       until its transcript names the resolved id; it reads as its catalogue
+       row, the way the resolved id would. */
+    return ENGINE_MODELS.claude.find((option) => option.id === model.trim().toLowerCase())?.label ?? model;
+  }
   const [, family, major, minor, tagged1m] = match;
   const version = minor && Number(minor) !== 0 ? `${major}.${minor}` : major;
   const name = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${version}`;

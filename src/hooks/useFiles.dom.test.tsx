@@ -4,12 +4,23 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
+import { Sparkle } from "@/components/icons";
+import { TurnStatusBar } from "@/components/TurnStatusBar";
+import { chatState } from "@/components/mobile/mobileChatState";
+import type { FileEntry } from "@/lib/types";
+import { turnStateFromRecords } from "@/lib/scanner/activity";
+import recordedTurnEnd from "@/lib/runtime/fixtures/recorded-turn-end.json";
+import { useSwitchboardData } from "./useSwitchboardData";
+import type { EventSourceLike, RuntimeBus } from "./runtimeBus";
+
+const createTestRuntimeBus = (await import("./runtimeBus")).createRuntimeBus;
+let testRuntimeBus: RuntimeBus | null = null;
 
 let revisionListener: ((revision: number) => void) | null = null;
 
 mock.module("./runtimeBus", () => ({
   isRuntimeUiEnabled: () => true,
-  getRuntimeBus: () => ({
+  getRuntimeBus: () => testRuntimeBus ?? ({
     getState: () => ({ connection: "live" }),
     subscribe: () => () => {},
     subscribeFilesRevision: (listener: (revision: number) => void) => {
@@ -21,6 +32,7 @@ mock.module("./runtimeBus", () => ({
 
 const {
   applyPipelineSnapshot,
+  filesApiUrl,
   resetFilesClientCacheForTests,
   revertPipelineSnapshot,
   useFiles,
@@ -42,6 +54,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  testRuntimeBus?.stop();
+  testRuntimeBus = null;
   globalThis.fetch = originalFetch;
   revisionListener = null;
   document.body.replaceChildren();
@@ -51,6 +65,224 @@ function Probe() {
   const data = useFiles();
   return <div data-loaded={String(data.loaded)}>{data.files[0]?.path ?? "empty"}</div>;
 }
+
+function TurnStatusProbe({ now, pinnedPath }: { now: number; pinnedPath?: string }) {
+  const data = useFiles(undefined, pinnedPath);
+  const board = useSwitchboardData(data.files, [], "", now);
+  return <>
+    <span data-working-count>{board.working.length}</span>
+    {data.files.map((file) => <section key={file.path} data-card-state={file.activity}>
+      <span data-phone-state>{chatState(file)}</span>
+      <span data-card-status>{[...board.working, ...board.waiting, ...board.recent, ...board.older]
+        .find((item) => item.file.path === file.path)?.statusLine}</span>
+      <TurnStatusBar file={file} workingLabel="working…" workingIcon={Sparkle} />
+    </section>)}
+  </>;
+}
+
+const turnEndReplays = (["claude", "codex"] as const)
+  .flatMap((engine) => (["recorded", "idle recovery", "unknown recovery", "same-batch running", "same-batch unknown"] as const)
+    .map((mode) => ({ engine, mode })));
+for (const { engine, mode } of turnEndReplays) {
+  test(`${engine}: ${mode} turn end settles every status surface while the scan remains live`, async () => {
+    const coalesced = mode !== "recorded";
+    // Recorded QA transcript boundaries with identities and prose removed.
+    // Replay their canonical lifecycle into the bus; the catalog stays
+    // at the preceding open turn, as it did during the five-minute scan window.
+    const conversationId = "conversation_turn-end";
+    const artifactPath = `/sessions/${engine}-turn-end.jsonl`;
+    let source: EventSourceLike | null = null;
+    let recovered = false;
+    testRuntimeBus = createTestRuntimeBus({
+      fetch: async () => new Response(JSON.stringify({
+        schemaVersion: 1, snapshotSeq: recovered ? 102 : 100, retentionFloorSeq: 0,
+        runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+        sessions: [{ conversationId, sessionKey: { engine, sessionId: "session-turn-end" },
+          artifactPath, hostKind: engine === "claude" ? "claude-broker" : "codex-app-server",
+          host: "hosted", turn: recovered ? mode === "unknown recovery" ? "unknown" : "idle" : coalesced ? "unknown" : "running",
+          provenance: "structured", revision: recovered ? 3 : 1,
+          attentionIds: [], recentReceipts: [], activeTurnId: coalesced ? null : "turn-end", capabilities: {} }],
+        attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [],
+      })),
+      createEventSource: () => source = {
+        onopen: null, onmessage: null, onerror: null,
+        close: () => {}, addEventListener: () => {},
+      },
+      now: Date.now, setTimeout, clearTimeout, setInterval, clearInterval,
+    });
+    testRuntimeBus.start();
+    await Bun.sleep(20);
+    source!.onopen?.(null);
+    const scanned: FileEntry = {
+      path: artifactPath, conversationId, root: engine === "claude" ? "claude-projects" : "codex-sessions",
+      engine, fmt: engine, kind: "session", name: "turn-end", title: "Replay", project: "demo",
+      parent: null, mtime: Date.now() / 1000, size: 1, activity: "live", proc: "running", pid: null,
+      model: null, pendingQuestion: null, waitingInput: null, rateLimit: null,
+      lastTurn: { startedAt: Date.now() - 8000, endedAt: null },
+    };
+    let fileReads = 0;
+    globalThis.fetch = mock(async () => {
+      fileReads += 1;
+      return new Response(JSON.stringify({ files: [scanned] }));
+    }) as unknown as typeof fetch;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      flushSync(() => root.render(<TurnStatusProbe now={scanned.mtime} />));
+      await Bun.sleep(40);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("1");
+      expect(host.querySelector('[data-turn-status="running"]')).not.toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).toBe("working");
+      const ended = recordedTurnEnd[engine];
+      const turn = turnStateFromRecords([ended], engine);
+      expect(turn).toBe("done");
+      // Deliver both lifecycle events within the bus's 16 ms subscriber batch.
+      const offset = coalesced ? 1 : 0;
+      const lateOffset = offset + (mode.startsWith("same-batch") ? 1 : 0);
+      if (coalesced) source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 101, eventId: `${engine}-start`,
+        scope: { type: "session", id: conversationId }, revision: 2, kind: "turn-started",
+        payload: { conversationId, turnId: "turn-end" },
+      }) });
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 101 + offset, eventId: `${engine}-end`,
+        scope: { type: "session", id: conversationId }, revision: 2 + offset, kind: turn === "done" ? "turn-ended" : "item",
+        occurredAt: ended.timestamp,
+        payload: { conversationId, turnId: "turn-end", outcome: "completed" },
+      }) });
+      if (mode === "idle recovery" || mode === "unknown recovery") {
+        // A snapshot replacement before the first batched render must retain
+        // the terminal identity too; the wire snapshot has no active turn.
+        recovered = true;
+        expect(await testRuntimeBus.refresh()).toBe(true);
+      }
+      if (mode.startsWith("same-batch")) source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 103, eventId: "same-batch-status",
+        scope: { type: "session", id: conversationId }, revision: 4, kind: "session-status",
+        payload: { conversationId, host: "hosted", turn: mode === "same-batch running" ? "running" : "unknown",
+          activeTurnId: mode === "same-batch running" ? "turn-end" : null },
+      }) });
+      await Bun.sleep(60);
+      expect(testRuntimeBus.getState().store.sessions[conversationId]?.settledTurnId).toBe("turn-end");
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+      expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 102 + lateOffset, eventId: "host-after-end",
+        scope: { type: "session", id: conversationId }, revision: 3 + lateOffset, kind: "session-status",
+        payload: { conversationId, host: "dead", turn: "unknown" },
+      }) });
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+      expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+      expect(host.querySelector("[data-card-status]")?.textContent).toBe("finished the turn — waiting for a reply");
+      expect(fileReads).toBe(1);
+      // A same-turn status snapshot can arrive after the terminal event while
+      // the host still reports the last activeTurnId. It must preserve idle.
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 104 + lateOffset, eventId: "late-same-turn-status",
+        scope: { type: "session", id: conversationId }, revision: 4 + lateOffset, kind: "session-status",
+        payload: { conversationId, host: "hosted", turn: "running", activeTurnId: "turn-end" },
+      }) });
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+
+      // Opening the transcript changes the files scope and restarts its
+      // subscription effect. The settlement must remain visible during that
+      // render and on every status surface.
+      flushSync(() => root.render(<TurnStatusProbe now={scanned.mtime} pinnedPath={artifactPath} />));
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("0");
+      expect(host.querySelector('[data-turn-status="running"]')).toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).not.toBe("working");
+      expect(host.querySelector("[data-card-status]")?.textContent).toBe("finished the turn — waiting for a reply");
+
+      // Recovery first reports unknown, then proves that a different turn
+      // started. This transition must invalidate the retained idle overlay.
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 105 + lateOffset, eventId: "unknown-after-end",
+        scope: { type: "session", id: conversationId }, revision: 5 + lateOffset, kind: "session-status",
+        payload: { conversationId, host: "dead", turn: "unknown", activeTurnId: null },
+      }) });
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 106 + lateOffset, eventId: "next-turn-started",
+        scope: { type: "session", id: conversationId }, revision: 6 + lateOffset, kind: "session-status",
+        payload: { conversationId, host: "hosted", turn: "running", activeTurnId: "turn-next" },
+      }) });
+      await Bun.sleep(60);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("1");
+      expect(host.querySelector('[data-turn-status="running"]')).not.toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).toBe("working");
+      // A late catalog answer still containing the pre-terminal row cannot
+      // bring working back after the runtime end has already reached the DOM.
+      source!.onmessage?.({ data: JSON.stringify({
+        schemaVersion: 1, seq: 107 + lateOffset, eventId: "files-after-end",
+        scope: { type: "system", id: "files" }, kind: "files.revision", payload: { filesRevision: 2 },
+      }) });
+      await Bun.sleep(500);
+      expect(fileReads).toBeGreaterThanOrEqual(2);
+      expect(host.querySelector("[data-working-count]")?.textContent).toBe("1");
+      expect(host.querySelector('[data-turn-status="running"]')).not.toBeNull();
+      expect(host.querySelector("[data-phone-state]")?.textContent).toBe("working");
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
+}
+
+test("an already open live board renders a new agent after SSE snapshot recovery", async () => {
+  let filesRevision = 1;
+  const sources: Array<{ source: EventSourceLike; reset: () => void }> = [];
+  testRuntimeBus = createTestRuntimeBus({
+    fetch: async () => new Response(JSON.stringify({
+      schemaVersion: 1, snapshotSeq: filesRevision === 1 ? 100 : 200,
+      retentionFloorSeq: 0, runtime: { hostEpoch: 1, health: "ready" }, filesRevision,
+      sessions: [], attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [],
+    })),
+    createEventSource: () => {
+      let reset = () => {};
+      const source: EventSourceLike = {
+        onopen: null, onmessage: null, onerror: null, close: () => {},
+        addEventListener: (name, listener) => {
+          if (name === "reset") reset = () => listener({ data: "{}" });
+        },
+      };
+      sources.push({ source, reset: () => reset() });
+      return source;
+    },
+    now: Date.now, setTimeout, clearTimeout, setInterval, clearInterval,
+  });
+  testRuntimeBus.start();
+  await Bun.sleep(20);
+  sources[0]!.source.onopen?.(null);
+  let fileReads = 0;
+  globalThis.fetch = mock(async () => {
+    fileReads += 1;
+    return new Response(JSON.stringify({ files: [{ path: filesRevision === 1 ? "/sessions/seat.jsonl" : "/sessions/new-agent.jsonl" }] }));
+  }) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => { root.render(<Probe />); });
+    await Bun.sleep(30);
+    expect(host.textContent).toBe("/sessions/seat.jsonl");
+    expect(fileReads).toBe(1);
+    filesRevision = 7;
+    sources[0]!.reset();
+    await Bun.sleep(20);
+    sources.at(-1)!.source.onopen?.(null);
+    await Bun.sleep(500);
+    expect(testRuntimeBus.getState().connection).toBe("live");
+    expect(host.textContent).toBe("/sessions/new-agent.jsonl");
+    expect(fileReads).toBe(2);
+  } finally {
+    flushSync(() => { root.unmount(); });
+    host.remove();
+  }
+});
 
 function ScopedProbe({ pinnedPath }: { pinnedPath?: string }) {
   const data = useFiles(undefined, pinnedPath);
@@ -73,7 +305,7 @@ test("concurrent pinned and global hooks keep their scopes through local pipelin
   globalThis.fetch = mock(async (input: string | URL | Request) => {
     fetches += 1;
     const url = String(input);
-    const pinned = url !== "/api/files";
+    const pinned = new URL(url, "http://localhost").searchParams.has("path");
     return new Response(JSON.stringify({
       files: pinned ? [{ path: "/global" }, { path: pinnedPath }] : [{ path: "/global" }],
       pinOverlayPaths: pinned ? [pinnedPath] : [],
@@ -98,14 +330,14 @@ test("concurrent pinned and global hooks keep their scopes through local pipelin
   expect(host.children[0]?.textContent).toBe(JSON.stringify({
     files: ["/global", pinnedPath],
     pins: [pinnedPath],
-    scope: `/api/files?path=${encodeURIComponent(pinnedPath)}`,
+    scope: filesApiUrl(undefined, pinnedPath),
     certified: true,
     task: "patched",
   }));
   expect(host.children[1]?.textContent).toBe(JSON.stringify({
     files: ["/global"],
     pins: [],
-    scope: "/api/files",
+    scope: filesApiUrl(),
     certified: true,
     task: "patched",
   }));
@@ -118,7 +350,7 @@ test("concurrent pinned and global hooks keep their scopes through local pipelin
   expect(host.children[1]?.textContent).toBe(JSON.stringify({
     files: ["/global"],
     pins: [],
-    scope: "/api/files",
+    scope: filesApiUrl(),
     certified: true,
     task: "server",
   }));
