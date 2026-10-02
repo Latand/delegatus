@@ -12,6 +12,7 @@ import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { readOperatorAsks } from "@/lib/asks/store";
+import type { groundedRequest } from "./selection";
 
 const previous = { ...process.env };
 const originalFetch = globalThis.fetch;
@@ -23,6 +24,63 @@ afterEach(() => {
   }
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+for (const engine of ["claude", "codex"] as const) for (const prompt of ["Proceed", "Так"]) {
+  test(`${engine} short follow-up ${prompt} recalls preceding task terms and keeps the Jev prompt unchanged`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-controller-followup-")); roots.push(root);
+    process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
+    process.env.OPENROUTER_API_KEY = "fixture";
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    setAgentRegistryForTests(registry);
+    const receipt = registry.beginSpawn(engine, root, { cwd: root, title: "Synthetic hook conversation" });
+    const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+    const project = projectInfoFromCwd(root)!.project; setSharedMemoryEnabled(project, true);
+    const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+    const opening = "Review calendar scheduling timezone reminders meetings invitations attendees availability recurrence notifications holidays weekends appointments agenda events appointments scheduling";
+    const priorTask = "Update the widget parser";
+    const turns = [{ role: "user", text: opening }, { role: "user", text: priorTask }, { role: "assistant", text: "I can update it." }];
+    fs.writeFileSync(transcript, turns.map(turn => JSON.stringify(engine === "claude"
+      ? { type: turn.role, uuid: crypto.randomUUID(), message: { role: turn.role, content: [{ type: "text", text: turn.text }] } }
+      : { type: "response_item", payload: { type: "message", role: turn.role, content: [{ type: turn.role === "user" ? "input_text" : "output_text", text: turn.text }] } }
+    )).join("\n") + "\n");
+    expect(registry.settleSpawn(receipt.launchId, {
+      key: { engine, sessionId: session }, artifactPath: transcript, cwd: root, accountId: null,
+      status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }).kind).toBe("settled");
+    const source = path.join(root, "memory.md");
+    fs.writeFileSync(source, engine === "claude"
+      ? "v1\n## User preferences\n- Widget parser uses escaped delimiters for every record.\n"
+      : "---\nname: Widget parser\ndescription: Widget parser records use escaped delimiters.\nmetadata:\n  type: user\n---\nApply escaped delimiters to the widget parser.\n");
+    await memoryIndex().refresh([{ path: source, engine: engine === "claude" ? "codex" : "claude", sourceKind: engine === "claude" ? "codex_summary" : "claude_memory", project }]);
+    const deliveryId = crypto.randomUUID();
+    const wirePrompt = engine === "codex"
+      ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(deliveryId).digest("hex"))
+      : prompt;
+    if (engine === "claude") new FileClaudeDeliveryLedger().recordQueued(session, { id: deliveryId, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    let calls = 0;
+    let jevRequest: ReturnType<typeof groundedRequest> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      calls++;
+      const body = JSON.parse(String(init?.body));
+      jevRequest = body;
+      return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
+    }) as typeof fetch;
+    const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+    const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt: wirePrompt, ...(engine === "claude" ? { delegatus_delivery_id: deliveryId } : {}) };
+    const block = await offerForHook(request, input);
+    expect(calls).toBe(1);
+    expect(jevRequest!.state.latestOperatorMessage).toBe(prompt);
+    expect(jevRequest!.state.openingRequest).toBe(opening);
+    expect(jevRequest!.state.precedingTurns).toContain("user: " + priorTask);
+    expect(jevRequest!.state.receivingEngine).toBe(engine);
+    expect(Object.values(jevRequest!.questions)).toHaveLength(1);
+    expect(Object.values(jevRequest!.questions)[0].instructions.proposedOffer.summary).toContain("escaped delimiters");
+    expect(block).toContain("Widget parser");
+    expect(memoryIndex().turnOffers(receipt.conversationId)).toMatchObject([{ score: .8 }]);
+    expect(input.prompt).toBe(wirePrompt);
+  });
+}
+
 test("real controller joins queued operator authorship, calls grounded Jev once, charges shared cap and records offers", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-controller-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;

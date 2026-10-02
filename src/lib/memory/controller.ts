@@ -63,6 +63,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     if (origin !== "operator") return "";
     if (performance.now() >= deadline || !index.claimHook(conversationId, requestId)) return "";
     const context = transcript ? memoryTurnContext(transcript, engine as "claude" | "codex", prompt) : [];
+    // Recall terms follow the research order within the bounded transcript view.
+    const recallQuery = [prompt, ...context.slice().reverse().map(turn => turn.text)].join("\n");
     const latestReply = context.findLast(turn => turn.role === "assistant");
     if (latestReply) index.recordCitations(conversationId, latestReply.text);
     let reserved = 0;
@@ -70,7 +72,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     return await injectMemory({ prompt, origin, engine: engine, project, conversation: conversationId, requestId, context }, {
       deadline,
       enabled: () => sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
-      candidates: deadline => index.injectionCandidates(prompt, project, engine, conversationId, deadline),
+      candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline),
       reserve: ceiling => {
         mutateOperatorAsks(file => {
           if (file.spend.usd + ceiling > readAsksYouSettings().capUsd) { file.spend.capped++; return; }
