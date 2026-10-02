@@ -218,7 +218,7 @@ function order(host: HTMLElement): string[] {
   return [...content.children].flatMap((child) => {
     const element = child as HTMLElement;
     if (element.dataset.deputyBlock) return [`block:${element.dataset.deputyBlock}`];
-    if (element.hasAttribute("data-live-turn-group")) return ["seat-live"];
+    if (element.hasAttribute("data-live-turn-group") || element.hasAttribute("data-live-turn")) return ["seat-live"];
     const text = element.textContent ?? "";
     /* A resumed row quotes the head it continues, so its own words decide. */
     if (text.includes("Seat row written after")) return ["seat:a2"];
@@ -365,7 +365,7 @@ test("while a parallel self streams, the seat's live turn names its participant 
   ] } });
   const { host } = mount([deputy()]);
   await settle();
-  const seatLive = [...host.querySelector("[data-feed-state]")!.children].find((child) => child.hasAttribute("data-live-turn-group"))!;
+  const seatLive = [...host.querySelector("[data-feed-state]")!.children].find((child) => child.hasAttribute("data-live-turn"))!;
   expect(seatLive.querySelector('[data-seat-speaker="live"]')?.textContent).toBe("Orchestrator");
   expect(seatLive.querySelector('[data-live-turn-caret="seat"]')?.className).toContain("bg-accent");
   const ghostCaret = host.querySelector('[data-deputy-block] [data-live-turn-caret]')!;
@@ -373,7 +373,9 @@ test("while a parallel self streams, the seat's live turn names its participant 
   expect(ghostCaret.className).toContain("bg-secondary");
   expect(ghostCaret.className).not.toContain("bg-accent");
   /* Live prose is set at the feed's prose size, as its settled row is. */
-  for (const row of host.querySelectorAll<HTMLElement>("[data-live-turn]:not([data-live-tool])")) expect(row.className).toContain("text-body");
+  for (const row of host.querySelectorAll<HTMLElement>("[data-live-turn]:not([data-live-tool])")) {
+    expect((row.querySelector(".whitespace-pre-wrap") ?? row).className).toContain("text-body");
+  }
 });
 
 test("on the phone, a prose row inside the block is captioned as the parallel self, never with the bare engine name", async () => {
@@ -442,11 +444,12 @@ test("on the phone, the seat's live turn beside a parallel self is named what it
   ] } });
   const { host } = mount([deputy()]);
   await settle();
-  const seatLive = [...host.querySelector("[data-feed-state]")!.children].find((child) => child.hasAttribute("data-live-turn-group"))!;
+  const seatLive = [...host.querySelector("[data-feed-state]")!.children].find((child) => child.hasAttribute("data-live-turn"))!;
   expect(seatLive.querySelector('[data-seat-speaker="live"] [data-seat-speaker-name]')?.textContent).toBe("Claude");
   for (const row of host.querySelectorAll<HTMLElement>("[data-live-turn]:not([data-live-tool])")) {
-    expect(row.className).toContain("text-title");
-    expect(row.className).not.toContain("text-body");
+    const text = row.querySelector(".whitespace-pre-wrap") ?? row;
+    expect(text.className).toContain("text-title");
+    expect(text.className).not.toContain("text-body");
   }
 });
 

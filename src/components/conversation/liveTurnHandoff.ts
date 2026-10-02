@@ -248,11 +248,9 @@ export function useReasoningFeed(feed: FeedSnapshot, liveTurn: RuntimeLiveTurn |
  * Canonical transcript rows claim completed live items by response identity.
  * Older engine records without ids use a timestamp-fenced text echo.
  *
- * Completed prose waits for its own echo. LogFeed places it in the shared
- * row list by its original instant, so an older unclaimed answer cannot pin
- * below newer transcript rows. Persisted identity claims keep an echoed answer
- * retired after its canonical row leaves the loaded window. Tool overlays and
- * stranded streaming deltas retain their existing tail staleness fence.
+ * Tail-only consumers fence old overlays once the transcript moves past them.
+ * LogFeed separately retains prose in its pane-owned assistant handoff and
+ * places it by its original instant in the shared keyed row list.
  */
 export function visibleRuntimeLiveTurnItems(
   liveTurn: RuntimeLiveTurn | null | undefined,
@@ -292,7 +290,7 @@ export function visibleRuntimeLiveTurnItems(
         && (startedAt === null || item.at === null || item.at >= startedAt),
       );
     }
-    if (owner < 0) return !live.tool && Boolean(live.text.trim()) || !transcriptMovedPast(live);
+    if (owner < 0) return !transcriptMovedPast(live);
     claimed.add(owner);
     return false;
   });

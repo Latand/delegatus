@@ -21,14 +21,14 @@ beforeEach(() => {
   resetCanonicalAssistantClaimsForTests();
 });
 
-test("completed answer waits for its own echo despite a later tool or reconnect", () => {
+test("tail-only overlays retire an old answer after the transcript moves past it", () => {
   const live: RuntimeLiveTurn = { turnId: "delayed", text: "Still readable", items: [{
     itemId: "delayed-answer", text: "Still readable", phase: "awaiting-echo",
     startedAt: "2026-10-02T10:00:00Z", completedAt: "2026-10-02T10:00:01Z",
   }] };
   const later = [toolRow("later-tool", "2026-10-02T10:00:05Z")];
   for (const turn of ["running", "idle", "unknown"] as const) {
-    expect(visibleRuntimeLiveTurnItems(live, later, new Set(), turn)).toHaveLength(1);
+    expect(visibleRuntimeLiveTurnItems(live, later, new Set(), turn)).toHaveLength(0);
   }
   const echoed = [...later, { key: "echo", anchorKey: "row:2:0", item: {
     kind: "prose", ts: "2026-10-02T10:00:01Z", text: "Still readable", engine: "claude", sourceId: "delayed-answer",

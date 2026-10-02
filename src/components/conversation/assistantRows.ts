@@ -7,7 +7,7 @@ import { newestTranscriptInstant, transcriptInstant } from "../feed/transcriptOr
 import { LIVE_TURN_ITEM_LIMIT, LIVE_TURN_OVERFLOW_LIMIT, runtimeLiveTurnItems, type RuntimeLiveTurn, type RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 
 interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; order: number }
-interface Binding { key: string; at: number | null; order: number }
+interface Binding { key: string; at: number | null; order: number; identity: string }
 export interface AssistantHandoff {
   pending: PendingAnswer[];
   bindings: Map<string, Binding>;
@@ -22,6 +22,11 @@ const at = (live: RuntimeLiveTurnItem) => {
 };
 const streamKey = (live: RuntimeLiveTurnItem) => JSON.stringify([live.startedAt, live.text]);
 const source = (item: Item) => "sourceId" in item ? item.sourceId : undefined;
+// Parser sequence keys restart on a new filter or locale. Bind the original
+// transcript projection, so a reused sequence key cannot adopt another row.
+const bindingIdentity = (entry: FeedEntry) => JSON.stringify([entry.anchorKey, entry.item.kind,
+  source(entry.item), transcriptInstant(entry.item),
+  !entry.anchorKey && "text" in entry.item ? entry.item.text : null]);
 
 /** Pane-owned completed replies survive a missing runtime snapshot until an
  * actual echo or durable claim retires them. Idle turns retain the existing
@@ -44,8 +49,9 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     else pending.push({ key: `assistant-pending:${sequence++}`, live, order });
   }
   const bindings = new Map<string, Binding>();
+  const priorBindings = new Map([...state.bindings.values()].map(binding => [binding.identity, binding]));
   for (const entry of feed) {
-    const prior = state.bindings.get(entry.key);
+    const prior = priorBindings.get(bindingIdentity(entry));
     if (prior) bindings.set(entry.key, prior);
   }
   const remaining: PendingAnswer[] = [];
@@ -62,7 +68,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       matches.forEach((match, index) => {
         claimedRows.add(match.key);
         // A structured answer can expand into several cards; each keeps a unique key.
-        bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live), order: entry.order });
+        bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live), order: entry.order, identity: bindingIdentity(match) });
       });
     } else if ((!entry.live.itemId || !claims.has(entry.live.itemId))
       && !(entry.live.phase === "streaming" && turn === "idle" && transcriptAt !== null

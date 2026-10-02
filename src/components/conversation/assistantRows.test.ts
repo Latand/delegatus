@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { FeedEntry } from "../feed/parse";
+import { createFeedSession, type FeedEntry } from "../feed/parse";
 import type { RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
 import { mergeAssistantRows, projectAssistantHandoff } from "./assistantRows";
 
@@ -18,6 +18,24 @@ const rows = (feed: FeedEntry[], state: ReturnType<typeof projectAssistantHandof
   feed.map(entry => ({ ...entry, kind: "item" })), state,
   ({ key, live }) => ({ key, anchorKey: key, kind: "item", item: { ...echo.item, text: live.text } as typeof echo.item }),
 );
+
+test("a parser reset for a filter keeps the answer binding on its own transcript row", () => {
+  const lines = [
+    { type: "user", timestamp: "2026-10-02T10:00:00Z", message: { content: "Please respond" } },
+    { type: "assistant", timestamp: "2026-10-02T10:00:01Z", message: { id: "answer", content: [{ type: "text", text: "The answer" }] } },
+    { type: "user", timestamp: "2026-10-02T10:00:05Z", message: { content: "Next answer request" } },
+  ].map(value => JSON.stringify(value));
+  const parse = (lineFilter: string) => createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter }).feed(lines, 0, false).items;
+  const initial = parse("");
+  const state = projectAssistantHandoff(null, live("awaiting-echo", null), initial, claims);
+  expect(state.pending).toEqual([]);
+  const filtered = parse("answer");
+  const reconnected = projectAssistantHandoff(state, null, filtered, claims);
+  const rendered = rows(filtered, reconnected);
+  expect(rendered.map(row => "text" in row.item ? row.item.text : "")).toEqual(["The answer", "Next answer request"]);
+  expect(rendered[0].key).toBe("assistant-pending:0");
+  expect(rendered[1].key).not.toBe("assistant-pending:0");
+});
 
 test("stream, completion, missing reconnect snapshot and delayed echo keep one row in its slot", () => {
   let state = projectAssistantHandoff(null, live("streaming", null), [], claims);
