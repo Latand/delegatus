@@ -267,6 +267,7 @@ function isWorkflow(value: unknown): value is Workflow {
     typeof wf.repoDir === "string" &&
     typeof wf.worktreeDir === "string" &&
     typeof wf.branch === "string" &&
+    (wf.controlGeneration === undefined || typeof wf.controlGeneration === "string") &&
     Array.isArray(wf.stageRuns) &&
     typeof wf.stageIndex === "number" &&
     normalizeTemplate(wf.template) !== null

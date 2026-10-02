@@ -503,6 +503,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     if (ready) fail("spawn", ready);
     const repo = await ports.prepareRepo();
     record({ repoDir: repo.repoDir });
+    await wait(0);
     const spawned = await ports.spawnSeat({ runtime, cwd: repo.repoDir, clientAttemptId: `health-seat-${run.id}` });
     if ("error" in spawned) {
       const refused = spawned.reason && spawned.reason !== "connected" ? readinessFailure(runtime, spawned.reason) : null;

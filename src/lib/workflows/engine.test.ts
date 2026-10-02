@@ -458,6 +458,33 @@ test("embedded flow trouble parks the workflow: create error, needs_decision, CO
   }
 });
 
+test.each((["finishing", "provisioning"] as const).flatMap((phase) => (["pause", "close", "cycle"] as const).map((action) => [phase, action] as const)))("async workflow %s respects %s", async (phase, action) => {
+    const h = makeHarness(), wf = await createWf(h.ports);
+    const rows = loadWorkflows(), current = rows.find((item) => item.id === wf.id)!;
+    current.state = phase; current.stateDetail = "resumed by operator";
+    current.baseRef = phase === "finishing" ? "basesha" : ""; current.baseBranch = "main";
+    saveWorkflows(rows);
+    let entered!: () => void, release!: () => void;
+    const checking = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const original = h.ports.exec; let first = true, signal: AbortSignal | undefined;
+    h.ports.exec = async (...args) => {
+      if (first) { first = false; signal = args[4]?.signal; entered(); await held; }
+      return await original(...args);
+    };
+    h.calls.length = 0;
+    const work = tickWorkflows([], h.ports);
+    try {
+      await checking;
+      await patchWorkflow(wf.id, { action: action === "cycle" ? "pause" : action }, h.ports);
+      if (action === "cycle") await patchWorkflow(wf.id, { action: "resume" }, h.ports);
+      await Bun.sleep(75); expect(signal?.aborted).toBe(true);
+      release(); await work;
+      expect(h.calls.some((call) => call.includes("git push") || call.includes("gh pr create") || call.includes("git worktree add"))).toBe(false);
+      expect(load(wf.id)).toMatchObject({ state: action === "cycle" ? phase : action === "close" ? "closed" : "paused", prUrl: null });
+    } finally { release(); await work; }
+});
+
 test("a finish failure parks; retry-stage reruns the finish", async () => {
   const harness = makeHarness();
   harness.state.execFail = "push";

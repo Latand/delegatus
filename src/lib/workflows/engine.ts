@@ -309,9 +309,29 @@ async function ensureStageAgent(
   return "ready";
 }
 
+/** A control change cancels every child and supersedes this exact phase's result. */
+function workflowGitFence(wf: Workflow, ports: WorkflowPorts) {
+  const fingerprint = JSON.stringify(wf), abort = new AbortController();
+  const revalidate = () => {
+    if (JSON.stringify(loadWorkflows().find((item) => item.id === wf.id)) !== fingerprint) abort.abort();
+    return !abort.signal.aborted;
+  };
+  const watch = setInterval(revalidate, 50);
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    if (!revalidate()) return { code: null, stdout: "", stderr: "workflow operation superseded" };
+    return await ports.exec(command, args, cwd, env, { ...options,
+      signal: options?.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal,
+      timeoutMs: options?.timeoutMs ?? 60_000 });
+  };
+  return { exec, current: revalidate, release: () => clearInterval(watch) };
+}
+
 async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
   if (!wf.baseRef) {
-    const res = (await provisionWorktree(wf, ports.exec));
+    const fence = workflowGitFence(wf, ports);
+    let res: Awaited<ReturnType<typeof provisionWorktree>>;
+    try { res = await provisionWorktree(wf, fence.exec); if (!fence.current()) return; }
+    finally { fence.release(); }
     if (!res.ok) {
       park(wf, res.error);
       return;
@@ -457,7 +477,10 @@ async function tickReviewing(
 
 async function tickFinishing(wf: Workflow, ports: WorkflowPorts): Promise<void> {
   const flow = wf.flowId ? ports.getFlow(wf.flowId) : null;
-  const res = (await runFinish(wf, prBody(wf, flow?.rounds ?? []), ports.exec));
+  const fence = workflowGitFence(wf, ports);
+  let res: Awaited<ReturnType<typeof runFinish>>;
+  try { res = await runFinish(wf, prBody(wf, flow?.rounds ?? []), fence.exec); if (!fence.current()) return; }
+  finally { fence.release(); }
   if (!res.ok) {
     park(wf, res.error);
     return;
@@ -537,11 +560,13 @@ export async function patchWorkflow(
     if (wf.state !== "paused" && !TERMINAL_STATES.has(wf.state)) {
       if (wf.state !== "needs_decision") wf.pausedState = wf.state;
       wf.state = "paused";
+      wf.controlGeneration = crypto.randomUUID();
       wf.stateDetail = pauseResumeDetail("paused", actor);
     }
   } else if (req.action === "resume") {
     if (wf.state === "paused" || wf.state === "needs_decision") {
       wf.state = wf.pausedState && !PARKED_STATES.has(wf.pausedState) ? wf.pausedState : "provisioning";
+      wf.controlGeneration = crypto.randomUUID();
       wf.pausedState = null;
       wf.stateDetail = pauseResumeDetail("resumed", actor);
     }
@@ -575,6 +600,7 @@ export async function patchWorkflow(
     }
     wf.pausedState = null;
     wf.stateDetail = null;
+    wf.controlGeneration = crypto.randomUUID();
   } else if (req.action === "retry-stage") {
     const phase = phaseOf(wf);
     if (TERMINAL_STATES.has(wf.state)) return { error: "workflow is finished", status: 409 };
@@ -600,6 +626,7 @@ export async function patchWorkflow(
       }
     }
     wf.state = phase;
+    wf.controlGeneration = crypto.randomUUID();
     wf.pausedState = null;
     wf.stateDetail = null;
   } else if (req.action === "close") {
@@ -610,6 +637,7 @@ export async function patchWorkflow(
     }
     /* Panes and the worktree stay for inspection (W10); removal is manual. */
     wf.state = "closed";
+    wf.controlGeneration = crypto.randomUUID();
     wf.pausedState = null;
     wf.stateDetail = null;
     wf.closedAt = ports.now();
