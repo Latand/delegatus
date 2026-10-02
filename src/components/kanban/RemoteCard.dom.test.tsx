@@ -163,3 +163,25 @@ test("a remote lane that finished keeps its quiet state word and draws neither a
   expect(card.querySelector("[data-managed-on]")).toBeNull();
   expect(card.querySelectorAll(".pblock[data-managed] button")).toHaveLength(0);
 });
+
+
+test("host sync metadata reaches the card with distinct fresh, stale, failing and waiting cues in both languages", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    for (const [state, lastCall, expected, tone] of [
+      ["active", Date.now() - 60_000, "synced", "success"],
+      ["active", Date.now() - 1_200_000, "stale", "warning"],
+      ["failing", Date.now() - 60_000, "failing", "danger"],
+      ["active", null, "waiting", "muted"],
+    ] as const) {
+      const host = await mount(feed([], { hosts: { [STAGE]: { label: "Stage", linked: true, state, lastCall } } }), [remoteTask()]);
+      const chip = cardOf(host, REMOTE_ID)!.querySelector<HTMLElement>(".host-chip")!;
+      expect(chip.dataset.remoteSync).toBe(expected);
+      expect(chip.style.color).toBe(`var(--color-${tone})`);
+      expect(chip.textContent).toContain("Stage");
+      expect(chip.textContent).not.toBe(translate(locale, "kanban.remote.managedOn", { host: "Stage" }));
+      for (const root of roots.splice(0)) flushSync(() => root.unmount());
+      document.body.replaceChildren();
+    }
+  }
+});
