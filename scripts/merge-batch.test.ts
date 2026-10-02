@@ -1,9 +1,9 @@
 import { expect, test, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, requiredVerdict, nextRefresh, commandRunner, type CommandRunner } from "./merge-batch";
+import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
   expect(parseReviewedPrs("12@abcdef1, 13@1234567")).toEqual([
@@ -16,6 +16,10 @@ test("review inputs require unique PRs and unambiguous hexadecimal heads", () =>
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+function githubFailedLog(output: string): string {
+  return output.split("\n").map((line) => `privacy\tScan\t2026-10-02T08:45:12Z ${line}`).join("\n");
+}
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "merge-batch-test-"));
@@ -117,7 +121,8 @@ test("a real git bisect isolates a local gate culprit and rebuilds the remaining
   expect(git(state.work, ["rev-list", "--count", `${state.base}..HEAD`])).toBe("2");
 });
 
-function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner) {
+function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,
+  setupRun?: (data: ReturnType<typeof fixture>) => CommandRunner) {
   const f = fixture();
   const stateFile = join(f.root, "merge-batch.json");
   const calls: string[][] = [];
@@ -128,7 +133,7 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
     if (env?.LLV_STATE_DIR) expect(env.LLV_STATE_DIR).toStartWith("/var/tmp/");
     return { code: 0, output: "" };
   };
-  const run = runOverride ?? defaultRun;
+  const run = runOverride ?? setupRun?.(f) ?? defaultRun;
   const gh = async (args: string[]) => {
     calls.push(args);
     const batch = JSON.parse(readFileSync(stateFile, "utf8"));
@@ -171,9 +176,9 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
         expect(result.stdout.toString()).not.toContain(value);
         expect(result.stderr.toString()).not.toContain(value);
         expect(result.stdout.toString()).not.toContain("file: a.txt:1");
-        return result.stdout.toString();
+        return githubFailedLog(result.stdout.toString());
       }
-      return `commit_message: ${batch.rows[1].commit.slice(0, 12)} message email_address`;
+      return githubFailedLog(`commit_message: ${batch.rows[1].commit.slice(0, 12)} message email_address`);
     }
     if (args[0] === "pr" && args[1] === "merge") {
       expect(args).toContain("--rebase");
@@ -193,6 +198,91 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const batch = new MergeBatch(f.repo, stateFile, run, gh, async () => {});
   return { ...f, batch, calls, commands };
 }
+
+function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
+  mkdirSync(join(f.repo, "scripts"));
+  f.seed("scripts/privacy-publication-gate.ts", "trusted main scanner\n");
+  f.seed("scripts/privacy-known-value-fingerprints.json", JSON.stringify({
+    schemaVersion: 1, normalization: "nfkc-lower-alnum-v1", fingerprints: [],
+  }));
+}
+
+function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: string, observed: string[] = [], candidates: string[] = []): CommandRunner {
+  return async (cwd, args, env) => {
+    if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts") {
+      observed.push(cwd);
+      const candidate = args[args.indexOf("--repository") + 1]!;
+      candidates.push(candidate);
+      const base = args[args.indexOf("--base") + 1]!;
+      expect(git(cwd, ["rev-parse", "HEAD"])).toBe(base);
+      expect(readFileSync(join(cwd, "scripts/privacy-publication-gate.ts"), "utf8")).toBe("trusted main scanner\n");
+      expect(env?.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE).toBe(join(cwd, "scripts/privacy-known-value-fingerprints.json"));
+      expect(readFileSync(env!.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE!, "utf8")).toContain("nfkc-lower-alnum-v1");
+      const candidateIdentity = join(candidate, "identity.txt");
+      return { code: rejectedIdentity && existsSync(candidateIdentity)
+        && readFileSync(candidateIdentity, "utf8").includes(rejectedIdentity) ? 1 : 0, output: "" };
+    }
+    if (args[0] === "git" && args[1] === "bisect") return commandRunner(cwd, args, env);
+    return { code: 0, output: "" };
+  };
+}
+
+test("the pinned main privacy scanner rejects an identity before the batch can publish", async () => {
+  const personalEmail = ["synthetic-person", "invalid.example"].join("@");
+  const trustedDirs: string[] = [];
+  const f = landingFixture("green", undefined, (fixture) => {
+    seedTrustedPrivacyFiles(fixture);
+    return trustedPrivacyRunner(fixture, personalEmail, trustedDirs);
+  });
+  f.addPr(12, "identity.txt", personalEmail);
+  git(f.repo, ["checkout", "topic-12"]);
+  writeFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "export const weakened = true;\n");
+  git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Weaken branch scanner"]);
+  const head = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "--force", "origin", `${head}:refs/pull/12/head`, `${head}:refs/heads/topic-12`]);
+  f.views.get(12)!.headRefOid = head;
+  git(f.repo, ["checkout", "main"]);
+  const built = await f.batch.build(`12@${head}`);
+  const gated = await f.batch.gate();
+  const landed = await f.batch.land();
+
+  expect(built.rows[0]!.head).toBe(head);
+  expect(gated.rows[0]!.status).toBe("culprit");
+  expect(landed.published).toBeNull();
+  expect(trustedDirs.length).toBeGreaterThan(0);
+  expect(trustedDirs.every((directory) => directory !== built.work)).toBe(true);
+  expect(f.calls.some((args) => args[1] === "create")).toBe(false);
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/merge-batch/" + built.branch.split("/").at(-1)])).toBe("");
+});
+
+test("a stale branch privacy scanner cannot block publication after pinned main passes", async () => {
+  const trustedDirs: string[] = [];
+  const f = landingFixture("green", undefined, (fixture) => {
+    seedTrustedPrivacyFiles(fixture);
+    return trustedPrivacyRunner(fixture, undefined, trustedDirs);
+  });
+  f.addPr(12, "a.txt", "healthy change");
+  git(f.repo, ["checkout", "topic-12"]);
+  writeFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "export const stale = true;\n");
+  git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Refresh branch scanner"]);
+  const movedHead = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "--force", "origin", `${movedHead}:refs/pull/12/head`, `${movedHead}:refs/heads/topic-12`]);
+  f.views.get(12)!.headRefOid = movedHead;
+  git(f.repo, ["checkout", "main"]);
+  mkdirSync(join(f.repo, ".githooks"));
+  const hook = join(f.repo, ".githooks/pre-push");
+  writeFileSync(hook, "#!/bin/sh\nwhile read local_ref local_sha remote_ref remote_sha; do\n  [ \"$remote_ref\" = refs/heads/main ] && exit 0\ndone\n[ \"${LLV_SKIP_HOOKS:-0}\" = 1 ]\n");
+  chmodSync(hook, 0o755);
+  git(f.repo, ["config", "core.hooksPath", ".githooks"]);
+  await f.batch.build(`12@${movedHead}`);
+  await f.batch.gate();
+  const landed = await f.batch.land();
+
+  expect(landed.rows[0]!.status).toBe("merged");
+  expect(trustedDirs.length).toBe(3);
+  expect(trustedDirs.every((directory) => directory !== landed.work)).toBe(true);
+  expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+});
 
 test("one gated batch rebase-merges with exact head, closes originals with landed SHAs and keeps branches", async () => {
   const f = landingFixture();
@@ -217,6 +307,33 @@ test("an attributed red required check drops its PR and lands the remainder", as
   expect(state.rows.map((row) => row.status)).toEqual(["merged", "culprit"]);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
   expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).not.toContain("b.txt");
+});
+
+test("a personal attribution trailer makes only its PR the culprit", async () => {
+  const f = landingFixture();
+  const good12 = f.addPr(12, "a.txt", "healthy 12");
+  f.addPr(13, "personal.txt", "rejected 13");
+  const personalEmail = ["synthetic-person", "invalid.example"].join("@");
+  git(f.repo, ["checkout", "topic-13"]);
+  git(f.repo, ["commit", "--amend", "-m", `Feature 13\n\nCo-Authored-By: Fixture <${personalEmail}>`]);
+  const personalHead = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "--force", "origin", `${personalHead}:refs/pull/13/head`, `${personalHead}:refs/heads/topic-13`]);
+  f.views.get(13)!.headRefOid = personalHead;
+  git(f.repo, ["checkout", "main"]);
+  const good14 = f.addPr(14, "c.txt", "healthy 14");
+
+  await f.batch.build(`12@${good12},13@${personalHead},14@${good14}`);
+  await f.batch.gate();
+  const state = await f.batch.land();
+
+  expect(state.rows.map((row) => row.status)).toEqual(["merged", "culprit", "merged"]);
+  expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+  for (const row of state.rows.filter((entry) => entry.status === "merged")) {
+    expect(git(state.work, ["show", "-s", "--format=%B", row.commit])).not.toContain(personalEmail);
+  }
+  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).toContain("a.txt");
+  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).toContain("c.txt");
+  expect(git(f.repo, ["ls-tree", "--name-only", "HEAD"])).not.toContain("personal.txt");
 });
 
 test("an unattributable red merges nothing", async () => {
@@ -261,7 +378,11 @@ test("BEHIND rebuilds at most three times", async () => {
 });
 
 test("a deferred conflict only fast-forwards its original branch after landing, then needs independent review", async () => {
-  const f = landingFixture();
+  const resolutionCandidates: string[] = [];
+  const f = landingFixture("green", undefined, (fixture) => {
+    seedTrustedPrivacyFiles(fixture);
+    return trustedPrivacyRunner(fixture, undefined, [], resolutionCandidates);
+  });
   const a = f.addPr(12, "story.txt", "first\nsecond accepted\nthird\nfourth\nfifth\n");
   const b = f.addPr(13, "story.txt", "first\nsecond alternative\nthird\nfourth\nfifth\n");
   await f.batch.build(`12@${a},13@${b}`); await f.batch.gate(); await f.batch.land();
@@ -272,6 +393,7 @@ test("a deferred conflict only fast-forwards its original branch after landing, 
   git(work, ["add", "story.txt"]);
   state = await f.batch.resolve(13);
   expect(state.rows[1]!.status).toBe("needs-review");
+  expect(resolutionCandidates).toContain(work);
   const sha = state.rows[1]!.resolution!;
   expect(git(work, ["rev-list", "--parents", "-n", "1", sha]).split(" ")).toHaveLength(3);
   expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(sha);
@@ -286,6 +408,7 @@ test("required checks must all finish green; optional failures do not hold a bat
   expect(requiredVerdict(["privacy"], [{ context: "privacy", state: "FAILURE" }])).toBe("red");
   expect([0, 1, 2].map(nextRefresh)).toEqual([1, 2, 3]);
   expect(() => nextRefresh(3)).toThrow("three");
+  expect(MAX_REQUIRED_CHECK_POLLS).toBe(240);
 });
 
 test("commit messages deduplicate machine credit and refuse forged human trailers", () => {
@@ -295,6 +418,10 @@ test("commit messages deduplicate machine credit and refuse forged human trailer
   ])).toBe("Feature (#12)\n\nSummary.\n\nCo-Authored-By: Tool <noreply@example.test>\n");
   expect(() => batchMessage(12, "Feature", "", [{ name: "Tool", email: "noreply@example.test",
     message: `Co-Authored-By: Contributor <${["fixture", "users.noreply.github.com"].join("@")}>` }])).toThrow();
+  expect(batchMessage(12, "Feature", "", [{ name: "Tool", email: "noreply@example.test",
+    message: "Signed-Off-By: Tool <noreply@example.test>" }])).toContain("Signed-Off-By: Tool <noreply@example.test>");
+  expect(() => batchMessage(12, "Feature", "", [{ name: "Tool", email: "noreply@example.test",
+    message: `Signed-Off-By: Fixture <${["synthetic-person", "invalid.example"].join("@")}>` }])).toThrow();
 });
 
 test("touched tests are existing files, with TSX siblings and no directories", () => {
@@ -318,6 +445,10 @@ test("gate notices require unique path ownership or an attributed changed line",
   expect(noticePrs("file: attack\nfile: src/a.ts:12 known_value\nprobe.txt", commits, () => "b".repeat(40))).toEqual([]);
   expect(noticePrs("random log bbbbbbbbbbbb not a diagnostic", commits)).toEqual([]);
   expect(noticePrs(`commit_message: ${"b".repeat(12)} message injected`, commits)).toEqual([]);
+  expect(noticePrs(`privacy\tScan\t2026-10-02T08:45:12.123Z commit_message: ${"b".repeat(12)} message email_address`, commits)).toEqual([13]);
+  expect(noticePrs(`privacy\tScan\t2026-10-02T08:45:12Z file-sha256:${fileDigest} known_value`, commits)).toEqual([13]);
+  expect(noticePrs(`privacy\tScan\t2026-10-02T08:45:12Z\tcommit_message: ${"b".repeat(12)} message email_address`, commits)).toEqual([]);
+  expect(noticePrs(`privacy\tScan\tnot-a-timestamp\tcommit_message: ${"b".repeat(12)} message email_address`, commits)).toEqual([]);
   expect(noticePrs("all checks failed", commits)).toEqual([]);
   expect(noticePrs("error: longsrc/b.tsuffix", commits)).toEqual([]);
   expect(noticePrs("git checkout " + "b".repeat(40) + "\ngit diff -- src/b.ts\ninfrastructure failed", commits)).toEqual([]);

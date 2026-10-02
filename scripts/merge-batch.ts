@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -34,10 +34,11 @@ export function batchMessage(number: number, title: string, body: string, author
       trailers.add(`Co-Authored-By: ${author.name} <${author.email}>`);
     }
     for (const line of author.message.split("\n")) {
-      if (!/^Co-Authored-By:/i.test(line)) continue;
-      const match = /^Co-Authored-By:\s*([^<>\r\n]+)\s+<([^<>\s]+)>\s*$/i.exec(line);
-      if (!match || !machineEmail(match[2]!)) throw new Error("Non-machine attribution trailer refused");
-      trailers.add(`Co-Authored-By: ${match[1]!.trim()} <${match[2]}>`);
+      if (!/^(?:Co-Authored-By|Signed-Off-By):/i.test(line)) continue;
+      const match = /^(Co-Authored-By|Signed-Off-By):\s*([^<>\r\n]+)\s+<([^<>\s]+)>\s*$/i.exec(line);
+      if (!match || !machineEmail(match[3]!)) throw new Error("Non-machine attribution trailer refused");
+      const kind = /^signed-off-by$/i.test(match[1]!) ? "Signed-Off-By" : "Co-Authored-By";
+      trailers.add(`${kind}: ${match[2]!.trim()} <${match[3]}>`);
     }
   }
   // PR prose also goes through the privacy gate before publication.
@@ -62,7 +63,10 @@ const privacyFindingClass = "(?:configuration_error|credential|email_address|hom
 export function noticePrs(log: string, commits: BatchCommit[], lineOwner?: (path: string, line: number) => string | undefined): number[] {
   // Accept only the privacy gate's complete, known notice shapes. Parsing
   // arbitrary log lines lets a filename containing a newline forge blame.
-  const lines = log.split("\n");
+  const lines = log.split("\n").map((line) => {
+    const envelope = /^[^\t\r\n]+\t[^\t\r\n]+\t\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}) +(.*)$/.exec(line);
+    return envelope?.[1] ?? line;
+  });
   const commitNotices = lines.filter((line) => new RegExp(
     `^(?:commit_message: [a-f0-9]{12} message (?:unreadable|${privacyFindingClass}(?:, ${privacyFindingClass})*)`
       + `|merge_boundary: [a-f0-9]{12} (?:author|committer) identity composes an attributable Co-Authored-By trailer \\(address withheld\\))$`,
@@ -121,13 +125,14 @@ export function requiredVerdict(required: string[], checks: Check[]): "green" | 
 }
 
 export const MAX_MAIN_REFRESHES = 3;
+export const MAX_REQUIRED_CHECK_POLLS = 240;
 export function nextRefresh(count: number): number {
   if (count >= MAX_MAIN_REFRESHES) throw new Error("Main moved more than three times");
   return count + 1;
 }
 
-export function git(cwd: string, args: string[], input?: string): string {
-  return execFileSync("git", args, { cwd, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }).trimEnd();
+export function git(cwd: string, args: string[], input?: string, env?: NodeJS.ProcessEnv): string {
+  return execFileSync("git", args, { cwd, input, env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }).trimEnd();
 }
 
 export function patchId(cwd: string, base: string, head: string): string {
@@ -318,7 +323,14 @@ export class MergeBatch {
           const [name, email, message] = git(state.work, ["show", "-s", "--format=%an%x00%ae%x00%B", sha]).split("\0");
           return { name: name!, email: email!, message: message! };
         });
-      const message = batchMessage(row.number, row.view.title, row.view.body, authors);
+      let message: string;
+      try { message = batchMessage(row.number, row.view.title, row.view.body, authors); }
+      catch {
+        git(state.work, ["reset", "--hard", previous]);
+        row.status = "culprit";
+        row.detail = "privacy: batch attribution refused";
+        continue;
+      }
       this.identity(state.work);
       git(state.work, ["commit", "-F", "-"], message);
       row.commit = git(state.work, ["rev-parse", "HEAD"]);
@@ -330,6 +342,12 @@ export class MergeBatch {
   }
 
   private async gateCommand(cwd: string, gate: Gate, useStableTestCorpus = true): Promise<CommandResult> {
+    if (gate.id === "privacy") {
+      const state = this.read();
+      const baseIndex = gate.args.indexOf("--base");
+      const base = baseIndex >= 0 ? gate.args[baseIndex + 1]! : state.base;
+      return this.trustedPrivacy(state, ["--check-commits", "--require-known-values"], cwd, base);
+    }
     let args = gate.args;
     if (gate.id === "tests" || gate.id === "eslint") {
       const prefix = gate.id === "tests" ? 2 : 3;
@@ -423,18 +441,47 @@ export class MergeBatch {
       "", ...issues.map((number) => `Closes #${number}`)].join("\n");
   }
 
+  private async trustedPrivacy(state: RunState, args: string[], candidate = state.work, base = state.base): Promise<CommandResult> {
+    const trustedWork = join(dirname(this.stateFile), `privacy-main-${randomUUID()}`);
+    const stateDir = mkdtempSync(join("/var/tmp", "merge-privacy-state-"));
+    let worktreeAdded = false;
+    try {
+      git(state.work, ["worktree", "add", "--detach", trustedWork, base]);
+      worktreeAdded = true;
+      const modules = join(this.repo, "node_modules");
+      if (existsSync(modules)) symlinkSync(modules, join(trustedWork, "node_modules"), "dir");
+      const catalog = join(trustedWork, "scripts/privacy-known-value-fingerprints.json");
+      return await this.run(trustedWork, ["/var/tmp/llv-gate", "bun", "scripts/privacy-publication-gate.ts",
+        "--repository", candidate, "--base", base, ...args], {
+        ...process.env,
+        LLV_STATE_DIR: stateDir,
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+      });
+    } finally {
+      try {
+        if (worktreeAdded) git(state.work, ["worktree", "remove", "--force", trustedWork]);
+      } finally {
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    }
+  }
+
   private async publish(state: RunState): Promise<void> {
     this.assertTip(state);
     if (state.gated !== state.tip) throw new Error("Exact batch tip has not passed local gates");
     const title = `Merge batch: ${state.rows.filter((row) => row.status === "clean").map((row) => `#${row.number}`).join(", ")}`;
     const bodyFile = join(dirname(this.stateFile), "merge-batch-body.md");
     writeFileSync(bodyFile, this.body(state), { mode: 0o600 });
-    // Check public title/body too; changed-file and commit gates ran in gate().
-    const privacy = await this.run(state.work, ["/var/tmp/llv-gate", "bun", "scripts/privacy-publication-gate.ts", "--paths", bodyFile]);
-    if (privacy.code) throw new Error("Batch PR body failed the publication gate");
+    // Recheck the exact candidate and public body with the pinned main scanner
+    // immediately before any push or PR edit.
+    const candidatePrivacy = await this.trustedPrivacy(state, ["--check-commits", "--require-known-values"]);
+    if (candidatePrivacy.code) throw new Error("Batch failed the trusted publication gate");
+    const bodyPrivacy = await this.trustedPrivacy(state, ["--paths", bodyFile, "--require-known-values"]);
+    if (bodyPrivacy.code) throw new Error("Batch PR body failed the publication gate");
     const push = ["push", ...(state.published ? [`--force-with-lease=refs/heads/${state.branch}:${state.published}`] : []),
       "origin", `${state.tip}:refs/heads/${state.branch}`];
-    git(state.work, push);
+    // Main's trusted scanner has already checked the exact candidate and body.
+    git(state.work, push, undefined, { ...process.env, LLV_SKIP_HOOKS: "1" });
     state.published = state.tip;
     this.save(state);
     if (!state.batch) {
@@ -508,7 +555,7 @@ export class MergeBatch {
     const required = [...new Set([...(protection.protection?.required_status_checks?.contexts ?? []),
       ...(protection.protection?.required_status_checks?.checks ?? []).map((check) => check.context)])];
     if (!required.length) throw new Error("Cannot establish required checks from branch protection");
-    for (let poll = 0; poll < 120; poll++) {
+    for (let poll = 0; poll < MAX_REQUIRED_CHECK_POLLS; poll++) {
       const clean = state.rows.filter((row) => row.status === "clean");
       if (!clean.length) {
         if (state.batch) await this.gh(["pr", "close", String(state.batch.number), "--comment", "Batch empty after attribution; nothing merged."]);
@@ -648,7 +695,9 @@ export class MergeBatch {
     // Explicit expected head plus normal push keeps this strictly fast-forward.
     const current = git(work, ["ls-remote", remote, `refs/heads/${row.view.headRefName}`]).split(/\s/)[0];
     if (current !== row.head) { row.status = "head-moved"; this.save(state); return state; }
-    git(work, ["push", remote, `${row.resolution}:refs/heads/${row.view.headRefName}`]);
+    // The exact resolution passed the trusted main publication gates above.
+    git(work, ["push", remote, `${row.resolution}:refs/heads/${row.view.headRefName}`], undefined,
+      { ...process.env, LLV_SKIP_HOOKS: "1" });
     row.status = "needs-review";
     delete state.resolving;
     this.save(state);
