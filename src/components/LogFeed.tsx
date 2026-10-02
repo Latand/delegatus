@@ -56,6 +56,8 @@ import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/
 import { createFeedSession, rawUserTextFor, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
 import { FeedItem, resolveDeliveredItem } from "./feed/FeedItem";
+import { StreamingMd } from "./feed/markdown";
+import { READING_MEASURE } from "./feed/measure";
 import { heldMandateFor, heldMandateMatches, holdMandate } from "./conversation/heldMandate";
 import { useConversationGallery } from "./feed/imageGallery";
 import { GalleryOwnerProvider, ImageGalleryProvider } from "./feed/Lightbox";
@@ -1786,6 +1788,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                         <p className="font-semibold">{t("feed.processingFailed")}</p>
                         <p className="mt-1 text-label">{t("feed.processingFailedRecord", { type: item.processingError.recordType, line: item.processingError.line })}</p>
                         <p className="mt-1 whitespace-pre-wrap text-body">{item.processingError.message}</p>
+                      </div>
+                    ) : row.live?.phase === "streaming" ? (
+                      /* Keep unfinished markdown literal while deltas arrive.
+                         The keyed row survives completion and its own echo. */
+                      <div className={`my-2 ${phone ? "" : "ml-9 "}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] ${phone ? "text-title leading-[1.45]" : "text-body"}`}>
+                        <StreamingMd text={row.live.text} streaming />
                       </div>
                     ) : <FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} />}</SpeechScope.Provider>
                     </MandateConversationContext.Provider>

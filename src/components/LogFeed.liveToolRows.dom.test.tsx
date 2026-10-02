@@ -427,3 +427,26 @@ test("the shared live tail bounds prose and tools while retaining older replies"
   expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(8);
   expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("32");
 });
+
+test("streaming markdown holds unfinished fences and tables until completion", () => {
+  const partial = "Patch:\n\n```ts\nconst x = 1;";
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "markdown", partial, AT(1)) };
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.textContent).toContain("const x = 1;");
+  expect(row.querySelector("pre")).toBeNull();
+  sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(sessionState.session.liveTurn, "markdown", "\n```\n\n| Name | Value |", AT(2)) };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(row.querySelector("pre")).not.toBeNull();
+  expect(row.querySelector("table")).toBeNull();
+  const complete = `${partial}\n\`\`\`\n\n| Name | Value |\n| --- | --- |\n| x | 1 |`;
+  const record = { type: "assistant", uuid: "markdown-answer", timestamp: AT(3), message: { content: [{ type: "text", text: complete }] } };
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(sessionState.session.liveTurn, "markdown", record, "completed", AT(3)) };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(row.querySelector("table")).not.toBeNull();
+  tailState.lines = [JSON.stringify(record)];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="markdown-answer"]')).toBe(row);
+});
