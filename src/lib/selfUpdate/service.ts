@@ -322,7 +322,7 @@ export class SelfUpdateService {
     return { availability: this.autoAvailability(decision), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
       waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
-      decision: auto.enabled && phase === "waiting" && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
+      decision: auto.enabled && (phase === "waiting" || phase === "building") && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
       drain: auto.enabled && auto.waitingSince ? auto.drain
         ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt }
           : { state: "draining", at: auto.drain.since }
@@ -421,7 +421,10 @@ export class SelfUpdateService {
     let green = await this.autoGreen(target.sha, record.checkout!, now);
     if (green.state !== "green") return;
     if (snapshot.installed.sha !== target.sha) {
-      if (this.auto.drain) return;
+      // Pending updates fence new work before building too: otherwise busy
+      // agents can keep consuming the resources the candidate build needs.
+      await this.waitForAutoQuiet(snapshot, target.sha, now);
+      if (!this.auto.enabled && !this.hasAutoCustody()) return;
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       if (green.state !== "green") return;
@@ -521,7 +524,7 @@ export class SelfUpdateService {
       this.saveAuto();
     }
     if (!this.draining()) {
-      const revision = snapshot.mode === "checkout" ? snapshot.installed : snapshot.available;
+      const revision = snapshot.mode === "checkout" && snapshot.installed.sha === target ? snapshot.installed : snapshot.available;
       if (revision?.sha === target) {
         const drain = { id: randomUUID(), target: revision, since: at, overranAt: null, blockers: null };
         // Publish the hold before the next asynchronous observation can launch work.

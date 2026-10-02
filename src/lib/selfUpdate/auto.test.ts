@@ -137,6 +137,36 @@ test("a ready update immediately holds admission and a three-hour cohort still d
   } finally { service.stop(); }
 });
 
+test("a pending green checkout update holds admission before its candidate build", async () => {
+  const h = scenario();
+  h.setTurn(true);
+  const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  const stateFile = join(h.dir, "state.json");
+  const state = JSON.parse(readFileSync(stateFile, "utf8"));
+  state.slice.available = revision(TARGET);
+  writeFileSync(stateFile, JSON.stringify(state));
+  const createRunner = h.deps.createRunner;
+  let holdAtBuild: ReturnType<typeof activeDrain> = null;
+  let finishBuild!: () => void;
+  let building = false;
+  h.deps.createRunner = (...args) => ({ ...createRunner(...args), start: async () => {
+    holdAtBuild = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+    building = true;
+    await new Promise<void>((resolve) => { finishBuild = resolve; });
+  } });
+  const service = h.service();
+  const snapshot = service.snapshot.bind(service);
+  service.snapshot = async () => ({ ...await snapshot(), installed: revision(OLD), available: revision(TARGET), busy: building ? "update" : null });
+  try {
+    await service.autoTick();
+    expect(holdAtBuild).not.toBeNull();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.target).toBe(TARGET);
+    h.advance(3 * 60 * 60_000);
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.target).toBe(TARGET);
+  } finally { service.stop(); finishBuild?.(); }
+});
+
 test("six hours names blockers for an operator decision while admission remains held", async () => {
   const h = scenario();
   h.setTurn(true);
