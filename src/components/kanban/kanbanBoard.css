@@ -177,7 +177,7 @@
 /* The snap keeps the board's own edge: without the scroll padding a column
    snaps flush to the scroller and the edge padding scrolls away. */
 .kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--kb-edge); gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
-.kb .board.scroll .column { flex: 0 0 auto; width: var(--kb-column-width); scroll-snap-align: start; }
+.kb .board.scroll .column { flex: 0 0 auto; width: var(--kb-column-width, 280px); scroll-snap-align: start; }
 .kb .board.scroll .column[data-status="assigned"] { --kb-column-width: 480px; }
 /* Tabs (640–767 px): one column at a time under a segmented strip. */
 .kb .board.tabs { display: flex; flex-direction: column; padding: 0 12px 12px; overflow: hidden; }

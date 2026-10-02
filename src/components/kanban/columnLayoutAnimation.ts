@@ -27,6 +27,12 @@ function ease(t: number): number {
   }
   return 1 - (1 - u) ** 3;
 }
+// Reuse the same curve across content effects instead of solving the cubic
+// separately for every glyph layer during activation.
+const CONTENT_CURVE = Array.from({ length: 17 }, (_, i) => {
+  const offset = (i / 16) ** 2;
+  return { offset, q: ease(offset), reveal: ease(Math.min(1, offset * 2)), fade: 1 - ease(Math.min(1, offset * COLUMN_LAYOUT_MS / FADE_MS)) };
+});
 export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): void; dispose(): void } {
   let pending: Snapshot | null = null;
   let expiry: ReturnType<typeof setTimeout> | null = null;
@@ -35,7 +41,11 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   let paintFrame = 0;
   let started = 0;
   let active: Snapshot | null = null;
+  let promoting: Snapshot | null = null;
   let released = false;
+  const projected = new Map<HTMLElement, (q: number) => DOMRect>();
+  const wrapped = new Set<HTMLElement>();
+  const invalidated = new Set<HTMLElement>();
   const animations = new Map<HTMLElement, Animation>();
   const paintAnimations = new Set<Animation>();
   let activeColumns: HTMLElement[] = [];
@@ -90,7 +100,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   const finish = () => {
     clearPending(); stopClock(); clearAnimations(); plans.length = 0;
     restoreInline();
-    active = null; activeColumns = []; released = false;
+    active = promoting = null; activeColumns = []; released = false; projected.clear(); wrapped.clear(); invalidated.clear();
     if (!motion?.matches) paintAnimations.forEach((animation) => animation.play());
     paintAnimations.clear();
     thawGrid(); [...frozen.keys()].forEach(thaw); contentBase.clear(); scrollPositions.clear();
@@ -104,14 +114,19 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     stopClock();
     root.dataset.columnLayout = "settling";
     const queue = [...marked];
+    const resumes = [...paintAnimations];
     const release = () => {
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
-        for (const node of queue.splice(0, 16)) {
+        for (const node of queue.splice(0, 8)) {
           animations.get(node)?.cancel(); animations.delete(node);
           node.removeAttribute("data-layout-animating"); marked.delete(node);
         }
-        if (queue.length) release();
+        for (const animation of resumes.splice(0, 8)) {
+          if (!motion?.matches) animation.play();
+          paintAnimations.delete(animation);
+        }
+        if (queue.length || resumes.length) release();
         else finish();
       });
     };
@@ -141,13 +156,12 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     return { dx, dy, sx: rect.width / next.width / px, sy: rect.height / next.height / py, px, py };
   };
   const transform = (dx: number, dy: number, sx: number, sy: number) => `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
-  const contentFrames = (node: HTMLElement, startOpacity: number, sx: number, sy: number, ex: number, ey: number, px: number, py: number, reveal: boolean, parentEnd = 1, sourceX = 1, sourceY = 1, count = 13): Keyframe[] => {
+  const contentFrames = (node: HTMLElement, startOpacity: number, sx: number, sy: number, ex: number, ey: number, px: number, py: number, reveal: boolean, parentEnd = 1, sourceX = 1, sourceY = 1, count = 17): Keyframe[] => {
     const base = contentBase.get(node) ?? "";
-    return Array.from({ length: count }, (_, i) => {
-      const offset = i / Math.max(1, count - 1), q = ease(offset);
+    return (count === 1 ? CONTENT_CURVE.slice(0, 1) : CONTENT_CURVE).map(({ offset, q, reveal: shown, fade }) => {
       const x = (px + (parentEnd - px) * q) * (sx + (ex - sx) * q);
       const y = (py + (1 - py) * q) * (sy + (ey - sy) * q);
-      const opacity = reveal ? ease(Math.min(1, offset * 2)) : startOpacity * (1 - ease(Math.min(1, offset * COLUMN_LAYOUT_MS / FADE_MS)));
+      const opacity = reveal ? shown : startOpacity * fade;
       return { offset, transform: `scale(${(sourceX + (1 - sourceX) * q) / x}, ${(sourceY + (1 - sourceY) * q) / y}) ${base}`.trim(), opacity };
     });
   };
@@ -172,11 +186,15 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
         if (!column.isConnected) { nextColumn(); return; }
-        const columnRect = column.getBoundingClientRect();
+        const q = ease(Math.min(1, Number(animations.get(column)?.currentTime ?? 0) / COLUMN_LAYOUT_MS));
+        const sourceRect = (node: HTMLElement) => !wrapped.has(column) && !invalidated.has(column) && projected.has(node) ? projected.get(node)!(q) : node.getBoundingClientRect();
+        const columnRect = sourceRect(column);
         const shots = snapshot.shots.filter((shot) => shot.column === column && shot.node !== column && shot.node.isConnected);
-        // Every painted pose is read before changing this column's wrapping.
-        const sources = shots.map((shot) => ({ ...shot, rect: shot.node.getBoundingClientRect() }));
+        // The source is the cached FLIP geometry sampled at compositor time.
+        // Reading live transformed overflow here forced a second board layout.
+        const sources = shots.map((shot) => ({ ...shot, rect: sourceRect(shot.node) }));
         const scroll = [...scrollContainers()].map((node) => ({ node, top: node.scrollTop, left: node.scrollLeft }));
+        wrapped.add(column);
         animations.get(column)?.cancel();
         thaw(column);
         for (const shot of shots) {
@@ -228,6 +246,13 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     nextColumn();
   };
   const start = (snapshot: Snapshot) => {
+    // Updates painted during promotion become the source pose, before the
+    // first transform write; frozen widths still preserve source wrapping.
+    if (promoting === snapshot && invalidated.size) {
+      const fresh = capture();
+      snapshot = { ...snapshot, shots: [...snapshot.shots.filter((shot) => !invalidated.has(shot.column)), ...fresh.filter((shot) => invalidated.has(shot.column))] };
+    }
+    promoting = null;
     const retargeting = active !== null;
     clearAnimations(true); restoreInline();
     root.dataset.columnLayout = "inverted";
@@ -252,7 +277,29 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     const order = ["inbox", "assigned", "blocked", "done"];
     const targetWidth = (node: HTMLElement) => flexWidths.get(node) || tracks[order.indexOf(node.dataset.status!)] || node.getBoundingClientRect().width;
     const columns = new Map(destinations.filter(({ shot, next }) => shot.node === shot.column && Math.abs(shot.rect.left - next.left) + Math.abs(shot.rect.top - next.top) + Math.abs(shot.rect.width - targetWidth(shot.node)) + Math.abs(shot.rect.height - next.height) > 0.5).map(({ shot, next }) => [shot.node, next]));
+    // A column that only translates carries its cards in one wrapper layer.
+    // Its wrapping and glyph size are unchanged, so it needs no text effects.
+    const resizing = new Map([...columns].filter(([node]) => {
+      const source = snapshot.shots.find((shot) => shot.node === node)!;
+      return retargeting || Math.abs(source.rect.width - targetWidth(node)) > 0.5;
+    }));
     const parents = new Map(snapshot.shots.filter(({ node, column }) => node === column).map((shot) => [shot.node, { rect: shot.rect, next: columns.get(shot.node)! }]));
+    projected.clear(); wrapped.clear(); invalidated.clear();
+    for (const { shot, next } of destinations) if (shot.node === shot.column && columns.has(shot.node)) {
+      const pose = inverse(shot.rect, next);
+      const end = targetWidth(shot.node) / next.width;
+      projected.set(shot.node, (q) => box(next.left + pose.dx * (1 - q), next.top + pose.dy * (1 - q), next.width * (pose.sx + (end - pose.sx) * q), next.height * (pose.sy + (1 - pose.sy) * q)));
+    }
+    for (const { shot, next } of destinations) if (shot.node !== shot.column) {
+      const parent = parents.get(shot.column);
+      const project = projected.get(shot.column);
+      if (!parent?.next || !project) continue;
+      const pose = shot.visible && resizing.has(shot.column) ? inverse(shot.rect, next, parent) : { dx: 0, dy: 0, sx: 1, sy: 1 };
+      projected.set(shot.node, (q) => {
+        const frame = project(q), px = frame.width / parent.next.width, py = frame.height / parent.next.height;
+        return box(frame.left + (next.left - parent.next.left + pose.dx * (1 - q)) * px, frame.top + (next.top - parent.next.top + pose.dy * (1 - q)) * py, next.width * px * (pose.sx + (1 - pose.sx) * q), next.height * py * (pose.sy + (1 - pose.sy) * q));
+      });
+    }
     for (const { shot, next } of destinations) {
       if (!next.width || !next.height || !shot.visible) continue;
       const parent = parents.get(shot.column);
@@ -260,7 +307,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       if (shot.node === shot.column) {
         const pose = inverse(shot.rect, next);
         play(shot.node, [{ transform: transform(pose.dx, pose.dy, pose.sx, pose.sy) }, { transform: transform(0, 0, targetWidth(shot.node) / next.width, 1) }], COLUMN_LAYOUT_MS, "frame", true);
-      } else {
+      } else if (resizing.has(shot.column)) {
         applyCard(shot, next, parent, COLUMN_LAYOUT_MS, false, next.width, true, targetWidth(shot.column) / parent.next.width);
       }
     }
@@ -276,22 +323,24 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       node.style.transform = String(first.transform);
       if (first.opacity !== undefined) node.style.opacity = String(first.opacity);
     }
-    active = snapshot; activeColumns = [...columns.keys()]; released = false;
+    active = snapshot; activeColumns = [...resizing.keys()]; released = false;
     // Text layers already own their raster before promoting the column.
     // Construct effects from cached source styles, then release on the next frame.
-    plans.push(...initial); flush();
-    paintFrame = window.requestAnimationFrame(() => {
-      paintFrame = 0; restoreInline();
-      started = performance.now(); released = true; root.dataset.columnLayout = "running";
-      animations.forEach((animation) => animation.play());
-      wrapTimer = setTimeout(() => wrapColumns(snapshot, columns), FADE_MS);
-      finishTimer = setTimeout(settle, COLUMN_LAYOUT_MS);
-    });
+    const activate = () => {
+      plans.push(...initial.splice(0, 8)); flush();
+      paintFrame = window.requestAnimationFrame(() => {
+        paintFrame = 0;
+        if (initial.length) { activate(); return; }
+        restoreInline();
+        started = performance.now(); released = true; root.dataset.columnLayout = "running";
+        animations.forEach((animation) => animation.play());
+        wrapTimer = setTimeout(() => wrapColumns(snapshot, resizing), FADE_MS);
+        finishTimer = setTimeout(settle, COLUMN_LAYOUT_MS);
+      });
+    };
+    activate();
   };
-  const prepare = () => {
-    clearPending();
-    if (motion?.matches || typeof root.animate !== "function") { finish(); return; }
-    stopClock(); animations.forEach((animation) => animation.pause());
+  const capture = () => {
     const shots: Shot[] = [];
     for (const column of root.querySelectorAll<HTMLElement>(COLUMN)) {
       const viewport = column.querySelector(".col-body")?.getBoundingClientRect();
@@ -300,7 +349,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         if (!rect.width || !rect.height) continue;
         const visible = node === column || node.matches(".col-head") || !(rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth || (viewport && (rect.bottom < viewport.top || rect.top > viewport.bottom)));
         const style = window.getComputedStyle(node);
-        const contents = node.matches(".card, .col-head") ? [...node.children].filter((node): node is HTMLElement => node instanceof window.HTMLElement && !node.matches(".label, .saving, .spacer")) : [];
+        const contents = node.matches(".card, .col-head, .divider, .empty") ? [...node.children].filter((node): node is HTMLElement => node instanceof window.HTMLElement && !node.matches(".label, .saving, .spacer")) : [];
         const scale = (transform: string) => {
           const values = transform.match(/^matrix(3d)?\((.+)\)$/);
           if (!values) return { x: 1, y: 1 };
@@ -311,21 +360,30 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         const children = contents.map((node) => {
           if (!active && !visible) return { node, opacity: 1, scaleX: 1, scaleY: 1 };
           const current = window.getComputedStyle(node);
-          if (!contentBase.has(node)) contentBase.set(node, current.transform === "none" ? "" : current.transform);
-          if (!active) return { node, opacity: Number(current.opacity || "1"), scaleX: 1, scaleY: 1 };
+          const known = contentBase.has(node);
+          if (!known) contentBase.set(node, current.transform === "none" ? "" : current.transform);
+          if (!active || !known) return { node, opacity: Number(current.opacity || "1"), scaleX: 1, scaleY: 1 };
           const own = scale(current.transform), base = scale(contentBase.get(node)!);
           return { node, opacity: Number(current.opacity || "1"), scaleX: active ? rect.width / width * own.x / base.x : 1, scaleY: active ? rect.height / height * own.y / base.y : 1 };
         });
         shots.push({ node, column, rect, visible, opacity: Number(style.opacity || "1"), widthAsNumber: width, width: style.width || `${rect.width}px`, height: style.height || `${rect.height}px`, contents: children });
       }
     }
+    return shots;
+  };
+  const prepare = () => {
+    clearPending();
+    if (motion?.matches || typeof root.animate !== "function") { finish(); return; }
+    stopClock(); animations.forEach((animation) => animation.pause());
+    const shots = capture();
     recordScroll();
     const board = root.querySelector<HTMLElement>(".board");
     const grid = board && !board.classList.contains("scroll") && !board.classList.contains("tabs") ? window.getComputedStyle(board).gridTemplateColumns : null;
-    // These live indicators paint SVG strokes/shadows on the main thread.
-    // Their progress is held only while the column surfaces are moving.
+    // Live SVG glyphs also invalidate overflow/layout outside the viewport.
+    // Hold their progress for the entire activation-through-cleanup window.
     for (const animation of root.getAnimations?.({ subtree: true }) ?? []) {
-      if (["kb-edge-flow", "kb-node-pulse", "pb-live"].includes((animation as CSSAnimation).animationName) && animation.playState === "running") {
+      const name = (animation as CSSAnimation).animationName;
+      if ((name?.startsWith("mg-") || ["kb-edge-flow", "kb-node-pulse", "pb-live"].includes(name)) && animation.playState === "running") {
         paintAnimations.add(animation); animation.pause();
       }
     }
@@ -360,28 +418,59 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       finishTimer = setTimeout(settle, remaining);
     });
   };
-  const observer = new window.MutationObserver(() => {
+  const layoutStyle = (style: string | null) => (style ?? "").split(";").map((part) => part.trim()).filter((part) => part && !/^(transform(?:-origin)?|opacity)\s*:/.test(part)).sort().join(";");
+  const observer = new window.MutationObserver((records) => {
+    // Live content can change between capture and wrapping. Such a column
+    // must use its current DOM pose rather than the original projection.
+    if (active || promoting) for (const record of records) if (record.attributeName !== "data-wide") {
+      const node = record.target instanceof window.Element ? record.target : record.target.parentElement;
+      const column = node?.closest<HTMLElement>(COLUMN);
+      if (!column) continue;
+      // Our inverse writes change only transform/opacity/origin. Width,
+      // height or other live styles still invalidate the captured geometry.
+      if (record.attributeName === "style" && layoutStyle(record.oldValue) === layoutStyle(node!.getAttribute("style"))) continue;
+      invalidated.add(column);
+    }
+    // New real cards or direct content layers must join the FLIP before
+    // paint. Retarget from the current boxes so their text never inherits
+    // an untreated wrapper scale or reflows in plain sight.
+    const newSurfaces = records.some((record) => record.type === "childList" && record.target instanceof window.Element && (
+      record.target.matches(".col-body") && [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof window.Element && node.matches(".card, .divider, .empty")) ||
+      record.target.matches(".card, .col-head, .divider, .empty") && [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof window.HTMLElement)
+    ));
+    if (active && newSurfaces && !pending) {
+      prepare();
+      const snapshot = pending as Snapshot | null;
+      clearPending();
+      if (snapshot) start(snapshot);
+      return;
+    }
     if (!pending || pending.key === keyOf(root)) return;
     const snapshot = pending; clearPending(); stopClock();
     if (active) {
       paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
       return;
     }
-    // Hold source geometry while text layers are promoted in small batches.
-    // Promoting the column first rasterized every live glyph again before
-    // its children became separate compositor layers.
-    const contents = snapshot.shots.filter((shot) => shot.visible).flatMap((shot) => shot.contents.map(({ node }) => node));
+    promoting = snapshot;
+    // Promote text before transforming a wrapper: promoting the wrapper first
+    // rasterizes all its live glyphs into that layer again.
+    const changed = new Set(snapshot.key.split("|").filter((entry) => !keyOf(root).split("|").includes(entry)).map((entry) => entry.split(":")[0]));
+    const contents = snapshot.shots.filter((shot) => shot.visible && changed.has(shot.column.dataset.status!)).flatMap((shot) => shot.contents.map(({ node }) => node));
+    let firstPromotion = true;
     const promote = () => {
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
-        for (const node of contents.splice(0, 12)) { node.dataset.layoutAnimating = "content"; marked.add(node); }
+        // React has just changed the shelf paint; its first raster shares
+        // this frame with promotion. Leave room for that one-time work.
+        for (const node of contents.splice(0, firstPromotion ? 4 : 8)) { node.dataset.layoutAnimating = "content"; marked.add(node); }
+        firstPromotion = false;
         if (contents.length) promote();
         else paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
       });
     };
     promote();
   });
-  observer.observe(root, { subtree: true, attributes: true, attributeFilter: ["data-wide"] });
+  observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ["data-wide", "class", "style"] });
   const onClick = (event: Event) => {
     const target = event.target as Element | null;
     if (target?.closest?.("[data-col-width], [data-open-agent-jump]")) prepare();

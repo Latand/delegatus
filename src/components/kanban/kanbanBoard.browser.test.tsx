@@ -11473,6 +11473,21 @@ describe("column dwell smooth", () => {
               const box = glyph ? range.getBoundingClientRect() : node.getBoundingClientRect();
               return { x: box.x, y: box.y, width: box.width, height: box.height, opacity: Number(getComputedStyle(node).opacity) };
             };
+            const labelGlyph = (node: HTMLElement) => {
+              const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              let text: Node | null;
+              while ((text = walk.nextNode())) if (text.textContent?.trim()) {
+                const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, Math.min(text.textContent!.length, text.textContent!.trimStart().split(/\s/)[0]!.length));
+                const box = range.getBoundingClientRect();
+                return { width: box.width, height: box.height };
+              }
+              return { width: 0, height: 0 };
+            };
+            const labels = [...root.querySelectorAll<HTMLElement>(".divider > span, .divider > button, .empty > strong, .empty > span")].filter((node) => {
+              const rect = node.getBoundingClientRect(), viewport = node.closest(".col-body")!.getBoundingClientRect();
+              return rect.top < viewport.bottom && rect.bottom > viewport.top;
+            });
+            const naturalLabels = labels.map(labelGlyph);
             click("inbox"); await Promise.resolve();
             while (root.dataset.columnLayout !== (phase === "staging" ? "inverted" : "running")) await frame();
             if (phase === "after-wrap") {
@@ -11481,6 +11496,7 @@ describe("column dwell smooth", () => {
             } else if (typeof phase === "number") {
               for (const animation of document.getAnimations()) if (animation.effect?.getTiming().duration === 240) { animation.pause(); animation.currentTime = phase; }
             }
+            const labelGlyphs = labels.map((node, i) => ({ natural: naturalLabels[i]!, during: labelGlyph(node), opacity: Number(getComputedStyle(node).opacity) }));
             const layers = [...root.querySelectorAll<HTMLElement>(".board > .column, .board .col-head, .board .col-body > .card")].filter((node) => {
               const box = node.getBoundingClientRect(), viewport = node.closest(".col-body")?.getBoundingClientRect();
               return !viewport || (box.top < Math.min(viewport.bottom, innerHeight) && box.bottom > Math.max(viewport.top, 0));
@@ -11492,8 +11508,13 @@ describe("column dwell smooth", () => {
             // Observe the first inverse pose, before all text layers are promoted.
             while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "inverted") await frame();
             const after = layers.map((node) => rect(node)), glyphAfter = children.map((node) => rect(node, true));
-            return { phase, target, before, after, glyphBefore, glyphAfter };
+            return { phase, target, before, after, glyphBefore, glyphAfter, labelGlyphs };
           }, phase);
+          expect(sample.labelGlyphs.length).toBeGreaterThan(0);
+          for (const glyph of sample.labelGlyphs) if (glyph.opacity > 0.01 && glyph.natural.width) {
+            expect(Math.abs(glyph.during.width / glyph.natural.width - 1), `${phase} label width`).toBeLessThanOrEqual(0.01);
+            expect(Math.abs(glyph.during.height - glyph.natural.height), `${phase} label height`).toBeLessThanOrEqual(1);
+          }
           let maxLayerDelta = 0, maxGlyphDelta = 0, visibleGlyphs = 0;
           sample.before.forEach((before, i) => {
             for (const key of ["x", "y", "width", "height"] as const) {

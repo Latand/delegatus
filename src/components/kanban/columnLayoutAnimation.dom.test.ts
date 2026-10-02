@@ -208,3 +208,130 @@ test("an idle control that changes no width releases its preparation on the comm
   expect(column.style.width).toBe("");
   expect(calls).toHaveLength(0);
 });
+
+
+test("a neighbour whose width stays fixed slides as one wrapper without text effects", async () => {
+  const { root, column, calls, layout } = mount();
+  const board = root.querySelector<HTMLElement>(".board")!;
+  board.style.gridTemplateColumns = "220px 220px 240px 420px";
+  const neighbour = document.createElement("section");
+  neighbour.className = "column";
+  neighbour.dataset.status = "blocked";
+  neighbour.dataset.wide = "0";
+  neighbour.innerHTML = '<div class="col-body"><article class="card"><button>Fixed wrapping</button></article></div>';
+  board.prepend(neighbour);
+  const card = neighbour.querySelector<HTMLElement>(".card")!;
+  const left = () => column.dataset.wide === "0" ? 500 : 300;
+  neighbour.getBoundingClientRect = () => new dom.DOMRect(left(), 100, 240, 600) as unknown as DOMRect;
+  neighbour.querySelector<HTMLElement>(".col-body")!.getBoundingClientRect = () => new dom.DOMRect(left(), 150, 240, 550) as unknown as DOMRect;
+  card.getBoundingClientRect = () => new dom.DOMRect(left() + 12, 160, 216, 100) as unknown as DOMRect;
+  layout.prepare();
+  column.dataset.wide = "1";
+  await mutations();
+  const frame = calls.find((call) => call.node === neighbour)!;
+  expect(frame.frames[0]!.transform).toBe("translate(200px, 0px) scale(1, 1)");
+  expect(frame.frames[1]!.transform).toBe("translate(0px, 0px) scale(1, 1)");
+  await new Promise((resolve) => dom.setTimeout(resolve, COLUMN_LAYOUT_MS + 80));
+  expect(calls.filter((call) => neighbour.contains(call.node) && call.node !== neighbour)).toHaveLength(0);
+  expect(neighbour.querySelector("[data-layout-animating]")).toBeNull();
+  expect(neighbour.style.width).toBe("");
+});
+
+
+test("wrapping preserves a programmatic scroll before its scroll event is delivered", async () => {
+  const { column, body, layout } = mount();
+  body.scrollTop = 75;
+  layout.prepare();
+  column.dataset.wide = "1";
+  await mutations();
+  body.scrollTop = 125;
+  // No scroll event yet: a caller may run earlier in the same RAF batch.
+  await new Promise((resolve) => dom.setTimeout(resolve, 140));
+  expect(body.scrollTop).toBe(125);
+});
+
+test("live height changes invalidate the projected pose before wrapping", async () => {
+  for (const kind of ["class", "style", "text"] as const) {
+    const { root, column, card, calls, layout } = mount();
+    layout.prepare();
+    column.dataset.wide = "1";
+    await mutations();
+    const read = card.getBoundingClientRect.bind(card);
+    card.getBoundingClientRect = () => {
+      const rect = read();
+      return new dom.DOMRect(rect.left, rect.top, rect.width, rect.width < 300 ? 240 : 160) as unknown as DOMRect;
+    };
+    if (kind === "class") card.classList.add("updated");
+    else if (kind === "style") card.style.minHeight = "160px";
+    else card.querySelector("button")!.textContent = "A longer title";
+    await new Promise((resolve) => dom.setTimeout(resolve, 140));
+    const resized = calls.filter((call) => call.node === card).at(-1)!;
+    expect(resized.frames[0]!.transform).toContain(", 1.5)");
+    layout.dispose(); root.remove();
+  }
+});
+
+
+test("a live update painted during promotion becomes the first inverse source pose", async () => {
+  const originalRAF = dom.requestAnimationFrame;
+  const originalCancel = dom.cancelAnimationFrame;
+  const frames = new Map<ReturnType<typeof dom.requestAnimationFrame>, FrameRequestCallback>();
+  dom.requestAnimationFrame = (callback) => { const id = setImmediate(() => {}); frames.set(id, callback); return id; };
+  dom.cancelAnimationFrame = (id) => { frames.delete(id); clearImmediate(id); };
+  const { root, column, card, calls, layout } = mount();
+  const read = card.getBoundingClientRect.bind(card);
+  let height = 180;
+  card.getBoundingClientRect = () => {
+    const rect = read();
+    return new dom.DOMRect(rect.left, rect.top, rect.width, height) as unknown as DOMRect;
+  };
+  card.insertAdjacentHTML("beforeend", '<span>More text</span>'.repeat(16));
+  const frame = () => {
+    const batch = [...frames.values()]; frames.clear();
+    batch.forEach((callback) => callback(0));
+  };
+  try {
+    layout.prepare(); column.dataset.wide = "1";
+    await mutations(); frame();
+    expect(root.dataset.columnLayout).toBe("pending");
+    height = 240;
+    card.querySelector("button")!.textContent = "A live title update";
+    await mutations();
+    for (let i = 0; i < 30 && root.dataset.columnLayout !== "running"; i++) frame();
+    expect(root.dataset.columnLayout).toBe("running");
+    // The newly painted card must not shrink back to its older 180px height.
+    const inverse = calls.find((call) => call.node === card);
+    expect(inverse?.frames[0]?.transform ?? "none").not.toContain("0.75");
+  } finally {
+    layout.dispose();
+    dom.requestAnimationFrame = originalRAF; dom.cancelAnimationFrame = originalCancel;
+  }
+});
+
+
+test("cards and content added during motion receive counter-scales and wrapping effects", async () => {
+  const { root, column, card, calls, layout } = mount();
+  layout.prepare(); column.dataset.wide = "1";
+  await mutations();
+  expect(root.dataset.columnLayout).toBe("running");
+  const added = document.createElement("article"); added.className = "card";
+  added.innerHTML = '<button id="arriving">A newly arriving task</button>';
+  added.getBoundingClientRect = () => {
+    const rect = card.getBoundingClientRect();
+    return new dom.DOMRect(rect.left, 400, rect.width, 100) as unknown as DOMRect;
+  };
+  column.querySelector(".col-body")!.append(added);
+  const paragraph = document.createElement("p"); paragraph.textContent = "New task details";
+  card.append(paragraph);
+  await mutations();
+  for (const node of [added.querySelector("button")!, paragraph]) {
+    const effects = calls.filter((call) => call.node === node);
+    expect(effects.length).toBeGreaterThan(0);
+    expect(effects[0]!.frames[0]!.transform).toContain("scale(");
+    expect(node.dataset.layoutAnimating).toBe("content");
+  }
+  await new Promise((resolve) => dom.setTimeout(resolve, COLUMN_LAYOUT_MS + 80));
+  expect(calls.some((call) => call.node === added)).toBe(true);
+  expect(root.hasAttribute("data-column-layout")).toBe(false);
+  expect(added.querySelector("[data-layout-animating]")).toBeNull();
+});
