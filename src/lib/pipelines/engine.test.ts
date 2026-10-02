@@ -1145,6 +1145,88 @@ test("a new owner reviews the commit published after the producer turn ends", as
   }
 });
 
+for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "legacy-auto-retry", "crash-before-apply"] as const) {
+  const pinned = pin === "explicit" || pin === "legacy-draft";
+  test(`successor provisioning records its backup and respects the caller's base pin (${pin})`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-published-"));
+    const repo = path.join(root, "repo");
+    const origin = path.join(root, "origin.git");
+    const { realExec } = await import("@/lib/workflows/provision");
+    const { realProvisionExec } = await import("./git");
+    const git = (cwd: string, ...args: string[]) => {
+      const result = realExec("git", args, cwd);
+      if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+      return result.stdout.trim();
+    };
+    try {
+      fs.mkdirSync(repo);
+      git(repo, "init", "--initial-branch=main");
+      git(repo, "config", "user.name", "Fixture");
+      git(repo, "config", "user.email", "noreply");
+      git(repo, "config", "commit.gpgSign", "false");
+      git(repo, "commit", "--allow-empty", "-m", "pinned base");
+      const base = git(repo, "rev-parse", "HEAD");
+      git(root, "init", "--bare", "--initial-branch=main", origin);
+      git(repo, "remote", "add", "origin", origin);
+      git(repo, "push", "origin", "main");
+      git(repo, "checkout", "-b", "feature/provision");
+      git(repo, "commit", "--allow-empty", "-m", "published head");
+      git(repo, "push", "origin", "feature/provision");
+      const published = git(repo, "rev-parse", "HEAD");
+      git(repo, "commit", "--allow-empty", "-m", "unpublished leftover");
+      const leftover = git(repo, "rev-parse", "HEAD");
+      const h = harness();
+      h.ports.exec = realExec;
+      h.ports.provisionExec = realProvisionExec;
+      const created = await createPipelineFromRequest({
+        task: "Published successor", repoDir: repo, ...(pinned ? { baseRef: base } : {}),
+        ...(pin === "legacy-draft" ? { autoStart: false } : {}),
+        delivery: { branch: "refs/heads/feature/provision" },
+        stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }],
+      }, h.ports);
+      if (!created.pipeline) throw new Error(created.error);
+      if (pin === "legacy-draft") {
+        const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+        delete legacy.baseRefPinned;
+        savePipelines([legacy]);
+        expect(await patchPipeline(legacy.id, { action: "start" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
+      }
+      if (pin === "legacy-unknown" || pin === "legacy-auto-retry") {
+        const legacy = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+        delete legacy.baseRefPinned;
+        legacy.baseBranch = "main";
+        legacy.baseRef = base;
+        legacy.lastPassedCommit = base;
+        legacy.stateDetail = pin === "legacy-auto-retry" ? "failed automatic checkout" : null;
+        if (pin === "legacy-auto-retry") legacy.state = "needs_decision";
+        savePipelines([legacy]);
+        if (pin === "legacy-auto-retry") {
+          expect(await patchPipeline(legacy.id, { action: "retry-stage" }, h.ports)).toMatchObject({ pipeline: { state: "provisioning" } });
+        }
+      }
+      if (pin === "crash-before-apply") {
+        const { provisionPipelineWorktreeAsync } = await import("./git");
+        const interrupted = await provisionPipelineWorktreeAsync({ ...created.pipeline, baseBranch: "main", baseRef: base }, realProvisionExec);
+        expect(interrupted).toMatchObject({ ok: true, sha: published, preservedLocalRef: { sha: leftover } });
+        // The checkout exists, but the controller did not persist its outcome.
+      }
+      await tickPipelines([], h.ports);
+      const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
+      expect(lane.state).toBe("running");
+      expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(pinned ? base : published);
+      expect(git(repo, "rev-parse", "HEAD")).toBe(leftover);
+      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished");
+      expect(git(repo, "rev-parse", backup)).toBe(leftover);
+      expect(lane.stateDetail).toContain(backup);
+      expect(lane.delivery!.journal.some((entry) => entry.reason.includes(backup) && entry.reason.includes("1 unpublished commit"))).toBe(true);
+      expect(loadPipelines().find((item) => item.id === lane.id)!.baseRefPinned ?? false).toBe(pinned);
+    } finally {
+      savePipelines([]);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("delivery creation clamps the second target lane and replays its original key before provisioning", async () => {
   const h = harness();
   const request = { task: "Delivery owner", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false,
@@ -1189,17 +1271,23 @@ test("legacy publication admission processes bounded batches before provisioning
   expect(loadPipelines().some((pipeline) => pipeline.state === "needs_decision")).toBe(false);
 });
 
-test("a terminal failing verdict releases ownership and explicit takeover acknowledges that failure", async () => {
+test("a fail-park keeps delivery through retry and publishes the next pass without takeover", async () => {
   const h = harness();
-  const pipeline = await create(h.ports);
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail")], h.ports);
-  expect(loadPipelines()[0]?.delivery).toMatchObject({ active: false, publish: "disabled", epoch: 1 });
-  const taken = await patchPipeline(pipeline.id, { action: "takeover", expectedOwner: pipeline.id, expectedEpoch: 1, reason: "retry the failed attempt" }, h.ports,
-    { kind: "agent", role: "builder", conversationId: "conversation_retry" });
-  expect(taken.pipeline?.delivery).toMatchObject({ active: true, publish: "enabled", epoch: 2 });
-  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).pipeline?.delivery?.active).toBe(true);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.delivery).toMatchObject({ active: true, publish: "enabled", ownerId: pipeline.id, epoch: 1 });
+  expect(parked.delivery!.journal.some((item) => item.kind === "release")).toBe(false);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" }, delivery: { active: true, epoch: 1 } });
+  expect(box.remote()).toBe(box.passedSha);
 });
 
 /** A review-loop stage in these fixtures stands for a lane stored before
@@ -10250,6 +10338,108 @@ test("draft metadata can be revised before the pipeline starts", async () => {
   expect(updated.pipeline?.branch).toContain("revised-task");
 });
 
+test("add-stage preserves the supplied graph and every existing edge (#2247)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Preserve graph", repoDir: "/repo", autoStart: false,
+    stages: [
+      { ...RUN_STAGES[1], id: "build", next: "review" },
+      { ...RUN_STAGES[1], id: "review", next: null, onFail: { to: "fix", maxRounds: 2 } },
+      { ...RUN_STAGES[1], id: "fix", next: "review" },
+    ] as never,
+  }, h.ports);
+  const original = structuredClone(created.pipeline!.stages);
+  const added = await patchPipeline(created.pipeline!.id, {
+    action: "add-stage", index: 1,
+    stage: { ...RUN_STAGES[1], id: "ui-check", next: null, onFail: { to: "fix", maxRounds: 2 } } as never,
+  }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.pipeline!.stages.filter((stage) => stage.id !== "ui-check")).toEqual(original);
+  expect(added.pipeline!.stages.find((stage) => stage.id === "ui-check")).toMatchObject({ next: null, onFail: { to: "fix", maxRounds: 2 } });
+  const loop = await patchPipeline(created.pipeline!.id, {
+    action: "add-stage", stage: { ...RUN_STAGES[1], id: "polish-fix", next: "ui-check" } as never,
+  }, h.ports);
+  expect(loop.error).toBeUndefined();
+  expect(loop.pipeline!.stages.find((stage) => stage.id === "polish-fix")!.next).toBe("ui-check");
+  expect(loop.pipeline!.stages.find((stage) => stage.id === "fix")!.next).toBe("review");
+});
+
+test.each([
+  { next: "missing" },
+  { next: "extra" },
+  { next: null, onFail: { to: "missing", maxRounds: 1 } },
+])("add-stage refuses invalid edges without clearing them in draft or started graphs (#2247): %j", async (edges) => {
+  for (const started of [false, true]) {
+    const h = harness();
+    savePipelines([]);
+    const created = await createPipelineFromRequest({ task: "Invalid insertion", repoDir: "/repo", autoStart: false, stages: RUN_STAGES as never }, h.ports);
+    if (started) await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+    const before = loadPipelines()[0]!;
+    const added = await patchPipeline(before.id, { action: "add-stage", stage: { ...RUN_STAGES[1], id: "extra", ...edges } } as never, h.ports);
+    expect(added.status).toBe(400);
+    expect(loadPipelines()[0]).toEqual(before);
+  }
+});
+
+test("add-stage refuses replacing the draft entry by display insertion (#2247)", async () => {
+  const h = movingHeadHarness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Display order", repoDir: "/repo", autoStart: false, publication: "internal", stages: BUILD_ONLY as never }, h.ports);
+  const added = await patchPipeline(created.pipeline!.id, { action: "add-stage", index: 0, stage: { ...BUILD_ONLY[0], id: "disconnected", next: null } } as never, h.ports);
+  expect(added.status).toBe(409);
+  expect(added.error).toContain("draft entry build");
+  expect(loadPipelines()[0]).toEqual(created.pipeline!);
+  const appended = await patchPipeline(created.pipeline!.id, { action: "add-stage", stage: { ...BUILD_ONLY[0], id: "disconnected", next: null } } as never, h.ports);
+  expect(appended.error).toBeUndefined();
+  expect(appended.pipeline!.cursor?.stageId).toBe("build");
+  await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+  const { pipeline } = await driveWithController(h, new Set());
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(1);
+  expect(pipeline.runs.find((run) => run.stageId === "disconnected")!.attempts).toHaveLength(0);
+});
+
+test("add-stage after selects a pass edge independently of displayed neighbours (#2247)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Explicit insertion", repoDir: "/repo", autoStart: false,
+    stages: [
+      { ...RUN_STAGES[1], id: "build", next: "review" },
+      { ...RUN_STAGES[1], id: "review", next: "ship", onFail: { to: "fix", maxRounds: 2 } },
+      { ...RUN_STAGES[1], id: "fix", next: "review" },
+      { ...RUN_STAGES[1], id: "ship", next: null },
+    ] as never,
+  }, h.ports);
+  const added = await patchPipeline(created.pipeline!.id, {
+    action: "add-stage", after: "review",
+    stage: { ...RUN_STAGES[1], id: "ui-check", next: null, onFail: { to: "fix", maxRounds: 1 } } as never,
+  } as Parameters<typeof patchPipeline>[1], h.ports);
+  expect(added.error).toBeUndefined();
+  expect(added.pipeline!.stages.map(({ id, next }) => [id, next])).toEqual([
+    ["build", "review"], ["review", "ui-check"], ["fix", "review"], ["ship", null], ["ui-check", "ship"],
+  ]);
+  expect(added.pipeline!.stages.find((stage) => stage.id === "ui-check")!.onFail).toEqual({ to: "fix", maxRounds: 1 });
+  expect(added.pipeline!.graphEdits).toHaveLength(1);
+  const before = loadPipelines()[0]!;
+  const unknown = await patchPipeline(before.id, { action: "add-stage", after: "absent", stage: { ...RUN_STAGES[1], id: "extra", next: null } } as Parameters<typeof patchPipeline>[1], h.ports);
+  expect(unknown.status).toBe(400);
+  expect(loadPipelines()[0]).toEqual(before);
+  await patchPipeline(before.id, { action: "start" }, h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const build = loadPipelines()[0]!.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+  await tickPipelines([h.finish(build.agentPath!, "pass", "built")], h.ports);
+  const appended = await patchPipeline(before.id, { action: "add-stage", stage: { ...RUN_STAGES[1], id: "extra", next: null } } as never, h.ports);
+  expect(appended.error).toBeUndefined();
+  const frozen = loadPipelines()[0]!;
+  const refused = await patchPipeline(before.id, { action: "add-stage", after: "build", stage: { ...RUN_STAGES[1], id: "insert", next: null } } as never, h.ports);
+  expect(refused.status).toBe(409);
+  expect(refused.error).toContain("frozen evidence");
+  expect(loadPipelines()[0]).toEqual(frozen);
+
+});
+
 test("draft stages can be added, reordered, and removed while keeping a linear plan", async () => {
   const h = harness();
   const { ports } = h;
@@ -10265,7 +10455,7 @@ test("draft stages can be added, reordered, and removed while keeping a linear p
 
   const added = await patchPipeline(id, {
     action: "add-stage",
-    index: 1,
+    index: 1, after: "plan",
     stage: { id: "verify", kind: "run", role: { roleId: "builder" }, prompt: "Verify the plan", next: null },
   }, ports);
   expect(added.pipeline?.stages.map((stage) => [stage.id, stage.next])).toEqual([
@@ -10807,19 +10997,19 @@ test("onExhausted: park keeps today's park once the review budget is spent (#186
   expect(current.stages.find((stage) => stage.id === "critique")!.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "park" });
 });
 
-test("a spent review budget on the last stage completes the pipeline with the same record (#1868)", async () => {
+test("a spent review budget on the last stage parks after a failed final check (#1868)", async () => {
   const h = harness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1);
 
   const current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
-  expect(current.cursor).toBeNull();
-  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.state).toBe("needs_decision");
+  expect(current.cursor?.stageId).toBe("critique");
+  expect(current.stateDetail).toContain("budget spent: 1 findings left");
   expect(current.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
   const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(critiques).toHaveLength(1);
+  expect(critiques).toHaveLength(2);
   expect(critiques[0]).toMatchObject({ state: "failed", budgetSpent: true, verdict: { findings: ["P2 evidence gap 1"] } });
 });
 
@@ -10953,8 +11143,8 @@ test("stop-after-fix, maxRounds 1: a final fix that writes a new head ends in ne
   expect(resumed.pipeline?.stateDetail).toBe(current.stateDetail);
 });
 
-test("a spent budget whose final fix wrote no new head completes under the default and under stop-after-fix alike (#1938, #2187)", async () => {
-  for (const edge of [{}, STOP_AFTER_FIX]) {
+test("stop-after-fix with no new head completes (#1938, #2187)", async () => {
+  for (const edge of [STOP_AFTER_FIX]) {
     /* Round 1 writes H1 and the handoff fix leaves the tree at H1. */
     const h = movingHeadHarness(() => REVIEW_HEADS[0]!);
     await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, ...edge }, null) as never);
@@ -11220,7 +11410,7 @@ const { pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
     stage passes, and a read-write pass moves the worktree head first. */
 async function driveWithController(
   h: ReturnType<typeof movingHeadHarness>,
-  failing: ReadonlySet<string> = new Set(["critique"]),
+  failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean) = new Set(["critique"]),
 ): Promise<{ pipeline: Pipeline; reviews: number }> {
   const answered: FileEntry[] = [];
   const controller = new FlowPipelineController({
@@ -11243,7 +11433,7 @@ async function driveWithController(
     const attempt = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) : undefined;
     if (!stageId || !attempt?.agentPath || seen.has(attempt.agentPath)) continue;
     seen.add(attempt.agentPath);
-    if (failing.has(stageId)) {
+    if (typeof failing === "function" ? failing(stageId, attempt.n) : failing.has(stageId)) {
       reviews += 1;
       h.messages.set(attempt.agentPath, {
         text: `round ${reviews} findings\n\n\`\`\`json\n{"status":"fail","findings":["P2 evidence gap ${reviews}"]}\n\`\`\``,
@@ -11258,11 +11448,59 @@ async function driveWithController(
   throw new Error(`the controller left the lane ${loadPipelines()[0]!.state}`);
 }
 
+test("another gate's fail loop gives a spent gate a fresh bounded check cycle (#2247)", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, [
+    { ...BUILD_ONLY[0], next: "review" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 })[1], id: "review", next: "ui-check" },
+    { ...BUILD_ONLY[0], id: "fix", next: "review" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 2 })[1], id: "ui-check", next: null },
+  ] as never);
+  const { pipeline } = await driveWithController(h, (stageId, n) => stageId === "review" || (stageId === "ui-check" && n <= 2));
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(2);
+  expect(pipeline.runs.find((run) => run.stageId === "fix")!.attempts).toHaveLength(4);
+  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail", "pass"]);
+});
+
+test("a failed final budget re-check parks with the remaining findings and never fixes again (#2247)", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const { pipeline } = await driveWithController(h);
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
+  expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+  const gate = pipeline.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(gate).toHaveLength(2);
+  expect(gate.at(-1)!.verdict).toEqual({ status: "fail", findings: ["P2 evidence gap 2"] });
+  expect(gate.at(-1)!.activatedBy).toMatchObject({ budgetRecheck: true });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+});
+
+test("a terminal spent gate re-checks the last fix and completes only on pass (#2247)", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await critiqueRound(h, "fail", "finding");
+  await buildRound(h, "last fix");
+  let lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("running");
+  expect(lane.cursor).toMatchObject({ stageId: "critique", state: "pending" });
+  await critiqueRound(h, "pass", "final fix verified");
+  lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("completed");
+  expect(lane.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(2);
+  expect(lane.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+  expect(pipelineCompletedUnreviewed(lane)).toBeNull();
+});
+
 test.each([
   { reviews: 1, newHead: true },
   { reviews: 3, newHead: true },
   { reviews: 3, newHead: false },
-])("under the default the controller drives $reviews failed review(s): the fixer runs one more time and the lane completes with the unreviewed findings recorded (new head: $newHead) (#2187)", async ({ reviews, newHead }) => {
+])("under the default the controller drives $reviews failed review(s): the fixer runs one more time and the final gate re-check fails and parks (new head: $newHead) (#2187)", async ({ reviews, newHead }) => {
   const h = movingHeadHarness(newHead ? undefined : () => REVIEW_HEADS[0]!);
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: reviews }, null) as never);
   const { pipeline } = await driveWithController(h);
@@ -11270,27 +11508,22 @@ test.each([
   const builds = pipeline.runs.find((run) => run.stageId === "build")!.attempts;
   const critiques = pipeline.runs.find((run) => run.stageId === "critique")!.attempts;
   expect(builds).toHaveLength(reviews + 1);
-  expect(critiques).toHaveLength(reviews);
+  expect(critiques).toHaveLength(reviews + 1);
   expect(builds.every((attempt) => attempt.state === "passed")).toBe(true);
   expect(critiques.every((attempt) => attempt.state === "failed")).toBe(true);
   /* The last fix took the last review's findings. */
   expect(builds[reviews]!.activatedBy).toEqual({ stageId: "critique", attempt: reviews, edge: "fail", budgetSpent: true });
   expect(builds[reviews]!.input).toContain(`P2 evidence gap ${reviews}`);
-  /* The lane completed; nothing parked and nothing waits for review. */
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.cursor).toBeNull();
+  /* The failed final re-check parks without another fix. */
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.cursor?.stageId).toBe("critique");
   expect(pipeline.reviewPending).toBeUndefined();
-  expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
   /* The unreviewed findings stay on the record, and the record names the heads. */
   expect(critiques[reviews - 1]).toMatchObject({ budgetSpent: true, reviewedHead: newHead ? REVIEW_HEADS[reviews - 1] : REVIEW_HEADS[0], verdict: { status: "fail", findings: [`P2 evidence gap ${reviews}`] } });
   const currentHead = newHead ? REVIEW_HEADS[reviews]! : REVIEW_HEADS[0]!;
   expect(pipeline.lastPassedCommit).toBe(currentHead);
-  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({
-    stageId: "critique",
-    reviewedHead: newHead ? REVIEW_HEADS[reviews - 1]! : REVIEW_HEADS[0]!,
-    currentHead,
-    findings: 1,
-  });
+  expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
 });
 
 test("under the default a last fix with a new head takes the reviewer's pass edge, and the next stage reads the unreviewed findings (#2187)", async () => {
@@ -11380,12 +11613,12 @@ test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage 
   expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review", "review-fix"]);
 });
 
-test("add-stage on a draft converts a review-loop, and that draft started and failed on every round completes after a last fix (#2187)", async () => {
+test("add-stage on a draft converts a review-loop, and that draft started and failed on every round parks after the final re-check (#2187)", async () => {
   const h = movingHeadHarness();
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false, publication: "internal" }, h.ports);
   const id = created.pipeline!.id;
-  const added = await patchPipeline(id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  const added = await patchPipeline(id, { action: "add-stage", after: "build", stage: REVIEW_LOOP_STAGE as never }, h.ports);
   expect(added.error).toBeUndefined();
   expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
   expect(added.graphEdit?.summary).toContain("as a reviewer with fix stage review-fix");
@@ -11393,14 +11626,14 @@ test("add-stage on a draft converts a review-loop, and that draft started and fa
 
   expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
   const { pipeline, reviews } = await driveWithController(h, new Set(["review"]));
-  expect(reviews).toBe(3);
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(reviews).toBe(4);
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
   const fixes = pipeline.runs.find((run) => run.stageId === "review-fix")!.attempts;
   expect(fixes).toHaveLength(3);
   expect(fixes.at(-1)!.activatedBy).toEqual({ stageId: "review", attempt: 3, edge: "fail", budgetSpent: true });
   expect(fixes.at(-1)!.input).toContain("P2 evidence gap 3");
-  expect(pipelineCompletedUnreviewed(pipeline)).toEqual({ stageId: "review", reviewedHead: REVIEW_HEADS[2], currentHead: REVIEW_HEADS[3], findings: 1 });
+  expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
   expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
 });
 
@@ -11415,7 +11648,7 @@ test("add-stage on a started lane converts a review-loop and keeps every run's h
   const planAttempts = structuredClone(started.runs.find((run) => run.stageId === "plan")!.attempts);
   expect(planAttempts).toHaveLength(1);
 
-  const added = await patchPipeline(started.id, { action: "add-stage", index: 2, stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  const added = await patchPipeline(started.id, { action: "add-stage", index: 2, after: "build", stage: REVIEW_LOOP_STAGE as never }, h.ports);
   expect(added.error).toBeUndefined();
   expect(added.convertedStages).toEqual([{ reviewer: "review", fixer: "review-fix" }]);
   const lane = loadPipelines()[0]!;
@@ -11444,7 +11677,7 @@ test("a review-loop the conversion cannot build without a guess is stored as sen
   /* A full plan has no slot for the fix stage, on add-stage as at creation. */
   const seven = Array.from({ length: 7 }, (_, index) => ({ ...BUILD_ONLY[0], id: `build${index}`, next: index < 6 ? `build${index + 1}` : null }));
   const full = await createPipelineFromRequest({ task: "Seven builds", repoDir: "/repo", stages: seven as never, autoStart: false }, h.ports);
-  const added = await patchPipeline(full.pipeline!.id, { action: "add-stage", stage: REVIEW_LOOP_STAGE as never }, h.ports);
+  const added = await patchPipeline(full.pipeline!.id, { action: "add-stage", after: "build6", stage: REVIEW_LOOP_STAGE as never }, h.ports);
   expect(added.error).toBeUndefined();
   expect(added.convertedStages).toBeUndefined();
   expect(added.legacyReview).toEqual([{ stageId: "review", refusals: [expect.objectContaining({ code: "stage-count" })] }]);
@@ -11636,7 +11869,7 @@ test("structural draft edits preserve intentional pass and fail edges (#353)", a
     expect(edges.get("verify")!.onFail).toEqual({ to: "plan", maxRounds: 3 });
   };
 
-  /* add-stage: the jump and loop survive; the new stage is spliced at its seam. */
+  /* add-stage: every existing edge survives; the new stage keeps its edges. */
   const added = await patchPipeline(id, {
     action: "add-stage",
     stage: { id: "audit", kind: "run", role: { roleId: "builder" }, prompt: "Audit", next: null },
@@ -11913,6 +12146,42 @@ const PUBLISH_STAGES = [
   { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
 ] as const;
 
+async function deliveryRefusalPark() {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  // Reproduce an old fail-park's released claim before its retry passed.
+  const released = loadPipelines()[0]!;
+  released.delivery!.active = false;
+  released.delivery!.publish = "disabled";
+  savePipelines([released]);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", cursor: { stageId: "build", state: "committing" },
+    lastPassedCommit: box.passedSha });
+  expect(parked.stateDetail).toStartWith("publishing the passed stage: Viewer publication denied:");
+  return { h, box, pipeline: parked, id: pipeline.id };
+}
+
+test.each([false, true])("own-id takeover resumes a delivery-refusal park without rerunning the pass (publish first: %s)", async (publishFirst) => {
+  const { h, box, pipeline, id } = await deliveryRefusalPark();
+  const cursor = structuredClone(pipeline.cursor);
+  expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
+    reason: "recover the lane's delivery" }, h.ports)).error).toBeUndefined();
+  if (publishFirst) expect((await patchPipeline(id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" },
+    publishedCommit: box.passedSha, delivery: { active: true, ownerId: id, epoch: 2 } });
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", output: "accepted output", input: cursor!.input,
+    activatedBy: cursor!.activatedBy, verdict: { status: "pass" }, error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
+});
+
 async function interruptedPublication() {
   const h = harness();
   const box = publishHarness(h, { remoteReadFails: true });
@@ -11961,6 +12230,35 @@ test("a same-owner publication waits through another tick, then advances once se
   expect(advanced.runs[0]!.attempts).toHaveLength(1);
   expect(box.order.filter((item) => item === "commit")).toHaveLength(1);
   expect(box.order.some((item) => item.startsWith("push:"))).toBe(false);
+});
+
+test("a legacy HEAD-verification park waits for its in-flight publisher to settle", async () => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operation = pipeline.delivery!.operation!;
+  const detail = "the accepted head cannot be verified before completion: HEAD temporarily unavailable";
+  pipeline.state = "needs_decision";
+  pipeline.stateDetail = detail;
+  pipeline.runs[0]!.attempts[0]!.state = "needs_decision";
+  pipeline.runs[0]!.attempts[0]!.error = detail;
+  savePipelines([pipeline]);
+  box.setRemote(box.passedSha);
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: detail,
+      cursor: { stageId: "build", state: "committing" }, delivery: { operation: { id: operation.id, state: "running" } } });
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(box.order).toEqual(["commit"]);
+  } finally { fs.closeSync(descriptor); }
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(recovered.runs[0]!.attempts).toHaveLength(1);
+  expect(recovered.runs[0]!.attempts[0]!.state).toBe("passed");
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit"]);
 });
 
 test("a restarted engine reconciles an interrupted reservation from the remote without repeating stage work (#1939)", async () => {
@@ -12195,6 +12493,194 @@ test("a publication that cannot land parks the pass without losing the commit", 
   expect(parked.publishedCommit ?? null).toBeNull();
   expect(box.order).toEqual(["commit", "push-rejected"]);
   expect(h.flows.size).toBe(0);
+});
+
+test("retry-stage republishes a committing passed stage without rerunning its work", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor).toMatchObject({ stageId: "build", state: "committing" });
+  expect(parked.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  const before = structuredClone(parked.runs[0]!.attempts[0]!);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  expect(resumed.publishedCommit).toBe(box.passedSha);
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: before.verdict, output: before.output,
+    agentPath: before.agentPath, input: before.input, activatedBy: before.activatedBy, error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+  expect(h.killedPanes).toHaveLength(0);
+});
+
+test.each(["retry-stage", "publish"] as const)("publication recovery keeps the accepted pass through a temporary worktree-head mismatch (%s)", async (action) => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const moved = "8".repeat(40);
+  box.setLocalHead(moved);
+  await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("needs_decision");
+  expect(waiting.stateDetail).toContain(`the worktree moved to ${moved}`);
+  expect(waiting.lastPassedCommit).toBe(box.passedSha);
+  box.setLocalHead(box.passedSha);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  expect(resumed.publishedCommit).toBe(box.passedSha);
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
+test("a successful publish resumes a pass parked on a rejected publication", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
+test.each([
+  ["retry-stage", "moved"],
+  ["publish", "moved"],
+  ["retry-stage", "unverifiable"],
+  ["publish", "unverifiable"],
+] as const)("legacy HEAD-verification parks resume the accepted attempt (%s, %s)", async (action, cause) => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  box.setPushFails(true);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+
+  const exec = h.ports.exec;
+  if (cause === "moved") box.setLocalHead("8".repeat(40));
+  else h.ports.exec = (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
+    ? { code: 128, stdout: "", stderr: "HEAD temporarily unavailable" }
+    : exec(command, args, cwd);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  const legacy = loadPipelines()[0]!;
+  expect(legacy.stateDetail).toStartWith(cause === "moved"
+    ? "the worktree moved to " : "the accepted head cannot be verified before completion:");
+  // The pinned base passed the accepted attempt to park(), overwriting its state.
+  legacy.runs[0]!.attempts[0]!.state = "needs_decision";
+  savePipelines([legacy]);
+  const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+
+  h.ports.exec = exec;
+  box.setLocalHead(box.passedSha);
+  box.setPushFails(false);
+  expect((await patchPipeline(pipeline.id, { action, expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const resumed = loadPipelines()[0]!;
+  expect(resumed).toMatchObject({ state: "running", lastPassedCommit: box.passedSha,
+    publishedCommit: box.passedSha, cursor: { stageId: "review", state: "pending" } });
+  expect(resumed.runs[0]!.attempts).toHaveLength(1);
+  expect(resumed.runs[0]!.attempts[0]).toEqual({ ...before, state: "passed", error: null });
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.killedPanes).toHaveLength(0);
+  expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
+});
+
+test("a pass whose commit failed still retries stage work before publishing", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const exec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => args[0] === "commit"
+    ? { code: 1, stdout: "", stderr: "commit temporarily unavailable" }
+    : exec(command, args, cwd);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: ORIGIN_MAIN_SHA,
+    cursor: { stageId: "build", state: "committing" } });
+  expect(parked.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  h.ports.exec = exec;
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(box.order).toEqual([]);
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ publishedCommit: box.passedSha,
+    cursor: { stageId: "review", state: "pending" } });
+  expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
+});
+
+test.each([false, true])("another lane's takeover keeps the old publication park fenced (legacy HEAD park: %s)", async (legacyHeadPark) => {
+  const { h, box, id } = await deliveryRefusalPark();
+  if (legacyHeadPark) {
+    const parked = loadPipelines()[0]!;
+    parked.stateDetail = `the worktree moved to ${"8".repeat(40)} after accepting ${box.passedSha}; commit and publish the current head before completing this stage`;
+    parked.runs[0]!.attempts[0]!.state = "needs_decision";
+    parked.runs[0]!.attempts[0]!.error = parked.stateDetail;
+    savePipelines([parked]);
+  }
+  expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
+    reason: "recover the owner" }, h.ports)).error).toBeUndefined();
+  const target = loadPipelines()[0]!.delivery!.target;
+  const next = await createPipelineFromRequest({ task: "Successor", repoDir: "/repo", autoStart: false,
+    stages: RUN_STAGES as never, ...REMOTE_BRANCH, delivery: { branch: target.branch } }, h.ports);
+  expect(next.pipeline!.delivery).toMatchObject({ disposition: "comparison", ownerId: id, epoch: 2 });
+  expect((await patchPipeline(next.pipeline!.id, { action: "takeover", expectedOwner: id, expectedEpoch: 2,
+    reason: "select the successor" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const old = loadPipelines().find((item) => item.id === id)!;
+  expect(old).toMatchObject({ state: "needs_decision", delivery: { active: false, publish: "disabled" },
+    cursor: { stageId: "build", state: "committing" } });
+  expect((await patchPipeline(id, { action: "publish" }, h.ports)).error).toContain(next.pipeline!.id);
+  expect(box.order).toEqual(["commit"]);
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test.each([
+  ["budget spent: 2 findings left", "passed"],
+  ["the worktree needs a decision", "passed"],
+  ["budget spent: 2 findings left", "needs_decision"],
+  ["the worktree needs a decision", "needs_decision"],
+] as const)("takeover and publish preserve an unrelated park: %s (%s)", async (detail, attemptState) => {
+  const { h, id } = await deliveryRefusalPark();
+  const parked = loadPipelines()[0]!;
+  parked.stateDetail = detail;
+  parked.runs[0]!.attempts[0]!.state = attemptState;
+  parked.runs[0]!.attempts[0]!.error = detail;
+  savePipelines([parked]);
+  expect((await patchPipeline(id, { action: "takeover", expectedOwner: id, expectedEpoch: 1,
+    reason: "recover the delivery only" }, h.ports)).error).toBeUndefined();
+  expect((await patchPipeline(id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: detail,
+    delivery: { active: true, epoch: 2 }, cursor: { stageId: "build", state: "committing" } });
+  expect(h.spawnInputs).toHaveLength(1);
 });
 
 test("a pipeline whose repo has no origin keeps its producer head before review ingress", async () => {
@@ -15607,11 +16093,11 @@ test.each([undefined, 7])("pipeline review default and explicit higher budget %s
   expect(patched.pipeline!.stages[1]!.onFail!.maxRounds).toBe(maxRounds ?? 3);
 });
 
-test("an omitted pipeline review budget runs three reviews before the last fix completes", async () => {
+test("an omitted pipeline review budget runs three reviews and a final re-check", async () => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build" }, null) as never);
   const { pipeline } = await driveWithController(h);
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(4);
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });

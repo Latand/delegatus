@@ -93,6 +93,22 @@ Nothing earlier designed a per-project setting or a task-finishing link.
 
 ### 3.1 Three exhaustion modes, one default
 
+Current routing amendment (#2247): under `advance`, when the spent gate has
+`next: null`, the last fix returns directly to that gate for one final check.
+A pass completes the lane; a fail parks with `budget spent: N findings left`
+and keeps the verdict and findings. Delivery retention across that park belongs
+to the delivery-survives-park change. Nonterminal gates still relay unreviewed
+findings along their pass edge. A fail loop from another gate permits a fresh
+handoff through a previously spent gate; the round count remains cumulative.
+`stop-after-fix` and `park` retain their existing behavior.
+
+`add-stage` keeps the supplied `next` and `onFail` and every existing edge.
+An explicit `after: <stageId>` selects the pass edge to splice: the named stage
+points to the new one, which inherits its former successor. `index` controls
+presentation only. The board's Add stage action supplies `after` explicitly.
+The historical acceptance below describes the earlier exhaustion behavior.
+
+
 `PipelineFailEdgeExhaustion` (`src/lib/pipelines/types.ts:76,82`) gains one value:
 
 | Value | When the last allowed review fails | After that fix passes | Who asks for it |

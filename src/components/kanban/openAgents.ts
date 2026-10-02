@@ -21,6 +21,9 @@ export interface OpenAgent {
   tone: MobileRowDot;
   live: boolean;
   state: MobileRowStateKey;
+  /** A draft the operator has not sent yet. It stands in the rail so the strip
+      is already there when the launch turns it into a conversation. */
+  draft?: boolean;
 }
 
 export function openAgents(t: TFunction, views: readonly ReaderView[], open: readonly { key: string }[], now: number): OpenAgent[] {
@@ -40,6 +43,20 @@ export function openAgents(t: TFunction, views: readonly ReaderView[], open: rea
       state: row.key,
     }];
   });
+}
+
+/** The agent drafts on the board, drawn as agents the rail already holds a place for. */
+export function draftAgents(t: TFunction, cards: readonly { id: string; title: string; titlePending: boolean; task: unknown; drafts: readonly string[] }[]): OpenAgent[] {
+  return cards.flatMap((card) => card.drafts.map((id) => ({
+    key: `draft::${id}`,
+    name: t("kanban.openAgents.draft"),
+    card: card.task ? (card.titlePending ? t("kanban.untitled") : card.title) : null,
+    role: "neutral" as FrameRole,
+    tone: "neutral" as const,
+    live: false,
+    state: "done" as const,
+    draft: true,
+  })));
 }
 
 /** The agent a cycling step lands on: the next (or previous) after the

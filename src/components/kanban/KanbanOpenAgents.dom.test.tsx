@@ -150,7 +150,7 @@ function seed(readers: ReadonlyArray<FileEntry | [FileEntry, "folded"]>) {
   })));
 }
 
-function mount(options: { files?: FileEntry[] } = {}) {
+function mount(options: { files?: FileEntry[]; drafts?: string[]; onDraftClose?: (id: string) => void } = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -166,7 +166,8 @@ function mount(options: { files?: FileEntry[] } = {}) {
       pipelines={[searchPipeline()]}
       tasks={[]}
       allTasks={TASKS}
-      drafts={[]}
+      drafts={options.drafts ?? []}
+      onDraftClose={options.onDraftClose}
       now={NOW}
       loaded
       catalogFailures={0}
@@ -246,6 +247,28 @@ test("no rail while nothing is open, and uk strings when the Viewer speaks Ukrai
   expect(rail(host)?.getAttribute("aria-label")).toBe("3 відкриті агенти");
   expect(host.querySelector("[data-open-rail-close-all]")?.textContent).toBe("Закрити всі");
   expect(jump(host, "conversation_review-1")?.getAttribute("aria-label")).toStartWith("Перейти до ");
+});
+
+test("an agent draft stands in the rail from the moment it opens, so the launch does not insert the strip; its × and «Close all» close it", async () => {
+  const closed: string[] = [];
+  seed([plain]);
+  const { host } = mount({ drafts: ["draft-one"], onDraftClose: (id) => closed.push(id) });
+  await tick();
+  expect(segmentKeys(host)).toEqual(["conversation_plain-1", "draft::draft-one"]);
+  expect(rail(host)?.querySelector("[data-open-rail-count]")?.textContent).toBe("2 agents open");
+  const draft = segments(host).find((segment) => segment.dataset.openAgent === "draft::draft-one")!;
+  expect(draft.querySelector(".or-name")?.textContent).toBe("New agent");
+  expect(draft.querySelector("[data-open-agent-jump]")?.getAttribute("aria-label")).toBe("Go to New agent: Agent, not sent yet");
+  click(draft.querySelector("[data-open-agent-close]"));
+  expect(closed).toEqual(["draft-one"]);
+  click(host.querySelector("[data-open-rail-close-all]"));
+  expect(closed).toEqual(["draft-one", "draft-one"]);
+});
+
+test("a draft alone is enough for the rail", async () => {
+  const { host } = mount({ drafts: ["draft-one"] });
+  await tick();
+  expect(segmentKeys(host)).toEqual(["draft::draft-one"]);
 });
 
 test("a segment moves the board to its agent's conversation and focuses it, unfolding one that was folded", async () => {
