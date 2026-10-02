@@ -3641,7 +3641,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       the chain would be retired anyway. Over four real rollouts (500 to 1,300
       lines) the ledger alone blocked 95% or more of the lines, an open turn
       alone about 0.2%. Such a transcript parses its window whole on every older
-      page, as before the join. */
+      page, as before the join: the incremental join applies to Claude, Copilot
+      and OpenClaw transcripts, not to Codex rollouts. Joining a Codex rollout
+      needs the ledger, exec and pending-user state handed over, a follow-up. */
   const quietSignature = (): string | null => {
     if (!jsonl || turnOpen || failedResponseSeq !== null || plainBlock || lastPlainCall || pendingCodexUsers.length
       || codexAssistantRecord || codexCompacted || execWindow || pendingExecs.size || execPairingOverflow
