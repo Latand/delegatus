@@ -62,7 +62,7 @@ import { killTmuxHostIfMatches, paneInfo } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
-import { writeParkedTaskNote } from "./taskStatusNote";
+import { writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
@@ -1669,8 +1669,9 @@ async function unregisteredStageHostDeathEvidence(
     : null;
 }
 
-function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null): void {
-  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeParkedTaskNote(pipeline, detail, attempt);
+function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
+  const noteReason = reason ?? (detail.startsWith("rate limited until ") ? { kind: "quota-reset" as const } : undefined);
+  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeParkedTaskNote(pipeline, detail, attempt, noteReason);
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt) attempt.error = detail;
   pipeline.state = "needs_decision";
@@ -3855,7 +3856,12 @@ async function tickRunStage(
     const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
     if (readiness !== "connected") {
       const roleId = attempt.definition ? attempt.effectiveRole.roleId : stage.effectiveRole.roleId;
-      park(pipeline, engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness }), attempt);
+      park(
+        pipeline,
+        engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness }),
+        attempt,
+        readiness === "signed-out" ? { kind: "signed-out", engine } : undefined,
+      );
       return;
     }
     /* A publication this process is merely between is transient. Waiting for it

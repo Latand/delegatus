@@ -925,6 +925,62 @@ test("a parked lane writes a short status note and preserves a newer agent note"
   }
 });
 
+test("a stage parked before spawn replaces the preceding stage note, while newer notes still win", async () => {
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  const h = harness();
+  await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+  const pipeline = current();
+  pipeline.taskIds = ["park-note-task"];
+  savePipelines([pipeline]);
+  const oldNoteAt = new Date(Date.parse(pipeline.createdAt) + 1_000).toISOString();
+  saveTasks([{
+    id: "park-note-task", project: "viewer", text: "Complete the change", status: "assigned", placement: "unplaced", assignments: [],
+    createdAt: pipeline.createdAt, updatedAt: pipeline.createdAt,
+    note: { text: "The builder is running.", author: agent("conversation_stage_1"), updatedAt: oldNoteAt },
+  }]);
+
+  await h.report(1, { verdict: "pass", summary: "Build passed." });
+  h.ports.engineReadiness = () => "signed-out";
+  await tickPipelines([h.endTurn(1, "Build passed.")], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(current().state).toBe("needs_decision");
+  expect(attemptsOf("verify")[0]!.startedAt).toBeNull();
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  const { operatorLocale } = await import("@/lib/operator/settings");
+  expect(loadTasks()[0]!.note?.text).toBe(parkedTaskNote(
+    current().stateDetail ?? "",
+    operatorLocale() ?? "uk",
+    false,
+    { kind: "signed-out", engine: "codex" },
+  ));
+  expect(loadTasks()[0]!.note?.text).not.toBe("The builder is running.");
+
+  const { writeParkedTaskNote } = await import("./taskStatusNote");
+  const stillNewer = {
+    text: "The operator is choosing an account now.",
+    author: agent("conversation_current"),
+    updatedAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  saveTasks([{ ...loadTasks()[0]!, note: stillNewer }]);
+  writeParkedTaskNote(current(), "signed out", attemptsOf("verify")[0]);
+  expect(loadTasks()[0]!.note).toEqual(stillNewer);
+});
+
+test("automatic notes explain signed-out and quota-reset parks in both languages without diagnostics", async () => {
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  expect(parkedTaskNote("Stage \"verify\" runs on Codex, and no Codex account is signed in", "en", false, { kind: "signed-out", engine: "codex" }))
+    .toBe("No Codex account is connected. Connect one to continue.");
+  expect(parkedTaskNote("Stage \"verify\" runs on Codex, and no Codex account is signed in", "uk", false, { kind: "signed-out", engine: "codex" }))
+    .toBe("Для Codex не під’єднано обліковий запис. Під’єднайте його, щоб продовжити.");
+  for (const locale of ["en", "uk"] as const) {
+    const note = parkedTaskNote("rate limited until 2026-10-02T12:00:00.000Z, account fixture-private", locale, true, { kind: "quota-reset" });
+    expect(note).toMatch(/limit|ліміт/i);
+    expect(note).not.toContain("fixture-private");
+    expect(note).not.toContain("2026-10-02");
+  }
+});
+
 test("publication blocked, a failed stage and a spent budget each leave a plain current note", async () => {
   const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
   const { parkedTaskNote } = await import("./taskStatusNote");
