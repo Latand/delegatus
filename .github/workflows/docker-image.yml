@@ -1,7 +1,25 @@
 name: Docker image
 
 on:
+  # A pull request builds the image only when something the Dockerfile copies,
+  # installs from or compiles changes. Pushes to main and v* tags always build.
   pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - bun.lock
+      - bunfig.toml
+      - patches/**
+      - next.config.ts
+      - postcss.config.mjs
+      - tsconfig.json
+      - src/**
+      - public/**
+      - bin/**
+      - vendor/**
+      - scripts/**
+      - .github/workflows/docker-image.yml
   push:
     branches: [main]
     tags: ["v*"]
@@ -12,12 +30,12 @@ permissions:
 
 concurrency:
   group: docker-image-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 90 }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
