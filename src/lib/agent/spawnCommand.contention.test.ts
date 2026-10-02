@@ -2,7 +2,8 @@ import os from "node:os";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { afterAll, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -24,6 +25,13 @@ const { statePath } = await import("@/lib/configDir");
 const { agentRegistry } = await import("./registry");
 const { executeSpawnRequest } = await import("./spawnCommand");
 const { measureContention } = await import("@/lib/accounts/accountMutation.contention.fixture");
+beforeEach(() => {
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = statePath("fixture.sock");
+});
 function structuredRouteDependencies(cwd: string): SpawnCommandDependencies {
   return {
     registry: agentRegistry,
@@ -72,14 +80,56 @@ function structuredRouteDependencies(cwd: string): SpawnCommandDependencies {
   };
 }
 
+test("a refused anonymous structured spawn preserves the real Git index and writes no handoffs", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const cwd = statePath("anonymous-private-prompt-cwd");
+  const directory = path.join(cwd, ".artifacts", "pipeline-stage-inputs");
+  fs.mkdirSync(directory, { recursive: true });
+  const legacy = "PRIVATE_ANONYMOUS_SENTINEL\n";
+  fs.writeFileSync(path.join(directory, "old.md"), legacy);
+  fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 1;\n");
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet", "--initial-branch=main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "noreply@example.invalid");
+  git("config", "commit.gpgSign", "false");
+  git("add", "source.ts");
+  git("commit", "--quiet", "-m", "fixture base");
+  fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 2;\n");
+  git("add", "-A");
+  const staged = git("diff", "--cached", "--name-only");
+  const previousState = process.env.LLV_STATE_DIR;
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(sandbox, "anonymous-team-state");
+  try {
+    teamStore().insertMember({ id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", name: "Owner", role: "owner", status: "active", color: "teal",
+      telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null });
+    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: `attempt_${crypto.randomUUID()}`, title: "Anonymous structured launch", engine: "claude", cwd,
+        ["prompt"]: "Synthetic oversized fixture\n" + "p".repeat(40_000), mcpServers: [] }),
+    }), { ...structuredRouteDependencies(cwd), defer: () => {} });
+    expect(response.status).toBe(401);
+    expect((await response.json()).code).toBe("member_required");
+    expect(git("diff", "--cached", "--name-only")).toBe(staged);
+    expect(git("show", ":source.ts")).toBe("export const value = 2;");
+    expect(fs.readdirSync(directory)).toEqual(["old.md"]);
+    expect(fs.readFileSync(path.join(directory, "old.md"), "utf8")).toBe(legacy);
+    expect(fs.existsSync(path.join(cwd, ".artifacts", ".gitignore"))).toBe(false);
+  } finally {
+    resetTeamStoreForTests();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
 test("spawn catalog resolution leaves admission available", async () => {
   const cwd = statePath("spawn-cwd");
   fs.mkdirSync(cwd, { recursive: true });
-  process.env.LLV_SPAWN_TRANSPORT = "structured";
-  process.env.LLV_STRUCTURED_HOSTS = "1";
-  process.env.LLV_RUNTIME_EVENTS = "1";
-  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
-  process.env.LLV_RUNTIME_HOST_SOCKET = statePath("fixture.sock");
   await measureContention("spawn-catalog", async (pause) => {
     const dependencies = structuredRouteDependencies(cwd);
     const resolve = dependencies.resolveSpawnAccount;
@@ -96,6 +146,141 @@ test("spawn catalog resolution leaves admission available", async () => {
     if (response.status !== 202) console.info(await response.clone().json());
     expect(response.status).toBe(202);
   });
+});
+
+test("an oversized structured spawn launches with its full prompt in a stable readable reference", async () => {
+  const cwd = statePath("large-spawn-cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet", "--initial-branch=main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "noreply@example.invalid");
+  git("config", "commit.gpgSign", "false");
+  fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 1;\n");
+  git("add", "source.ts");
+  git("commit", "--quiet", "-m", "fixture base");
+  let deliveredPrompt = "";
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.spawnStructuredConversation = async (input) => {
+    deliveredPrompt = input.prompt;
+    return {
+      ok: true,
+      target: null,
+      path: null,
+      effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default",
+      launchId: input.receipt.launchId,
+      conversationId: input.receipt.conversationId,
+      launched: true,
+      retrySafe: false,
+      initialMessage: "delivered",
+      state: "settled",
+    };
+  };
+  const original = `Launch complete role brief\n${"界🙂".repeat(12_000)}`;
+  const clientAttemptId = `attempt_${crypto.randomUUID()}`;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId, title: "Large structured launch", engine: "claude", cwd, prompt: original, mcpServers: [] }),
+  });
+
+  const first = await executeSpawnRequest(request(), dependencies);
+  expect(first.status).toBe(202);
+  expect(Buffer.byteLength(deliveredPrompt, "utf8")).toBeLessThanOrEqual(32_000);
+  const file = deliveredPrompt.match(/Full structured first message file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  expect(fs.readFileSync(file!, "utf8")).toContain(original);
+  const firstReference = deliveredPrompt;
+
+  // Replaying the same request takes the durable receipt path and retains the
+  // same request payload and content-addressed file reference.
+  await executeSpawnRequest(request(), dependencies);
+  expect(deliveredPrompt).toBe(firstReference);
+  expect(fs.readFileSync(file!, "utf8")).toContain(original);
+  fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 2;\n");
+  git("add", "-A");
+  git("commit", "--quiet", "-m", "ordinary worker change");
+  expect(git("ls-tree", "-r", "--name-only", "HEAD")).toBe("source.ts");
+  expect(git("show", "HEAD:source.ts")).toBe("export const value = 2;");
+  expect(git("show", "--format=", "HEAD")).not.toContain("Launch complete role brief");
+  expect(fs.readFileSync(file!, "utf8")).toContain(original);
+});
+
+test("ordinary Git commits exclude private structured prompts under tracked inclusion rules", async () => {
+  const envKeys = ["LLV_SPAWN_TRANSPORT", "LLV_STRUCTURED_HOSTS", "LLV_RUNTIME_EVENTS", "LLV_RUNTIME_HOST_SOCKET", "NEXT_PUBLIC_RUNTIME_UI"] as const;
+  const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = statePath("private-prompt-runtime.sock");
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  const cwd = statePath("private-prompt-publication-cwd");
+  const ignoreDir = path.join(cwd, ".artifacts", "pipeline-stage-inputs");
+  fs.mkdirSync(ignoreDir, { recursive: true });
+  fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 1;\n");
+  fs.writeFileSync(path.join(ignoreDir, ".gitignore"), "!*.md\n");
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  git("init", "--quiet", "--initial-branch=main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "noreply@example.com");
+  git("config", "commit.gpgSign", "false");
+  git("add", "source.ts", ".artifacts/pipeline-stage-inputs/.gitignore");
+  git("commit", "--quiet", "-m", "fixture base");
+
+  let deliveredPrompt = "";
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.spawnStructuredConversation = async (input) => {
+    deliveredPrompt = input.prompt;
+    return {
+      ok: true,
+      target: null,
+      path: null,
+      effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default",
+      launchId: input.receipt.launchId,
+      conversationId: input.receipt.conversationId,
+      launched: true,
+      retrySafe: false,
+      initialMessage: "delivered",
+      state: "settled",
+    };
+  };
+  const privatePrompt = `Private controller input\n${"Sensitive worker brief. ".repeat(2_000)}`.trim();
+  try {
+    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: `attempt_${crypto.randomUUID()}`, title: "Private structured launch", engine: "claude", cwd, prompt: privatePrompt, mcpServers: [] }),
+    }), dependencies);
+
+    expect(response.status).toBe(202);
+    const privateFile = deliveredPrompt.match(/Full structured first message file: (.+)\n/)?.[1];
+    expect(privateFile).toBeDefined();
+    expect(fs.readFileSync(privateFile!, "utf8")).toBe(privatePrompt);
+    const ignoreContents = fs.readFileSync(path.join(ignoreDir, ".gitignore"), "utf8");
+    expect(ignoreContents.startsWith("!*.md\n")).toBe(true);
+    expect(ignoreContents.trimEnd().endsWith("*")).toBe(true);
+    git("restore", "--", ".artifacts/pipeline-stage-inputs/.gitignore");
+    fs.writeFileSync(path.join(cwd, "source.ts"), "export const value = 2;\n");
+    git("add", "-A");
+    git("commit", "--quiet", "-m", "ordinary worker commit");
+
+    const committedFiles = git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n");
+    expect(committedFiles).toContain("source.ts");
+    expect(committedFiles.filter((file) => file.startsWith(".artifacts/pipeline-stage-inputs/") && !file.endsWith("/.gitignore"))).toEqual([]);
+    expect(committedFiles).not.toContain(path.relative(cwd, privateFile!).split(path.sep).join("/"));
+    expect(git("show", "--format=", "HEAD")).not.toContain(privatePrompt);
+  } finally {
+    for (const key of envKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
+  }
 });
 
 test("a catalog generation change cannot admit the previously selected home", async () => {

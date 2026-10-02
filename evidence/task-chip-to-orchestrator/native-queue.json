@@ -1,0 +1,45 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1440,
+      "cleanPreview": true,
+      "wordsWithinBounds": true,
+      "cleanEdit": true,
+      "cleanDeputy": true,
+      "badge": "Fix __init__.py (#42)",
+      "overflow": false
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "cleanPreview": true,
+      "wordsWithinBounds": true,
+      "cleanEdit": true,
+      "cleanDeputy": true,
+      "badge": "Fix __init__.py (#42)",
+      "overflow": false
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "cleanPreview": true,
+      "wordsWithinBounds": true,
+      "cleanEdit": true,
+      "cleanDeputy": true,
+      "badge": "Fix __init__.py (#42)",
+      "overflow": false
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "cleanPreview": true,
+      "wordsWithinBounds": true,
+      "cleanEdit": true,
+      "cleanDeputy": true,
+      "badge": "Fix __init__.py (#42)",
+      "overflow": false
+    }
+  ]
+}

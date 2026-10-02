@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
+import fs from "node:fs";
+import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { loadTasks } from "@/lib/tasks/store";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -8,17 +10,19 @@ import { productionBoardMaintenanceController, type BoardMaintenancePorts, type 
 import { saveRoleMapping } from "@/lib/roles/store";
 import { claim, sandbox, input, PROJECT, NOW } from "./testFixture";
 import { maintenanceRuns, readMaintenanceProject, readMaintenanceRun, recordMaintenanceChange } from "./store";
+import type { TaskWorkEvidence } from "./evidence";
+import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
-function harness(archiveOverride = true, overrides: Partial<BoardMaintenancePorts> = {}) {
+function harness(archiveOverride = true, evidence: TaskWorkEvidence[] = [], overrides: Partial<BoardMaintenancePorts> = {}) {
   held = sandbox(); let now = NOW;
   const registry = new AgentRegistry(statePath("fixture-registry.json"));
   const bodies: Record<string, unknown>[] = [], archived: string[] = [];
   let observation: MaintenanceObservation = { state: "running" };
   let response = { status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), launchId: "fixture-launch", path: "/fixtures/worker.jsonl" } as Record<string, unknown> };
   const sources: SeatTickSources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => ({ state: "ok", value: null }) };
-  const ports: BoardMaintenancePorts = { sources, evidence: async () => [], ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
+  const ports: BoardMaintenancePorts = { sources, evidence: async () => evidence, ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
   return { controller: productionBoardMaintenanceController(sources, { ...ports, ...overrides }), sources, registry, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
 }
 test("off, no seat, live run and deploy defer without spending the slot", async () => {
@@ -52,6 +56,39 @@ test("card exists before spawn, with icon, colour, description and task binding 
   const run = h.run(), card = tasks().find(t => t.id === run.taskId)!;
   expect(card).toMatchObject({ icon: "brush-cleaning", color: "slate" }); expect(card.text).toContain("30.09 12:00 · Обслуговування дошки"); expect(card.details).toStartWith("Delegatus board maintenance run");
   expect(h.bodies[0]).toMatchObject({ role: "maintainer", taskId: card.id, cwd: "/fixtures/repository", project: PROJECT, clientAttemptId: run.runId });
+});
+test("large board-maintenance briefs reach the shared structured composer and keep a stable full-file reference", async () => {
+  const evidence: TaskWorkEvidence[] = Array.from({ length: 80 }, (_, task) => ({
+    taskId: `maintenance-${task.toString().padStart(8, "0")}`,
+    status: "assigned",
+    verdict: "quiet",
+    lastWorkAt: null,
+    lanes: [],
+    workers: Array.from({ length: 5 }, (_, worker) => ({
+      conversationId: `conversation_${task}_${worker}_${"evidence".repeat(9)}`,
+      via: "assignment" as const,
+      lifecycle: "unknown" as const,
+      lastRecordAt: null,
+    })),
+  }));
+  const h = harness(true, evidence);
+  await h.controller.launchIfDue(input());
+  const original = String(h.bodies[0]!.prompt);
+  expect(Buffer.byteLength(original, "utf8")).toBeGreaterThan(32_000);
+  const cwd = path.join(held!.dir, "repository");
+  fs.mkdirSync(cwd, { recursive: true });
+  const bounded = composeStructuredFirstMessage(original, cwd);
+  expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(32_000);
+  const file = bounded.match(/Full structured first message file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  expect(fs.readFileSync(file!, "utf8")).toBe(original);
+  expect(composeStructuredFirstMessage(original, cwd)).toBe(bounded);
+
+  const run = h.run();
+  const { patchMaintenanceRun } = await import("./store");
+  patchMaintenanceRun(run.runId, { conversationId: null, state: "launching" });
+  await h.controller.reconcile(PROJECT);
+  expect(composeStructuredFirstMessage(String(h.bodies[1]!.prompt), cwd)).toBe(bounded);
 });
 test("no account leaves one blocked visible card, success summarizes, hides and archives", async () => {
   const h = harness(); h.respond({ status: 409, body: { code: "project_account_refused", error: "fixture no allowed account" } });
@@ -253,7 +290,7 @@ test("update admission rechecks after evidence and retains an undispatched claim
   let entered!: () => void, resume!: () => void;
   const collecting = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { resume = resolve; });
-  const h = harness(true, { evidence: async () => { entered(); await gate; return []; } });
+  const h = harness(true, [], { evidence: async () => { entered(); await gate; return []; } });
   const launch = h.controller.launchIfDue(input());
   await collecting; holdUpdate(); resume(); await launch;
   const run = h.run();
@@ -291,7 +328,7 @@ test("an undispatched launch payload retains its key and restarts its dispatch c
 });
 test("admission deferred by the production spawn lane retries its payload after release", async () => {
   let refuse = true;
-  const h = harness(true, { launch: async body => {
+  const h = harness(true, [], { launch: async body => {
     if (refuse) { holdUpdate(); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; }
     h.bodies.push(body); return { status: 202, body: { state: "starting", conversationId: "conversation_fixture_resumed", launchId: "resumed-launch" } };
   } });

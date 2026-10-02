@@ -33,6 +33,10 @@ export interface MessageRowRecovery {
    * offer a second send instead.
    */
   check: (key: string) => void;
+  /** Restore a failed context row with its task chips before removing it. */
+  editContext?: (key: string) => void;
+  /** Return proven-unsent words and task chips together from a parked row. */
+  takeBack?: (key: string) => void;
   /** Replay the admitted operation itself, when the journal can start its next
       attempt from the recorded request. Absent for a row with no operation. */
   retryOperation?: (key: string) => void;
