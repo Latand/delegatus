@@ -1,13 +1,15 @@
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
+import { agentHistoryGuardEnv } from "./agentHistoryGuard";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
     identity. Invalid settings refuse the launch without logging their values. */
 export function agentPublicationIdentityEnv(source: NodeJS.ProcessEnv): Partial<NodeJS.ProcessEnv> {
   const defaults = controllerCommitIdentityEnv();
-  const name = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
+  const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
+  const name = configuredName.trim();
   const email = source.DELEGATUS_PUBLICATION_EMAIL ?? source.LLV_PUBLICATION_EMAIL ?? defaults.GIT_AUTHOR_EMAIL!;
-  if (!name.trim() || name.length > 80 || /[\x00-\x1f\x7f<>@/\\]/.test(name)
+  if (!name || configuredName.length > 80 || /[\x00-\x1f\x7f<>@/\\]/.test(configuredName)
     || !/^(?:noreply|no-reply)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/i.test(email)
     // The publication gate requires graph proof for the forge merge composer.
     || email.toLowerCase() === ["noreply", "github.com"].join("@")) {
@@ -16,6 +18,7 @@ export function agentPublicationIdentityEnv(source: NodeJS.ProcessEnv): Partial<
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
+    ...agentHistoryGuardEnv(source, name, email),
   };
 }
 

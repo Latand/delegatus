@@ -1,3 +1,4 @@
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
@@ -1571,7 +1572,7 @@ describe("CodexAppServerHost", () => {
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
       });
-      const git = { GIT_AUTHOR_NAME: "Build Agent", GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: "Build Agent", GIT_COMMITTER_EMAIL: email };
+      const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
         shell_environment_policy: { set: git, ...(keyedFilters
           ? { filters: Object.fromEntries(Object.keys(git).map((key) => [key, "include"])) }
@@ -1609,6 +1610,7 @@ describe("CodexAppServerHost", () => {
       NODE_ENV: "test",
       PATH: process.env.PATH,
       CODEX_HOME: "/codex-home",
+      ...agentPublicationIdentityEnv({}),
       GIT_AUTHOR_NAME: "Delegatus",
       GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
       GIT_COMMITTER_NAME: "Delegatus",
