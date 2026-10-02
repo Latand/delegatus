@@ -1366,17 +1366,16 @@ function sameHunkRebaseSandbox() {
   const box = publishSandbox();
   const repeatedComments = ["    # same context", "    # same context", "    # same context", "    # same context"];
   const policy = (first: number, second: number) => [
-    "def first():",
+    "def policy(admin):",
     ...repeatedComments,
     `    value = ${first}`,
     ...repeatedComments,
-    "    return value",
-    "",
-    "def second():",
+    "    first_result = value",
     ...repeatedComments,
     `    value = ${second}`,
     ...repeatedComments,
-    "    return value",
+    "    second_result = value",
+    "    return first_result, second_result",
     "",
   ].join("\n");
   fs.writeFileSync(path.join(box.repo, "policy.py"), policy(1, 1));
@@ -1420,7 +1419,7 @@ test.each(["update", "revert"])("stage reconciliation retains accepted history f
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("stage reconciliation rejects an amended replay moved to an identical hunk in another function", () => {
+test("stage reconciliation rejects an amended replay moved to an identical hunk in the same function", () => {
   const box = sameHunkRebaseSandbox();
   try {
     fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), `# newer main line\n${box.policy(1, 2)}`);

@@ -745,15 +745,26 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
     exact added / removed lines and context to agree before treating a
     whitespace-insensitive match as retained. Line positions are omitted so a
     replay still matches after surrounding lines move on a newer base. */
-function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): string | null | { error: string } {
+interface ExactCommitPatch {
+  signature: string;
+  locations: Array<{ path: string; start: number }>;
+}
+
+function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): ExactCommitPatch | null | { error: string } {
   const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
     "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", commit], pipeline.worktreeDir);
   if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
+  const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--name-only", "-z", commit], pipeline.worktreeDir);
+  if (names.code !== 0) return { error: failure("reading accepted replay paths", names).error };
+  const paths = names.stdout.split("\0").filter(Boolean);
   const evidence: string[] = [];
+  const locations: ExactCommitPatch["locations"] = [];
+  let fileIndex = -1;
   let binary = false;
   let inHunk = false;
   for (const line of patch.stdout.split("\n")) {
     if (line.startsWith("diff --git ")) {
+      fileIndex++;
       evidence.push(line);
       binary = false;
       inHunk = false;
@@ -764,16 +775,50 @@ function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): s
       binary = line === "GIT binary patch";
     } else if (line.startsWith("@@")) {
       // Keep Git's function/section label (the text after the closing @@) to
-      // distinguish identical local hunks in different parts of one file.
-      // The ranges themselves move during a valid rebase and are not identity.
-      evidence.push(line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, "@@"));
+      // distinguish different areas of a file; retain old-side coordinates
+      // separately and map them across the rebase parents before matching.
+      const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line);
+      if (!hunk || !paths[fileIndex]) return { error: "reading accepted replay hunk location: malformed Git patch" };
+      locations.push({ path: paths[fileIndex], start: Number(hunk[1]) });
+      evidence.push(`@@${hunk[5]}`);
       inHunk = true;
     } else if (inHunk && ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
       || line.startsWith("\\ No newline"))) {
       evidence.push(line);
     }
   }
-  return evidence.length ? evidence.join("\n") : null;
+  return evidence.length ? { signature: evidence.join("\n"), locations } : null;
+}
+
+/** Map a replay hunk's parent-side line to the accepted commit's parent.
+    Changes before the hunk shift its coordinate; a change overlapping the
+    hunk start makes the location unprovable and must fail closed. */
+function mapReplayPatchLocation(
+  pipeline: Pipeline,
+  acceptedCommit: string,
+  replayCommit: string,
+  location: ExactCommitPatch["locations"][number],
+  exec: ExecPort,
+): number | null | { error: string } {
+  const acceptedParent = exec("git", ["rev-parse", `${acceptedCommit}^`], pipeline.worktreeDir);
+  if (acceptedParent.code !== 0) return { error: failure("reading accepted patch parent", acceptedParent).error };
+  const replayParent = exec("git", ["rev-parse", `${replayCommit}^`], pipeline.worktreeDir);
+  if (replayParent.code !== 0) return { error: failure("reading replay patch parent", replayParent).error };
+  const diff = exec("git", ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
+    acceptedParent.stdout.trim(), replayParent.stdout.trim(), "--", location.path], pipeline.worktreeDir);
+  if (diff.code !== 0) return { error: failure("mapping replay hunk location", diff).error };
+  let delta = 0;
+  for (const line of diff.stdout.split("\n")) {
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!hunk) continue;
+    const oldCount = Number(hunk[1] ?? 1);
+    const newStart = Number(hunk[2]);
+    const newCount = Number(hunk[3] ?? 1);
+    if (newCount > 0 && location.start >= newStart && location.start < newStart + newCount) return null;
+    if (location.start >= newStart + newCount) delta += oldCount - newCount;
+    else if (location.start >= newStart) return null;
+  }
+  return location.start + delta;
 }
 
 /** Retained patch history admits subsequent builder edits just as ordinary
@@ -797,27 +842,49 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
   if (cherry.code !== 0) return failure("checking accepted patch history", cherry);
   const cherryLines = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ") || line.startsWith("- "));
   const retainedByCherry = cherryLines.filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
-  const replayedPatches = new Map<string, number>();
+  const replayedPatches: Array<{ commit: string; patch: ExactCommitPatch }> = [];
   if (retainedByCherry.length) {
     const candidates = exec("git", ["rev-list", "--no-merges", `${accepted}..${head}`], pipeline.worktreeDir);
     if (candidates.code !== 0) return failure("checking replayed commit patches", candidates);
     for (const candidate of candidates.stdout.split("\n").filter(Boolean)) {
-      const signature = exactCommitPatch(pipeline, candidate, exec);
-      if (signature && typeof signature === "object") return { ok: false, error: signature.error };
-      if (signature) replayedPatches.set(signature, (replayedPatches.get(signature) ?? 0) + 1);
+      const patch = exactCommitPatch(pipeline, candidate, exec);
+      if (patch && "error" in patch) return { ok: false, error: patch.error };
+      if (patch) replayedPatches.push({ commit: candidate, patch });
     }
   }
   const dropped = cherryLines.filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
   for (const acceptedCommit of retainedByCherry) {
-    const signature = exactCommitPatch(pipeline, acceptedCommit, exec);
-    if (signature && typeof signature === "object") return { ok: false, error: signature.error };
+    const acceptedPatch = exactCommitPatch(pipeline, acceptedCommit, exec);
+    if (acceptedPatch && "error" in acceptedPatch) return { ok: false, error: acceptedPatch.error };
     // An empty commit has no patch to preserve. Its SHA need not block a
     // content-based rebase reconciliation.
-    if (!signature) continue;
-    const count = replayedPatches.get(signature) ?? 0;
-    if (count === 0) dropped.push(acceptedCommit);
-    else if (count === 1) replayedPatches.delete(signature);
-    else replayedPatches.set(signature, count - 1);
+    if (!acceptedPatch) continue;
+    let matched = -1;
+    for (let index = 0; index < replayedPatches.length; index++) {
+      const replay = replayedPatches[index];
+      if (replay.patch.signature !== acceptedPatch.signature
+        || replay.patch.locations.length !== acceptedPatch.locations.length) continue;
+      let sameLocation = true;
+      for (let hunk = 0; hunk < replay.patch.locations.length; hunk++) {
+        const replayLocation = replay.patch.locations[hunk];
+        if (replayLocation.path !== acceptedPatch.locations[hunk].path) {
+          sameLocation = false;
+          break;
+        }
+        const mapped = mapReplayPatchLocation(pipeline, acceptedCommit, replay.commit, replayLocation, exec);
+        if (mapped && typeof mapped === "object") return { ok: false, error: mapped.error };
+        if (mapped === null || mapped !== acceptedPatch.locations[hunk].start) {
+          sameLocation = false;
+          break;
+        }
+      }
+      if (sameLocation) {
+        matched = index;
+        break;
+      }
+    }
+    if (matched === -1) dropped.push(acceptedCommit);
+    else replayedPatches.splice(matched, 1);
   }
   const merges = exec("git", ["rev-list", "--min-parents=2", "--parents", `${head}..${accepted}`], pipeline.worktreeDir);
   if (merges.code !== 0) return failure("checking accepted merge history", merges);
