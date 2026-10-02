@@ -191,6 +191,7 @@ import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
 import { resolveSiblings } from "@/lib/view/siblings";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { searchMemoryTool } from "@/lib/memory/mcp";
 import { validateSnapshotRequest } from "@/lib/view/validation";
 
 import {
@@ -265,7 +266,7 @@ export interface ViewerControlDependencies {
     headers?: Record<string, string>,
     context?: McpToolCallContext,
   ): Promise<Record<string, unknown>>;
-  /** #1490: ONE attempt, never repeated once the request may have reached the
+  /** #1490: never repeated once the request may have reached the
       Viewer. Throws {@link McpDispatchUncertainError} for every failure that
       cannot prove the server did nothing. Optional so a harness that supplies
       only `post` keeps working; the production set always provides it. */
@@ -284,6 +285,7 @@ const CONTROL_DEADLINE_RESERVE_MS = 250;
 const CONTROL_RETRY_BASE_MS = 100;
 const CONTROL_RETRY_MAX_MS = 1_000;
 const TRANSIENT_CONTROL_STATUSES = new Set([502, 504]);
+const controlLastResponseAt = new Map<string, number>();
 
 class ViewerControlResponseError extends Error {
   constructor(message: string) {
@@ -505,8 +507,9 @@ async function postViewerControl(
 }
 
 /**
- * One dispatch of a recoverable mutation (#1490). No reconnect loop: the
- * request is written once, and what comes back is classified by what it can
+ * One potentially received dispatch of a recoverable mutation (#1490). A
+ * send reconnects only after a kernel refusal proves no request was sent.
+ * What comes back is classified by what it can
  * PROVE. A connection the kernel refused never carried a byte, so the server
  * did nothing; a reset, a timeout after the write, an unreadable or missing
  * body, and a proxy status that says nothing about the upstream all leave the
@@ -527,37 +530,73 @@ async function dispatchViewerControl(
   const budgetMs = context.deadlineAt === undefined
     ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(1, context.deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, budgetMs), {
-    signal: context.signal,
-    reason: "Viewer control dispatch timed out",
-  });
+  const reconnectSend = pathname === "/api/tmux";
+  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, budgetMs);
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
   let response: Response;
+  let attempt: ReturnType<typeof deadlineSignal>;
+  let attempts = 0;
+  const refusedSend = () => {
+    const endpoint = new URL(pathname, baseUrl).origin;
+    const lastResponseAt = controlLastResponseAt.get(baseUrl);
+    const lastResponseAgeMs = lastResponseAt === undefined ? null : Math.max(0, Date.now() - lastResponseAt);
+    return new McpUnadmittedRefusal(
+      `Viewer control is unreachable at ${endpoint} after ${attempts} attempts: the connection was refused before the request was sent (last response age: ${lastResponseAgeMs === null ? "unknown" : `${lastResponseAgeMs} ms`})`,
+      { endpoint, lastResponseAgeMs },
+    );
+  };
   /* From here on the request may be on the wire: the service reads this to
      tell a failure that happened BEFORE any dispatch from one after it. */
   if (context.dispatch) context.dispatch.attempted = true;
-  try {
-    response = await fetch(new URL(pathname, baseUrl), {
-      method: "POST",
-      // Redirects can repeat a POST after the first endpoint accepted it.
-      redirect: "error",
-      headers: requestHeaders,
-      body: JSON.stringify(body),
-      signal: attempt.signal,
+  while (true) {
+    attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+      signal: context.signal,
+      reason: "Viewer control dispatch timed out",
     });
-  } catch (error) {
-    attempt.release();
-    const code = (error as { code?: unknown }).code;
-    if (code === "ConnectionRefused" || code === "ECONNREFUSED") {
-      throw new McpDispatchNotExecutedError("Viewer control is unreachable: the connection was refused before the request was sent");
+    attempts += 1;
+    try {
+      response = await fetch(new URL(pathname, baseUrl), {
+        method: "POST",
+        // Redirects can repeat a POST after the first endpoint accepted it.
+        redirect: "error",
+        headers: requestHeaders,
+        body: JSON.stringify(body),
+        signal: attempt.signal,
+      });
+      // fetch owns the socket pool; record the observable response age instead.
+      controlLastResponseAt.delete(baseUrl);
+      controlLastResponseAt.set(baseUrl, Date.now());
+      if (controlLastResponseAt.size > 32) controlLastResponseAt.delete(controlLastResponseAt.keys().next().value!);
+      break;
+    } catch (error) {
+      attempt.release();
+      const code = (error as { code?: unknown }).code;
+      if (code === "ConnectionRefused" || code === "ECONNREFUSED") {
+        if (!reconnectSend) {
+          throw new McpDispatchNotExecutedError("Viewer control is unreachable: the connection was refused before the request was sent");
+        }
+        const delayMs = controlRetryDelay(attempts);
+        if (!context.signal?.aborted && Date.now() + delayMs < expiresAt) {
+          // Every preceding attempt was affirmatively refused before sending.
+          // Keep the same durable binding, body and downstream key.
+          try {
+            await waitForControlRetry(delayMs, context.signal);
+          } catch {
+            // Cancellation here cannot turn a refused connection into a send.
+            throw refusedSend();
+          }
+          continue;
+        }
+        throw refusedSend();
+      }
+      throw new McpDispatchUncertainError(
+        attempt.signal.aborted
+          ? "the Viewer did not answer before the dispatch deadline; the request may have been received"
+          : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"})`,
+      );
     }
-    throw new McpDispatchUncertainError(
-      attempt.signal.aborted
-        ? "the Viewer did not answer before the dispatch deadline; the request may have been received"
-        : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"})`,
-    );
   }
   let parsed: unknown;
   let unreadable = false;
@@ -6437,6 +6476,7 @@ export function viewerMcpBindings(
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+    search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: (args, context) => conversationMessages(args, domainDependencies, context),

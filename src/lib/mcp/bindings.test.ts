@@ -3632,8 +3632,14 @@ test("the single dispatch classifies every transport outcome by what it can prov
     await viewer.stop(true);
   }
   /* A refused connection never carried the request: proven not executed. */
-  expect(await classify(send)).toMatchObject({ kind: "not-executed", value: expect.stringContaining("connection was refused") });
+  expect(await classify(send)).toMatchObject({
+    kind: "refusal", value: { message: expect.stringContaining("connection was refused"),
+      details: { outcome: "not-executed", nextAction: "retry-same-key", endpoint: viewer.url.origin } },
+  });
   expect(tracker.attempted).toBe(true);
+  // Spawn keeps its permanent single-attempt refusal contract.
+  expect(await classify(() => dispatch("/api/spawn", {}, {}, { deadlineAt: Date.now() + 2_000 })))
+    .toMatchObject({ kind: "not-executed" });
 });
 
 test("send and spawn bindings dispatch through the single-attempt seam with the persisted downstream key", async () => {

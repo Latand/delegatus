@@ -14,6 +14,7 @@ import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
 import { operatorLocale } from "@/lib/operator/settings";
+import { MEMORY_KINDS } from "@/lib/memory/parsers";
 import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
@@ -62,6 +63,7 @@ export const MCP_TOOL_NAMES = [
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
+  "search_memory",
   "get_conversation",
   "conversation_deliverability",
   "conversation_messages",
@@ -358,6 +360,9 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
   ],
   search_transcripts: [
     { path: ["limit"], min: 1, max: 100, fallback: 20 },
+  ],
+  search_memory: [
+    { path: ["limit"], min: 1, max: 20, fallback: 10 },
   ],
   get_conversation: [
     { path: ["maxRecords"], min: 1, max: 500, fallback: 100 },
@@ -2362,6 +2367,10 @@ export function createMcpToolService(
       const typedTool = toolName as McpToolName;
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       const effectiveArgs = normalized.args;
+      if (typedTool === "search_memory" && typeof effectiveArgs.clientRequestId === "string"
+        && effectiveArgs.clientRequestId.trim().length > 256) {
+        return failure(typedTool, null, "invalid_request", "clientRequestId must be at most 256 characters for search_memory", false);
+      }
       const callStartedAt = performance.now();
       const phaseDurations: Partial<Record<McpTimingPhase, number>> = {};
       context = { ...context, recordTiming: (phase, milliseconds) => {
@@ -2984,6 +2993,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
   "Recovery under the ORIGINAL `clientRequestId` (#1490): the claim is bound server-side to the calling conversation, its project, the canonical target and the exact downstream key BEFORE the one dispatch, and the request is sent exactly once — never re-POSTed after it may have reached Delegatus.",
   "Repeat the same call with the same arguments (with or without `recoveryOnly: true`) to learn what became of it. A fresh ordinary call claims and dispatches once; an existing claim is answered by READING the durable downstream record, never by dispatching again; `recoveryOnly: true` never claims an absent key or starts any work. Changed arguments under an existing key are an `idempotency_conflict`; another caller or project is refused without disclosure, and a caller whose identity the server cannot establish is refused (`caller_unidentified`) before anything is claimed or dispatched.",
   "The answer's `outcome` is closed: `accepted` (durably admitted, with its actual ids), `in-flight` (executing), `settled` (terminal, with the actual state and resend guidance), `not-executed` (the server proves dispatch never began and the attempt is permanently closed), or `unknown` (timeout, interrupted claim, an unreadable receipt record, unreadable or ambiguous evidence, or absence while execution is still possible). `nextAction` says what is permitted: on `unknown`, `accepted` and `in-flight` ONLY another lookup under the same key — `retryable` never means a new key may be used, and nothing is ever redelivered automatically. `message_receipt(operationId)` remains available for an accepted send.",
+  "For a direct `send_message`, a refused TCP connection is retried within the call only when the kernel proves no request was sent. If every attempt is refused, the unadmitted claim is released: the answer gives `outcome: not-executed`, `evidence: not-admitted` and `nextAction: retry-same-key`, and the caller may repeat the identical call under its original key. This exception never applies after a timeout, reset, proxy error or unreadable answer, when the request may have reached Delegatus.",
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
@@ -3060,6 +3070,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
   search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns newest messages first, with deterministic ties; duplicate bodies use their newest occurrence and undated messages use their indexed file time. Returns match snippets with speaker, timestamp, transcript path and byte offset. Pass nextCursor unchanged to continue the same ordering while new messages are indexed. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
+  search_memory: "Search the local read-only index of Claude and Codex memories, global instructions and single-fact skills. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with a fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
@@ -3582,6 +3593,14 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     project: z.string().trim().min(1).optional().describe("Canonical project key. Omit to search every indexed project."),
     cursor: z.string().min(1).optional().describe("Opaque cursor returned by the preceding page for this query and project."),
     limit: boundedNumericInput("search_transcripts", "limit"),
+  }).passthrough(),
+  search_memory: z.object({
+    clientRequestId: clientRequestIdSchema.max(256, "clientRequestId must be at most 256 characters for the bounded memory response"),
+    query: z.string().trim().min(1).max(2000).optional().describe("Terms to match in the shared memory index. Supply query or id."),
+    id: z.string().regex(/^m_[a-zA-Z0-9_]+$/).max(64).optional().describe("Open one search hit and record its opened outcome in the local ledger."),
+    project: z.string().trim().min(1).max(256).optional().describe("Canonical project key; includes that project's entries and global entries. Omit for cross-project search."),
+    kind: z.enum(MEMORY_KINDS).optional(),
+    limit: boundedNumericInput("search_memory", "limit"),
   }).passthrough(),
   get_conversation: z.object({
     clientRequestId: clientRequestIdSchema,
