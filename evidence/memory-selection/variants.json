@@ -1,0 +1,6266 @@
+{
+  "v1-desktop-light-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 811.109375,
+      "y": 183,
+      "width": 376.890625,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-light-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1099.78125,
+      "y": 183,
+      "width": 88.21875,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 720.15625,
+      "y": 183,
+      "width": 467.84375,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-light-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 874.90625,
+      "y": 183,
+      "width": 313.09375,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-light-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1080.8125,
+      "y": 183,
+      "width": 107.1875,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 742.671875,
+      "y": 183,
+      "width": 445.328125,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-light-story-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 811.109375,
+      "y": 183,
+      "width": 376.890625,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-dark-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1099.78125,
+      "y": 183,
+      "width": 88.21875,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-dark-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 720.15625,
+      "y": 183,
+      "width": 467.84375,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-dark-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-dark-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 874.90625,
+      "y": 183,
+      "width": 313.09375,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-dark-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1080.8125,
+      "y": 183,
+      "width": 107.1875,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-dark-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 742.671875,
+      "y": 183,
+      "width": 445.328125,
+      "height": 39.5
+    }
+  },
+  "v1-desktop-dark-story-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-phone-light-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-light-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 289.140625,
+      "y": 239.5,
+      "width": 88.859375,
+      "height": 39.75
+    }
+  },
+  "v1-phone-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-light-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-light-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 267.25,
+      "y": 261.25,
+      "width": 110.75,
+      "height": 39.75
+    }
+  },
+  "v1-phone-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-light-story-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-dark-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 289.140625,
+      "y": 239.5,
+      "width": 88.859375,
+      "height": 39.75
+    }
+  },
+  "v1-phone-dark-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-dark-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 5,
+    "incompleteEntries": 0,
+    "more": 10,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-dark-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-dark-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 267.25,
+      "y": 261.25,
+      "width": 110.75,
+      "height": 39.75
+    }
+  },
+  "v1-phone-dark-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v1-phone-dark-story-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-card-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v1-card-light-none-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v1-card-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v1-card-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v1-card-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v1-card-light-none-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v1-card-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v1-card-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v2-desktop-light-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 811.109375,
+      "y": 183,
+      "width": 376.890625,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-light-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1099.78125,
+      "y": 183,
+      "width": 88.21875,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 720.15625,
+      "y": 183,
+      "width": 467.84375,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-light-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 874.90625,
+      "y": 183,
+      "width": 313.09375,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-light-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1080.8125,
+      "y": 183,
+      "width": 107.1875,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 742.671875,
+      "y": 183,
+      "width": 445.328125,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-light-story-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 811.109375,
+      "y": 183,
+      "width": 376.890625,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-dark-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1099.78125,
+      "y": 183,
+      "width": 88.21875,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-dark-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 720.15625,
+      "y": 183,
+      "width": 467.84375,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-dark-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-dark-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 874.90625,
+      "y": 183,
+      "width": 313.09375,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-dark-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1080.8125,
+      "y": 183,
+      "width": 107.1875,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-dark-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 742.671875,
+      "y": 183,
+      "width": 445.328125,
+      "height": 39.5
+    }
+  },
+  "v2-desktop-dark-story-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24,
+      24,
+      24,
+      24,
+      24
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-phone-light-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-light-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 289.140625,
+      "y": 239.5,
+      "width": 88.859375,
+      "height": 39.75
+    }
+  },
+  "v2-phone-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-light-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-light-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 267.25,
+      "y": 261.25,
+      "width": 110.75,
+      "height": 39.75
+    }
+  },
+  "v2-phone-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-light-story-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-dark-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 289.140625,
+      "y": 239.5,
+      "width": 88.859375,
+      "height": 39.75
+    }
+  },
+  "v2-phone-dark-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-dark-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-dark-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-dark-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 267.25,
+      "y": 261.25,
+      "width": 110.75,
+      "height": 39.75
+    }
+  },
+  "v2-phone-dark-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v2-phone-dark-story-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-card-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v2-card-light-none-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v2-card-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v2-card-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v2-card-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v2-card-light-none-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v2-card-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v2-card-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v3-desktop-light-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 811.109375,
+      "y": 183,
+      "width": 376.890625,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-light-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1099.78125,
+      "y": 183,
+      "width": 88.21875,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 720.15625,
+      "y": 183,
+      "width": 467.84375,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-light-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28,
+      28,
+      28,
+      28,
+      28
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 874.90625,
+      "y": 183,
+      "width": 313.09375,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-light-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1080.8125,
+      "y": 183,
+      "width": 107.1875,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 742.671875,
+      "y": 183,
+      "width": 445.328125,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-light-story-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28,
+      28,
+      28,
+      28,
+      28
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 811.109375,
+      "y": 183,
+      "width": 376.890625,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-dark-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1099.78125,
+      "y": 183,
+      "width": 88.21875,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-dark-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 720.15625,
+      "y": 183,
+      "width": 467.84375,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-dark-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28,
+      28,
+      28,
+      28,
+      28
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 6,
+    "incompleteEntries": 0,
+    "more": 9,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-dark-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 874.90625,
+      "y": 183,
+      "width": 313.09375,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-dark-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 1080.8125,
+      "y": 183,
+      "width": 107.1875,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-dark-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 742.671875,
+      "y": 183,
+      "width": 445.328125,
+      "height": 39.5
+    }
+  },
+  "v3-desktop-dark-story-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28,
+      28,
+      28,
+      28,
+      28
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-phone-light-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 15,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-light-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 289.140625,
+      "y": 239.5,
+      "width": 88.859375,
+      "height": 39.75
+    }
+  },
+  "v3-phone-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-light-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 15,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-light-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 267.25,
+      "y": 261.25,
+      "width": 110.75,
+      "height": 39.75
+    }
+  },
+  "v3-phone-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-light-story-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-selecting-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-selecting-reduced-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-chosen-max-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 15,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-nothing-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-dark-skipped-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 289.140625,
+      "y": 239.5,
+      "width": 88.859375,
+      "height": 39.75
+    }
+  },
+  "v3-phone-dark-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-dark-story-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-selecting-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-selecting-reduced-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-chosen-max-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 15,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": true,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-dark-nothing-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-dark-skipped-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 267.25,
+      "y": 261.25,
+      "width": 110.75,
+      "height": 39.75
+    }
+  },
+  "v3-phone-dark-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 61.5
+    }
+  },
+  "v3-phone-dark-story-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "lineTexts": 5,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-card-light-chosen-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v3-card-light-none-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v3-card-light-failed-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v3-card-light-chosen-open-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v3-card-light-chosen-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v3-card-light-none-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v3-card-light-failed-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 59
+    }
+  },
+  "v3-card-light-chosen-open-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 4,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [],
+    "lineAnimations": 0,
+    "opened": "",
+    "bubble": {
+      "x": 140.5,
+      "y": 200,
+      "width": 310.5,
+      "height": 98
+    }
+  },
+  "v1-desktop-light-geometry-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-desktop-light-geometry-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v1-phone-light-geometry-uk": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v1-phone-light-geometry-en": {
+    "overflowX": 0,
+    "stripNumber": "1",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-sweep"
+    ],
+    "lineAnimations": 1,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-desktop-light-geometry-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-desktop-light-geometry-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      24
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v2-phone-light-geometry-uk": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v2-phone-light-geometry-en": {
+    "overflowX": 0,
+    "stripNumber": "2",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-scan"
+    ],
+    "lineAnimations": 3,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-desktop-light-geometry-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-desktop-light-geometry-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      28
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 696.375,
+      "y": 183,
+      "width": 491.625,
+      "height": 59
+    }
+  },
+  "v3-phone-light-geometry-uk": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 239.5,
+      "width": 314.75,
+      "height": 105
+    }
+  },
+  "v3-phone-light-geometry-en": {
+    "overflowX": 0,
+    "stripNumber": "3",
+    "lineHeights": [
+      44
+    ],
+    "lineTexts": 1,
+    "wrappedLines": 0,
+    "smallControls": 0,
+    "intersectingControls": 0,
+    "entries": 0,
+    "incompleteEntries": 0,
+    "more": null,
+    "sheet": false,
+    "animationFamilies": [
+      "memory-fill"
+    ],
+    "lineAnimations": 2,
+    "opened": "",
+    "bubble": {
+      "x": 63.25,
+      "y": 261.25,
+      "width": 314.75,
+      "height": 105
+    }
+  }
+}

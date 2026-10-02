@@ -698,3 +698,77 @@ body {
   .press-scale:active:not(:disabled) { scale: 0.96; position: relative; }
   .press-scale:active:not(:disabled)::after { content: ""; position: absolute; inset: calc(-2.5% - 2px); }
 }
+
+/* --- Memory in the conversation: prototype motion (docs/design/memory-in-conversation.md §2.4, §3) ---
+   Four effects, one per state of a selection. Each carries its own unlayered
+   reduced-motion rule as well as `motion-reduce:` on the element, because an
+   unlayered rule outranks a utility. `--memory-phase` freezes a frame for the
+   evidence driver by pausing at a negative delay. */
+@keyframes memory-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+.memory-sweep {
+  background: linear-gradient(90deg, var(--color-muted) 0 40%, var(--color-accent) 50%, var(--color-muted) 60% 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: memory-sweep 1.6s linear infinite;
+}
+@keyframes memory-scan {
+  0% {
+    opacity: 0.3;
+  }
+  20% {
+    opacity: 1;
+  }
+  40%,
+  100% {
+    opacity: 0.3;
+  }
+}
+.memory-scan-dot {
+  animation: memory-scan 1.6s ease-in-out infinite;
+}
+@keyframes memory-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.memory-fill {
+  animation: memory-fill 1500ms linear forwards;
+}
+@keyframes memory-settle {
+  from {
+    opacity: 0;
+  }
+}
+.memory-settle {
+  animation: memory-settle 200ms var(--ease-standard, ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .memory-sweep {
+    animation: none;
+    background: none;
+    color: var(--color-muted);
+  }
+  .memory-scan-dot {
+    animation: none;
+    opacity: 1;
+  }
+  .memory-fill {
+    animation: none;
+    transform: scaleX(0);
+  }
+  .memory-settle {
+    animation: none;
+  }
+}

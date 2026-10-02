@@ -12,7 +12,7 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
@@ -34,7 +34,20 @@ import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceB
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
+import { UserMessageRow } from "@/components/feed/UserMessageRow";
+import { CopyButton } from "@/components/feed/CopyButton";
+import { MESSAGE_ACTION } from "@/components/feed/actionStyles";
+import { tr } from "@/components/feed/parse";
+import { onArtifactPreview } from "@/components/preview/previewBus";
+import { useIsMobile } from "@/hooks/useIsMobile";
+
 import { LiveTurnRows } from "./LiveTurnRows";
+import {
+  MemorySelection,
+  type MemoryOfferFixture,
+  type MemorySelectionFixture,
+  type MemoryVariant,
+} from "./MemorySelection";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
   enqueueOutbox,
@@ -87,7 +100,8 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
-  | "agent-images";
+  | "agent-images"
+  | "memory-selection";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -1053,6 +1067,266 @@ function AgentImagesFixture() {
   );
 }
 
+/* Memory in the conversation (docs/design/memory-in-conversation.md): three
+   variants of how Jev's choosing, and the memory it chose, sit beside an
+   operator's message. The operator message is the production `UserMessageRow`,
+   the agent rows are the production `FeedItem` over invented Claude lines, and
+   the memory element is the prototype `MemorySelection` reading selections
+   shaped like the ledger offer (§5). Everything is invented: no real memory
+   text, account, handle or absolute path, and the clock is frozen. */
+const MEMORY_NOW = Date.parse("2026-10-02T18:30:00Z");
+const MEMORY_FILE = IMAGE_FILES.claude;
+const MEMORY_VARIANTS: Record<MemoryVariant, { uk: string; en: string }> = {
+  1: { uk: "Під повідомленням", en: "Attached" },
+  2: { uk: "Крок ходу", en: "Turn step" },
+  3: { uk: "Між вами", en: "Between you" },
+};
+
+const CODEX_MEMORY = "$HOME/.codex/memories/MEMORY.md";
+
+function offer(
+  n: number, engine: MemoryOfferFixture["engine"], kind: MemoryOfferFixture["kind"], writtenAt: string, score: number,
+  title: string, summary: string, source: MemoryOfferFixture["source"], chars = 640,
+): MemoryOfferFixture {
+  return { memoryId: `m_${(0xa1b2c0 + n * 977).toString(16)}`, engine, kind, writtenAt, title, summary, score, chars, source, outcome: null };
+}
+
+/** The standard selection: a Claude conversation is offered Codex and shared entries. */
+const STANDARD_OFFERS: MemoryOfferFixture[] = [
+  offer(1, "codex", "failure", "2026-09-30T09:12:00Z", 0.93,
+    "Release smoke suite needs an isolated state directory",
+    "Run it with LLV_STATE_DIR pointed at a temp directory; against live state it stops the host that owns the session.",
+    { path: CODEX_MEMORY, line: 214 }),
+  offer(2, "codex", "project_fact", "2026-09-23T14:40:00Z", 0.86,
+    "The release lane owns promotion; the seat only reports",
+    "A promotion stuck at verify-candidate belongs to the release lane. The seat reports it and restarts nothing.",
+    { path: CODEX_MEMORY, line: 188 }),
+  offer(3, "shared", "instruction", "2026-08-30T08:00:00Z", 0.78,
+    "Stop only processes you started",
+    "Stop by the PID you recorded; a port already in use is a reason to pick another port.",
+    { path: "$HOME/.agents/instructions/processes.md", line: 12 }),
+  offer(4, "codex", "reference", "2026-08-12T11:05:00Z", 0.71,
+    "Where release notes are drafted before a tag, and which headings the publish workflow expects in them so that the changelog step renders every section",
+    "Drafts live beside the workflow; a heading that does not match makes the changelog step skip that section without an error.",
+    { path: CODEX_MEMORY, line: 96 }),
+];
+
+/** The full selection: a Codex conversation is offered Claude and shared entries, 15 of them. */
+const MAX_OFFERS: MemoryOfferFixture[] = (() => {
+  const claude = (p: string) => ({ path: `$HOME/.claude/projects/demo/memory/${p}.md`, line: 1 });
+  const shared = (p: string) => ({ path: `$HOME/.agents/instructions/${p}.md`, line: 1 });
+  const rows: Array<[MemoryOfferFixture["engine"], MemoryOfferFixture["kind"], string, string, MemoryOfferFixture["source"]]> = [
+    ["claude", "preference", "Prefer small commits that each pass the local gate", "One concern per commit keeps a revert cheap and the gate's output readable.", claude("small-commits")],
+    ["shared", "instruction", "Never run broad test sweeps against live state", "Run the specific files you touched by path; a sweep acts on whatever the shared registry holds.", shared("live-state")],
+    ["claude", "failure", "A stale lockfile made the build agent loop on install", "Delete the lockfile in the temp worktree, not in the main checkout, then reinstall.", claude("lockfile-loop")],
+    ["claude", "project_fact", "Staging deploys use the candidate image, not the working tree", "The working tree is never what ships; verify-candidate builds the image first.", claude("candidate-image")],
+    ["shared", "skill", "Bisect a flaky browser test in a throwaway worktree", "Pin the seed, run twenty times, halve the commit range until one commit flips the result.", shared("bisect-flaky")],
+    ["claude", "reference", "Where the design briefs for phone screens are kept", "Briefs live under docs/design; the phone ones are grouped in the mobile folder with their frames.", claude("phone-briefs")],
+    ["shared", "instruction", "Name every account as account A or account B in public text", "Public surfaces carry no handles, emails or home paths; keep paths relative.", shared("public-text")],
+    ["claude", "failure", "Retrying a failed push without fetching hides the real conflict", "Fetch first; the second push failure names the file that actually collided, which the first one did not.", claude("push-conflict")],
+    ["claude", "preference", "The operator reads progress notes in Ukrainian", "Every visible line between tool calls is Ukrainian, including short status updates.", claude("progress-language")],
+    ["shared", "instruction", "Report stage results through the stage report call only", "A finished stage ends with one structured report; prose endings are ignored by the pipeline.", shared("stage-report")],
+    ["claude", "project_fact", "The migration order for the three state files matters: the inbox is read first, then the ledger, then the account map, and a reversed order silently drops the pending receipts until the next boot", "If receipts vanish after a restart, check the order the three imports ran in before suspecting the stores themselves.", claude("migration-order")],
+    ["shared", "skill", "Capture a rendered frame with the existing driver", "Add a case to the driver that exists and gate it by environment variable; never write a one-shot capture script.", shared("capture-frame")],
+    ["claude", "reference", "Where the evidence JSON for a conversation window is written", "The driver writes readings to evidence/<slug>/ and frames to a temp artifacts directory that is kept out of git, for example $HOME/.artifacts/conversation-window/memory-selection/very-long-token-without-any-break-opportunity-0123456789abcdef0123456789abcdef.png, and the committed JSON is the record that outlives the driver.", claude("evidence-json")],
+    ["claude", "failure", "A phone frame without touch emulation measures the wrong controls", "A 390 px context with a mouse is not a phone; the coarse-pointer sizes only apply with touch.", claude("touch-emulation")],
+    ["shared", "instruction", "Copy variants as numbered options the operator can pick from", "Design arrives as numbered variants with the number printed on every frame.", shared("numbered-variants")],
+  ];
+  const dayOffsets = [0, 1, 2, 4, 6, 9, 14, 20, 28, 37, 48, 60, 72, 92, 110];
+  const chars = [820, 700, 640, 690, 610, 560, 720, 650, 600, 580, 760, 540, 620, 500, 560];
+  return rows.map(([engine, kind, title, summary, source], index) => {
+    const written = new Date(MEMORY_NOW - dayOffsets[index]! * 86_400_000 - 3_600_000).toISOString();
+    const score = Math.round((0.97 - index * (0.27 / 14)) * 100) / 100;
+    return offer(100 + index, engine, kind, written, score, title, summary, source, chars[index]);
+  });
+})();
+
+type MemoryMessageKey = "main" | "skipped" | "none" | "failed" | "tail";
+
+const MEMORY_MESSAGES: Record<MemoryMessageKey, { uk: string; en: string }> = {
+  main: {
+    uk: "Подивись, чому реліз застряг на verify-candidate, і скажи, яка лінія за це відповідає. Якщо це знову хост, нічого не перезапускай без мене.",
+    en: "Look at why the release is stuck on verify-candidate and tell me which lane owns it. If it's the host again, don't restart anything without me.",
+  },
+  skipped: { uk: "ок, давай", en: "ok, go ahead" },
+  none: { uk: "Перейменуй картку на «Перевірка хоста перед релізом».", en: "Rename the card to “Host check before release”." },
+  failed: {
+    uk: "Збери одним списком усе, що ми вже знаємо про таймаути збірки на CI.",
+    en: "Collect everything we already know about CI build timeouts into one list.",
+  },
+  tail: { uk: "А тепер перевір, чи той самий збій є на попередньому тезі.", en: "Now check whether the same failure exists on the previous tag." },
+};
+
+const MEMORY_REPLIES: Record<"before" | MemoryMessageKey, { uk: string[]; en: string[] }> = {
+  before: {
+    uk: ["Реліз 2.14 зібрано, чекаю на перевірку кандидата.", "Скажи, коли дивитись далі."],
+    en: ["Release 2.14 is built and waiting for the candidate check.", "Tell me when to look further."],
+  },
+  main: {
+    uk: ["Перевірка кандидата зависла на старті хоста; лінію релізу вже сповіщено.", "Хост я не чіпав."],
+    en: ["The candidate check hung at the host's start; the release lane is already notified.", "I did not touch the host."],
+  },
+  skipped: { uk: ["Продовжую з того місця, де зупинився."], en: ["Continuing from where I stopped."] },
+  none: { uk: ["Картку перейменовано."], en: ["The card is renamed."] },
+  failed: {
+    uk: ["Зібрав список із чотирьох таймаутів: два на кешуванні залежностей і два на браузерних тестах."],
+    en: ["Collected four timeouts: two on dependency caching and two on browser tests."],
+  },
+  tail: { uk: [], en: [] },
+};
+
+function memorySelection(state: MemorySelectionFixture["state"], key: MemoryMessageKey, extra: Partial<MemorySelectionFixture> = {}): MemorySelectionFixture {
+  const startedAt = "2026-10-02T18:29:58.000Z";
+  const settle = (ms: number) => new Date(Date.parse(startedAt) + ms).toISOString();
+  const base = { requestId: `req_${key}`, conversationId: "conversation_memory", messageKey: `message:${key}`, startedAt, offers: [] as MemoryOfferFixture[] };
+  switch (state) {
+    case "selecting": return { ...base, state, considered: 30, ...extra };
+    case "offered": return { ...base, state, considered: 30, settledAt: settle(1100), offers: STANDARD_OFFERS, ...extra };
+    case "none": return { ...base, state, considered: 30, settledAt: settle(800), ...extra };
+    case "skipped": return { ...base, state, reason: "short", ...extra };
+    case "failed": return { ...base, state, reason: "timeout", settledAt: settle(1500), ...extra };
+  }
+}
+
+function replyItems(key: "before" | MemoryMessageKey, lang: Locale, withTool: boolean): Item[] {
+  const at = "2026-10-02T18:30:03.000Z";
+  const lines: string[] = [];
+  if (withTool) {
+    lines.push(
+      JSON.stringify({ type: "assistant", timestamp: "2026-10-02T18:30:01.000Z", message: { content: [{ type: "tool_use", id: `toolu-${key}`, name: "Bash", input: { command: "gh run view --log-failed" } }] } }),
+      JSON.stringify({ type: "user", timestamp: "2026-10-02T18:30:03.400Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu-${key}`, content: "verify-candidate: waiting for host" }] } }),
+    );
+  }
+  for (const text of MEMORY_REPLIES[key][lang]) {
+    lines.push(JSON.stringify({ type: "assistant", timestamp: at, message: { content: [{ type: "text", text }] } }));
+  }
+  return lines.length ? buildFeed(MEMORY_FILE, lines, false, "").items : [];
+}
+
+/** One operator message, the memory element in the variant's place, and the start of the agent's turn. */
+function MemoryExchange({ variant, selection, text, replies, initiallyOpen = false, phaseMs, live = false }: {
+  variant: MemoryVariant;
+  selection: MemorySelectionFixture;
+  text: string;
+  replies: Item[];
+  initiallyOpen?: boolean;
+  phaseMs?: number;
+  live?: boolean;
+}) {
+  const mobile = useIsMobile();
+  const [open, setOpen] = useState(initiallyOpen);
+  const [touched, setTouched] = useState(false);
+  const props = {
+    selection, variant, now: MEMORY_NOW, phaseMs, open, animateOpen: touched, animateSettle: live, messageText: text,
+    onToggle: () => { setTouched(true); setOpen((value) => !value); },
+  };
+  /* Variant 1 owns two slots on the phone: its line shares Copy's action row,
+     and its cards go under the bubble. Elsewhere the row is one piece. */
+  const message = variant === 1 ? (
+    <UserMessageRow
+      text={text}
+      action={mobile ? (
+        <>
+          <MemorySelection {...props} placement="line" />
+          <CopyButton text={text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
+        </>
+      ) : undefined}
+      below={<MemorySelection {...props} placement={mobile ? "detail" : "row"} />}
+    />
+  ) : <UserMessageRow text={text} />;
+  return (
+    <div data-memory-exchange={selection.requestId}>
+      {message}
+      {variant === 1 ? null : <MemorySelection {...props} placement="row" />}
+      {replies.map((item, index) => <FeedItem key={index} item={item} />)}
+    </div>
+  );
+}
+
+function MemorySelectionCase() {
+  const { locale } = useLocale();
+  const variant = Number(params.get("variant") ?? "1") as MemoryVariant;
+  const state = params.get("state") ?? "chosen";
+  const phase = Number(params.get("phase") ?? "600");
+  const card = params.get("card") === "1";
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [opened, setOpened] = useState<string[]>([]);
+  useEffect(() => onArtifactPreview((request) => setOpened((all) => [...all, request.path])), []);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (state !== "live") return;
+    const timer = setTimeout(() => setSettled(true), 1100);
+    return () => clearTimeout(timer);
+  }, [state]);
+
+  /* `msg` keeps one message across states, so a driver can compare what only the selection changes. */
+  const forced = params.get("msg") as MemoryMessageKey | null;
+  const message = (key: MemoryMessageKey) => MEMORY_MESSAGES[forced ?? key][locale];
+  const exchanges: ReactNode[] = [];
+  const before = replyItems("before", locale, false);
+  const common = { variant };
+  if (state === "story") {
+    exchanges.push(
+      <MemoryExchange key="main" {...common} selection={memorySelection("offered", "main")} text={message("main")} replies={replyItems("main", locale, true)} />,
+      <MemoryExchange key="skipped" {...common} selection={memorySelection("skipped", "skipped")} text={message("skipped")} replies={replyItems("skipped", locale, false)} />,
+      <MemoryExchange key="none" {...common} selection={memorySelection("none", "none")} text={message("none")} replies={replyItems("none", locale, false)} />,
+      <MemoryExchange key="failed" {...common} selection={memorySelection("failed", "failed")} text={message("failed")} replies={replyItems("failed", locale, false)} />,
+      <MemoryExchange key="tail" {...common} selection={memorySelection("selecting", "tail")} text={message("tail")} replies={[]} phaseMs={phase} />,
+    );
+  } else {
+    const kind: Record<string, [MemorySelectionFixture["state"], MemoryMessageKey]> = {
+      selecting: ["selecting", "main"], chosen: ["offered", "main"], "chosen-open": ["offered", "main"], "chosen-max": ["offered", "main"],
+      nothing: ["none", "none"], skipped: ["skipped", "skipped"], failed: ["failed", "failed"], live: [settled ? "offered" : "selecting", "main"],
+    };
+    const [selectionState, key] = kind[state] ?? kind.chosen!;
+    const selection = memorySelection(selectionState, key, state === "chosen-max" ? { offers: MAX_OFFERS } : {});
+    exchanges.push(
+      <MemoryExchange
+        key={`${state}-${selectionState}`}
+        {...common}
+        selection={selection}
+        text={message(key)}
+        replies={selectionState === "selecting" ? [] : replyItems(key, locale, key === "main")}
+        initiallyOpen={state === "chosen-open" || state === "chosen-max"}
+        phaseMs={state === "live" ? undefined : phase}
+        live={state === "live"}
+      />,
+    );
+  }
+
+  const feed = (
+    <div className="px-3 pb-3 text-body" data-memory-feed>
+      <div className="py-3">
+        {before.map((item, index) => <FeedItem key={index} item={item} />)}
+        {exchanges}
+      </div>
+    </div>
+  );
+  return (
+    <div
+      data-evidence-case="memory-selection"
+      data-memory-frame-variant={variant}
+      data-memory-opened={opened.join("|")}
+      className="flex min-h-dvh flex-col bg-canvas text-primary"
+    >
+      {/* The variant number, printed on every frame, outside the feed so it covers nothing. */}
+      <div data-memory-strip className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-raised px-3 text-[12px] font-semibold leading-4 text-primary">
+        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent px-1.5 text-label font-semibold tabular-nums text-white" data-memory-strip-number>{variant}</span>
+        <span className="min-w-0">
+          <span className="block truncate">{`${locale === "uk" ? "Варіант" : "Variant"} ${variant} · ${MEMORY_VARIANTS[variant][locale]}`}</span>
+          <span className="block truncate font-normal text-secondary">{`${state}${reduced && state === "selecting" ? "-reduced" : ""} · ${locale} · ${dark ? "dark" : "light"}`}</span>
+        </span>
+      </div>
+      {card ? (
+        <div className="ml-6 mt-4 w-[440px] rounded-surface border border-border bg-canvas" data-memory-card>{feed}</div>
+      ) : (
+        <div className="mx-auto w-full max-w-[960px]">{feed}</div>
+      )}
+    </div>
+  );
+}
+
 function DeliverySettlementFixture() {
   const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
   const [sends, setSends] = useState(0);
@@ -1079,6 +1353,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
+  if (id === "memory-selection") return <MemorySelectionCase />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;

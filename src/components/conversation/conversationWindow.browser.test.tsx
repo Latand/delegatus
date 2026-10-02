@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -1724,4 +1724,276 @@ describe("delivery outcome settlement", () => {
       fs.writeFileSync("evidence/delivery-outcome/receipts.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
+});
+
+describe("memory selection: three variants", () => {
+  /*
+   * Rendered evidence for docs/design/memory-in-conversation.md: three
+   * variants of how the conversation shows Jev choosing memory and the memory
+   * it chose, over the production `UserMessageRow` and `FeedItem`, at desktop
+   * 1440 and phone 390, light and dark, in uk and en. The variant number is
+   * printed on every frame, and the frames are named
+   * `v<N>-<surface>-<state>-<locale>.png`.
+   *
+   * Run:
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "memory selection"
+   *
+   * Frames go to `LLV_MEMORY_SELECTION_OUT` (default `.artifacts/memory-selection/`,
+   * not committed); the readings go to `evidence/memory-selection/variants.json`.
+   */
+
+  const OUT = path.resolve(process.env.LLV_MEMORY_SELECTION_OUT ?? ".artifacts/memory-selection");
+  const EVIDENCE = path.resolve("evidence/memory-selection");
+  const VARIANTS = [1, 2, 3] as const;
+  const SURFACES = [
+    { name: "desktop-light", width: 1440, height: 900, touch: false, scheme: "light" },
+    { name: "desktop-dark", width: 1440, height: 900, touch: false, scheme: "dark" },
+    { name: "phone-light", width: 390, height: 844, touch: true, scheme: "light" },
+    { name: "phone-dark", width: 390, height: 844, touch: true, scheme: "dark" },
+  ] as const;
+  const STATES = ["selecting", "selecting-reduced", "chosen", "chosen-open", "chosen-max", "nothing", "skipped", "failed", "story"] as const;
+  const LANGS = ["uk", "en"] as const;
+  /** How many entries each variant shows expanded before «Show N more». */
+  const SHOWN = { 1: 5, 2: 6, 3: 6 } as const;
+
+  interface MemoryReading {
+    overflowX: number;
+    stripNumber: string | null;
+    lineHeights: number[];
+    lineTexts: number;
+    wrappedLines: number;
+    smallControls: number;
+    intersectingControls: number;
+    entries: number;
+    incompleteEntries: number;
+    more: number | null;
+    sheet: boolean;
+    animationFamilies: string[];
+    lineAnimations: number;
+    opened: string;
+    bubble: { x: number; y: number; width: number; height: number } | null;
+  }
+
+  const readings: Record<string, MemoryReading> = {};
+
+  async function read(page: import("playwright-core").Page): Promise<MemoryReading> {
+    return page.evaluate(() => {
+      const visible = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const lines = [...document.querySelectorAll("[data-memory-line]")];
+      /* An open sheet makes the feed behind its scrim inert, so only the sheet's own controls count. */
+      const scope: ParentNode = document.querySelector('[data-mobile2-sheet="memory"]') ?? document;
+      const controls = [...scope.querySelectorAll("[data-memory-exchange] button, button")].filter((control) => visible(control) && control.closest("[data-memory-exchange]") !== null);
+      const rects = controls.map((control) => control.getBoundingClientRect());
+      let intersecting = 0;
+      for (let a = 0; a < rects.length; a += 1) {
+        for (let b = a + 1; b < rects.length; b += 1) {
+          const x = Math.min(rects[a]!.right, rects[b]!.right) - Math.max(rects[a]!.left, rects[b]!.left);
+          const y = Math.min(rects[a]!.bottom, rects[b]!.bottom) - Math.max(rects[a]!.top, rects[b]!.top);
+          if (x > 0.5 && y > 0.5) intersecting += 1;
+        }
+      }
+      const coarse = window.matchMedia("(pointer: coarse)").matches;
+      const lineControls = lines.flatMap((line) => [...line.querySelectorAll("button")].concat(line.tagName === "BUTTON" ? [line] : [])).filter(visible);
+      const memoryControls = [...scope.querySelectorAll("[data-memory-line] button, [data-memory-open], [data-memory-more], [data-memory-detail] button")].filter(visible);
+      const entries = [...document.querySelectorAll("[data-memory-offer]")];
+      const wrapped = lines.flatMap((line) => [...line.querySelectorAll("span[title]")]).filter((text) => {
+        const style = getComputedStyle(text);
+        return text.getBoundingClientRect().height > parseFloat(style.lineHeight || "16") * 1.6;
+      });
+      const animations = document.getAnimations().filter((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target;
+        return target ? target.closest("[data-memory-line]") !== null : false;
+      }) as CSSAnimation[];
+      const bubble = document.querySelector("[data-memory-exchange] [data-user-bubble]")?.getBoundingClientRect();
+      return {
+        overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+        stripNumber: document.querySelector("[data-memory-strip-number]")?.textContent ?? null,
+        lineHeights: lines.map((line) => line.getBoundingClientRect().height),
+        lineTexts: lines.length,
+        wrappedLines: wrapped.length,
+        /* Phone: every control the element draws is at least 44 × 44. Desktop: at least 24 tall. */
+        smallControls: (coarse ? memoryControls : lineControls).filter((control) => {
+          const rect = control.getBoundingClientRect();
+          return coarse ? rect.height < 43.5 || rect.width < 43.5 : rect.height < 23.5;
+        }).length,
+        intersectingControls: intersecting,
+        entries: entries.length,
+        incompleteEntries: entries.filter((entry) => !(
+          entry.getAttribute("data-memory-engine") && entry.getAttribute("data-memory-date") && entry.getAttribute("data-memory-title")
+          && entry.getAttribute("data-memory-summary") && entry.querySelector("[data-memory-score]")?.getAttribute("data-memory-score")
+          && entry.querySelector("[data-memory-open]") && (entry.querySelector("[data-memory-badge]") || /Claude|Codex|Інструкції|Instructions|Навичка|Skill/.test(entry.textContent ?? ""))
+        )).length,
+        more: Number(document.querySelector("[data-memory-more]")?.getAttribute("data-memory-more") ?? "") || null,
+        sheet: Boolean(document.querySelector('[data-mobile2-sheet="memory"]')),
+        animationFamilies: [...new Set(animations.map((animation) => animation.animationName))],
+        lineAnimations: animations.length,
+        opened: document.querySelector("[data-evidence-case]")?.getAttribute("data-memory-opened") ?? "",
+        bubble: bubble ? { x: bubble.x, y: bubble.y, width: bubble.width, height: bubble.height } : null,
+      };
+    });
+  }
+
+  async function openFrame(browser: Browser, base: string, query: string, surface: (typeof SURFACES)[number] | { width: number; height: number; touch: boolean; scheme: "light" | "dark" }, lang: "uk" | "en", motion: "no-preference" | "reduce" = "no-preference") {
+    const opened = await openFixture(browser, `${base}?case=memory-selection&lang=${lang}&${query}`, { width: surface.width, height: surface.height }, surface.scheme, lang, motion, surface.touch);
+    await opened.page.waitForSelector('[data-evidence-case="memory-selection"] [data-memory-selection]');
+    await opened.page.evaluate(() => document.fonts.ready);
+    /* A sheet rises over 320 ms; a frame is taken once every transition has finished. The
+       selecting animations are paused by `phase`, so they are not transitions and do not wait. */
+    await opened.page.evaluate(() => Promise.all(
+      document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished.catch(() => undefined)),
+    ));
+    return opened;
+  }
+
+  async function captureVariant(variant: (typeof VARIANTS)[number]) {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const surface of SURFACES) {
+        for (const lang of LANGS) {
+          for (const state of STATES) {
+            const reduced = state === "selecting-reduced";
+            const query = `variant=${variant}&state=${reduced ? "selecting" : state}&phase=600`;
+            const { context, page, pageErrors } = await openFrame(browser, served.base, query, surface, lang, reduced ? "reduce" : "no-preference");
+            const key = `v${variant}-${surface.name}-${state}-${lang}`;
+            try {
+              const reading = await read(page);
+              readings[key] = reading;
+              await page.screenshot({ path: path.join(OUT, `${key}.png`), fullPage: true });
+              expect(pageErrors, key).toEqual([]);
+              /* 1 · nothing scrolls sideways. 2 · the variant number is on the frame. */
+              expect(reading.overflowX, `${key} overflow`).toBe(0);
+              expect(reading.stripNumber, `${key} strip`).toBe(String(variant));
+              /* 4 · every collapsed element is one line. */
+              expect(reading.wrappedLines, `${key} wrapped`).toBe(0);
+              /* 5 · targets: a finger gets 44 × 44 and no two controls overlap. */
+              expect(reading.smallControls, `${key} small controls`).toBe(0);
+              expect(reading.intersectingControls, `${key} intersecting controls`).toBe(0);
+              /* 6 · every expanded entry carries all six parts. */
+              expect(reading.incompleteEntries, `${key} incomplete entries`).toBe(0);
+              if (state === "chosen-open") expect(reading.entries, key).toBe(4);
+              if (state === "chosen-max") {
+                const shown = variant === 3 && surface.touch ? 15 : SHOWN[variant];
+                expect(reading.entries, key).toBe(shown);
+                expect(reading.more, key).toBe(shown === 15 ? null : 15 - shown);
+              }
+              if (variant === 3 && surface.touch && (state === "chosen-open" || state === "chosen-max")) expect(reading.sheet, key).toBe(true);
+              /* No «open» was clicked, and nothing here called a memory route. */
+              expect(reading.opened, key).toBe("");
+              /* 7 · motion: none under reduced motion; exactly one family while selecting. */
+              if (reduced) expect(reading.lineAnimations, `${key} reduced motion`).toBe(0);
+              else if (state === "selecting") expect(reading.animationFamilies, key).toHaveLength(1);
+              else if (state !== "story") expect(reading.lineAnimations, key).toBe(0);
+              /* A settled state keeps its height: the line is as tall as the selecting one. */
+              if (state === "story") expect(reading.lineTexts, key).toBe(5);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+      /* The narrow card: a 440 px compact feed on a 1440 canvas. */
+      for (const lang of LANGS) {
+        const card = { width: 1440, height: 900, touch: false, scheme: "light" } as const;
+        for (const state of ["chosen", "none", "failed"] as const) {
+          const { context, page } = await openFrame(browser, served.base, `variant=${variant}&state=${state === "none" ? "nothing" : state}&card=1`, card, lang);
+          try {
+            const reading = await read(page);
+            readings[`v${variant}-card-light-${state}-${lang}`] = reading;
+            expect(reading.wrappedLines, `card ${state}`).toBe(0);
+            expect(reading.overflowX).toBe(0);
+          } finally {
+            await context.close();
+          }
+        }
+        const { context, page, pageErrors } = await openFrame(browser, served.base, `variant=${variant}&state=chosen-open&card=1`, card, lang);
+        try {
+          const reading = await read(page);
+          readings[`v${variant}-card-light-chosen-open-${lang}`] = reading;
+          await page.screenshot({ path: path.join(OUT, `v${variant}-card-light-chosen-open-${lang}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+          expect(reading.incompleteEntries).toBe(0);
+          expect(reading.overflowX).toBe(0);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }
+
+  for (const variant of VARIANTS) {
+    browserTest(`variant ${variant}: every state, both surfaces, both languages`, () => captureVariant(variant), 600_000);
+  }
+
+  browserTest("the bubble and the collapsed element do not move when a selection settles", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const variant of VARIANTS) {
+        for (const surface of SURFACES.filter((candidate) => candidate.scheme === "light")) {
+          for (const lang of LANGS) {
+            const rows: MemoryReading[] = [];
+            for (const state of ["selecting", "chosen", "nothing", "skipped", "failed"]) {
+              /* The same message in every state, so the only thing that changes is the selection. */
+              const { context, page } = await openFrame(browser, served.base, `variant=${variant}&state=${state}&msg=main&phase=600`, surface, lang);
+              try {
+                rows.push(await read(page));
+              } finally {
+                await context.close();
+              }
+            }
+            const first = rows[0]!;
+            for (const row of rows) {
+              expect(row.bubble, `v${variant} ${surface.name} ${lang}`).toEqual(first.bubble);
+              expect(row.lineHeights[0]!, `v${variant} ${surface.name} ${lang} line height`).toBeCloseTo(first.lineHeights[0]!, 1);
+            }
+            readings[`v${variant}-${surface.name}-geometry-${lang}`] = first;
+          }
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 600_000);
+
+  /* Opening an entry goes through the artifact preview and never through the ledger's route. */
+  browserTest("«Open» goes to the artifact preview and writes no outcome", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      const { context, page } = await openFrame(browser, served.base, "variant=1&state=chosen-open&phase=600", SURFACES[0], "en");
+      const requests: string[] = [];
+      page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+      try {
+        await page.locator("[data-memory-open]").first().click();
+        expect(await page.locator("[data-evidence-case]").getAttribute("data-memory-opened")).toBe("$HOME/.codex/memories/MEMORY.md:214");
+        expect(requests.filter((request) => request.startsWith("/api/search/memory"))).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 120_000);
+
+  afterAll(() => {
+    if (Object.keys(readings).length === 0) return;
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(path.join(EVIDENCE, "variants.json"), JSON.stringify(readings, null, 2) + "\n");
+  });
 });
