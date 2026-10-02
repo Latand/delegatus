@@ -3,6 +3,30 @@
   "cases": [
     {
       "id": "p01",
+      "prompt": "Explain the repository to a newcomer and inspect it for private data and unused code.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "A past seed import required verified input files.",
+          "helpful": false,
+          "reason": "An isolated historical loader pitfall does not answer the requested repository overview or privacy audit."
+        },
+        {
+          "id": "c2",
+          "summary": "A previous release needed updated manifest test assertions.",
+          "helpful": false,
+          "reason": "A past test-fix note provides no current architecture or dead-code evidence."
+        },
+        {
+          "id": "c3",
+          "summary": "General advice for clearer writing.",
+          "helpful": false,
+          "reason": "No specific repository fact or audit method is added."
+        }
+      ]
+    },
+    {
+      "id": "p02",
       "prompt": "Research the available cost and sales data, keeping the business calculation rules unresolved until their owner confirms them.",
       "candidates": [
         {
@@ -56,169 +80,7 @@
       ]
     },
     {
-      "id": "p02",
-      "prompt": "Reverse-engineer tariff spreadsheets into a calculation map, preserving formulas, periods, source provenance and unresolved inputs.",
-      "candidates": [
-        {
-          "id": "c1",
-          "summary": "Locations of tariff requirements, workbook references and source decisions.",
-          "helpful": true,
-          "reason": "Adds the requirements and provenance trail needed to interpret spreadsheet formulas."
-        },
-        {
-          "id": "c2",
-          "summary": "Remote access route for external UI testers.",
-          "helpful": false,
-          "reason": "The request is an offline spreadsheet analysis."
-        },
-        {
-          "id": "c3",
-          "summary": "Project status pointer identifying newer workbooks with half-year totals.",
-          "helpful": true,
-          "reason": "The period warning and newer-workbook pointer affect interpretation of monthly amounts; verify dates before use."
-        },
-        {
-          "id": "c4",
-          "summary": "Search old agent conversations before reporting an access blocker.",
-          "helpful": false,
-          "reason": "No access blocker is established; the supplied workbooks are local."
-        },
-        {
-          "id": "c5",
-          "summary": "Unrelated Bluetooth-device prototype.",
-          "helpful": false,
-          "reason": "Different project and task."
-        },
-        {
-          "id": "c6",
-          "summary": "PDF header rendering repair.",
-          "helpful": false,
-          "reason": "Spreadsheet formulas do not depend on PDF rendering."
-        },
-        {
-          "id": "c7",
-          "summary": "Keep existing test-user passwords unchanged.",
-          "helpful": false,
-          "reason": "No test accounts are being managed."
-        },
-        {
-          "id": "c8",
-          "summary": "Connect to a corporate file share.",
-          "helpful": false,
-          "reason": "The input directory is already local; no remote share is required."
-        }
-      ]
-    },
-    {
       "id": "p03",
-      "prompt": "Compare parking-space sale prices per area, payment arrangements and the effect of larger units.",
-      "candidates": [
-        {
-          "id": "c1",
-          "summary": "Tariff requirements and calculation-source locations.",
-          "helpful": false,
-          "reason": "Maintenance tariffs are a different quantity from property sale prices."
-        },
-        {
-          "id": "c2",
-          "summary": "Search previous agent work when access fails.",
-          "helpful": false,
-          "reason": "Generic fallback guidance gives no price data, query or source for this request."
-        },
-        {
-          "id": "c3",
-          "summary": "Personal messaging connector.",
-          "helpful": false,
-          "reason": "The quoted conversation already supplies the request; no additional messages are needed."
-        },
-        {
-          "id": "c4",
-          "summary": "PDF rendering dependency repair.",
-          "helpful": false,
-          "reason": "Unrelated to the price analysis."
-        },
-        {
-          "id": "c5",
-          "summary": "Distinguish application development and production SSH destinations.",
-          "helpful": false,
-          "reason": "These application hosts do not identify the sales database needed here."
-        },
-        {
-          "id": "c6",
-          "summary": "Tariff project status and recent calculation workbooks.",
-          "helpful": false,
-          "reason": "The workbooks concern maintenance charges, not parking sales."
-        },
-        {
-          "id": "c7",
-          "summary": "Inspect the remote main branch instead of a stale checkout.",
-          "helpful": false,
-          "reason": "No source-code investigation is requested."
-        },
-        {
-          "id": "c8",
-          "summary": "Messaging digest for another product.",
-          "helpful": false,
-          "reason": "Different project and task."
-        }
-      ]
-    },
-    {
-      "id": "p04",
-      "prompt": "Create an orchestrator, review the tariff project and access, and prepare a stakeholder discussion of known data, gaps and proposed work.",
-      "candidates": [
-        {
-          "id": "c1",
-          "summary": "Locations of requirements, stakeholder transcript, workbooks and seeds.",
-          "helpful": true,
-          "reason": "Directly identifies the background and original discussion requested by the operator."
-        },
-        {
-          "id": "c2",
-          "summary": "Current tariff work pointer, including workbook revisions and reconciliation status.",
-          "helpful": true,
-          "reason": "Provides the project-state trail needed for the status discussion; recheck its freshness."
-        },
-        {
-          "id": "c3",
-          "summary": "PDF header repair and deployment status.",
-          "helpful": false,
-          "reason": "A specific rendering incident is not material to this data-and-scope briefing."
-        },
-        {
-          "id": "c4",
-          "summary": "Preserve existing development test-user passwords.",
-          "helpful": false,
-          "reason": "Checking access does not require creating or changing users; the summary adds no needed access route."
-        },
-        {
-          "id": "c5",
-          "summary": "Avoid opening a new-record form in read-only UI walkthroughs.",
-          "helpful": false,
-          "reason": "No UI walkthrough is requested."
-        },
-        {
-          "id": "c6",
-          "summary": "Send each stakeholder question as a separate group message.",
-          "helpful": false,
-          "reason": "The prompt asks for a discussion, not messages to that particular group."
-        },
-        {
-          "id": "c7",
-          "summary": "Repository CI is local.",
-          "helpful": false,
-          "reason": "This is an orientation task without code changes or CI."
-        },
-        {
-          "id": "c8",
-          "summary": "Orchestrator bridge reports are mirrored to an external client group.",
-          "helpful": true,
-          "reason": "Creating an orchestrator can expose internal planning; the destination warning changes what may safely be reported."
-        }
-      ]
-    },
-    {
-      "id": "p05",
       "prompt": "Resolve a blocked application update and investigate excessive disk usage while preserving the live installation and active agents.",
       "candidates": [
         {
@@ -272,7 +134,61 @@
       ]
     },
     {
-      "id": "p06",
+      "id": "p04",
+      "prompt": "Reverse-engineer tariff spreadsheets into a calculation map, preserving formulas, periods, source provenance and unresolved inputs.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Locations of tariff requirements, workbook references and source decisions.",
+          "helpful": true,
+          "reason": "Adds the requirements and provenance trail needed to interpret spreadsheet formulas."
+        },
+        {
+          "id": "c2",
+          "summary": "Remote access route for external UI testers.",
+          "helpful": false,
+          "reason": "The request is an offline spreadsheet analysis."
+        },
+        {
+          "id": "c3",
+          "summary": "Project status pointer identifying newer workbooks with half-year totals.",
+          "helpful": true,
+          "reason": "The period warning and newer-workbook pointer affect interpretation of monthly amounts; verify dates before use."
+        },
+        {
+          "id": "c4",
+          "summary": "Search old agent conversations before reporting an access blocker.",
+          "helpful": false,
+          "reason": "No access blocker is established; the supplied workbooks are local."
+        },
+        {
+          "id": "c5",
+          "summary": "Unrelated Bluetooth-device prototype.",
+          "helpful": false,
+          "reason": "Different project and task."
+        },
+        {
+          "id": "c6",
+          "summary": "PDF header rendering repair.",
+          "helpful": false,
+          "reason": "Spreadsheet formulas do not depend on PDF rendering."
+        },
+        {
+          "id": "c7",
+          "summary": "Keep existing test-user passwords unchanged.",
+          "helpful": false,
+          "reason": "No test accounts are being managed."
+        },
+        {
+          "id": "c8",
+          "summary": "Connect to a corporate file share.",
+          "helpful": false,
+          "reason": "The input directory is already local; no remote share is required."
+        }
+      ]
+    },
+    {
+      "id": "p05",
       "prompt": "Diagnose a stale web process after updates, distinguish it from the runtime host, and recover safely without interrupting active agents.",
       "candidates": [
         {
@@ -326,26 +242,110 @@
       ]
     },
     {
-      "id": "p07",
-      "prompt": "Explain the repository to a newcomer and inspect it for private data and unused code.",
+      "id": "p06",
+      "prompt": "Compare parking-space sale prices per area, payment arrangements and the effect of larger units.",
       "candidates": [
         {
           "id": "c1",
-          "summary": "A past seed import required verified input files.",
+          "summary": "Tariff requirements and calculation-source locations.",
           "helpful": false,
-          "reason": "An isolated historical loader pitfall does not answer the requested repository overview or privacy audit."
+          "reason": "Maintenance tariffs are a different quantity from property sale prices."
         },
         {
           "id": "c2",
-          "summary": "A previous release needed updated manifest test assertions.",
+          "summary": "Search previous agent work when access fails.",
           "helpful": false,
-          "reason": "A past test-fix note provides no current architecture or dead-code evidence."
+          "reason": "Generic fallback guidance gives no price data, query or source for this request."
         },
         {
           "id": "c3",
-          "summary": "General advice for clearer writing.",
+          "summary": "Personal messaging connector.",
           "helpful": false,
-          "reason": "No specific repository fact or audit method is added."
+          "reason": "The quoted conversation already supplies the request; no additional messages are needed."
+        },
+        {
+          "id": "c4",
+          "summary": "PDF rendering dependency repair.",
+          "helpful": false,
+          "reason": "Unrelated to the price analysis."
+        },
+        {
+          "id": "c5",
+          "summary": "Distinguish application development and production SSH destinations.",
+          "helpful": false,
+          "reason": "These application hosts do not identify the sales database needed here."
+        },
+        {
+          "id": "c6",
+          "summary": "Tariff project status and recent calculation workbooks.",
+          "helpful": false,
+          "reason": "The workbooks concern maintenance charges, not parking sales."
+        },
+        {
+          "id": "c7",
+          "summary": "Inspect the remote main branch instead of a stale checkout.",
+          "helpful": false,
+          "reason": "No source-code investigation is requested."
+        },
+        {
+          "id": "c8",
+          "summary": "Messaging digest for another product.",
+          "helpful": false,
+          "reason": "Different project and task."
+        }
+      ]
+    },
+    {
+      "id": "p07",
+      "prompt": "Create an orchestrator, review the tariff project and access, and prepare a stakeholder discussion of known data, gaps and proposed work.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Locations of requirements, stakeholder transcript, workbooks and seeds.",
+          "helpful": true,
+          "reason": "Directly identifies the background and original discussion requested by the operator."
+        },
+        {
+          "id": "c2",
+          "summary": "Current tariff work pointer, including workbook revisions and reconciliation status.",
+          "helpful": true,
+          "reason": "Provides the project-state trail needed for the status discussion; recheck its freshness."
+        },
+        {
+          "id": "c3",
+          "summary": "PDF header repair and deployment status.",
+          "helpful": false,
+          "reason": "A specific rendering incident is not material to this data-and-scope briefing."
+        },
+        {
+          "id": "c4",
+          "summary": "Preserve existing development test-user passwords.",
+          "helpful": false,
+          "reason": "Checking access does not require creating or changing users; the summary adds no needed access route."
+        },
+        {
+          "id": "c5",
+          "summary": "Avoid opening a new-record form in read-only UI walkthroughs.",
+          "helpful": false,
+          "reason": "No UI walkthrough is requested."
+        },
+        {
+          "id": "c6",
+          "summary": "Send each stakeholder question as a separate group message.",
+          "helpful": false,
+          "reason": "The prompt asks for a discussion, not messages to that particular group."
+        },
+        {
+          "id": "c7",
+          "summary": "Repository CI is local.",
+          "helpful": false,
+          "reason": "This is an orientation task without code changes or CI."
+        },
+        {
+          "id": "c8",
+          "summary": "Orchestrator bridge reports are mirrored to an external client group.",
+          "helpful": true,
+          "reason": "Creating an orchestrator can expose internal planning; the destination warning changes what may safely be reported."
         }
       ]
     }

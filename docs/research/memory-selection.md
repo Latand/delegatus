@@ -1,19 +1,22 @@
-# Memory selection: Jev does not beat FTS in the first-request pilot
+# Memory selection: 100 requested, seven eligible; Phase 3 remains no-go
 
-Study date: 2026-10-02. This is the board task **Shared memory phase 2:
-does Jev pick useful memories better than search**, implementing
-[Phase 2 of the design](../design/agent-memory.md#6-phased-plan).
-Built on the merged read-only index, PR #2417, at base `5b046f54c`.
-The design stays unchanged.
+Study date: 2026-10-02. This implements [Phase 2 of the design](../design/agent-memory.md#6-phased-plan), building on the merged read-only index, PR #2417, at base `5b046f54c`.
 
-**No-go for Phase 3.** With the same candidates, FTS found five useful entries
-in 21 slots; Jev found two. Jev's P@3 was 9.52%, against FTS's 23.81%.
-Total observed spend was **USD 0.000558516**, including the reachability
-probe. The sample is too small for a population estimate, and it also fails
-the study's minimum coverage criterion. Keep on-demand memory search; this
-measurement gives no reason to send every prompt out for selection.
+**No-go for Phase 3.** The requested 100-prompt rerun exhausted the current
+index at **seven usable first requests** under the pilot's exclusion rules.
+They are the same seven requests as the pilot, so this is a repeated Jev
+measurement, with no increase in independent sample size. FTS found five
+helpful entries in 21 slots; Jev found one. The paired P@3 difference is
+**−19.05 percentage points**, with an exploratory 95% prompt-bootstrap
+interval of **[−38.10, −4.76] points**. Quality and minimum coverage both fail.
+These intervals do not establish a population-wide ranking from seven
+selected requests. Keep on-demand search; this evidence does not justify
+sending every prompt for selection.
 
-## Protocol frozen before Jev scores
+New provider spend was **USD 0.000543102**. Cumulative pilot plus rerun spend
+was **USD 0.001101618**, including the single original reachability probe.
+
+## Unchanged protocol and labelling rule
 
 The hypothesis is that one Jev decision over a prompt and up to eight memory
 summaries can select at most three useful additions more precisely than FTS
@@ -42,55 +45,55 @@ otherwise even a positive pilot remains no-go pending a representative test.
 These numerical thresholds are this study's predeclared choices; the design
 does not specify numerical thresholds.
 
-## Observation and method
+## Rerun sampling and exclusions
 
-The initial credential observation failed before this continuation, with no
-request sent. The operator subsequently supplied a secret-file location and
-authorized reading it into `OPENROUTER_API_KEY` for the runner process only.
-One call through the existing `classifyWithJev` and `readOpenRouterApiKey`
-confirmed the decisions endpoint was reachable: 367 input tokens,
-`usage.cost = 0.000015414`, 416.42 ms. The key never enters an artifact or log.
+Collection: **2026-10-02 17:32:32 UTC**. The runner opens the installation's
+transcript and Phase 1 memory indexes read-only in SQLite read transactions.
+It reads all indexed user messages from Claude and Codex; it never refreshes
+an index or scans additional transcript files. It skips launch instruction,
+environment and plugin preambles, then considers exactly the first request
+per transcript. An excluded first request never promotes a later message.
+Transport envelopes are stripped; exact prompt copies are folded.
 
-[`scripts/memory-selection.ts`](../../scripts/memory-selection.ts) opens the
-transcript and Phase 1 memory SQLite indexes read-only, with read transactions
-for stable snapshots. It does no refresh, migration, offer-ledger write or
-engine-store write. Collection happened at 2026-10-02 16:52:16 UTC.
-
-The collector takes the first user request per indexed transcript, after
-skipping launch instruction/environment/plugin-list preambles. If that first
-request is excluded, a later message cannot take its place. It strips the
-transport envelope, folds exact prompt copies, sorts by SHA-256 of a fixed
-seed plus prompt, and takes at most 32. It retains private provenance with
-transcript location, message index, timestamp and original memory ids.
+The collector now requests 100 by default. Within each engine/project
+stratum it sorts by SHA-256 of `memory-selection-v1` plus the prompt. It
+round-robins projects within each engine, then engines, without replacement;
+exhausted strata yield unused slots to the rest. Exact-copy provenance is
+chosen deterministically by message index then transcript path. This is
+balanced coverage sampling, with no claim of proportional population
+weighting. With only seven eligible requests, all were retained.
 
 | Collection count | Number |
 | --- | ---: |
-| Indexed user messages examined | 4,349 |
-| Transcripts with a first non-preamble request | 1,017 |
-| Explicit pipeline/role boilerplate, ticks, test requests and relays excluded | 1,003 |
+| Indexed user messages examined | 4,459 |
+| Transcripts with a first non-preamble request | 1,049 |
+| Explicit pipeline/role boilerplate, ticks, test requests and relays excluded | 1,035 |
 | Context-only continuation requests excluded | 5 |
 | Requests needing an unavailable image excluded | 1 |
 | Exact duplicate requests excluded | 1 |
+| Short requests excluded | 0 |
+| Requested sample | **100** |
 | Eligible and sampled requests | **7** |
-| Entries in the Phase 1 memory snapshot | 7,673 |
+| Phase 1 memory entries | 7,673 |
 
-The seven requests span 2026-07-20 through 2026-10-02, two project keys, six
-Codex recipients and one Claude recipient. Four are detailed work briefs;
-three are shorter direct requests. Authorship of a work brief cannot be
-inferred reliably from its user role. The heuristic excludes explicit
-automation scaffolds; it cannot certify that all retained prose was typed
-directly by a person. It also excludes many genuine tasks delivered inside
-pipeline scaffolds. This is a strongly selected pilot, not a representative
-sample of the operator's work. No extra transcripts were sought to improve
-the score after labels were set.
+The sample contains six Codex requests and one Claude request, spanning two
+project keys (five and two requests), dated 2026-07-20 through 2026-10-02.
+Four are detailed briefs; three are shorter direct requests. A user-role
+brief does not prove human authorship. Explicit automation scaffolds are
+excluded, including many genuine tasks relayed through pipelines. The
+result is strongly selected. The remaining 93 requested observations are
+unavailable under this rule; no fabricated, later-turn or duplicate prompts
+were substituted. All seven requests and their candidates match the pilot
+exactly, despite the larger indexed population. Case IDs changed with the
+stratified ordering; pilot artifacts retain their original IDs.
 
 ### Two retrieval policies, kept separate
 
 **Literal Phase 1 query:** the first 16 alphanumeric/underscore terms, joined
 by AND, with the Phase 1 BM25 weights `(0, 5, 2, 1)`. After the experiment's
-scope/native filters it returned **zero candidates for all seven prompts**.
+scope/native filters it returned **zero candidates for all seven retained prompts**.
 Directly passing complete natural-language prompts into this API is therefore
-not a useful candidate generator in this pilot. An agent-written short
+not a useful candidate generator in this rerun. An agent-written short
 `search_memory` query can behave differently; this result does not evaluate
 that interactive use.
 
@@ -134,139 +137,145 @@ index would offer useful additions if that request were replayed now.
   Keep scores at least 0.70, highest first, at most three. No retry or tuning.
 - **No injection:** return no entries without a retrieval or provider call.
 
-The labeler read each request and candidate's bounded body, wrote all 51
-labels and the rule, then ran the arms. The six positive labels are
-`p02/c1`, `p02/c3`, `p04/c1`, `p04/c2`, `p04/c8`, `p06/c1`.
+The pilot labeler read every request and bounded candidate body before scoring.
+The rerun verified exact equality of all seven prompts and all 51 candidate
+records against the private pilot sample, then reused those frozen labels
+with the new stratified IDs. No label changed after inspecting pilot or rerun
+scores. The six positive labels are `p04/c1`, `p04/c3`, `p05/c1`,
+`p07/c1`, `p07/c2`, `p07/c8`.
 [`memory-selection.results.json`](memory-selection.results.json) records
 all numeric scores, costs, selections and timings without private text.
 
-## Results
+## Rerun results and uncertainty
 
-| Decider, identical OR candidates | Offered | Useful | P@3 | Useful / offered | Candidate recall | Prompt coverage |
+| Decider, identical OR candidates | Offered | Helpful | P@3 | 95% interval | Helpful / offered | Candidate recall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FTS rank | 21 | 5 | **23.81%** | 23.81% | **83.33%** | 100% |
-| Jev, threshold 0.70 | 8 | 2 | 9.52% | 25.00% | 33.33% | 71.43% |
-| No injection | 0 | 0 | 0% | undefined | 0% | 0% |
+| FTS rank | 21 | 5 | **23.81%** | **[4.76%, 47.62%]** | 23.81% | 83.33% |
+| Jev, threshold 0.70 | 7 | 1 | **4.76%** | **[0%, 14.29%]** | 14.29% | 16.67% |
+| No injection | 0 | 0 | **0%** | **[0%, 0%]** | undefined | 0% |
 
-Jev loses **14.29 percentage points of P@3**. Its precision among offered
-entries improves by only 1.19 points, while it misses four of six positives.
-Two prompts favor FTS by two and one positives respectively; five tie in
-the number of useful selections. There is no statistical superiority
-claim from seven clustered requests. Every candidate is annotated; recall
-here says nothing about relevant entries that retrieval never surfaced.
+Jev minus FTS: **−19.05 percentage points**, 95% interval
+**[−38.10, −4.76] points**. FTS wins on three requests; four tie.
+Jev's precision among offered entries is 9.52 points lower. Prompt coverage
+is 100%, 71.43% and 0% for FTS, Jev and no injection respectively.
+
+Intervals use 20,000 percentile bootstrap draws, xorshift32 seed 2475,
+resampling seven prompt clusters with replacement. All three slots travel
+with their prompt, and identical resampled indices are used for both arms
+in the paired contrast. Endpoints are the nearest-rank 2.5th and 97.5th
+percentiles. No injection has a structurally zero P@3 under this definition;
+its [0, 0] interval says nothing about downstream task success. These are
+approximate, conditional intervals: seven selected prompts, one labeler,
+shared candidate memories and only one Claude request severely limit their
+interpretation. They exclude labelling uncertainty, corpus selection bias
+and provider variation. The rerun is not pooled with the pilot as 14
+independent prompts. Bootstrap inference on this tiny corpus is exploratory.
 
 | Decider | Median latency | p99 latency |
 | --- | ---: | ---: |
-| FTS retrieval and frozen-rank choice | 2.32 ms | 5.68 ms |
-| Jev, same retrieval + decision request | 267.75 ms | 456.26 ms |
+| FTS retrieval and frozen-rank choice | 4.26 ms | 12.64 ms |
+| Jev, same retrieval + decision request | 244.98 ms | 429.50 ms |
 | No-injection empty-return measurement | <0.001 ms | <0.001 ms |
 
-Retrieval timings were captured once at collection and reused for both
-ranking arms. Jev adds measured HTTP round-trip/body parsing time; tiny local
-sorting/serialization overhead is outside those timers. No-injection timing
-is a local empty-return operation, with no hook or process startup. The p99
-uses nearest rank and equals the maximum at this sample size. These are warm
-process measurements, not a production-hook latency guarantee.
+Retrieval is measured once at collection and reused by both ranking arms.
+Jev adds HTTP round-trip and response parsing; small local serialization
+and sorting overhead is outside these timers. No injection measures a local
+empty return, without retrieval, hooks or process startup. Nearest-rank p99
+is the maximum of seven observations. These are warm-process observations.
 
-### Confusions, paraphrased
+### Seven-prompt pilot, retained separately
 
-- A data-research request explicitly names a SQL access skill. Jev selects
-  that redundant pointer (0.77). The label asks for incremental usefulness.
-- A request for parking sale prices retrieves maintenance-tariff memories.
-  Jev chooses generic advice to search older conversations (0.78), while the
-  needed sales-data entry never enters the candidate list. Candidate recall
-  is a separate problem from final selection.
-- A workbook analysis needs a provenance trail and a pointer to newer
-  half-year workbooks. FTS selects both. Jev scores them 0.46 and 0.67,
-  below the fixed threshold.
-- A current request explicitly authorizes an account. Jev selects an older
-  prohibition (0.91) and old model guidance (0.87). Current instructions
-  supersede these notes; neither was injected into a live prompt.
-- A launcher update investigation retrieves another host's restart warning
-  (0.79) and a container-bootstrap recipe (0.71). Both lack an established
-  environment match. All technical statements in those notes remain
-  hypotheses requiring current verification.
-- For an orchestrator briefing, Jev correctly moves an external-audience
-  warning from rank eight into its two choices (0.71), the one positive FTS
-  misses. That isolated gain does not offset the other misses.
+The original collection at 16:52:16 UTC examined 4,349 user messages from
+1,017 first-request transcripts: 1,003 machine requests, five continuations,
+one attachment and one duplicate were excluded. It retained the same seven
+requests and 51 candidates. Original
+[pilot labels](memory-selection.pilot.labels.json) and
+[pilot receipts/results](memory-selection.pilot.results.json) are preserved
+unchanged. Pilot latency median/p99 was 2.32/5.68 ms for FTS and
+267.75/456.26 ms for Jev; no injection was below 0.001 ms.
 
-## Spend and safety
+| Pilot arm | Offered | Helpful | P@3 | Helpful / offered | Candidate recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FTS | 21 | 5 | 23.81% | 23.81% | 83.33% |
+| Jev | 8 | 2 | 9.52% | 25.00% | 33.33% |
+| No injection | 0 | 0 | 0% | undefined | 0% |
 
-| Calls | Input tokens from provider | Sum of `usage.cost`, USD |
+The pilot's paired difference was −14.29 points. Its no-go was a pilot
+conclusion. The new call set selected one fewer helpful entry and remains
+below both quality margins. Both runs used the same model, threshold,
+question wording and labels. We did not tune to the rerun.
+
+### Errors illustrated with scrubbed paraphrases
+
+A workbook task needed a provenance trail and a pointer to newer workbooks;
+FTS found both and Jev selected neither. A prompt already named its SQL
+access skill, making the retrieved skill pointer redundant. Another prompt
+explicitly authorized an account, superseding the older account prohibition
+that Jev selected. A launcher investigation retrieved a restart warning for
+a different host without evidence that its topology applied. These examples
+illustrate incremental usefulness and applicability, not merely topic match.
+
+## Spend, receipts and safety
+
+| Measurement | Input tokens from provider | Sum of `usage.cost`, USD |
 | --- | ---: | ---: |
-| One reachability probe through the existing client | 367 | 0.000015414 |
-| Seven memory-selection decisions | 12,931 | 0.000543102 |
-| **Total: eight successful requests** | **13,298** | **0.000558516** |
+| Original reachability probe, made once | 367 | 0.000015414 |
+| Seven pilot decisions | 12,931 | 0.000543102 |
+| Seven new rerun decisions | 12,931 | 0.000543102 |
+| **Cumulative: 15 actual HTTP calls** | **26,229** | **0.001101618** |
 
-These costs are response fields, not estimates or a separate account billing
-audit. Every reported cost matches the pinned USD 0.042/million input-token
-rate. There were no failed or ambiguous paid requests and no unresolved
-reservations. FTS and no-injection made no paid calls.
+The rerun ledger reuses the original probe receipt; it does not send another
+probe. Its reported total is **0.000558516 USD**, including that reused
+receipt. Summing the two run totals would count the probe twice. Costs above
+come directly from Jev's `usage.cost` and `usage.input_tokens`, with no
+estimated token conversion or separate billing audit. All seven new requests
+completed; there are no unsettled reservations. FTS and no injection cost
+zero provider dollars.
 
-The runner hard-caps the research ledger at USD 2.00 including the probe. A
-single-writer lock covers the run. Before every request it durably reserves
-the greater of USD 0.01 and the full serialized request's UTF-8 byte count
-plus 4,096 overhead tokens at the existing client's pinned model price. This
-conservative token bound assumes that price contract, the same assumption
-as the live client's ceiling. It is not a provider-side account quota.
-Requests are sequential; any reservation that would cross USD 2 is refused
-before fetch. Success settles to `usage.cost`; errors keep the reservation
-and block replay until reconciled. A receipt over its bound stops the run.
-Restarting a completed ledger reuses scores and makes no further calls;
-changed sample or labels are refused. A crash-held lock requires manual
-inspection rather than automatic takeover. Reuse this ledger for this study;
-creating another ledger starts a separate budget.
+Each runner ledger is hard-capped at **USD 2.00** including its probe receipt.
+A single-writer lock spans the run. Before each sequential request the runner
+durably reserves the greater of USD 0.01 and the serialized request's UTF-8
+byte count plus 4,096 overhead tokens at the existing client's pinned price.
+This is a conservative bound under that price contract, not an account-wide
+provider quota. Success settles to actual usage cost; an ambiguous failure
+retains its reservation and blocks replay. An over-bound receipt blocks
+subsequent calls, including after restart. Completed ledgers reuse scores;
+changed samples or labels are refused. A new ledger is a separate budget;
+the cumulative actual spend across these two ledgers is also below USD 2.
 
-Nothing was injected into a live prompt. No engine memory, installed Jev
-switch or runtime setting changed. The published examples are manually
-paraphrased; raw prompts, indexed bodies, source paths and credentials stay
-outside the repository. Existing Jev redaction is applied before outbound
-selection, but it is not a general anonymizer of person or host names. The
-operator explicitly authorized that bounded outbound selection text.
+The authorized secret was loaded into `OPENROUTER_API_KEY` only for the runner
+process and never printed or committed. The runner requires that environment
+variable before calling the existing helper, preventing its secret-file
+fallback. Nothing was injected into live prompts, written to engine memory,
+or changed in installed Jev settings. Existing redaction bounds outbound
+prompts and summaries; it is not a general anonymizer of names. Bounded
+outbound selection was explicitly authorized. Public artifacts contain
+aggregates, opaque local case IDs and scrubbed paraphrases only; private
+samples, bodies, provenance and ledger input hashes remain outside the repo.
 
-## Reproduction
-
-Run the exact test file in an isolated state directory:
+## Reproduction and verification
 
 ```sh
 LLV_STATE_DIR="$(mktemp -d)" bun test scripts/memory-selection.test.ts
-```
-
-The collector accepts explicit index paths and writes a new private sample.
-The inputs are the installation's `transcript-search.sqlite` and
-`memory-index.sqlite`. It never discovers credentials or live state itself:
-
-```sh
 bun scripts/memory-selection.ts collect "$TRANSCRIPT_DB" "$MEMORY_DB" "$PRIVATE_SAMPLE"
-bun scripts/memory-selection.ts local "$PRIVATE_SAMPLE" docs/research/memory-selection.labels.json "$LOCAL_RESULTS"
-bun scripts/memory-selection.ts probe "$PRIVATE_PROBE"
-bun scripts/memory-selection.ts jev "$PRIVATE_SAMPLE" docs/research/memory-selection.labels.json "$PAID_RESULTS" "$PRIVATE_LEDGER" "$PRIVATE_PROBE"
+bun scripts/memory-selection.ts local "$PRIVATE_SAMPLE" "$LABELS" "$LOCAL_RESULTS"
+bun scripts/memory-selection.ts jev "$PRIVATE_SAMPLE" "$LABELS" "$PAID_RESULTS" "$PRIVATE_LEDGER" "$EXISTING_PROBE"
 ```
 
-Use an isolated `LLV_STATE_DIR` for every command. The paid commands require
-`OPENROUTER_API_KEY` already in their process environment, checked before
-calling `readOpenRouterApiKey`, so an absent variable never falls back to a
-secret file. The operator's wrapper reads the authorized file without
-printing it. Do not run the probe again for this completed study. Output
-files are exclusive-create; use a fresh output path to re-export the same
-ledger. A new collection must be relabelled and is a new experiment.
+Set an isolated `LLV_STATE_DIR` for every command. The default collection
+limit is 100. Label the resulting sample before paid scoring. Paid commands
+require the authorized key in their process environment. Output files are
+exclusive-create; do not repeat the completed probe or create a fresh paid
+ledger just to export results. Retained private `sample.json`, `labels.json`,
+`ledger.json` and `results.json` bind this rerun; the pilot has separate
+retained private artifacts. Public JSON lets reviewers recompute selections,
+metrics, confidence intervals and spend, while the private index and raw
+prompts are intentionally not published. Replaying paraphrases would be a
+different experiment.
 
-The private study directory retains `sample-final.json`, `probe.json` and
-`ledger.json`. Public readers can audit every label, selected id, score and
-cost in the two JSON artifacts. The fixture-integrity test recomputes the
-reported metrics from them. They cannot reproduce the private FTS corpus or
-claim that sending the paraphrases to Jev reproduces the original requests.
-
-## Decision and next evidence
-
-**No-go:** the measured decider fails both quality margins and loses recall.
-Latency and price pass, but they do not justify outbound text when selection
-quality fails. Sample coverage independently fails (7 requests; one Claude
-recipient), so a future positive score on this set could not authorize
-Phase 3 either.
-
-The useful next experiment would separate candidate recall from decision
-quality, gather more direct first requests across both engines, record the
-native context already supplied, and independently adjudicate labels. It
-should include contradictory and outdated memories deliberately. This work
-adds no automatic injection, retirement, deletion, or alternate classifier.
+Exact-path tests cover 100-case stratification and validation, exclusions,
+read-only collection, paired intervals, both public artifact sets and budget
+failure/restart behavior. The remaining evidence gap is coverage: the current
+index cannot supply the requested 100 usable first prompts. Neither the
+pilot nor this repeat can authorize Phase 3; broader independent requests
+and independently adjudicated labels are still needed.

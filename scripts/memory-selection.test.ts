@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { CAP_USD, charged, collect, metrics, paidReplay, parseAnswer, queryFor, requestBody,
-  reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
+  confidenceIntervals, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
 
 const roots: string[] = [];
 const priorKey = process.env.OPENROUTER_API_KEY;
@@ -37,6 +37,42 @@ test("literal FTS syntax is bounded; recall policy is distinct", () => {
   expect(queryFor("please investigate closed socket socket", "recall")).toBe('"investigate" OR "closed" OR "socket"');
   expect(queryFor("!!!", "strict")).toBeNull();
   expect(queryFor(Array(30).fill("word").join(" "), "strict")!.split(" AND ")).toHaveLength(16);
+});
+
+test("100-request sampling balances engines then projects and reallocates exhausted strata", () => {
+  const messages = Array.from({ length: 150 }, (_, i) => ({
+    ...message(`${c.prompt} Unique request ${i}.`, 0, `transcript-${i}`),
+    engine: i < 120 ? "codex" : "claude", project: i % 2 ? "project-a" : "project-b",
+  }));
+  const result = samplePrompts(messages, 100);
+  expect(result.rows).toHaveLength(100);
+  expect(result.rows.filter(r => r.engine === "claude")).toHaveLength(30);
+  expect(result.rows.filter(r => r.engine === "codex" && r.project === "project-a")).toHaveLength(35);
+  expect(new Set(result.rows.map(r => r.body)).size).toBe(100);
+  expect(samplePrompts([...messages].reverse(), 100)).toEqual(result);
+  const limited = samplePrompts(messages, 20);
+  for (const engine of ["claude", "codex"]) for (const project of ["project-a", "project-b"])
+    expect(limited.rows.filter(r => r.engine === engine && r.project === project)).toHaveLength(5);
+  expect(samplePrompts(messages.slice(0, 7), 100).counts).toMatchObject({ requested: 100, sampled: 7 });
+  expect(() => samplePrompts(messages, 101)).toThrow();
+  const many = Array.from({ length: 100 }, (_, i) => ({ ...c, id: `p${i + 1}` }));
+  expect(() => validateLabels({ ...sample, cases: many }, { ...labels,
+    cases: many.map(row => ({ ...labels.cases[0], id: row.id })) })).not.toThrow();
+});
+
+test("confidence intervals resample prompts together and preserve paired equality", () => {
+  const cases = [c, { ...c, id: "p02" }];
+  const pairedLabels = { ...labels, cases: [labels.cases[0], { ...labels.cases[0], id: "p02" }] };
+  const selection = [["c4"], []];
+  const result = confidenceIntervals(cases, pairedLabels, selection, selection);
+  expect(result.fts).toEqual([0, 1 / 3]);
+  expect(result.jev).toEqual(result.fts);
+  expect(result.none).toEqual([0, 0]);
+  expect(result.pairedJevMinusFts).toEqual({ estimate: 0, interval: [0, 0] });
+  const loss = confidenceIntervals(cases, pairedLabels, [["c4"], ["c4"]], [[], []]);
+  expect(loss.pairedJevMinusFts.estimate).toBe(-1 / 3);
+  expect(loss.pairedJevMinusFts.interval).toEqual([-1 / 3, -1 / 3]);
+  expect(confidenceIntervals(cases, pairedLabels, selection, selection)).toEqual(result);
 });
 
 function memoryDb(filename: string) {
@@ -179,9 +215,9 @@ test("concurrent run is refused; absent environment key never falls back to a fi
   expect(fs.existsSync(ledger)).toBeFalse();
 });
 
-test("public label/receipt artifacts reproduce every selection, metric and cost", () => {
-  const publishedLabels = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.labels.json", import.meta.url), "utf8")) as Labels;
-  const results = JSON.parse(fs.readFileSync(new URL("../docs/research/memory-selection.results.json", import.meta.url), "utf8"));
+test.each(["", ".pilot"])("public %s label/receipt artifacts reproduce every selection, metric and cost", suffix => {
+  const publishedLabels = JSON.parse(fs.readFileSync(new URL(`../docs/research/memory-selection${suffix}.labels.json`, import.meta.url), "utf8")) as Labels;
+  const results = JSON.parse(fs.readFileSync(new URL(`../docs/research/memory-selection${suffix}.results.json`, import.meta.url), "utf8"));
   const cases = results.cases.map((row: { id: string; engine: string; retrievalMs: number; strictCount: number }) => ({
     ...row, prompt: publishedLabels.cases.find(l => l.id === row.id)!.prompt,
     candidates: publishedLabels.cases.find(l => l.id === row.id)!.candidates.map(l => candidate(l.id)),
@@ -199,4 +235,6 @@ test("public label/receipt artifacts reproduce every selection, metric and cost"
   }
   expect(charged(results.calls)).toBe(results.spendUsd);
   expect(results.spendUsd).toBeLessThan(CAP_USD);
+  if (!suffix) expect(results.confidenceIntervals).toEqual(confidenceIntervals(cases, publishedLabels,
+    results.cases.map((row: { fts: string[] }) => row.fts), results.cases.map((row: { jev: string[] }) => row.jev)));
 });

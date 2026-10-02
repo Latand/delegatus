@@ -11,6 +11,7 @@ import { readOpenRouterApiKey } from "../src/lib/asks/settings";
 export const CAP_USD = 2;
 export const THRESHOLD = 0.7;
 export const SEED = "memory-selection-v1";
+export const SAMPLE_LIMIT = 100;
 const hash = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
 
 export interface Message {
@@ -53,8 +54,9 @@ export function exclusion(text: string): string | null {
 /** Skip launch metadata, then take exactly one first request per transcript.
  * An excluded first request never promotes a later request into the sample. */
 export function samplePrompts(messages: Message[], limit: number) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > SAMPLE_LIMIT) throw new Error("Invalid sample limit");
   const first = new Map<string, Message>();
-  for (const message of [...messages].sort((a, b) => a.message_index - b.message_index)) {
+  for (const message of [...messages].sort((a, b) => a.message_index - b.message_index || a.transcript_path.localeCompare(b.transcript_path))) {
     if (!isPreamble(message.body) && !first.has(message.transcript_path)) first.set(message.transcript_path, message);
   }
   const counts: Record<string, number> = { messages: messages.length, conversations: first.size, duplicate: 0 };
@@ -70,9 +72,35 @@ export function samplePrompts(messages: Message[], limit: number) {
     eligible.push({ ...message, body });
   }
   eligible.sort((a, b) => hash(SEED + a.body).localeCompare(hash(SEED + b.body)));
+  // Equal allocation by engine, then project, without replacement. Exhausted
+  // strata yield their unused slots; hash order fixes choices inside a stratum.
+  const strata = new Map<string, Map<string, Message[]>>();
+  for (const row of eligible) {
+    if (!strata.has(row.engine)) strata.set(row.engine, new Map());
+    const projects = strata.get(row.engine)!;
+    if (!projects.has(row.project)) projects.set(row.project, []);
+    projects.get(row.project)!.push(row);
+  }
+  const engines = [...strata.keys()].sort();
+  const queues = engines.map(engine => {
+    const projects = strata.get(engine)!;
+    const buckets = [...projects.keys()].sort().map(key => projects.get(key)!);
+    const rows: Message[] = [];
+    while (buckets.some(bucket => bucket.length)) {
+      for (const bucket of buckets) if (bucket.length) rows.push(bucket.shift()!);
+    }
+    return rows;
+  });
+  const rows: Message[] = [];
+  while (rows.length < limit && queues.some(queue => queue.length)) {
+    for (const queue of queues) if (queue.length && rows.length < limit) rows.push(queue.shift()!);
+  }
   counts.eligible = eligible.length;
-  counts.sampled = Math.min(limit, eligible.length);
-  return { rows: eligible.slice(0, limit), counts };
+  counts.requested = limit;
+  counts.engineStrata = strata.size;
+  counts.projectStrata = new Set(eligible.map(row => row.project)).size;
+  counts.sampled = rows.length;
+  return { rows, counts };
 }
 
 /** Literal Phase 1 query is retained as a diagnostic. The experimental OR
@@ -107,7 +135,7 @@ export function retrieve(db: Database, message: Message, mode: "strict" | "recal
   }).slice(0, 8);
 }
 
-export function collect(transcripts: string, memories: string, limit = 32): Sample {
+export function collect(transcripts: string, memories: string, limit = SAMPLE_LIMIT): Sample {
   const t = new Database(transcripts, { readonly: true });
   const m = new Database(memories, { readonly: true });
   try {
@@ -137,7 +165,7 @@ export function collect(transcripts: string, memories: string, limit = 32): Samp
 }
 
 export function validateLabels(sample: Sample, labels: Labels): void {
-  if (sample.version !== 1 || sample.cases.length > 32 || new Set(sample.cases.map(c => c.id)).size !== sample.cases.length) throw new Error("Invalid replay sample");
+  if (sample.version !== 1 || sample.cases.length > SAMPLE_LIMIT || new Set(sample.cases.map(c => c.id)).size !== sample.cases.length) throw new Error("Invalid replay sample");
   if (!labels.rule?.trim() || labels.cases.length !== sample.cases.length || !sample.cases.length) throw new Error("Incomplete labels");
   if (new Set(labels.cases.map(c => c.id)).size !== labels.cases.length) throw new Error("Duplicate labels");
   for (const c of sample.cases) {
@@ -178,6 +206,32 @@ export function metrics(cases: Sample["cases"], labels: Labels, selections: stri
     precisionWhenOffered: offered ? helpful / offered : null, recall: available ? helpful / available : null,
     promptCoverage: selections.filter(s => s.length).length / cases.length,
     latencyMs: { median: quantile(times, 0.5), p99: quantile(times, 0.99) } };
+}
+
+/** Prompt-cluster percentile bootstrap: keep all three slots together and
+ * resample the same prompt indices for both arms of the paired contrast.
+ * Approximate uncertainty, conditional on this selected corpus and its labels. */
+export function confidenceIntervals(cases: Case[], labels: Labels, fts: string[][], jev: string[][]) {
+  const values = cases.map((c, i) => {
+    const good = new Set(labels.cases.find(l => l.id === c.id)!.candidates.filter(l => l.helpful).map(l => l.id));
+    return [fts[i].filter(id => good.has(id)).length / 3, jev[i].filter(id => good.has(id)).length / 3];
+  });
+  if (!values.length) throw new Error("Empty confidence sample");
+  let state = 2475;
+  const random = () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) / 4294967296; };
+  const draws: number[][] = [[], [], []];
+  for (let b = 0; b < 20_000; b++) {
+    let a = 0, j = 0;
+    for (let i = 0; i < values.length; i++) {
+      const pair = values[Math.floor(random() * values.length)];
+      a += pair[0]; j += pair[1];
+    }
+    draws[0].push(a / values.length); draws[1].push(j / values.length); draws[2].push((j - a) / values.length);
+  }
+  const interval = (draw: number[]) => [quantile(draw, 0.025)!, quantile(draw, 0.975)!];
+  return { method: "prompt-cluster percentile bootstrap", confidence: 0.95, resamples: 20_000, seed: 2475,
+    fts: interval(draws[0]), jev: interval(draws[1]), none: [0, 0],
+    pairedJevMinusFts: { estimate: values.reduce((sum, [a, j]) => sum + j - a, 0) / values.length, interval: interval(draws[2]) } };
 }
 
 export function requestBody(c: Case) {
@@ -299,10 +353,11 @@ export async function run(sample: Sample, labels: Labels, ledgerPath?: string, p
   }) : null;
   const jevTimes = ledger ? sample.cases.map(c => c.retrievalMs + (ledger.receipts.find(r => r.id === c.id)?.latencyMs ?? 0)) : [];
   return { version: 1, collectedAt: sample.collectedAt, counts: sample.counts,
-    protocol: { seed: SEED, threshold: THRESHOLD, capUsd: CAP_USD, candidates: 8, slots: 3, model: JEV_MODEL },
+    protocol: { seed: sample.seed, sampling: "equal engine then project allocation; seeded hash within strata", threshold: THRESHOLD, capUsd: CAP_USD, candidates: 8, slots: 3, model: JEV_MODEL },
     strictNonempty: sample.cases.filter(c => c.strictCount > 0).length,
     fts: metrics(sample.cases, labels, fts, baselineTimes), none: metrics(sample.cases, labels, empty, noneTimes),
     jev: selections ? metrics(sample.cases, labels, selections, jevTimes) : null,
+    confidenceIntervals: selections ? confidenceIntervals(sample.cases, labels, fts, selections) : null,
     spendUsd: ledger ? charged(ledger.receipts) : 0,
     calls: ledger?.receipts ?? [],
     cases: sample.cases.map((c, i) => ({ id: c.id, engine: c.engine, candidates: c.candidates.length,
