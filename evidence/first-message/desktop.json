@@ -1,0 +1,2349 @@
+{
+  "frames": {
+    "p-1440-light-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1440-light-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1440-light-en": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Not delivered",
+          "errorChips": [
+            {
+              "text": "The agent could not be started.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1280-light-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1280-light-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1280-light-en": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Not delivered",
+          "errorChips": [
+            {
+              "text": "The agent could not be started.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1440-dark-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1440-dark-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1440-dark-en": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Not delivered",
+          "errorChips": [
+            {
+              "text": "The agent could not be started.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1280-dark-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1280-dark-en": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1280-dark-en": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Not delivered",
+          "errorChips": [
+            {
+              "text": "The agent could not be started.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1440-light-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1440-light-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1440-light-uk": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Не доставлено",
+          "errorChips": [
+            {
+              "text": "Агента не вдалося запустити.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1280-light-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1280-light-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1280-light-uk": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Не доставлено",
+          "errorChips": [
+            {
+              "text": "Агента не вдалося запустити.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1440-dark-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1440-dark-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 373,
+            "width": 618,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1440-dark-uk": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 337,
+            "width": 654,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Не доставлено",
+          "errorChips": [
+            {
+              "text": "Агента не вдалося запустити.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "p-1280-dark-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "pending",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 0,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "confirmed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 39
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 1, rows 1, cards 0, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "s-1280-dark-uk": {
+      "readings": [
+        {
+          "step": "pending",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 0,
+          "mandateHeight": 72,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 72
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "delivered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "transcript",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        },
+        {
+          "step": "answered",
+          "envelope": false,
+          "danger": 0,
+          "rows": 0,
+          "outboxEntries": 0,
+          "userBubbles": [],
+          "mandateCards": 1,
+          "mandateOpenSections": 1,
+          "mandateHeight": 121,
+          "rowState": null,
+          "sameNode": false,
+          "rect": {
+            "top": 150,
+            "left": 313,
+            "width": 578,
+            "height": 121
+          },
+          "failureLines": 0,
+          "failureText": null,
+          "errorChips": [],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": true
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 0,
+        "userBubbleMax": 0,
+        "mandateMax": 1,
+        "lapses": [],
+        "timeline": [
+          "panel draft, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft yes",
+          "panel creating, outbox 0, bubbles 0, rows 0, cards 0, chips 0, feed none, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 1, feed items, draft no",
+          "panel live, outbox 0, bubbles 0, rows 0, cards 1, chips 0, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    },
+    "f-1280-dark-uk": {
+      "readings": [
+        {
+          "step": "failed",
+          "envelope": false,
+          "danger": 0,
+          "rows": 1,
+          "outboxEntries": 1,
+          "userBubbles": [
+            "row: Fix the failing export test. The pinned "
+          ],
+          "mandateCards": 0,
+          "mandateOpenSections": 0,
+          "mandateHeight": null,
+          "rowState": "failed",
+          "sameNode": true,
+          "rect": {
+            "top": 150,
+            "left": 277,
+            "width": 614,
+            "height": 67
+          },
+          "failureLines": 1,
+          "failureText": "Не доставлено",
+          "errorChips": [
+            {
+              "text": "Агента не вдалося запустити.",
+              "title": "runtime host unavailable"
+            }
+          ],
+          "overflowX": 0,
+          "zeroWidthControls": [],
+          "answered": false
+        }
+      ],
+      "seen": {
+        "envelope": false,
+        "danger": [],
+        "outboxMax": 1,
+        "userBubbleMax": 1,
+        "mandateMax": 0,
+        "lapses": [],
+        "timeline": [
+          "panel live, outbox 1, bubbles 1, rows 1, cards 0, chips 1, feed items, draft no"
+        ]
+      },
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

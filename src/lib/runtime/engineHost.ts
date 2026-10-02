@@ -1,3 +1,4 @@
+import type { HostMemoryState } from "./agentMemory";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
@@ -102,6 +103,7 @@ export type RuntimeEvent =
   | { kind: "session-status"; status: "active" | "idle" | "unhosted" | "dead"; activeFlags?: string[]; seq: number };
 
 export interface HostState {
+  memory?: HostMemoryState;
   status: "active" | "attention" | "idle" | "unhosted" | "dead";
   sessionKey: string;
   endpoint: string;

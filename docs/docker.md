@@ -427,3 +427,20 @@ Additional runtime mounts keep host sockets reachable:
 - `/tmp/claude-1000`
 
 If the host uid differs, run with `LLV_UID` and `LLV_GID` set and make sure the matching `/tmp/tmux-$LLV_UID` and `/tmp/claude-$LLV_UID` paths exist.
+
+## Agent memory limits
+
+Docker uses the RSS watchdog for agent process trees; migration through the
+host user manager is deferred. Configure `DELEGATUS_AGENT_MEMORY_MAX` and
+`DELEGATUS_AGENT_MEMORY_RESERVE` in the Viewer environment, and recreate the
+container at the next planned update to apply them. Defaults reserve at least
+4 GiB and 15% of RAM for the OS and core, and size each agent at launch.
+
+The watchdog samples every two seconds, checks PID start identities and kills
+the largest process when a tree or the shared agent budget exceeds its limit.
+One interval of growth can overshoot, double-forked descendants can escape,
+swap is unbounded, and kernel OOM kills lack attribution. Agents inherit an OOM
+score of at least 500; the container restart policy still handles a dead core.
+`DELEGATUS_AGENT_MEMORY=off` disables isolation. See the
+[agent memory design](design/agent-memory-isolation.md) for the systemd drop-in
+needed by an existing host user-service install.

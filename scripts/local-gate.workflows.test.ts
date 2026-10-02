@@ -5,19 +5,19 @@ const root = path.resolve(import.meta.dir, "..");
 function read(name: string) {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as {
     on: { pull_request?: { paths?: string[] }; push?: { branches?: string[]; tags?: string[] }; schedule?: { cron: string }[]; workflow_dispatch?: unknown };
-    jobs: Record<string, { "timeout-minutes"?: number; steps?: { name?: string; run?: string; with?: Record<string, unknown> }[] }>;
+    jobs: Record<string, { "timeout-minutes"?: number | string; steps?: { name?: string; run?: string; with?: Record<string, unknown> }[] }>;
     concurrency: { "cancel-in-progress": boolean | string };
   };
 }
-test("Docker publishing stays on main and tags; PRs match image inputs and reject unrelated paths", () => {
+test("Docker publishing stays on main and tags; PRs preserve complete image inputs including Tailwind sources", () => {
   const docker = read("docker-image.yml");
   expect(docker.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
   const patterns = docker.on.pull_request!.paths!;
   const matches = (file: string) => patterns.some(pattern => new Bun.Glob(pattern).match(file));
   for (const file of ["Dockerfile", ".dockerignore", "package.json", "bun.lock", "patches/dependency.patch", "src/runtime-host/main.ts", "src/app/page.tsx", "public/icon.svg", "bin/cli.mjs", "scripts/published-image-entrypoint.sh", "scripts/build-mcp.ts", "vendor/connector/index.js"]) expect(matches(file)).toBeTrue();
-  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/local-gate.ts", "scripts/audit-with-retry.sh", ".github/workflows/docker-image.yml"]) expect(matches(file)).toBeFalse();
-  expect(docker.jobs.build!["timeout-minutes"]).toBe(45);
-  expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
+  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/local-gate.ts", "scripts/audit-with-retry.sh", ".github/workflows/docker-image.yml"]) expect(matches(file)).toBeTrue();
+  expect(docker.jobs.build!["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
+  expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}");
   const build = docker.jobs.build!.steps!.find(step => step.name === "Build both architectures")!;
   expect(build.with!.push).toBe("${{ github.event_name != 'pull_request' }}");
   expect(build.with!.platforms).toBe("linux/amd64,linux/arm64");

@@ -1,4 +1,4 @@
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import { spawn, spawnSync as rawSpawnSync, type SpawnSyncReturns } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -3322,3 +3322,346 @@ test.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering acco
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
+
+test.each(["finalOutput", "stderr"])("an OAuth race on %s schedules bounded provider retries without spending review rounds", async (channel) => {
+  const startedAt = new Date().toISOString();
+  const cwd = "/repo";
+  const implementer = writeCodexEntry("retry-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f117"].join("-"), cwd }, Date.now() / 1_000);
+  const flow: Flow = {
+    id: "flow-provider-retry",
+    template: "implement-review-loop",
+    project: "repo",
+    cwd,
+    implementerPath: implementer.path,
+    roles: {
+      implementer: { engine: "codex", model: null, effort: "high" },
+      reviewer: { engine: "codex", model: null, effort: "xhigh" },
+    },
+    reviewerFallback: { engine: "claude", model: "fable", effort: "high" },
+    baseRef: "base",
+    baseMode: "head",
+    mode: "auto",
+    reviewerMode: "headless",
+    roundLimit: 5,
+    state: "reviewing",
+    pausedState: null,
+    stateDetail: null,
+    rounds: [{
+      n: 1,
+      reviewerPath: null,
+      reviewerRole: { engine: "codex", model: null, effort: "xhigh" },
+      accountId: "default",
+      attemptedAccounts: ["codex:default"],
+      autoRetryCount: 0,
+      sessionId: null,
+      reviewerPid: 999_999_999,
+      reviewerPane: null,
+      findingsPath: null,
+      triggeredBy: "marker",
+      readyNote: null,
+      verdict: null,
+      findingsCount: null,
+      startedAt,
+      spawnStartedAt: startedAt,
+      relayStartedAt: null,
+      reviewedAt: null,
+      relayedAt: null,
+      error: null,
+    }],
+    createdAt: startedAt,
+    closedAt: null,
+  };
+  const race = "Failed to refresh OAuth token: another process is refreshing it; retry in a minute";
+  const now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    for (let n = 0; n < 4; n += 1) {
+      const current = n === 0 ? flow : loadFlows()[0]!;
+      current.state = "reviewing";
+      current.rounds[0]!.spawnStartedAt = startedAt;
+      current.rounds[0]!.reviewerPid = 999_999_999;
+      current.rounds[0]!.launchNotBefore = null;
+      fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+      fs.writeFileSync(outputPathFor(flow.id, 1), channel === "finalOutput" ? race : "");
+      if (channel === "stderr") {
+        fs.writeFileSync(stdoutPathFor(flow.id, 1), "Initializing reviewer\n");
+        fs.writeFileSync(stderrPathFor(flow.id, 1), race);
+      }
+      saveFlows([current]);
+      await tickFlows([implementer]);
+      const next = loadFlows()[0]!;
+      expect(next.rounds).toHaveLength(1);
+      expect(next.rounds[0]!.autoRetryCount).toBe(0);
+      if (n < 3) {
+        expect(next.state).toBe("spawning");
+        expect(Date.parse(next.rounds[0]!.launchNotBefore!)).toBe(now + 60_000 * 2 ** n);
+        await tickFlows([implementer]);
+        expect(loadFlows()[0]!.rounds[0]!.spawnStartedAt).toBeNull();
+      } else {
+        expect(next.state).toBe("needs_decision");
+        expect(next.stateDetail).toContain("auth refresh race");
+      }
+    }
+  } finally { clock.mockRestore(); }
+});
+
+test("native headless usage limits wait for reset without spending missing-verdict retries", async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const implementer = writeCodexEntry("limit-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, now / 1_000);
+  const flow = raceFlow({ id: "flow-native-limit", implementerPath: implementer.path, reviewerMode: "headless", state: "reviewing" });
+  flow.rounds = [newRound(flow, "button", null)];
+  try {
+    for (let cut = 0; cut < 4; cut += 1) {
+      const current = cut === 0 ? flow : loadFlows()[0]!;
+      current.state = "reviewing";
+      const round = current.rounds[0]!;
+      const resetsAt = Math.floor(now / 1_000) + 600;
+      const reviewer = writeCodexEntry(`limit-reviewer-${cut}.jsonl`, { id: crypto.randomUUID(), cwd: "/repo" }, now / 1_000);
+      const records = [
+        { type: "event_msg", timestamp: new Date(now).toISOString(), payload: { type: "task_started" } },
+        { type: "event_msg", timestamp: new Date(now + 1).toISOString(), payload: { type: "token_count", rate_limits: {
+          primary: { used_percent: 100, resets_at: resetsAt }, secondary: null } } },
+        { type: "event_msg", timestamp: new Date(now + 2).toISOString(), payload: { type: "task_complete", error: { codex_error_info: "usage_limit_exceeded" } } },
+      ];
+      fs.appendFileSync(reviewer.path, records.map(record => JSON.stringify(record) + "\n").join(""));
+      Object.assign(round, { reviewerPath: reviewer.path, reviewerRole: { engine: "codex", model: null, effort: "xhigh" },
+        accountId: "default", reviewerPid: 999_999_999, spawnStartedAt: new Date(now - 1_000).toISOString(), launchNotBefore: null });
+      fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+      fs.writeFileSync(outputPathFor(flow.id, 1), "");
+      saveFlows([current]);
+      await tickFlows([implementer, reviewer]);
+      const next = loadFlows()[0]!;
+      expect(next.rounds).toHaveLength(1);
+      expect(next.rounds[0]!.autoRetryCount ?? 0).toBe(0);
+      if (cut < 3) {
+        expect(next.state).toBe("spawning");
+        expect(Date.parse(next.rounds[0]!.launchNotBefore!)).toBe(resetsAt * 1_000 + 60_000);
+        expect(next.stateDetail).toContain("usage limit");
+        await tickFlows([implementer]);
+        expect(loadFlows()[0]!.rounds[0]!.spawnStartedAt).toBeNull();
+      } else {
+        expect(next.state).toBe("needs_decision");
+        expect(next.stateDetail).toContain("usage limit");
+      }
+      now = resetsAt * 1_000 + 60_000;
+    }
+  } finally { clock.mockRestore(); }
+});
+
+test.each(["session", "weekly"] as const)("native Claude %s reviewer reset defers one relaunch and preserves later unknown backoff", async (scope) => {
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "native-reviewer-reset-"));
+  let now = Date.parse("2026-10-02T00:16:00Z");
+  const resetsAt = Date.parse("2026-10-02T14:30:00Z");
+  const clock = (at: number) => { now = at; setSystemTime(now); };
+  clock(now);
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const exec = await import("./exec");
+  const account = { engine: "claude" as const, accountId: "account-a", kind: "managed" as const,
+    home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({ kind: "available", account }));
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "native-reset-review-session", reviewerPath: null });
+  const nativeStatus = exec.headlessReviewStatus;
+  const status = spyOn(exec, "headlessReviewStatus").mockImplementation((id, n, round, engine) => launch.mock.calls.length > 0
+    ? { status: "running", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null }
+    : nativeStatus(id, n, round, engine));
+  try {
+    expect(spawnSync("git", ["init", "-b", "main"], { cwd: root }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply", "commit", "--allow-empty", "-m", "Base"], { cwd: root }).status).toBe(0);
+    const implementer = writeCodexEntry(`native-${scope}-implementer.jsonl`, { id: crypto.randomUUID(), cwd: root }, now / 1_000);
+    const reviewer = writeCodexEntry(`native-${scope}-reviewer.jsonl`, { id: crypto.randomUUID(), cwd: root }, now / 1_000);
+    fs.appendFileSync(reviewer.path, JSON.stringify({ type: "assistant", timestamp: new Date(now).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+        content: [{ type: "text", text: `You've hit your ${scope} limit · resets 2:30pm (UTC)` }] } }) + "\n");
+    const flow = raceFlow({ id: `flow-native-claude-${scope}-reset`, cwd: root, implementerPath: implementer.path, state: "reviewing" });
+    flow.rounds = [newRound(flow, "button", null)];
+    Object.assign(flow.rounds[0]!, { reviewerPath: reviewer.path, reviewerRole: { engine: "claude", model: "fable", effort: "high" },
+      accountId: "account-a", reviewerPid: 999_999_999, spawnStartedAt: new Date(now - 1_000).toISOString() });
+    fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+    fs.writeFileSync(outputPathFor(flow.id, 1), "");
+    saveFlows([flow]);
+    await tickFlows([implementer, reviewer]);
+    for (const at of [now + 30 * 60_000, now + 6 * 60 * 60_000, resetsAt, resetsAt + 59_999]) {
+      clock(at);
+      await tickFlows([implementer]);
+      const waiting = loadFlows()[0]!;
+      expect(waiting.state).toBe("spawning");
+      expect(waiting.rounds[0]!.providerLimitWait).toMatchObject({ resetsAt: resetsAt / 1_000, capacityProbes: 0 });
+      expect(waiting.rounds[0]!.autoRetryCount).toBe(0);
+      expect(waiting.rounds[0]!.providerRetryCount).toBe(1);
+      expect(launch).not.toHaveBeenCalled();
+      expect(resolve).not.toHaveBeenCalled();
+    }
+    clock(now + 1);
+    await tickFlows([implementer]);
+    await tickFlows([implementer]);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(loadFlows()[0]!.state).toBe("reviewing");
+    expect(loadFlows()[0]!.rounds).toHaveLength(1);
+    // The relaunched reviewer encounters a new limit without usable reset
+    // evidence. The earlier known wait must not exhaust its capacity backoff.
+    clock(now + 1_000);
+    fs.appendFileSync(reviewer.path, JSON.stringify({ type: "assistant", timestamp: new Date(now).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+        content: [{ type: "text", text: `You've hit your ${scope} limit` }] } }) + "\n");
+    const relaunched = loadFlows()[0]!;
+    Object.assign(relaunched.rounds[0]!, { reviewerPath: reviewer.path, reviewerPid: 999_999_999, sessionId: null });
+    fs.writeFileSync(outputPathFor(flow.id, 1), "");
+    status.mockImplementation(nativeStatus);
+    resolve.mockImplementation(() => ({ kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a"] }));
+    saveFlows([relaunched]);
+    await tickFlows([implementer, reviewer]);
+    expect(loadFlows()[0]!.state).toBe("spawning");
+    expect(loadFlows()[0]!.rounds[0]!.providerLimitWait?.resetsAt).toBeNull();
+    clock(now + 30 * 60_000);
+    await tickFlows([implementer]);
+    const waiting = loadFlows()[0]!;
+    expect(waiting.stateDetail).toContain("waiting for reviewer account capacity");
+    expect(waiting.state).toBe("spawning");
+    expect(waiting.rounds[0]!.providerLimitWait).toMatchObject({ resetsAt: null, capacityProbes: 1 });
+    expect(waiting.rounds[0]!.providerRetryCount).toBe(2);
+    expect(launch).toHaveBeenCalledTimes(1);
+    for (let probe = 0; probe < 2; probe += 1) {
+      clock(now + 15 * 60_000);
+      await tickFlows([implementer]);
+    }
+    expect(loadFlows()[0]!.state).toBe("needs_decision");
+    expect(loadFlows()[0]!.stateDetail).toContain("capacity recovery exhausted after 3 probes");
+  } finally {
+    status.mockRestore(); launch.mockRestore(); resolve.mockRestore(); setSystemTime();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ordinary reviewer prose mentioning retry in a minute keeps the missing-verdict budget", async () => {
+  const implementer = writeCodexEntry("prose-retry-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
+  const flow = raceFlow({ id: "flow-prose-retry", implementerPath: implementer.path });
+  flow.rounds = [newRound(flow, "button", null)];
+  Object.assign(flow.rounds[0]!, { reviewerPid: 999_999_999, spawnStartedAt: new Date().toISOString() });
+  fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+  fs.writeFileSync(outputPathFor(flow.id, 1), "The test service is restarting; retry in a minute after it is ready.");
+  saveFlows([flow]);
+  await tickFlows([implementer]);
+  const next = loadFlows()[0]!;
+  expect(next.stateDetail).toContain("reviewer produced no verdict");
+  expect(next.rounds[0]!.providerRetryCount ?? 0).toBe(0);
+  expect(next.rounds[0]!.autoRetryCount).toBe(1);
+  expect(next.rounds[0]!.launchNotBefore).toBeNull();
+});
+
+test.each([false, true])("headless limit recovery probes capacity and relaunches once, exhausted=%s", async (exhausted) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-limit-"));
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const exec = await import("./exec");
+  const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
+    home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => exhausted
+    ? { kind: "exhausted" as const, resetsAt: Math.floor(now / 1_000) - 600, allowedAccountIds: ["account-a"] }
+    : { kind: "available" as const, account });
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "capacity-retry-session", reviewerPath: null });
+  const status = spyOn(exec, "headlessReviewStatus").mockImplementation((_id, _n, persisted) => persisted.spawnStartedAt
+    ? { status: "running", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null }
+    : null);
+  try {
+    expect(spawnSync("git", ["init", "-b", "main"], { cwd: root }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "Base"], { cwd: root }).status).toBe(0);
+    const implementer = writeCodexEntry(`capacity-implementer-${exhausted}.jsonl`, { id: crypto.randomUUID(), cwd: root }, now / 1_000);
+    const flow = raceFlow({ id: `flow-limit-capacity-${exhausted}`, cwd: root, implementerPath: implementer.path, state: "spawning" });
+    flow.rounds = [newRound(flow, "button", null)];
+    const round = flow.rounds[0]!;
+    round.providerRetryCount = 1;
+    round.providerLimitWait = { resetsAt: Math.floor(now / 1_000), startedAt: new Date(now).toISOString(), capacityProbes: 0 };
+    round.launchNotBefore = new Date(now + 60_000).toISOString();
+    saveFlows([flow]);
+    await tickFlows([implementer]);
+    expect(resolve).not.toHaveBeenCalled();
+    now += 60_000;
+    for (let probe = 0; probe < 4; probe += 1) {
+      await tickFlows([implementer]);
+      now += 15 * 60_000;
+    }
+    const result = loadFlows()[0]!;
+    expect(result.rounds).toHaveLength(1);
+    expect(result.rounds[0]!.autoRetryCount).toBe(0);
+    expect(result.rounds[0]!.providerRetryCount).toBe(1);
+    if (exhausted) {
+      expect(result.state).toBe("needs_decision");
+      expect(result.stateDetail).toMatch(/usage limit.*capacity recovery exhausted after 3 probes/);
+      expect(launch).not.toHaveBeenCalled();
+    } else {
+      expect(result.state).toBe("reviewing");
+      expect(result.rounds[0]!.accountId).toBe("account-a");
+      expect(result.rounds[0]!.sessionId).toBe("capacity-retry-session");
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(launch.mock.calls[0]![2].engine).toBe("codex");
+    }
+  } finally {
+    status.mockRestore(); launch.mockRestore(); resolve.mockRestore(); clock.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a transient reviewer retry retains its frozen engine after configuration changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-frozen-retry-"));
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const exec = await import("./exec");
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "frozen-engine-retry-session", reviewerPath: null });
+  const resolve = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation((engine) => engine === "codex"
+    ? { kind: "available", account: { engine: "codex", accountId: "account-a", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" } } }
+    : { kind: "unavailable" });
+  try {
+    expect(spawnSync("git", ["init", "-b", "main"], { cwd: root }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "Base"], { cwd: root }).status).toBe(0);
+    const implementer = writeCodexEntry("frozen-retry-implementer.jsonl", { id: crypto.randomUUID(), cwd: root }, Date.now() / 1_000);
+    const flow = raceFlow({ id: "flow-frozen-retry", cwd: root, implementerPath: implementer.path, state: "spawning" });
+    flow.rounds = [newRound(flow, "button", null)];
+    flow.rounds[0]!.providerRetryCount = 1;
+    flow.roles.reviewer = { engine: "claude", model: "fable", effort: "high" };
+    saveFlows([flow]);
+    await tickFlows([implementer]);
+    expect(loadFlows()[0]!.state).toBe("reviewing");
+    expect(loadFlows()[0]!.rounds[0]!.sessionId).toBe("frozen-engine-retry-session");
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(launch.mock.calls[0]![2].engine).toBe("codex");
+    expect(resolve.mock.calls.every(call => call[0] === "codex")).toBe(true);
+  } finally {
+    launch.mockRestore(); resolve.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("headless capacity recovery preserves a newly discovered future reset before spending probes", async () => {
+  let now = Date.now();
+  const resetsAt = Math.floor(now / 1_000) + 7 * 24 * 60 * 60;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "exhausted", resetsAt, allowedAccountIds: ["account-a"] });
+  try {
+    const implementer = writeCodexEntry("future-reset-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, now / 1_000);
+    const flow = raceFlow({ id: "flow-future-reset", implementerPath: implementer.path, state: "spawning" });
+    flow.rounds = [newRound(flow, "button", null)];
+    Object.assign(flow.rounds[0]!, { providerRetryCount: 1,
+      providerLimitWait: { resetsAt: null, startedAt: new Date(now).toISOString(), capacityProbes: 0 } });
+    saveFlows([flow]);
+    await tickFlows([implementer]);
+    const waiting = loadFlows()[0]!;
+    expect(waiting.state).toBe("spawning");
+    expect(waiting.rounds[0]!.providerLimitWait).toMatchObject({ resetsAt, capacityProbes: 0 });
+    expect(waiting.rounds[0]!.launchNotBefore).toBe(new Date(resetsAt * 1_000 + 60_000).toISOString());
+    now = resetsAt * 1_000 + 59_999;
+    await tickFlows([implementer]);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(loadFlows()[0]!.state).toBe("spawning");
+    now += 1;
+    for (let probe = 0; probe < 3; probe += 1) {
+      await tickFlows([implementer]);
+      now += 15 * 60_000;
+    }
+    expect(loadFlows()[0]!.state).toBe("needs_decision");
+    expect(loadFlows()[0]!.stateDetail).toContain("capacity recovery exhausted after 3 probes");
+    expect(loadFlows()[0]!.rounds).toHaveLength(1);
+    expect(loadFlows()[0]!.rounds[0]!.autoRetryCount).toBe(0);
+  } finally { resolve.mockRestore(); clock.mockRestore(); }
+});

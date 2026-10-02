@@ -1,3 +1,4 @@
+import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -426,7 +427,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     });
   }
   for (const file of files) {
-    if (file.engine !== "claude" && file.engine !== "codex") continue;
+    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") continue;
     if (file.spawn) continue;
     const conversation = conversationForPath(file.path);
     if (!conversation || conversation.engine !== file.engine) continue;
@@ -452,6 +453,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
         ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
         : null;
       if (permission) file.pendingPermission = permission;
+      const memoryKill = !conversation.supersededBy ? registryEntry?.structuredHost?.memory?.lastKill : null;
+      if (memoryKill) file.memoryKill = { at: memoryKill.at, limitBytes: memoryKill.limitBytes, limit: memoryKill.limit, fatal: memoryKill.fatal };
       if (registryEntry?.status === "dead" && file.pid === null) {
         file.activity = Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle";
         file.activityReason = "registry_terminal";
@@ -934,7 +937,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     systemHealth: {
       tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,
-      ...(storageIncidents.length ? { storage: { incidents: storageIncidents } } : {}),
+      storage: { incidents: storageIncidents, writes: stateWriteHealth(stateDir()) },
     },
     conversationAliases: registrySnapshot.conversationAliases,
     ...(Object.keys(launchProjection.routes).length ? { launchRoutes: launchProjection.routes } : {}),

@@ -436,3 +436,95 @@ createRoot(document.getElementById("root")!).render(<div data-feed-kind="prose">
   }
   expect(results.filter((result) => result.cache === "cold page")).toHaveLength(process.env.LLV_TTS_LIVE_REPLAY === "1" ? 1 : 20);
 }
+
+/** The same seat hand-over in the desktop and phone drivers: provenance is
+ * released after the answered record and reply are already visible. */
+export async function captureSeatMandateHandover(browser: Browser, base: string, mobile: boolean): Promise<void> {
+  const { expect } = await import("bun:test");
+  const surface = mobile ? "phone" : "desktop";
+  const out = path.resolve(`.artifacts/seat-handover/${surface}`);
+  fs.mkdirSync(out, { recursive: true });
+  const frames: Record<string, unknown>[] = [];
+  for (const engine of ["claude", "codex"] as const) for (const handover of ["answered", "adopted"] as const)
+    for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      const label = `${engine}-${handover}-${scheme}-${locale}`;
+      const query = mobile ? "kanban=1&seatless=donly&firstmessage=s" : "scenario=first-message&case=s";
+      const { context, page, pageErrors } = await openFixture(browser, `${base}?${query}&engine=${engine}&handover=${handover}#p=atlas`,
+        { width: mobile ? 390 : 1440, height: mobile ? 844 : 900 }, scheme, locale, "reduce", mobile);
+      try {
+        await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+        if (mobile) {
+          await page.locator("[data-mobile2-seat-open]").first().click();
+          await page.locator('[data-orchestrator-sheet-mode="create"]').waitFor();
+        }
+        await page.locator("[data-orchestrator-confirm]").first().click();
+        await page.locator("[data-mandate-card]").first().waitFor();
+        await page.locator("[data-mandate-card] summary").first().click();
+        await page.waitForFunction(() => document.querySelector("[data-mandate-card] details[open] > div")?.textContent?.includes("Keep the project moving."));
+        await page.evaluate(() => {
+          const sink = { lapses: [] as string[] };
+          (window as unknown as { __seatHandover: typeof sink }).__seatHandover = sink;
+          const scan = () => {
+            const root = document.querySelector("[data-log-feed-scroller]");
+            if (!root) { sink.lapses.push("no feed"); return; }
+            const clone = root.cloneNode(true) as HTMLElement;
+            clone.querySelectorAll("[data-mandate-card]").forEach((card) => card.remove());
+            if (root.querySelectorAll("[data-mandate-card]").length !== 1) sink.lapses.push("card count");
+            if ((clone.textContent ?? "").includes("Keep the project moving.")) sink.lapses.push("mandate outside card");
+            if (root.querySelector("[data-user-bubble]")) sink.lapses.push("operator bubble");
+          };
+          new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+          scan();
+        });
+        const read = () => page.evaluate(() => {
+          const root = document.querySelector("[data-log-feed-scroller]")!;
+          const card = root.querySelector<HTMLElement>("[data-mandate-card]")!;
+          const rect = card.getBoundingClientRect();
+          const clone = root.cloneNode(true) as HTMLElement;
+          clone.querySelectorAll("[data-mandate-card]").forEach((node) => node.remove());
+          return {
+            cards: root.querySelectorAll("[data-mandate-card]").length,
+            recordKind: card.closest("[data-feed-kind]")?.getAttribute("data-feed-kind") ?? null,
+            open: card.querySelector("details")!.hasAttribute("open"),
+            height: rect.height, top: rect.top, left: rect.left, width: rect.width,
+            text: card.querySelector("details")!.textContent,
+            outside: (clone.textContent ?? "").includes("Keep the project moving."),
+            userBubbles: root.querySelectorAll("[data-user-bubble]").length,
+            json: /structured launch recovery|"phase"|\{\s*"/.test(root.textContent ?? ""),
+            danger: [...root.querySelectorAll("[class*=danger]")].filter((node) => [...node.classList].some((token) => /^(text|bg|border)-danger/.test(token))).length,
+            overflow: document.documentElement.scrollWidth - innerWidth,
+            beforeReply: card.closest("[data-feed-kind]")?.nextElementSibling?.textContent?.includes("Looking at the export test.") ?? false,
+          };
+        });
+        const initial = await read();
+        await page.screenshot({ path: path.join(out, `${label}-pending.png`) });
+        await page.evaluate(() => {
+          const evidence = (window as unknown as { evidence: { advanceFirstMessage(): void } }).evidence;
+          evidence.advanceFirstMessage(); evidence.advanceFirstMessage();
+        });
+        await page.waitForFunction(() => document.querySelector("[data-log-feed-scroller]")?.textContent?.includes("Looking at the export test."), undefined, { timeout: 25_000 });
+        const held = await read();
+        await page.screenshot({ path: path.join(out, `${label}-evidence-pending.png`) });
+        await page.evaluate(() => (window as unknown as { evidence: { releaseFirstMessageEvidence(): void } }).evidence.releaseFirstMessageEvidence());
+        await page.waitForTimeout(200);
+        const resolved = await read();
+        await page.screenshot({ path: path.join(out, `${label}-evidence-resolved.png`) });
+        const lapses = await page.evaluate(() => (window as unknown as { __seatHandover: { lapses: string[] } }).__seatHandover.lapses);
+        frames.push({ engine, handover, locale, scheme, initial, held, resolved, lapses, pageErrors });
+        for (const state of [initial, held, resolved]) {
+          expect(state.cards).toBe(1); expect(state.open).toBe(true);
+          expect(state.outside).toBe(false); expect(state.userBubbles).toBe(0);
+          expect(state.json).toBe(false); expect(state.danger).toBe(0); expect(state.overflow).toBeLessThanOrEqual(1);
+          expect(Math.abs(state.height - initial.height)).toBeLessThanOrEqual(2);
+          expect(state.text).toBe(initial.text);
+          expect(Math.abs(state.top - initial.top)).toBeLessThanOrEqual(2);
+        }
+        expect(held.beforeReply).toBe(true); expect(resolved.beforeReply).toBe(true);
+        expect(held.recordKind).toBe("mandate");
+        expect(resolved.recordKind).toBe(engine === "claude" ? "sysmsg" : "user");
+        expect(lapses).toEqual([]); expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+  fs.mkdirSync("evidence/first-message", { recursive: true });
+  fs.writeFileSync(`evidence/first-message/${surface}-handover.json`, JSON.stringify({ surface, width: mobile ? 390 : 1440, frames }, null, 2) + "\n");
+}
