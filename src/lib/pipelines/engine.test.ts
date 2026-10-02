@@ -27,6 +27,7 @@ const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pat
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
+const { saveFlows } = await import("@/lib/flows/store");
 const { isRecoverableLegacyRelayFailurePause, MAX_FLOW_NOTE_LENGTH } = await import("@/lib/flows/commands");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
@@ -1164,6 +1165,10 @@ test(`a legacy architect repair commits its declared output before ${publication
     const roles = { implementer: { engine: "codex" as const, model: null, effort: "high" }, reviewer: { engine: "codex" as const, model: null, effort: "high" } };
     const firstRound = { ...newRound({ ...flow, roles, rounds: [] }, "marker", null), n: 1, startedAt: "2026-07-22T00:00:00Z", relayedAt: "2026-07-22T00:01:00Z" };
     Object.assign(flow, {
+      template: "implement-review-loop",
+      project: loadPipelines().find((item) => item.id === fixture.id)!.project,
+      baseMode: "head",
+      pausedState: null, stateDetail: null,
       cwd: fixture.worktree,
       implementerPath: transcript,
       requireRemoteHead: publication === "remote-branch",
@@ -1172,6 +1177,7 @@ test(`a legacy architect repair commits its declared output before ${publication
       createdAt: "2026-07-21T00:00:00Z",
       rounds: [firstRound],
     });
+    saveFlows([flow]);
     fs.writeFileSync(path.join(fixture.worktree, "report.md"), "repaired report\n");
     fs.writeFileSync(path.join(fixture.worktree, "sentinel.tmp"), "keep me\n");
     const record = entry(transcript);
@@ -1185,6 +1191,7 @@ test(`a legacy architect repair commits its declared output before ${publication
       expect(flow.state).toBe("fixing");
       expect(flow.rounds).toHaveLength(1);
       fs.renameSync(offline, fixture.origin);
+      saveFlows([flow]);
       expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
       expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`))).toBe(repaired);
     }
@@ -1194,6 +1201,7 @@ test(`a legacy architect repair commits its declared output before ${publication
     expect((await fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("report.md");
     expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("keep me\n");
   } finally {
+    saveFlows([]);
     savePipelines([]);
     if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
     fs.rmSync(fixture.root, { recursive: true, force: true });
