@@ -14676,10 +14676,20 @@ describe("launch layout shift rendered evidence", () => {
           /* The mandate bubble's own hand-over is read apart: the first-bubble lane (#2006, #2415) owns it. */
           const clsWithoutMandate = Number(shifts.filter((entry) => !entry.mandate).reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
           const pills = await page.evaluate(() => (window as unknown as { __pills: Array<{ at: number; text: string }> }).__pills.map((entry) => entry.text));
+          /* The seat header and the composer's pill name one model and one tier the same way. */
+          const names = await page.evaluate(() => ({
+            header: (document.querySelector("[data-orchestrator-model]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+            pill: (document.querySelector("[data-runtime-pill]")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+          }));
           await page.screenshot({ path: path.join(out, `${label}-seat-${viewport.name}.png`) });
-          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), clsWithoutMandate, chosen, pills, pageErrors });
+          readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), clsWithoutMandate, chosen, pills, names, pageErrors });
           expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
           if (label === "after") {
+            if (names.header) {
+              const headerModel = names.header.split(" · ")[0]!;
+              expect(names.pill, `${viewport.name} the seat header's model name is the composer pill's`).toContain(headerModel);
+              expect(names.header, `${viewport.name} the seat header names the tier as the pill does`).toContain(word);
+            }
             expect(pills.length, `${viewport.name} the composer drew a runtime pill`).toBeGreaterThan(0);
             for (const text of pills) {
               expect(text, `${viewport.name} the runtime pill reads the chosen effort from its first frame`).toContain(word);

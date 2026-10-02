@@ -1010,7 +1010,7 @@ test("a cached «alive» nobody is answering for any more never accuses the seat
   /* The reading IS on hand — with no file in the catalog the board contributes
      no context of its own, so the header's model and wear can only be coming
      from the retained reading. */
-  expect(incumbentRow(host)?.textContent).toContain("opus");
+  expect(incumbentRow(host)?.textContent).toContain("Opus 5.5");
   expect(host.querySelector("[data-orchestrator-context]")?.getAttribute("data-orchestrator-context")).toBe("24");
   /* And it is not evidence: the panel keeps waiting instead of reporting a
      fault the server was never asked to confirm. */
@@ -1198,8 +1198,8 @@ test("the header names the incumbent — engine, model, account and context perc
   const row = incumbentRow(host)!;
   expect(row).not.toBeNull();
   expect(row.textContent).toContain("Claude");
-  expect(row.textContent).toContain("opus");
-  expect(row.textContent).toContain("high");
+  expect(row.textContent).toContain("Opus 5.5");
+  expect(row.textContent).toContain(translate("en", "reasoningTier.high"));
   /* The account catalog's own label, resolved from the id the server reports. */
   expect(row.textContent).toContain("spare");
   expect(row.querySelector("[data-orchestrator-context]")?.getAttribute("data-orchestrator-context")).toBe("24");
@@ -1687,7 +1687,7 @@ test("coming back to a project paints its conversation in the first commit, tran
   expect(dock.host.textContent).toContain("Atlas mandate accepted.");
   /* The incumbent header is whole too — the model is read, not degraded to the
      dash a fresh 60s-cadence status read would leave for a minute. */
-  expect(dock.host.textContent).toContain("opus");
+  expect(dock.host.textContent).toContain("Opus 5.5");
 
   /* The poll behind that paint still runs, and lands in place. */
   seatStatus = { seat: activeSeat({ conversationId: "conversation_successor", path: "/transcripts/successor.jsonl" }), pending: null, exists: true };

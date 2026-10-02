@@ -4,11 +4,11 @@
   "readings": [
     {
       "viewport": "desktop-1440",
-      "cls": 0.0803,
-      "shifts": 6,
+      "cls": 0.0573,
+      "shifts": 4,
       "largest": [
         {
-          "at": 9069,
+          "at": 9085,
           "value": 0.0232,
           "sources": [
             "DIV.flex.min-h-0",
@@ -18,7 +18,7 @@
           "mandate": false
         },
         {
-          "at": 9114,
+          "at": 9131,
           "value": 0.0167,
           "sources": [
             "DIV.px-3.pb-3"
@@ -26,27 +26,7 @@
           "mandate": true
         },
         {
-          "at": 834,
-          "value": 0.0115,
-          "sources": [
-            "SECTION.column[assigned]",
-            "SECTION.column.strip[done]",
-            "SECTION.column.strip[blocked]"
-          ],
-          "mandate": false
-        },
-        {
-          "at": 871,
-          "value": 0.0115,
-          "sources": [
-            "SECTION.column[assigned]",
-            "SECTION.column.strip[blocked]",
-            "SECTION.column.strip[done]"
-          ],
-          "mandate": false
-        },
-        {
-          "at": 9130,
+          "at": 9148,
           "value": 0.0103,
           "sources": [
             "DIV.px-3.pb-3"
@@ -54,7 +34,7 @@
           "mandate": true
         },
         {
-          "at": 904,
+          "at": 876,
           "value": 0.0071,
           "sources": [
             "DIV.px-3.pb-3"
@@ -62,11 +42,15 @@
           "mandate": false
         }
       ],
-      "clsWithoutMandate": 0.0533,
+      "clsWithoutMandate": 0.0303,
       "chosen": "high",
       "pills": [
         "Opus 5.5 · High"
       ],
+      "names": {
+        "header": "Opus 5.5 · High",
+        "pill": "Opus 5.5 · High"
+      },
       "pageErrors": []
     },
     {
@@ -75,7 +59,7 @@
       "shifts": 3,
       "largest": [
         {
-          "at": 9138,
+          "at": 9178,
           "value": 0.0578,
           "sources": [
             "DIV.px-3.pb-3"
@@ -83,7 +67,7 @@
           "mandate": true
         },
         {
-          "at": 9160,
+          "at": 9206,
           "value": 0.0383,
           "sources": [
             "DIV.px-3.pb-3"
@@ -91,7 +75,7 @@
           "mandate": true
         },
         {
-          "at": 770,
+          "at": 777,
           "value": 0.0056,
           "sources": [
             "SPAN.max-w-[300px].text-body",
@@ -106,6 +90,10 @@
       "pills": [
         "Opus 5.5 · high"
       ],
+      "names": {
+        "header": "",
+        "pill": "Opus 5.5 · high"
+      },
       "pageErrors": []
     }
   ]
