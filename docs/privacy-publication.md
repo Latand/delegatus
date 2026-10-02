@@ -31,12 +31,15 @@ Unsupported binary inputs fail closed. Publication inputs and supporting files
 with symlinks in any path component are rejected before their targets are read.
 
 Email detection skips domains ending in the systemd unit types `.service`,
-`.socket`, `.scope`, `.slice`, `.timer`, `.target`, `.mount`, `.automount`,
-`.path`, `.device`, and `.swap`. These suffixes are not delegated TLDs; template
-unit names and cgroup paths therefore name no mailbox. This rule also applies
-to commit messages and merge-boundary identities. The suffix must be the final
-domain component: `.services` and unit-looking domains ending in a real TLD
-remain reportable.
+`.socket`, `.scope`, `.slice`, `.timer`, `.mount`, `.automount`, `.path`,
+`.device`, and `.swap`. These suffixes are not delegated TLDs; template unit
+names and cgroup paths therefore name no mailbox. `.target` remains reportable
+because [IANA delegates it as a TLD](https://www.iana.org/domains/root/db/target.html).
+This rule also applies to commit messages and merge-boundary identities. The
+suffix must be the final domain component: `.services` and unit-looking domains
+ending in a real TLD remain reportable.
+Internationalized domain labels are read in full before this exemption is
+applied.
 
 Media dispatch recognizes PNG, JPEG, GIF, BMP, TIFF, WebP, ISO-BMFF, AVI, and
 Matroska signatures before applying the declared-extension fallback. Renamed

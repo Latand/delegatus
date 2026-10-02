@@ -36,7 +36,7 @@ const systemdUnitSamples = [
   `0::/user.slice/user-1000.slice/${["user", "1000.service"].join("@")}/app.slice/delegatus.service`,
   ["delegatus", String.raw`review\x2dworker.service`].join("@"),
   [String.raw`delegatus\x2dworker`, "review.service"].join("@"),
-  ...["service", "socket", "scope", "slice", "timer", "target", "mount", "automount", "path", "device", "swap"]
+  ...["service", "socket", "scope", "slice", "timer", "mount", "automount", "path", "device", "swap"]
     .map((type) => ["delegatus", `review.${type}`].join("@")),
   ["delegatus", "review.SERVICE"].join("@"),
 ];
@@ -47,6 +47,8 @@ const unitLookingRealAddresses = [
   ["delegatus", "review.service.dev"].join("@"),
   ["delegatus", "review.services"].join("@"),
   ["delegatus", "review.serviceevil"].join("@"),
+  ["someone", "b.service.TaRgEt"].join("@"),
+  ["someone", "b.SeRvIcE.укр"].join("@"),
 ];
 
 afterEach(() => {

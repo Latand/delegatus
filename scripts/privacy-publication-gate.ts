@@ -577,7 +577,7 @@ type EmailOccurrence = {
    detection reads both rather than only the shape that is easy to match. */
 const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
 const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-const emailDomain = /([A-Z0-9.-]+\.[A-Z]{2,})\b/;
+const emailDomain = /([A-Z0-9.\p{L}\p{M}-]+\.[A-Z\p{L}\p{M}]{2,})(?![A-Z0-9\p{L}\p{M}-])/u;
 const emailAddressSource =
   `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
 
@@ -590,12 +590,12 @@ function domainNamesNobody(domain: string): boolean {
   const lowered = domain.toLowerCase();
   return lowered === "example.com" || lowered === "example.net" || lowered === "example.org"
     || lowered.endsWith(".invalid") || lowered.endsWith(".test")
-    || /\.(?:service|socket|scope|slice|timer|target|mount|automount|path|device|swap)$/.test(lowered);
+    || /\.(?:service|socket|scope|slice|timer|mount|automount|path|device|swap)$/.test(lowered);
 }
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */
 function* emailOccurrences(text: string): Generator<EmailOccurrence> {
-  const pattern = new RegExp(emailAddressSource, "gi");
+  const pattern = new RegExp(emailAddressSource, "giu");
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     if (domainNamesNobody(match[2])) continue;
     yield { address: match[0], domain: match[2], index: match.index, localPart: match[1] };
