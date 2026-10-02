@@ -3117,12 +3117,17 @@ function fixerSelfFailCanGoToReview(
   // also recognize ordinary blocker prose in legacy summaries. Findings are
   // defect descriptions for the reviewer, so words like "tests fail to cover"
   // in a finding cannot establish that the fixer is blocked.
-  const completion = [parsed.output, parsed.completionText].filter(Boolean).join("\n");
-  const recoveredHistoricalFailure = /\bfailed on (?:the )?base\b/i.test(completion)
-    && /\bpassed on (?:the )?head\b/i.test(completion);
-  const reason = (recoveredHistoricalFailure
-    ? completion.replace(/[^.\n]*\bfailed on (?:the )?base\b[^.\n]*(?:\.|\n|$)/gi, "")
-    : completion)
+  const completion = [parsed.output, parsed.completionText]
+    .filter(Boolean)
+    .map((part) => stageVerdictProse(part!))
+    .join("\n");
+  // A base failure is historical only when its own paired statement says
+  // that check passed on the head. Another check passing cannot clear it.
+  const explicitlyBlocked = /\bblocked\s*:/i.test(completion);
+  const reason = (explicitlyBlocked ? completion : completion.replace(
+    /[^.\n]*\bfailed on (?:the )?base\b\s*(?:[,;]\s*)?(?:(?:and|but)\s+)?(?:(?:they|it|these tests|those tests)\s+)?passed on (?:the )?head\b[^.\n]*(?:\.|\n|$)/gi,
+    "",
+  ))
     .replace(/\b(?:not blocked|no blockers?)\b/gi, "")
     // Red/green evidence describes a resolved failure, not a present stop.
     .replace(/[^.\n]*\bfailed before (?:the )?fix\b[^.\n]*\bpassed\b[^.\n]*/gi, "");

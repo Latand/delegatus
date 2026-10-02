@@ -728,8 +728,10 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
     expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
-    expect(tool?.description).toContain("fixes every handed finding and anything it notices within the specification");
-    expect(tool?.description).toContain("fails only when blocked");
+    expect(tool?.description).toContain("fixes every handed finding and every in-spec discovery immediately");
+    expect(tool?.description).toContain("It returns fail only when blocked");
+    expect(tool?.description).toContain("It never returns fail for its own discovery");
+    expect(tool?.description).toContain("every in-spec discovery immediately");
     expect(tool?.description).toContain("fixer's findings as notes for the reviewer");
     expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");

@@ -746,9 +746,9 @@ test.each([
 });
 
 test.each([
-  { label: "historical red/green evidence across sentences", summary: "Regression tests failed on base. All required checks passed on head. No blockers.", finding: "another in-scope issue" },
+  { label: "correlated historical red/green evidence", summary: "Regression tests failed on base and passed on head. No blockers.", finding: "another in-scope issue" },
   { label: "test coverage finding", summary: "Handed findings fixed; checks passed.", finding: "Tests fail to cover cancellation in fix.txt:1" },
-].flatMap((scenario) => ["fenced verdict", "recorded report"].map((settlement) => ({ ...scenario, settlement }))))("a fixer routes $label to review through a $settlement settlement", async ({ summary, finding, settlement }) => {
+].flatMap((scenario) => ["fenced verdict", "recorded report", "reported plus fenced completion"].map((settlement) => ({ ...scenario, settlement }))))("a fixer routes $label to review through a $settlement settlement", async ({ summary, finding, settlement }) => {
   const fixture = await realWorktreeLane("fixer-blocker-wording", [
     { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
     { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
@@ -761,7 +761,7 @@ test.each([
     const fixed = git(worktree, "rev-parse", "HEAD");
     const findings = [`P2 — ${finding}`];
     const lane = loadPipelines()[0]!;
-    if (settlement === "recorded report") {
+    if (settlement === "recorded report" || settlement === "reported plus fenced completion") {
       lane.runs[0]!.attempts[0]!.report = {
         seq: 1,
         at: h.ports.now(),
@@ -774,7 +774,7 @@ test.each([
       savePipelines([lane]);
     }
     h.setConversationActive(false);
-    const transcriptVerdict = settlement === "fenced verdict"
+    const transcriptVerdict = settlement !== "recorded report"
       ? `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings })}\n\`\`\``
       : "";
     h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${transcriptVerdict}`, ts: Date.now() + 100_000_000 });
@@ -786,6 +786,46 @@ test.each([
     expect(current.lastPassedCommit).toBe(fixed);
     expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
     expect(current.cursor?.input).toContain(finding);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preserves an explicit current blocker when another check passed on head (%s)", async (settlement) => {
+  const fixture = await realWorktreeLane("fixer-current-blocker", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    const { h, git, worktree, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
+    git(worktree, "add", "fix.txt");
+    git(worktree, "commit", "-m", "committed partial fix");
+    const lane = loadPipelines()[0]!;
+    if (settlement === "reported plus fenced completion") {
+      lane.runs[0]!.attempts[0]!.report = {
+        seq: 1,
+        at: h.ports.now(),
+        actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+        verdict: { status: "fail", findings: ["P2 — unresolved integration failure"] },
+        summary: "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.",
+        provenance: { head: git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+        calls: 1,
+      };
+      savePipelines([lane]);
+    }
+    h.setConversationActive(false);
+    const summary = "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.";
+    const verdict = `\n\`\`\`json\n${JSON.stringify({ status: "fail", findings: ["P2 — unresolved integration failure"] })}\n\`\`\``;
+    h.messages.set("/codex/stage-1.jsonl", { text: `${summary}${verdict}`, ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    const current = loadPipelines()[0]!;
+    expect(current.state).toBe("needs_decision");
+    expect(current.cursor?.stageId).toBe("fix");
+    expect(current.lastPassedCommit).toBe(base);
+    expect(current.runs[0]!.attempts[0]!.output).toContain("Blocked: required integration tests");
+    expect(h.spawnInputs).toHaveLength(1);
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
