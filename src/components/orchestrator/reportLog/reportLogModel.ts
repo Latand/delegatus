@@ -56,18 +56,29 @@ export function bodySegments(body: string, github: string | null, cards: readonl
   return segments;
 }
 
+/* A formatter is built once per locale and shape: a log of thirty entries built
+   sixty of them on every render, which was the log's whole cost (#2218). */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(locale: string, shape: "clock" | "day" | "dayYear"): Intl.DateTimeFormat {
+  const key = `${locale}|${shape}`;
+  let made = formatters.get(key);
+  if (!made) {
+    made = new Intl.DateTimeFormat(locale, shape === "clock"
+      ? { hour: "2-digit", minute: "2-digit", hour12: false }
+      : { day: "numeric", month: "short", ...(shape === "dayYear" ? { year: "numeric" } : {}) });
+    formatters.set(key, made);
+  }
+  return made;
+}
+
 /** The entry's local time: the clock alone today, the day and the clock before. */
 export function entryTime(at: string, locale: string, now: Date = new Date()): string {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return "";
   const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+  const clock = formatter(locale, "clock").format(date);
   if (sameDay) return clock;
-  const day = new Intl.DateTimeFormat(locale, {
-    day: "numeric",
-    month: "short",
-    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-  }).format(date);
+  const day = formatter(locale, date.getFullYear() === now.getFullYear() ? "day" : "dayYear").format(date);
   return `${day} ${clock}`;
 }
 
