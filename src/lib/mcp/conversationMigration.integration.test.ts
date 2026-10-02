@@ -3,6 +3,9 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { NextRequest } from "next/server";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeOperationCommand } from "@/lib/runtime/contracts";
@@ -27,35 +30,39 @@ const { dispatchStructuredControl } = await import("@/lib/runtime/structuredCont
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
 const { FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
+const { ownExternalFixtureChild, reapFixtureChildren } = await import("./ownedFixtureChildren");
 
-afterAll(() => {
+afterAll(async () => {
+  await reapFixtureChildren();
   for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
   Object.assign(process.env, originalEnv);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-function migrationFixture(name: string, options: { missingHost?: boolean; delay?: Promise<void>; loseRuntimeAnswer?: boolean; defaultSpeed?: boolean } = {}) {
+function migrationFixture(name: string, options: { engine?: "claude" | "codex"; missingHost?: boolean; delay?: Promise<void>; loseRuntimeAnswer?: boolean; defaultSpeed?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(sandbox, `${name}-`));
-  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, accountId: "account-a", transport: "structured",
-    launchProfile: { title: "Account migration fixture", model: "gpt-5.6-luna", effort: "low", fast: options.defaultSpeed ? null : false, project: "repo-fixture", role: "worker" } });
+  const engine = options.engine ?? "codex";
+  const hostKind = engine === "claude" ? "claude-broker" : "codex-app-server";
+  const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = registry.beginSpawnRequest({ engine, cwd: root, accountId: "account-a", transport: "structured",
+    launchProfile: { title: "Account migration fixture", model: engine === "claude" ? "opus" : "gpt-5.6-luna", effort: "low", fast: engine === "claude" || options.defaultSpeed ? null : false, project: "repo-fixture", role: "worker" } });
   if (begun.kind !== "created") throw new Error("fixture was not created");
   const id = begun.receipt.conversationId;
   const nativeId = crypto.randomUUID();
   const transcript = path.join(root, `${nativeId}.jsonl`);
   registry.settleSpawn(begun.receipt.launchId, {
-    key: { engine: "codex", sessionId: nativeId }, artifactPath: transcript, cwd: root,
+    key: { engine, sessionId: nativeId }, artifactPath: transcript, cwd: root,
     accountId: "account-a", status: "live", host: null,
-    structuredHost: { kind: "codex-app-server", endpoint: "fake:fixture", process: { pid: process.pid, startIdentity: "fixture" },
+    structuredHost: { kind: hostKind, endpoint: "fake:fixture", process: { pid: process.pid, startIdentity: "fixture" },
       eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
     claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
   });
   expect(registry.conversationForPath(transcript)?.id).toBe(id);
-  expect(registry.readOnlySnapshot().entries[`codex:${nativeId}`]?.structuredHost).toBeTruthy();
+  expect(registry.readOnlySnapshot().entries[`${engine}:${nativeId}`]?.structuredHost).toBeTruthy();
   const journal = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
   journal.append({ scope: { type: "session", id }, kind: "session-status", payload: {
-    conversationId: id, sessionKey: { engine: "codex", sessionId: nativeId },
-    hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured", artifactPath: transcript,
+    conversationId: id, sessionKey: { engine, sessionId: nativeId },
+    hostKind, host: "hosted", turn: "idle", provenance: "structured", artifactPath: transcript,
     capabilities: { steer: true, structuredAttention: true }, activeTurnId: null,
   } });
   const commands: RuntimeOperationCommand[] = [];
@@ -75,7 +82,7 @@ function migrationFixture(name: string, options: { missingHost?: boolean; delay?
     dispatchControl: request => {
       actors.push(request.actor);
       return dispatchStructuredControl(request, { registry, client: options.missingHost ? null : runtime,
-        enabled: () => true, kick: () => {}, accountExists: (engine, account) => engine === "codex" && ["account-a", "account-b", "default"].includes(account),
+        enabled: () => true, kick: () => {}, accountExists: (candidate, account) => candidate === engine && ["account-a", "account-b", "default"].includes(account),
       });
     },
   });
@@ -91,9 +98,100 @@ function migrationFixture(name: string, options: { missingHost?: boolean; delay?
   const receipts = new SqliteMcpReceiptStore(receiptPath);
   const bindings = viewerMcpBindings(undefined, productionViewerControlDependencies(true));
   const service = createMcpToolService(bindings, receipts);
-  return { registry, id, transcript, journal, commands, actors, runtime, service, bindings, receipts, receiptPath,
+  return { root, launchId: begun.receipt.launchId, registry, id, transcript, journal, commands, actors, runtime, service, bindings, receipts, receiptPath,
     requests: () => requests, close() { viewer.stop(true); receipts.close(); journal.close(); } };
 }
+
+class MigrationStdioTransport extends StdioClientTransport {
+  override async start(): Promise<void> {
+    await super.start();
+    const child = (this as unknown as { _process?: ChildProcess })._process;
+    if (!child) throw new Error("migration fixture did not retain its MCP child");
+    ownExternalFixtureChild(child, () => this.close());
+  }
+}
+
+test.each(["reseat", "select-account"])("Claude %s crosses MCP stdio and Viewer HTTP without an MCP runtime socket", async action => {
+  const f = migrationFixture(`claude-${action}`, { engine: "claude" });
+  const target = action === "reseat" ? "default" : "account-b";
+  const now = new Date().toISOString();
+  f.registry.recordQuotaEvaluation({ engine: "claude", observations: [{ engine: "claude", accountId: "default",
+    authenticated: true, authCheckedAt: now, limits: { session: { usedPercent: 5, resetsAt: null }, weekly: null, plan: null, capturedAt: Date.now() },
+    provenance: { source: "live", reason: null, staleSince: null }, observedAt: now, bootId: "fixture" }], signature: null, bootId: "fixture", now, minimumGapMs: 0 });
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] =>
+    typeof entry[1] === "string" && !/^(LLV_|DELEGATUS_|NEXT_PUBLIC_)/.test(entry[0])));
+  Object.assign(env, {
+    LLV_STATE_DIR: f.root, LLV_AGENT_REGISTRY_SQLITE: "off",
+    LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME!, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME!,
+    LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL!, LLV_VIEWER_CONTROL_TOKEN: process.env.LLV_VIEWER_CONTROL_TOKEN!,
+    LLV_SPAWN_CAPABILITY: f.registry.rotateSpawnCapabilityForReceipt(f.launchId),
+  });
+  expect(env.LLV_RUNTIME_HOST_SOCKET).toBeUndefined();
+  const transport = new MigrationStdioTransport({ command: process.execPath,
+    args: [path.join(process.cwd(), "src/lib/mcp/entry.ts")], cwd: process.cwd(), env, stderr: "pipe" });
+  const client = new Client({ name: "claude-migration-fixture", version: "1.0.0" });
+  // Resolve the capability at the Viewer boundary as the real control API does.
+  setCallerConversationResolverForTests(digest => f.registry.conversationIdForSpawnCapabilityDigest(digest));
+  let selected = "account-a";
+  const order: string[] = [];
+  const host = new FakeEngineHost();
+  const originalSend = host.send.bind(host);
+  host.send = async entry => { order.push(`send:${selected}`); return originalSend(entry); };
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, after) => f.journal.effectBatch(100, kinds, after),
+    status: async operationId => f.journal.operationResult(operationId)?.receipt ?? null,
+    transition: async (operationId, status, details) => { f.journal.transitionOperation(operationId, status, details); },
+  }, () => host, undefined, undefined, undefined, async effect => {
+    selected = effect.accountId!;
+    order.push(`select:${selected}`);
+    return "applied";
+  });
+  try {
+    await client.connect(transport);
+    const call = { name: "conversation_migration", arguments: { clientRequestId: `claude-${action}`, conversationId: f.id, action,
+      ...(action === "select-account" ? { accountId: target } : {}) } };
+    const result = await client.callTool(call);
+    const payload = result.structuredContent as Record<string, unknown>;
+    expect(payload).toMatchObject({ ok: true, receipt: { status: "queued" } });
+    expect(result.isError).not.toBe(true);
+    expect(f.requests()).toBe(1);
+    expect(f.actors).toEqual([{ kind: "agent", conversationId: f.id }]);
+    expect(f.commands).toHaveLength(1);
+    const command = f.commands[0]!;
+    expect(command).toMatchObject({ kind: "reconfigure", accountId: target, sessionKey: { engine: "claude" },
+      model: "opus", effort: "low", fast: null });
+    expect(payload).toMatchObject({ operationId: command.operationId });
+    await queue.drain();
+    expect(order).toEqual([]);
+    f.journal.executeOperation({ kind: "send", operationId: "claude-engage", idempotencyKey: "claude-engage", conversationId: f.id, text: "Continue", policy: "queue" });
+    await queue.drain();
+    expect(order).toEqual([`select:${target}`, `send:${target}`]);
+    expect(f.journal.operationResult(command.operationId!)?.receipt.status).toBe("applied");
+    expect((await client.callTool(call)).structuredContent).toEqual({ ...payload, replayed: true });
+    await queue.drain();
+    expect(f.requests()).toBe(1);
+    expect(f.commands).toHaveLength(1);
+    expect(host.ledger.writes).toHaveLength(1);
+  } finally {
+    await client.close();
+    await transport.close();
+    await reapFixtureChildren();
+    setCallerConversationResolverForTests(null);
+    f.close();
+  }
+});
+
+test("Claude account selection names an unavailable Viewer runtime host through MCP", async () => {
+  const f = migrationFixture("claude-missing-host", { engine: "claude", missingHost: true });
+  try {
+    expect(runtimeHostClient()).toBeNull();
+    expect(await f.service.callTool("conversation_migration", {
+      clientRequestId: "claude-missing-host", conversationId: f.id, action: "select-account", accountId: "account-b",
+    })).toMatchObject({ ok: false, details: { status: 503, code: "runtime-host-unavailable" } });
+    expect(f.requests()).toBe(1);
+    expect(f.commands).toEqual([]);
+  } finally { f.close(); }
+});
 
 test.each([false, true])("MCP explicit pick preserves busy=%s until engagement, then applies the chosen account before one send", async busy => {
   const f = migrationFixture(`engage-${busy}`);

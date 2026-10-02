@@ -31,7 +31,10 @@ const gatherSeatTickInput: typeof gatherProduction = (project, state, policy, po
   accounting.initialize(state, null);
   return gatherProduction(project, accounting.readState(), policy, ports);
 };
-const { AgentRegistry } = await import("@/lib/agent/registry");
+const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
+const { wakeRecordPorts } = await import("./seatTickSources");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 
 test("self-update sends one wait or off signal from its durable state", () => {
@@ -1656,6 +1659,49 @@ test("a delivered record lands, a fenced loss drops, and an unverified failure i
   expect((await classify(found(receipt({ state: "failed", resend: "verify-first", duplicateRisk: true })))).state).toBe("uncertain");
   /* A failure whose guidance is missing proves nothing, so it is not a drop. */
   expect((await classify(found(receipt({ state: "failed", resend: null })))).state).toBe("uncertain");
+});
+
+test("a timed-out Claude wake resolves under its original key when its ledger confirms delivery late", async () => {
+  const dir = fs.mkdtempSync(path.join(SANDBOX, "late-wake-"));
+  const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  const conversation = registry.ensureConversation("claude", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
+  const text = "Check the owed lane outcomes.";
+  const key = "seat-tick:fixture:3:first:lane-event:prompt-fixture";
+  const held = registry.holdDelivery(conversation.id, text, key, "text", [], structuredContentDigest({ text, images: [] }), {
+    kind: "send", policy: "interrupt-active", origin: { kind: "agent", role: "seat-tick" },
+  });
+  registry.recordDeliveryOutcome(held.id, "failed", "Claude delivery confirmation timed out; outcome is uncertain", "unverified");
+  const ledger = new FileClaudeDeliveryLedger();
+  const session = conversation.generations[0]!.id;
+  ledger.recordQueued(session, { id: held.command.operationId, text }, "turn-started");
+  const wake = { ...WAKE, conversationId: conversation.id, clientMessageId: key, operationId: null, text };
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = "";
+  setAgentRegistryForTests(registry);
+  try {
+    // The journal has no record of the operation, as after its retention window.
+    const ports = { ...wakeRecordPorts({ end: true }), journal: async () => null };
+    expect((await wakeStateFromRecord(wake, ports)).state).toBe("uncertain");
+    ledger.recordQueued(session, { id: "different-operation", text }, "turn-started");
+    ledger.confirmDelivered(session, "different-operation", "other-message");
+    ledger.recordQueued("unrelated-session", { id: held.command.operationId, text }, "turn-started");
+    ledger.confirmDelivered("unrelated-session", held.command.operationId, "other-session-message");
+    expect((await wakeStateFromRecord(wake, ports)).state).toBe("uncertain");
+    ledger.confirmDelivered(session, held.command.operationId, "engine-message-fixture");
+    // A diagnostic can observe the proof while leaving both stores untouched.
+    const before = JSON.stringify(registry.readOnlySnapshot());
+    const readonly = { ...wakeRecordPorts({ end: false }), journal: async () => null };
+    expect(await wakeStateFromRecord(wake, readonly)).toMatchObject({ state: "landed", evidence: { confirmation: "claude-ledger", record: { state: "failed" } } });
+    expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
+    expect((await wakeStateFromRecord({ ...wake, text: "A changed instruction." }, ports)).state).toBe("uncertain");
+    const observed = await wakeStateFromRecord(wake, ports);
+    expect(observed).toMatchObject({ state: "landed", evidence: { operationId: held.command.operationId, journal: "no-record", confirmation: "claude-ledger", record: { state: "delivered", resend: "not-needed" } } });
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "delivered", clientMessageId: key, command: { operationId: held.command.operationId } });
+  } finally {
+    setAgentRegistryForTests(null);
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
 });
 
 /* A record ended without proof is asked about once more, of the journal, under

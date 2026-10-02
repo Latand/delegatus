@@ -31,8 +31,9 @@ const { seatMcpHealth } = await import("./seatMcpHealth");
 const { viewerMcpTransportForLaunch } = await import("@/lib/agent/spawnPolicy");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
 const { openPullRequestsForRepo } = await import("./githubEvidence");
-const { defaultSeatTickSources, journalReceipt, settleRecordFromJournal, wakeStateFromRecord } = await import("./seatTickSources");
-const { resolveOriginalSend, resolveSendReceipt, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON } = await import("@/lib/runtime/sendSettlement");
+const { confirmedClaudeWakeDelivery, journalReceipt, settleRecordFromJournal, wakeStateFromRecord } = await import("./seatTickSources");
+const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+const { resolveOriginalSend, resolveSendReceipt, SEND_UNRECORDED_REASON, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { DELIVERY_FENCED_BY_SETTLEMENT, StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
 const { createFakeDeliveryLedger, FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
@@ -328,6 +329,7 @@ function harness(options: {
             lookup: (binding) => resolveOriginalSend(binding, { registry: options.registry, client }),
             settle: (operationId) => resolveSendReceipt(operationId, { registry: options.registry, client, now }),
             journal: (operationId) => journalReceipt(operationId, client),
+            confirmed: confirmedClaudeWakeDelivery,
             settleFromJournal: (target, receipt) => settleRecordFromJournal(options.registry!, target, receipt),
           });
         }
@@ -507,7 +509,7 @@ test("a tick setting that reached its expiry is written back to the default by t
   /* The wake goes out — the setting lapsed — and the record on disk stops
      saying "off" beside a tick that is ticking. */
   expect(record).toMatchObject({ verdict: "wake" });
-  expect(persisted).toEqual([defaultSeatTickSettings(PROJECT)]);
+  expect(persisted).toEqual([{ ...defaultSeatTickSettings(PROJECT), reason: settings.reason, updatedAt: settings.updatedAt, setBy: settings.setBy }]);
   expect(rig.cards[0]!.card).toMatchObject({ state: "resolved" });
 });
 
@@ -522,6 +524,7 @@ test("the lapse ends the setting that expired and keeps the monitor prompt it ne
   expect(persisted).toEqual([{
     ...defaultSeatTickSettings(PROJECT),
     monitorPrompt: MONITOR_PROMPT,
+    reason: settings.reason,
     updatedAt: settings.updatedAt,
     setBy: settings.setBy,
   }]);
@@ -823,8 +826,8 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  type Response = { result: Record<string, unknown> };
-  const pendingResponses = new Map<number, (message: Response) => void>();
+  type McpResponse = { id: number; result: { serverInfo?: { name: string }; isError?: boolean; content?: { text: string }[] } };
+  const pendingResponses = new Map<number, (message: McpResponse) => void>();
   let output = "";
   session.stdout.setEncoding("utf8");
   session.stdout.on("data", (chunk: string) => {
@@ -838,7 +841,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
       }
     }
   });
-  const call = (id: number, method: string) => new Promise<Response>((resolve, reject) => {
+  const call = (id: number, method: string) => new Promise<McpResponse>((resolve, reject) => {
     const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
     pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
     session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
@@ -856,7 +859,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const designatedAt = new Date(Date.now() - 20 * MINUTE).toISOString();
   const deps = { ...rig.deps, mcpHealth: () => seatMcpHealth(receipt, designatedAt, stateDir, Date.now()) };
   try {
-    expect((await call(1, "initialize")).result).toMatchObject({ serverInfo: { name: "viewer" } });
+    expect((await call(1, "initialize")).result.serverInfo?.name).toBe("viewer");
     for (let id = 2; id <= 4; id++) {
       await readyHeartbeat();
       expect((await call(id, "tools/call")).result.isError).toBe(true);
@@ -868,7 +871,7 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
     expect(rig.sent).toHaveLength(0);
     expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "open" });
     fs.unlinkSync(crashFlag);
-    expect((await call(5, "tools/call")).result).toMatchObject({ content: [{ text: "recovered" }] });
+    expect((await call(5, "tools/call")).result.content?.[0]?.text).toBe("recovered");
     expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).failedCalls).toBe(0);
     await runSeatTickCheck(PROJECT, deps);
     expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
@@ -2127,6 +2130,39 @@ test("a check that outran its interval drops the next tick rather than queueing 
 
 const MONITOR_PROMPT = "before the items, check whether last night's digest actually sent";
 const PROMPT_HEADING = "Standing monitor note for this project";
+
+test("every scheduler wake carries the operator instructions alongside the seat note", async () => {
+  const instruction = "Handle incoming tasks by priority; stop when the inbox is empty.";
+  const settings = { ...promptSettings(), wakeIntervalMinutes: 30, reason: instruction };
+  const first = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent[0]!.text).toContain(`Operator instructions for every wake:\n${instruction}`);
+  expect(first.sent[0]!.text).toContain(MONITOR_PROMPT);
+  expect(first.sent[0]!.text).toContain("Items:");
+
+  const next = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, noteShown: seatTickNoteRevisionForTest(MONITOR_PROMPT) }, settings });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent[0]!.text).toContain(instruction);
+  expect(next.sent[0]!.text).toContain("Standing monitor note unchanged");
+
+  const proposal = harness({ settings });
+  await runSeatTickCheck(PROJECT, proposal.deps);
+  expect(proposal.journal[0]!.verdict).toBe("proactive");
+  expect(proposal.sent[0]!.text).toContain(instruction);
+  expect(proposal.sent[0]!.text).toContain(MONITOR_PROMPT);
+
+  const edited = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings: { ...settings, reason: "Stop launching tasks until the release settles." } });
+  await runSeatTickCheck(PROJECT, edited.deps);
+  expect(edited.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
+  const cleared = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings: { ...settings, reason: null } });
+  await runSeatTickCheck(PROJECT, cleared.deps);
+  expect(cleared.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
+  expect(cleared.sent[0]!.text).not.toContain("Operator instructions for every wake:");
+});
+
+function seatTickNoteRevisionForTest(note: string): string {
+  return createHash("sha256").update(note).digest("hex").slice(0, 32);
+}
 
 function promptSettings(): SeatTickSettings {
   return {
@@ -4669,6 +4705,33 @@ function frozen(fixture: ChildFixture) {
   const row = fixture.row();
   return { outstandingWake: row.outstandingWake, retiredWakes: row.retiredWakes, lastWakeAt: row.lastWakeAt, eventsThrough: row.eventsThrough };
 }
+
+test("a late Claude confirmation closes a retired wake under its original key without sending or crediting it", async () => {
+  const { fixture, operationId, wake, rig } = await strandedManagerWake("late-confirmed-retired-wake");
+  const retirement = {
+    wake, retiredAt: ago(fixture, 1), supersededBy: null, reason: "unresolved-age" as const,
+  };
+  fixture.seed({ outstandingWake: null, retiredWakes: [retirement], lastWakeAt: ago(fixture, 1), eventsThrough: 12 });
+  const lastWakeAt = fixture.row().lastWakeAt;
+  const settings = { ...defaultSeatTickSettings(fixture.project), enabled: false, reason: "Reconcile without a fresh wake." };
+  const session = fixture.registry.conversation(fixture.seat.conversationId as never)!.generations[0]!.id;
+  const ledger = new FileClaudeDeliveryLedger();
+  ledger.recordQueued(session, { id: operationId, text: wake.text }, "turn-started");
+  const before = rig(12, { settings });
+  await runSeatTickCheck(fixture.project, before.deps);
+  expect(fixture.row().retiredWakes).toEqual([retirement]);
+  expect(before.sent).toEqual([]);
+
+  ledger.confirmDelivered(session, operationId, "late-wake-message");
+  const later = rig(13, { settings });
+  await runSeatTickCheck(fixture.project, later.deps);
+  expect(later.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: wake.clientMessageId, outcome: "landed" } });
+  expect(later.journal[0]!.detail).toContain("Claude delivery ledger confirms the original operation");
+  expect(later.journal[0]!.detail).not.toContain("settled delivered on the journal's own verdict");
+  expect(fixture.row()).toMatchObject({ outstandingWake: null, retiredWakes: [], lastWakeAt, eventsThrough: 12 });
+  expect(fixture.acknowledged()).toEqual([]);
+  expect(later.sent).toEqual([]);
+});
 
 test("a wake the settlement ended unrecorded fences inside its bound, the board names the operation, the record's reason and the journal's silence, and the bound is what ends it (#1746)", async () => {
   const { fixture, journal, child, operationId, wake, fenced } = await strandedManagerWake("stranded-manager");

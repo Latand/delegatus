@@ -112,22 +112,43 @@ test("a cadence is a setting like any other: faster, slower, or back to the defa
   expect(effectiveSeatTickSettings(restoredSettings, NOW, HOUR_MS)).toMatchObject({ wakeIntervalMs: HOUR_MS, isDefault: true, configured: true });
 });
 
+test("operator instructions survive default cadence, schedule restore and expiry alongside the seat note", () => {
+  const reason = "Prioritize incoming tasks; stop after the inbox is empty.";
+  const monitorPrompt = "Keep the current lane ledger.";
+  const initial = settingsOf(change(defaultSeatTickSettings(PROJECT), { reason, monitorPrompt }));
+  expect(initial.reason).toBe(reason);
+  expect(effectiveSeatTickSettings(initial, NOW, HOUR_MS).reason).toBe(reason);
+  const temporary = settingsOf(change(initial, { wakeIntervalMinutes: 30, until: new Date(NOW + 60_000).toISOString() }));
+  const restored = settingsOf(change(temporary, { wakeIntervalMinutes: null }));
+  expect(restored).toMatchObject({ reason, monitorPrompt, until: null });
+  const lapsed = seatTickSettingsAfterLapse(PROJECT, effectiveSeatTickSettings(temporary, NOW + 60_001, HOUR_MS));
+  expect(lapsed).toMatchObject({ reason, monitorPrompt, wakeIntervalMinutes: null, until: null });
+  const file = settingsFile();
+  writeSeatTickSettings(PROJECT, lapsed, file);
+  expect(readSeatTickSettings(PROJECT, file)).toMatchObject({ reason, monitorPrompt });
+  expect(settingsOf(change(lapsed, { reason: null }))).toMatchObject({ reason: null, monitorPrompt });
+});
+
+test("operator instructions over the storage limit are refused without dropping their tail", () => {
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: "Keep these instructions." };
+  const result = change(current, { reason: "x".repeat(501) });
+  expect(result).toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  expect(current.reason).toBe("Keep these instructions.");
+});
+
 test("a change that leaves the default without a reason is refused; restoring it needs none", () => {
   expect(change(defaultSeatTickSettings(PROJECT), { enabled: false })).toEqual({
     ok: false,
-    error: "a reason is required when the tick is disabled or its wake interval is changed; a quiet tick with no recorded reason is indistinguishable from a broken one",
+    error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one",
   });
   const off = (change(defaultSeatTickSettings(PROJECT), { enabled: false, reason: "nothing here for me" }) as { settings: SeatTickSettings }).settings;
   const back = change(off, { enabled: true });
   expect(back.ok).toBe(true);
-  /* And the record it restores keeps nothing of the setting it ended: a reason
-     left standing beside a tick that is ticking again is the same disagreement
-     between record and behaviour as a row that still says "off". Who restored
-     it, and when, stays. */
+  /* Restoring the schedule preserves the standing panel instructions. */
   expect((back as { settings: SeatTickSettings }).settings).toMatchObject({
     enabled: true,
     wakeIntervalMinutes: null,
-    reason: null,
+    reason: "nothing here for me",
     until: null,
     setBy: SEAT,
   });
@@ -261,10 +282,9 @@ test("the prompt is untouched by the settings around it: quieting, restoring, an
   const off = settingsOf(change(withPrompt, { enabled: false, reason: "nothing here for me until the release lands" }));
   expect(off).toMatchObject({ enabled: false, monitorPrompt: "the release is the only thing that matters here" });
 
-  /* Restoring the default keeps nothing of the setting it ended — and the
-     prompt was never part of that setting, so it stands. */
+  /* Restoring the schedule keeps both instruction fields. */
   const back = settingsOf(change(off, { enabled: true }));
-  expect(back).toMatchObject({ enabled: true, reason: null, until: null, monitorPrompt: "the release is the only thing that matters here" });
+  expect(back).toMatchObject({ enabled: true, reason: off.reason, until: null, monitorPrompt: "the release is the only thing that matters here" });
 
   /* Nor does an expiry set for the schedule take the prompt with it: the row
      the lapse writes back is the default tick, still carrying the words. */
@@ -279,20 +299,20 @@ test("the prompt is untouched by the settings around it: quieting, restoring, an
   expect(seatTickSettingsAfterLapse(PROJECT, lapsed)).toMatchObject({
     enabled: true,
     wakeIntervalMinutes: null,
-    reason: null,
+    reason: expiring.reason,
     until: null,
     monitorPrompt: "the release is the only thing that matters here",
   });
 });
 
-test("a lapse with no prompt on the row writes back the untouched default", () => {
+test("a lapse with no seat note keeps the operator instructions on the default schedule", () => {
   const expiring = settingsOf(change(defaultSeatTickSettings(PROJECT), {
     enabled: false,
     reason: "quiet while the release runs",
     until: new Date(NOW + 30 * 60_000).toISOString(),
   }));
   const lapsed = effectiveSeatTickSettings(expiring, NOW + 31 * 60_000, HOUR_MS);
-  expect(seatTickSettingsAfterLapse(PROJECT, lapsed)).toEqual(defaultSeatTickSettings(PROJECT));
+  expect(seatTickSettingsAfterLapse(PROJECT, lapsed)).toEqual({ ...defaultSeatTickSettings(PROJECT), reason: expiring.reason, updatedAt: expiring.updatedAt, setBy: expiring.setBy });
 });
 
 test("a prompt survives the write and the read a later check does", () => {

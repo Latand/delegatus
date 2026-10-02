@@ -3278,7 +3278,7 @@ test("seat_tick_settings lets one seat set another project's tick, and says whos
 test("seat_tick_settings refuses only the change that would leave no reason behind", async () => {
   const { bindings, store } = tickSettingsBindings();
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-no-reason", enabled: false }))
-    .rejects.toThrow("a reason is required");
+    .rejects.toThrow("instructions (reason) are required");
   expect(store.size).toBe(0);
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-empty" })).resolves.toMatchObject({ changed: false });
 });
@@ -3661,8 +3661,14 @@ test("the single dispatch classifies every transport outcome by what it can prov
     await viewer.stop(true);
   }
   /* A refused connection never carried the request: proven not executed. */
-  expect(await classify(send)).toMatchObject({ kind: "not-executed", value: expect.stringContaining("connection was refused") });
+  expect(await classify(send)).toMatchObject({
+    kind: "refusal", value: { message: expect.stringContaining("connection was refused"),
+      details: { outcome: "not-executed", nextAction: "retry-same-key", endpoint: viewer.url.origin } },
+  });
   expect(tracker.attempted).toBe(true);
+  // Spawn keeps its permanent single-attempt refusal contract.
+  expect(await classify(() => dispatch("/api/spawn", {}, {}, { deadlineAt: Date.now() + 2_000 })))
+    .toMatchObject({ kind: "not-executed" });
 });
 
 test("send and spawn bindings dispatch through the single-attempt seam with the persisted downstream key", async () => {

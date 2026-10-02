@@ -265,7 +265,7 @@ export function seatTickSettingsCardText(input: {
       input.schedule.enabled
         ? `Пробудження цього проєкту йдуть ${schedule}, а не за типовим розкладом.`
         : "Тікер цього проєкту вимкнено: жодне пробудження не надійде, доки його не ввімкнуть знову.",
-      `Причина: ${input.reason ?? "не записана"}.`,
+      `Вказівки на кожне пробудження: ${input.reason ?? "не записані"}.`,
       validUntil ? `Повернеться до типових налаштувань ${clock(validUntil, true)}.` : "Діє, доки хтось не поверне типові налаштування.",
       who,
       `Проєкт ${input.project}. Записано ${recorded ?? "в невідомий час"}.`,
@@ -275,7 +275,7 @@ export function seatTickSettingsCardText(input: {
       title,
       "",
       `${input.detail.charAt(0).toUpperCase()}${input.detail.slice(1)}.`,
-      `Reason given: ${input.reason ?? "none recorded"}.`,
+      `Instructions for every wake: ${input.reason ?? "none recorded"}.`,
       validUntil ? `It returns to the default at ${clock(validUntil, true)}.` : "It stands until someone changes it back.",
       who,
       `Project ${input.project}. Recorded ${recorded ?? "at an unrecorded time"}.`,
