@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { isTaskNote } from "./note";
+
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
@@ -206,6 +208,7 @@ function coerceTask(value: unknown): BoardTask | null {
     createdAt: raw.createdAt!,
     updatedAt: raw.updatedAt!,
   };
+  if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;

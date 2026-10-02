@@ -1114,6 +1114,17 @@ test("MCP pipeline tools describe default 3 and accept an explicit higher budget
   expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
 });
 
+test("the published update_task schema advertises replaceable notes without author inputs", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
+    const properties = tool.inputSchema.properties!;
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(properties.author).toBeUndefined();
+    expect(properties.noteAuthor).toBeUndefined();
+    expect(tool.description).toContain("Orchestrators and stage agents: set note whenever the situation changes");
+    expect(tool.description).toContain("operator's language");
+  });
+});
 
 test("search order is optional and advertised with relevance and newest choices", async () => {
   expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion" }).success).toBe(true);
