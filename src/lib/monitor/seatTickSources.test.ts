@@ -272,6 +272,31 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("a note edited during evidence gathering renders the refreshed length", async () => {
+  const { seatTickNoteRevision, seatTickWakeMessage } = await import("./report");
+  const oldNote = "a".repeat(7_155);
+  const newNote = "b".repeat(7_622);
+  let settings = { ...defaultSeatTickSettings(PROJECT), monitorPrompt: oldNote };
+  const ports = sources({});
+  ports.settings = () => settings;
+  const liveness = ports.liveness;
+  ports.liveness = async (request) => {
+    settings = { ...settings, monitorPrompt: newNote };
+    return liveness(request);
+  };
+  const state = { ...emptySeatTickState(), noteShown: seatTickNoteRevision(oldNote) };
+  const gathered = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.settings.monitorPrompt).toBe(oldNote);
+  const fresh = refreshSeatTickInput(gathered, ports);
+  const text = seatTickWakeMessage({ project: PROJECT, reasons: [], items: [], deferred: 0, signals: [],
+    monitorPrompt: fresh.settings.monitorPrompt,
+    monitorPromptUnchanged: seatTickNoteRevision(fresh.settings.monitorPrompt) === state.noteShown,
+  });
+  expect(text).toContain("7622 chars");
+  expect(text).not.toContain("7155 chars");
+  expect(text).not.toContain("Standing monitor note unchanged");
+});
+
 /** A row whose cursor was established at some earlier check. Distinct from the
     empty row, whose cursor is null because nothing has established one yet. */
 function withCursor(eventsThrough: number, over: Partial<SeatTickProjectState> = {}): SeatTickProjectState {
@@ -1717,7 +1742,7 @@ test("a timed-out Claude wake resolves under its original key when its ledger co
     const readonly = { ...wakeRecordPorts({ end: false }), journal: async () => null };
     expect(await wakeStateFromRecord(wake, readonly)).toMatchObject({ state: "landed", evidence: { confirmation: "claude-ledger", record: { state: "failed" } } });
     expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
-    expect((await wakeStateFromRecord({ ...wake, text: "A changed instruction." }, ports)).state).toBe("uncertain");
+    expect((await wakeStateFromRecord({ ...wake, text: "A changed instruction." }, ports)).state).toBe("unknown");
     const observed = await wakeStateFromRecord(wake, ports);
     expect(observed).toMatchObject({ state: "landed", evidence: { operationId: held.command.operationId, journal: "no-record", confirmation: "claude-ledger", record: { state: "delivered", resend: "not-needed" } } });
     expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "delivered", clientMessageId: key, command: { operationId: held.command.operationId } });
@@ -1732,6 +1757,35 @@ test("a timed-out Claude wake resolves under its original key when its ledger co
    the operation the record names — and only the journal's own terminal
    verdicts change the answer. Silence, an unreachable host, an open status
    and an unverified ending all leave the record's `uncertain` standing. */
+test("a timed-out Codex wake retains canonical transcript confirmation", async () => {
+  const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+  const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+  const dir = fs.mkdtempSync(path.join(SANDBOX, "codex-wake-"));
+  const registry = new AgentRegistry(path.join(dir, "fixture-registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  const transcript = path.join(dir, "fixture.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, null);
+  const text = "Check the owed lane outcomes.";
+  const key = "seat-tick:codex-fixture";
+  const held = registry.holdDelivery(conversation.id, text, key, "text", [], null, { kind: "send", policy: "queue" });
+  registry.beginDeliveryAttempt(held.id, conversation.generations[0]!.id);
+  registry.recordDeliveryOutcome(held.id, "failed", "Codex delivery confirmation timed out; outcome is uncertain", "unverified");
+  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
+  fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = "";
+  setAgentRegistryForTests(registry);
+  try {
+    const wake = { ...WAKE, conversationId: conversation.id, clientMessageId: key, operationId: null, text };
+    const ports = { ...wakeRecordPorts({ end: true }), journal: async () => null };
+    expect((await wakeStateFromRecord(wake, ports)).state).toBe("landed");
+    expect((await wakeStateFromRecord({ ...wake, text: "A different request." }, ports)).state).toBe("unknown");
+  } finally {
+    setAgentRegistryForTests(null);
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
 test("an unverified record yields to the journal's own terminal verdict, and to nothing weaker", async () => {
   const unverified = found(receipt({ state: "failed", reason: "delivery was accepted and the delivery journal holds no record of it", resend: "verify-first", duplicateRisk: true, settledAt: new Date(NOW).toISOString() }));
   expect(await classify(unverified, { runtime: "landed" })).toMatchObject({ state: "landed", calls: ["lookup", "journal", "record:op-wake-1"], evidence: { recorded: "delivered" } });
