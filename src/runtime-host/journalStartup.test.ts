@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { runtimeScope } from "@/lib/runtime/contracts";
+
 import { RuntimeJournal } from "./journal";
 
 const sandboxes: string[] = [];
@@ -20,7 +22,7 @@ function fixture() {
   const journal = new RuntimeJournal(filename, { maxEvents: 100 });
   const inputs = ["codex-app-server", "claude-broker"].flatMap((kind) =>
     [1, 2, 3].map((sequence) => ({
-      scope: `session:${kind}`,
+      scope: runtimeScope("session", kind),
       kind: "turn.started",
       payload: { turnId: `turn-${sequence}` },
       producer: { kind, eventKey: `startup-${sequence}` },
