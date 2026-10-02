@@ -1,5 +1,5 @@
 {
-  "commit": "c88a98bd7aa1cfe51383e1ed05a305f74cfbea89",
+  "commit": "d672acfcf4c75828dbd6f8049b749d30ed443329",
   "frames": {
     "1440-en-off": {
       "blockerRows": [],
@@ -183,6 +183,20 @@
           "left": 222,
           "right": 446.5625,
           "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 235,
+          "right": 452.484375,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 235,
+          "right": 459.828125,
+          "lines": 4
         }
       ],
       "cardOverflow": 0,
@@ -191,10 +205,15 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 240
+        "height": 388
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nHeld launches for 2 h and released them; the listed work is still running. Next attempt 2 Jan 2026 08:00.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nAutomatic update needs your decision\n\nRunning work has held the update for 6 h. New autonomous launches remain held. Deploy now may interrupt this work; keep waiting lets it finish.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nDeploy now\nKeep waiting\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
     },
     "1440-en-long-names": {
       "blockerRows": [
@@ -453,6 +472,20 @@
           "left": 222,
           "right": 448.71875,
           "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 235,
+          "right": 452.484375,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 235,
+          "right": 459.828125,
+          "lines": 4
         }
       ],
       "cardOverflow": 0,
@@ -461,10 +494,15 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 240
+        "height": 406
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗапуски стримувалися 2 год і знову дозволені; перелічена робота ще триває. Наступна спроба 2 січ. 2026 р. 08:00.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nАвтооновлення потребує вашого рішення\n\nПоточна робота стримує оновлення вже 6 год. Нові автономні запуски залишаються стриманими. Оновлення зараз може перервати цю роботу; очікування дозволяє їй завершитися.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nОновити зараз\nЧекати далі\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
     },
     "1440-uk-long-names": {
       "blockerRows": [
@@ -723,6 +761,20 @@
           "left": 51,
           "right": 275.5625,
           "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 64,
+          "right": 281.484375,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 64,
+          "right": 288.828125,
+          "lines": 4
         }
       ],
       "cardOverflow": 0,
@@ -731,10 +783,15 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 311.5
+        "height": 477.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nHeld launches for 2 h and released them; the listed work is still running. Next attempt 2 Jan 2026 08:00.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nAutomatic update needs your decision\n\nRunning work has held the update for 6 h. New autonomous launches remain held. Deploy now may interrupt this work; keep waiting lets it finish.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nDeploy now\nKeep waiting\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
     },
     "390-en-long-names": {
       "blockerRows": [
@@ -993,6 +1050,20 @@
           "left": 51,
           "right": 277.71875,
           "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 64,
+          "right": 281.484375,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 64,
+          "right": 288.828125,
+          "lines": 4
         }
       ],
       "cardOverflow": 0,
@@ -1001,10 +1072,15 @@
         "x": 16,
         "y": 273,
         "width": 358,
-        "height": 311.5
+        "height": 495.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗапуски стримувалися 2 год і знову дозволені; перелічена робота ще триває. Наступна спроба 2 січ. 2026 р. 08:00.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nАвтооновлення потребує вашого рішення\n\nПоточна робота стримує оновлення вже 6 год. Нові автономні запуски залишаються стриманими. Оновлення зараз може перервати цю роботу; очікування дозволяє їй завершитися.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nОновити зараз\nЧекати далі\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
     },
     "390-uk-long-names": {
       "blockerRows": [
