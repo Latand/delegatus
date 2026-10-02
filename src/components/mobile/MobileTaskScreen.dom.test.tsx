@@ -359,6 +359,20 @@ test("the phone folds many conversations off the board into one line inside the 
   }
 });
 
+test("the phone does not claim the task has no agents while its conversations are off the board", () => {
+  const wall = Array.from({ length: 12 }, (_, index) => ({
+    conversationId: `conversation_wall_${index}`, path: `/elsewhere/wall-${index}.jsonl`, panePid: null, state: "linked", error: null, at: iso(3_600 - index * 60),
+  }));
+  const subject = { ...theTask, id: "t-wall-only", assignments: wall } as unknown as BoardTask;
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject);
+    expect(q(host, "[data-phone-task-agents]")!.textContent).not.toContain(en("mobile2.kanban.noAgents"));
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+  } finally {
+    dom.location.hash = "";
+  }
+});
+
 test("the phone folds several launches that did not start behind one summary row, opens it on tap, and offers Dismiss all", async () => {
   /* Days of stage attempts that started, each with its minted conversation
      and no path, beside five launches that did not: four that never minted a

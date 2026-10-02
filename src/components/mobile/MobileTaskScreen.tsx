@@ -1226,7 +1226,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                       error, and opens its launch view, where Retry lives. Two or
                       more fold behind one summary row. */}
                   {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
-                  {!remote && !agents.length && !unstarted.length && !card?.drafts.length ? (
+                  {!remote && !agents.length && !unstarted.length && !card?.drafts.length && !notLoadedRefs.length ? (
                     <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
                   ) : null}
                 </section>
