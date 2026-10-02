@@ -419,7 +419,7 @@ export async function startCurrentReleaseControllers(
     const auto = readAuto(statePath("self-update", "auto.json"));
     // An expired raw lease still has durable custody during recovery. Refuse
     // autonomous startup until its owner can renew or release that custody.
-    if (activeDrain() || (auto.enabled && auto.drain && !auto.drain.overranAt)) throw error;
+    if (activeDrain() || (auto.drain && !auto.drain.overranAt && (auto.enabled || auto.drain.admitted || auto.managedPending))) throw error;
   }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();

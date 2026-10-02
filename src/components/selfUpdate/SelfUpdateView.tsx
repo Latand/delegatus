@@ -396,7 +396,7 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
       </div>
       <p className="m-0 text-ui text-secondary">{available || auto.off || auto.phase === "deploying" ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
       {auto.enabled && blockers && auto.phase === "waiting" ? (
-        <ul className="m-0 list-disc pl-5 text-ui text-secondary">
+        <ul data-auto-blockers className="m-0 list-disc pl-5 text-ui text-secondary [overflow-wrap:anywhere]">
           {(blockers.stageList ?? []).map((stage) => <li key={`${stage.pipelineId}:${stage.stageId}`}>{stage.stageId} · {stage.task}</li>)}
           {(blockers.turnList ?? []).filter((turn) => !turn.stage).map((turn) => <li key={turn.conversationId}>{turn.seat && turn.project ? turn.project : `${turn.engine} · ${turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`}</li>)}
           {blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}

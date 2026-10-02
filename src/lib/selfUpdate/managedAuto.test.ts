@@ -9,7 +9,7 @@ import { initialCheck } from "./checkState";
 import { readManagedRecord, writeManagedRecord, type ManagedRecord } from "./managed";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
-import { activeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS } from "./drain";
+import { activeDrain, DRAIN_AFTER_MS, DRAIN_MAX_MS, DRAIN_LEASE_MS } from "./drain";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -84,6 +84,59 @@ function scenario(enabled = true) {
     },
   };
 }
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("early managed admission holds launches across reconstruction until %s", async (phase) => {
+  const h = scenario();
+  let service = h.service();
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  expect(lease()?.target).toBe(TARGET);
+  service.stop();
+  h.advance(DRAIN_LEASE_MS + 1);
+  service = h.service();
+  service.startAuto();
+  expect(lease()?.target).toBe(TARGET);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  h.finish(phase);
+  await service.snapshot();
+  expect(lease()).toBeNull();
+  service.stop();
+});
+
+test.each(["succeeded", "rolled-back", "failed"] as const)("switch-off retains managed custody and cold renewal until %s", async (phase) => {
+  const h = scenario();
+  h.setTurns(1);
+  let service = h.service();
+  await service.autoTick();
+  h.advance(DRAIN_AFTER_MS);
+  await service.autoTick();
+  h.setTurns(0);
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  await service.setAuto(false);
+  const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  expect(lease()).not.toBeNull();
+  service.stop();
+  h.advance(DRAIN_LEASE_MS + 1);
+  service = h.service();
+  service.startAuto();
+  expect(lease()).not.toBeNull();
+  h.advance(DRAIN_LEASE_MS + 1);
+  await service.autoTick();
+  expect(lease()).not.toBeNull();
+  expect(h.requests).toHaveLength(1);
+  h.finish(phase);
+  await service.snapshot();
+  expect(lease()).toBeNull();
+  expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+  service.stop();
+});
 
 test("managed availability permits deployment and explains missing prerequisites", async () => {
   const h = scenario(false);

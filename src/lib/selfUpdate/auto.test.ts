@@ -64,6 +64,46 @@ test("checkout drain holds through web and host restarts and releases only when 
   service.stop();
 });
 
+test.each(["pending-web", "between-roles"] as const)("switch-off at %s retains early checkout custody through cold recovery and both roles", async (point) => {
+  const h = scenario();
+  let service = h.service();
+  const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  await service.autoTick();
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.pending()?.role).toBe("web");
+  expect(lease()).not.toBeNull();
+  if (point === "pending-web") expect(await service.setAuto(false)).toEqual({ ok: true });
+  let watcher = watchRestartRequests(h.record.requestFile, async ({ requestId }) => {
+    h.record.web = { ...h.record.web, requestId, revision: TARGET.slice(0, 7) };
+  }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId) });
+  try { await watcher.poll(); } finally { watcher.stop(); }
+  await service.autoTick();
+  expect(h.pending()).toBeNull();
+  if (point === "between-roles") expect(await service.setAuto(false)).toEqual({ ok: true });
+  expect(lease()).not.toBeNull();
+  service.stop();
+  h.advance(DRAIN_LEASE_MS + 1);
+  service = h.service();
+  service.startAuto();
+  expect(lease()).not.toBeNull();
+  // Let the startup tick finish before the second quiet observation.
+  for (let i = 0; i < 100 && !readAuto(join(h.dir, "auto.json")).quietSince; i++) await Bun.sleep(1);
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.pending()?.role).toBe("runtime-host");
+  expect(lease()).not.toBeNull();
+  watcher = watchRestartRequests(h.record.requestFile, async ({ requestId }) => {
+    h.record.runtimeHost = { ...h.record.runtimeHost, requestId, revision: TARGET.slice(0, 7) };
+  }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId) });
+  try { await watcher.poll(); } finally { watcher.stop(); }
+  await service.autoTick();
+  await service.autoTick();
+  expect(lease()).toBeNull();
+  expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+  service.stop();
+});
+
 test("the overrun cap cannot release launches between checkout restart roles", async () => {
   const h = scenario();
   h.setTurn(true);
@@ -110,6 +150,10 @@ function scenario() {
     green: { read: async () => ({ state: greenState }) },
     prune: async () => { prunes += 1; },
     findDeploymentByIdempotencyKey: async () => null,
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true,
+    hostHealth: async () => ({ pid: 102 }), describe: async (_repo: string, sha: string) => revision(sha),
+    buildEnv: () => ({}),
+    createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),
   } as unknown as ServiceDeps;
   const service = () => {
     const instance = new SelfUpdateService(deps);

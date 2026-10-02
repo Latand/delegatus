@@ -41,7 +41,7 @@ export interface AutoState {
   lastBlockers: QuietBlockers | null;
   quietSince: string | null;
   noticeAt: string | null;
-  drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null } | null;
+  drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean } | null;
   pending: AutoPending | null;
   /** Written before asking the runtime host; replay uses the same key after a web restart. */
   managedPending: { target: Revision; clientKey: string; at: string } | null;

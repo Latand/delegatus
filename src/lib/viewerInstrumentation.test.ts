@@ -27,7 +27,7 @@ test("an auto-update loader failure leaves the other controllers running", async
   expect(started).toEqual(["pipeline"]);
 });
 
-test("required durable drain recovery failure refuses autonomous startup", async () => {
+test.each([true, false])("required durable drain recovery failure refuses autonomous startup with enabled=%s", async (enabled) => {
   const previous = process.env.LLV_STATE_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "drain-boot-failure-"));
   process.env.LLV_STATE_DIR = dir;
@@ -35,7 +35,7 @@ test("required durable drain recovery failure refuses autonomous startup", async
   const target = "a".repeat(40);
   const at = new Date().toISOString();
   const drain = { id: "required-drain", target: { sha: target, short: target.slice(0, 7), version: "1", date: "" }, since: at, overranAt: null, blockers: null };
-  writeAuto(path.join(autoDir, "auto.json"), { ...initialAuto(), enabled: true, drain });
+  writeAuto(path.join(autoDir, "auto.json"), { ...initialAuto(), enabled, drain: { ...drain, admitted: !enabled } });
   writeDrain(path.join(autoDir, "auto-drain.json"), { id: drain.id, target, since: at, until: Date.now() - 1 });
   const started: string[] = [];
   try {

@@ -5649,6 +5649,9 @@ async function selfUpdateAutoMain(): Promise<void> {
       stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
     overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: "2026-01-02T02:00:00Z", nextAt: "2026-01-02T06:00:00Z" }, blockers: { ...auto.blockers,
       stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }] } } },
+    "long-names": { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_seat", engine: "codex", project: "Project".repeat(11) + "Name", seat: true, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "T".repeat(80), cursor: "running", conversationId: "conversation_builder" }] } } },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
@@ -5683,13 +5686,27 @@ async function selfUpdateAutoMain(): Promise<void> {
         const outer = dialog.getBoundingClientRect();
         const rect = card.getBoundingClientRect();
         const control = button.getBoundingClientRect();
-        return { overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        const blockerRows = [...card.querySelectorAll<HTMLElement>("ul li")].map((row) => {
+          const range = document.createRange();
+          range.selectNodeContents(row);
+          const bounds = [...range.getClientRects()];
+          return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
+            left: Math.min(...bounds.map((bound) => bound.left)), right: Math.max(...bounds.map((bound) => bound.right)),
+            lines: bounds.length };
+        });
+        return { blockerRows, cardOverflow: card.scrollWidth - card.clientWidth, overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
           controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
           text: card.innerText.slice(0, 600) };
       });
       const tag = `${width}-${lang}-${name}`;
       report.frames[tag] = geometry;
-      if (geometry.overflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
+      if (geometry.overflow > 1 || geometry.cardOverflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
+      if (geometry.blockerRows.some((row) => row.overflow > 1 || row.left < geometry.card.x - 1 || row.right > geometry.card.x + geometry.card.width + 1)) {
+        report.failures.push(`${tag}: blocker text spills beyond card`);
+      }
+      if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some((row) => row.lines < 2))) {
+        report.failures.push(`${tag}: long blocker name did not wrap`);
+      }
       if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
       const frame = path.join(OUT_DIR, `${tag}.png`);
       await page.screenshot({ path: frame });

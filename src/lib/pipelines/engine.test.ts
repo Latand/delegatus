@@ -11,7 +11,7 @@ import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
-import { activeDrain, DRAIN_AFTER_MS } from "@/lib/selfUpdate/drain";
+import { activeDrain, DRAIN_AFTER_MS, DRAIN_LEASE_MS } from "@/lib/selfUpdate/drain";
 import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { initialCheck } from "@/lib/selfUpdate/checkState";
 import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
@@ -1264,7 +1264,61 @@ test.each([false, true])("automatic drain holds reserved custody with dead owner
   }
 });
 
-test("a stage finishes across the automatic drain and its successor waits for both roles", async () => {
+test.each(["early", "drain-switch-off"] as const)("managed %s admission holds actual pipeline launches across recovery until terminal status", async (admission) => {
+  const h = harness();
+  savePipelines([]);
+  const dir = fs.mkdtempSync("/var/tmp/managed-pipeline-custody-");
+  const target = "a".repeat(40);
+  const old = "b".repeat(40);
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  let turns = admission === "early" ? 0 : 1;
+  let requests = 0;
+  let status: import("@/lib/runtime/contracts").ViewerDeploymentStatus | null = null;
+  const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true });
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: rev(old), available: rev(target),
+    check: { ...idleCheck(), state: "update-available", relation: "behind" } }, update: null }));
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15,
+    mode: async () => ({ mode: "managed", record: null, reason: null }), releaseTarget: () => ({ revision: old }),
+    prepareCheckRepo: async () => dir, describe: async (_repo: string, sha: string) => rev(sha),
+    hostHealth: async () => ({ pid: 102, generation: { revision: old } }), web: { pid: 101, port: null, startedAt: "" },
+    green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: turns ? [{ turn: "running", host: "hosted" }] : [] }), pipelines: loadPipelines, presence: () => [], memoryAvailableMb: () => 8192 },
+    requestDeployment: async (body: import("@/lib/runtime/contracts").ViewerDeploymentRequest) => {
+      requests++;
+      status = { deploymentId: "deployment-test", idempotencyKey: body.idempotencyKey, requestedRevision: target, revision: target,
+        phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+        owner: { pid: 102, startIdentity: null }, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), revisionNumber: 1 };
+      return { state: "accepted", deploymentId: "deployment-test", revision: target, replayed: false };
+    },
+    readDeployment: async () => status, findDeploymentByIdempotencyKey: async () => status,
+  } as unknown as ServiceDeps;
+  let service = new SelfUpdateService(deps);
+  h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
+  try {
+    await service.autoTick();
+    if (admission === "drain-switch-off") { now += DRAIN_AFTER_MS; await service.autoTick(); turns = 0; await service.autoTick(); }
+    now += 60_000;
+    await service.autoTick();
+    expect(requests).toBe(1);
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+    if (admission === "drain-switch-off") await service.setAuto(false);
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    service.stop();
+    now += DRAIN_LEASE_MS + 1;
+    service = new SelfUpdateService(deps);
+    service.startAuto();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(requests).toBe(1);
+    status = { ...status!, phase: "rolled-back", terminal: true, revisionNumber: 2 };
+    await service.refreshManaged();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.each(["drain", "early-switch-off"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
   const h = harness();
   const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
   const target = "a".repeat(40);
@@ -1282,9 +1336,17 @@ test("a stage finishes across the automatic drain and its successor waits for bo
     meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
   const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
     green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
-    prune: async () => {}, findDeploymentByIdempotencyKey: async () => null } as unknown as ServiceDeps;
-  const service = new SelfUpdateService(deps);
-  service.snapshot = async () => snapshot();
+    prune: async () => {}, findDeploymentByIdempotencyKey: async () => null,
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, hostHealth: async () => ({ pid: 102 }),
+    describe: async (_repo: string, sha: string) => rev(sha), buildEnv: () => ({}),
+    createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),
+  } as unknown as ServiceDeps;
+  const makeService = () => {
+    const instance = new SelfUpdateService(deps);
+    instance.snapshot = async () => snapshot();
+    return instance;
+  };
+  let service = makeService();
   h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
   try {
     await create(h.ports, [
@@ -1295,25 +1357,37 @@ test("a stage finishes across the automatic drain and its successor waits for bo
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
     await service.autoTick();
-    now += DRAIN_AFTER_MS;
-    await service.autoTick();
-    expect(h.ports.drainHold()).not.toBeNull();
+    if (admission === "drain") {
+      now += DRAIN_AFTER_MS;
+      await service.autoTick();
+      expect(h.ports.drainHold()).not.toBeNull();
+    }
     expect(fs.existsSync(record.requestFile)).toBe(false);
     h.setConversationActive(false);
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built safely")], h.ports);
-    for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+    if (admission === "drain") for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
     expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "verify", state: "pending" });
-    const identity = loadPipelines()[0]!.runs[1]!.attempts[0]!.n;
     expect(h.spawnInputs).toHaveLength(1);
     await service.autoTick();
     now += 60_000;
     await service.autoTick();
     expect(JSON.parse(fs.readFileSync(record.requestFile, "utf8")).role).toBe("web");
+    await tickPipelines([], h.ports);
+    const identity = loadPipelines()[0]!.runs[1]!.attempts[0]!.n;
     const pending = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending;
     record.web = { ...record.web, requestId: pending.requestId, revision: target.slice(0, 7) };
     fs.rmSync(record.requestFile);
     await service.autoTick();
+    if (admission === "early-switch-off") {
+      expect(await service.setAuto(false)).toEqual({ ok: true });
+      service.stop();
+      now += DRAIN_LEASE_MS + 1;
+      service = makeService();
+      service.startAuto();
+      expect(h.ports.drainHold()).not.toBeNull();
+      await Bun.sleep(0);
+    }
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
     record.runtimeHost.revision = target.slice(0, 7);
