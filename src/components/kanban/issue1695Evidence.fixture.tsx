@@ -93,6 +93,8 @@ const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
    so the pill draws its structured face. */
 const SEAT_NOISE = SCENARIO === "seat-noise";
 const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
+/* #2218: `&streaming=1` hosts every working conversation on a structured session and lets the driver push runtime events down the stream (`window.runtimeEmit`), so the board can be measured while agents stream. */
+const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
@@ -114,7 +116,7 @@ const FEED_RECOVERY = SCENARIO === "feed-recovery";
 let feedRecoveryEcho = false;
 const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || FIRST_MESSAGE || FEED_CONTINUITY;
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -376,7 +378,12 @@ function structuredSnapshot() {
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }] : [])],
+    }] : []), ...(STREAMING ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path).map((file) => ({
+      conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
+      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: file.path,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+    })) : [])],
     attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
   };
 }
@@ -2103,7 +2110,24 @@ class QuietEventSource {
   removeEventListener() {}
   close() {}
 }
-Object.assign(window, { EventSource: QuietEventSource });
+/* The runtime stream, when the driver pushes events: `runtimeEmit` delivers one envelope exactly as the SSE route frames it. */
+class StreamEventSource extends QuietEventSource {
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onopen: (() => void) | null = null;
+  constructor(url: string | URL) {
+    super(url);
+    if (String(url).startsWith("/api/runtime/stream")) {
+      openStream(this);
+      setTimeout(() => this.onopen?.(), 0);
+    }
+  }
+}
+let streamSource: StreamEventSource | null = null;
+const openStream = (source: StreamEventSource) => { streamSource = source; };
+Object.assign(window, {
+  EventSource: STREAMING ? StreamEventSource : QuietEventSource,
+  runtimeEmit: (envelope: unknown) => streamSource?.onmessage?.({ data: JSON.stringify(envelope) }),
+});
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
