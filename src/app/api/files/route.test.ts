@@ -15,7 +15,7 @@ import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { archivedTranscriptPaths } from "@/lib/scanner";
 import { globalCache } from "@/lib/scanner/caches";
 import { describe as describeTranscript, projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
-import { readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, injectStateWriteFaultForTests, SqliteStateCollection, readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import { writeSessionTitle } from "@/lib/session/titleStore";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -55,11 +55,15 @@ function resetFilesProjectionCacheForTests(): void {
     __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
     __llvFilesProjectionWorkerTail?: Promise<void>;
     __llvFilesPersistedProjectionChecked?: boolean;
+    __llvFilesWriteRecovery?: unknown;
+    __llvFilesWorkerWriteFailedSince?: string | null;
   };
   store.__llvFilesProjectionCache = new Map();
   store.__llvFilesProjectionInflight = new Map();
   store.__llvFilesProjectionWorkerTail = undefined;
   store.__llvFilesPersistedProjectionChecked = undefined;
+  store.__llvFilesWriteRecovery = undefined;
+  store.__llvFilesWorkerWriteFailedSince = undefined;
 }
 
 beforeEach(() => {
@@ -103,6 +107,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  injectStateWriteFaultForTests(null);
   setStateFreeBytesProbeForTests(null);
   noteStateCommit();
   setFileScanRunnerForTests(null);
@@ -3853,8 +3858,12 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
       // Conditional reads serve the old body immediately while a worker runs.
       // Retry once its failure is observed, as the real completion chain does.
       expect(response.headers.get("x-llv-files-projection-cache")).toBe("stale");
-      for (let i = 0; i < 100 && stateWriteHealth(stateDir).state !== "disk-full"; i++) await Bun.sleep(10);
-      expect(stateWriteHealth(stateDir).state).toBe("disk-full");
+      let health = await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json();
+      for (let i = 0; i < 100 && health.state !== "disk-full"; i++) {
+        await Bun.sleep(10);
+        health = await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json();
+      }
+      expect(health.state).toBe("disk-full");
       response = await GET(new Request("http://127.0.0.1/api/files", { headers }));
     }
     expect(response.status).toBe(200);
@@ -3927,6 +3936,109 @@ process.stdout.write(JSON.stringify(reply)+'\\n');});`);
     expect(payload.systemHealth.storage.writes.state).toBe("ok");
   } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
 });
+async function warmFilesProjectionForWorkerTest(): Promise<string> {
+  let warm = await GET(new Request("http://127.0.0.1/api/files"));
+  for (let i = 0; i < 5 && warm.headers.get("x-llv-files-projection-cache") !== "hit"; i++) warm = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(warm.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  return warm.text();
+}
+
+function installRecoveringProjectionWorker(body: string, holdRecovery = false): void {
+  const script = path.join(stateDir, "controlled-recovery-worker.mjs");
+  fs.writeFileSync(script, `import readline from 'node:readline';import fs from 'node:fs';import path from 'node:path';
+const root=process.env.LLV_STATE_DIR;let attempts=0;
+readline.createInterface({input:process.stdin}).on('line', line => {
+const {id}=JSON.parse(line);fs.writeFileSync(path.join(root,'worker-attempts'),String(++attempts));
+if(attempts===1){process.stdout.write(JSON.stringify({id,ok:false,error:'ENOSPC: no space left on device',rssBytes:1})+'\\n');return;}
+const respond=()=>{const bodyFile=path.join(root,'files-response-results',id+'.json');fs.mkdirSync(path.dirname(bodyFile),{recursive:true});fs.writeFileSync(bodyFile,${JSON.stringify(body)});process.stdout.write(JSON.stringify({id,ok:true,result:{bodyFile,contentType:'application/json',etag:'"recovery-fixture"',timing:''},rssBytes:1})+'\\n');};
+if(${holdRecovery}){fs.writeFileSync(path.join(root,'worker-held'),'');const timer=setInterval(()=>{if(fs.existsSync(path.join(root,'release-worker'))){clearInterval(timer);respond();}},5);}else respond();
+});`);
+  setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: script }, timeoutMs: 5000 });
+  fs.writeFileSync(path.join(stateDir, "storage-incidents.json"), JSON.stringify({ version: 1, incidents: [], fixtureRevision: "input-B" }));
+}
+
+async function waitForWorkerRecoveryHeld(): Promise<void> {
+  for (let i = 0; i < 200 && !fs.existsSync(path.join(stateDir, "worker-held")); i++) await Bun.sleep(10);
+  expect(fs.existsSync(path.join(stateDir, "worker-held"))).toBe(true);
+}
+
+function pendingFilesProjection(): Promise<unknown> {
+  const store = globalThis as typeof globalThis & { __llvFilesProjectionInflight?: Map<string, Promise<unknown>> };
+  const pending = store.__llvFilesProjectionInflight?.values().next().value;
+  expect(pending).toBeDefined();
+  return pending!;
+}
+
+test("worker transport recovery preserves a concurrent SQLite commit failure until a real data commit", async () => {
+  savePipelines([]);
+  const database = path.join(stateDir, "state.sqlite");
+  const revision = readStateCollectionRevision(database, "pipelines");
+  installRecoveringProjectionWorker(await warmFilesProjectionForWorkerTest(), true);
+  try {
+    expect((await (await GET(new Request("http://127.0.0.1/api/files"))).json()).systemHealth.storage.writes.state).toBe("disk-full");
+    const recovery = GET(new Request("http://127.0.0.1/api/files"));
+    await waitForWorkerRecoveryHeld();
+    const pending = pendingFilesProjection();
+    const pipeline = buildPipeline({ id: "commit-recovery", task: "Recovery fixture", project: "fixture", repoDir: stateDir, stages: [], srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z", state: "draft" });
+    injectStateWriteFaultForTests({ site: "commit", collection: "pipelines", times: 1, error: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }) });
+    expect(() => savePipelines([pipeline])).toThrow(StateDiskFullError);
+    expect(readStateCollectionRevision(database, "pipelines")).toBe(revision);
+    const failureSince = stateWriteHealth(stateDir).since;
+    fs.writeFileSync(path.join(stateDir, "release-worker"), "");
+    await recovery;
+    await pending;
+    const health = await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json();
+    expect(health.state).toBe("disk-full");
+    expect(health.since).toBe(failureSince);
+    expect(stateWriteHealth(stateDir).state).toBe("disk-full");
+    savePipelines([pipeline]);
+    expect(readStateCollectionRevision(database, "pipelines")).toBeGreaterThan(revision!);
+    expect((await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json()).state).toBe("ok");
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+});
+
+test("successful worker transport preserves disk-full state health reported in its body", async () => {
+  const body = JSON.parse(await warmFilesProjectionForWorkerTest());
+  body.systemHealth.storage.writes = { state: "disk-full", since: new Date().toISOString(), freeBytes: 1024 ** 3 };
+  installRecoveringProjectionWorker(JSON.stringify(body), true);
+  try {
+    await GET(new Request("http://127.0.0.1/api/files"));
+    const recovery = GET(new Request("http://127.0.0.1/api/files"));
+    await waitForWorkerRecoveryHeld();
+    const pending = pendingFilesProjection();
+    fs.writeFileSync(path.join(stateDir, "release-worker"), "");
+    await recovery;
+    await pending;
+    const health = await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json();
+    expect(health.state).toBe("disk-full");
+    expect(health.since).toBe(body.systemHealth.storage.writes.since);
+    expect(stateWriteHealth(stateDir).state).toBe("disk-full");
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+});
+
+test("worker ENOSPC fallback retains input A until input B rebuilds after an unrelated commit", async () => {
+  const options = { collection: "unrelated_probe", schemaVersion: 1, busyMessage: "probe busy", key: (row: { key: string }) => row.key,
+    decode: (raw: unknown) => raw as { key: string }, clone: (row: { key: string }) => ({ ...row }) };
+  const database = path.join(stateDir, "state.sqlite");
+  initializeStateCollections(database, [{ ...options, migrationId: "unrelated-probe", loadRecords: () => [] }]);
+  const unrelated = new SqliteStateCollection(database, options);
+  const body = JSON.parse(await warmFilesProjectionForWorkerTest());
+  body.projectionInput = "B";
+  installRecoveringProjectionWorker(JSON.stringify(body));
+  try {
+    const fallback = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
+    expect(fallback.projectionInput).toBeUndefined();
+    expect(fallback.systemHealth.storage.writes.state).toBe("disk-full");
+    unrelated.replaceSync([{ key: "recovered" }]);
+    const response = await GET(new Request("http://127.0.0.1/api/files"));
+    const rebuilt = await response.json();
+    expect(rebuilt.projectionInput).toBe("B");
+    expect(rebuilt.systemHealth.storage.writes.state).toBe("ok");
+    expect(response.headers.get("x-llv-files-projection-cache")).toBe("miss");
+    expect(fs.readFileSync(path.join(stateDir, "worker-attempts"), "utf8")).toBe("2");
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+});
+
 test("disk-full alert overlays a persisted representation from before write health existed", async () => {
   scannedFiles = [];
   const body = JSON.stringify({ files: [], systemHealth: { tmux: { status: "healthy" } } });

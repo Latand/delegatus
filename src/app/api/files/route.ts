@@ -32,6 +32,8 @@ type ProjectionRepresentation = {
   etag: string;
   timing: string;
   stateWrites?: StateWriteHealth;
+  /** State-data health before this process overlays worker transport health. */
+  stateDataWrites?: StateWriteHealth;
   delta?: { base: string; body: string };
   /** The state this body was built from, sent with it whenever it is served,
       a stale answer included (#2072). */
@@ -179,10 +181,13 @@ function stateFileSignature(filename: string): string {
  * MCP/controller processes. Lease bookkeeping cannot clear a failed-write alert. */
 function currentWriteHealth(observed?: StateWriteHealth): StateWriteHealth {
   const directory = stateDir();
-  const health = stateWriteHealth(directory, observed);
+  const dataHealth = stateWriteHealth(directory, observed);
+  const transportSince = projectionCacheStore.__llvFilesWorkerWriteFailedSince;
+  const health: StateWriteHealth = !dataHealth.since && transportSince
+    ? { ...dataHealth, state: "disk-full", since: transportSince }
+    : dataHealth;
   if (!health.since) {
     projectionCacheStore.__llvFilesWriteRecovery = undefined;
-    projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
     return health;
   }
   try {
@@ -418,6 +423,7 @@ async function projectionFor(
       };
     };
     let representation: ProjectionRepresentation;
+    let cacheKey = key;
     if (filesResponseWorkerEnabled() && !filesystemExhausted()) {
       try {
         representation = await queueProjectionWorker(async () => {
@@ -437,22 +443,26 @@ async function projectionFor(
             ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
             ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
           });
-          if (projectionCacheStore.__llvFilesWorkerWriteFailedSince) {
-            // A result file successfully transported after ENOSPC proves that
-            // transport recovered. No health row or recovery probe is written.
-            noteStateCommit();
-            projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
-          }
+          // Result-file transport recovers independently of state-data writes.
+          // The body may itself report a state write failure from the worker.
+          projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
           const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
           return { ...projected, built: { epoch, generation, sequence } };
         });
       } catch (error) {
         if (!isDiskFullError(error)) throw error;
-        noteStateDiskFull("files response worker");
-        projectionCacheStore.__llvFilesWorkerWriteFailedSince = currentWriteHealth().since;
+        // Classified state-store failures belong to state-data health. A raw
+        // ENOSPC from result-file transport has its own recovery signal.
+        if (/disk full, state writes failing|SQLITE_FULL|database or disk is full/i.test(String(error))) {
+          noteStateDiskFull("files response worker state write");
+        }
+        projectionCacheStore.__llvFilesWorkerWriteFailedSince ??= new Date().toISOString();
+        currentWriteHealth();
         // A full state filesystem cannot carry the worker result file. Use
         // the retained body, or compute it inline when this is a cold request.
         representation = cached?.representation ?? await inlineProjection();
+        // A retained body still represents the input that built it.
+        cacheKey = cached?.key ?? key;
       }
     } else {
       representation = await inlineProjection();
@@ -467,7 +477,7 @@ async function projectionFor(
       /* The link holds the delta; the cached representation need not. */
       representation = { ...representation, delta: undefined };
     }
-    rememberProjection(scopeKey, key, representation);
+    rememberProjection(scopeKey, cacheKey, representation);
     if (scopeKey === projectionScopeKey(undefined) && currentWriteHealth().state === "ok") {
       schedulePersistProjection(representation);
     }
@@ -504,9 +514,10 @@ function withCurrentWriteHealth(representation: ProjectionRepresentation): Proje
     parsed = JSON.parse(representation.body);
     const system = parsed!.systemHealth as { storage?: { writes?: StateWriteHealth } } | undefined;
     representation.stateWrites = system?.storage?.writes ?? { state: "ok", since: null, freeBytes: null };
+    representation.stateDataWrites = representation.stateWrites;
   }
   const previous = representation.stateWrites;
-  const writes = currentWriteHealth(previous);
+  const writes = currentWriteHealth(representation.stateDataWrites);
   if (previous.state === writes.state && previous.since === writes.since
     && (writes.state === "ok" || previous.freeBytes === writes.freeBytes)) return representation;
   parsed ??= JSON.parse(representation.body);
