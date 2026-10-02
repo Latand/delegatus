@@ -4,6 +4,14 @@
    mirrored name for name, so light and dark follow the app's theme. Sizes,
    spacing and radii are the prototype's; keep them in step with it. */
 
+/* Grid track values belong to the board itself. They must not invalidate
+   the styles of every descendant when the wide share changes. */
+@property --c-inbox { syntax: "*"; inherits: false; }
+@property --c-assigned { syntax: "*"; inherits: false; }
+@property --c-blocked { syntax: "*"; inherits: false; }
+@property --c-done { syntax: "*"; inherits: false; }
+@property --kb-column-width { syntax: "<length>"; inherits: false; initial-value: 280px; }
+
 .kb {
   --shelf-w: 264px;
   --work-min: 520px;
@@ -169,8 +177,8 @@
 /* The snap keeps the board's own edge: without the scroll padding a column
    snaps flush to the scroller and the edge padding scrolls away. */
 .kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--kb-edge); gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
-.kb .board.scroll .column { flex: 0 0 280px; scroll-snap-align: start; }
-.kb .board.scroll .column[data-status="assigned"] { flex-basis: 480px; }
+.kb .board.scroll .column { flex: 0 0 auto; width: var(--kb-column-width); scroll-snap-align: start; }
+.kb .board.scroll .column[data-status="assigned"] { --kb-column-width: 480px; }
 /* Tabs (640–767 px): one column at a time under a segmented strip. */
 .kb .board.tabs { display: flex; flex-direction: column; padding: 0 12px 12px; overflow: hidden; }
 .kb .board.tabs .column { display: none; }
@@ -178,7 +186,7 @@
 
 /* Every column has the 1 px frame Assigned and a widened shelf draw, clear on
    a shelf, so a title and a card sit at the same place in each. */
-.kb .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
+.kb .column { contain: layout style; display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
 .kb .column[data-status="inbox"] { grid-area: inbox; }
 .kb .column[data-status="assigned"] { grid-area: assigned; }
 .kb .column[data-status="blocked"] { grid-area: blocked; }
@@ -195,29 +203,16 @@
    Assigned the shelf's fill, and the swap animates. */
 /* The layout helper owns the visible width transition. Reflowing tracks on
    every frame repeatedly wraps every card on the board. */
-.kb .board:not(.scroll):not(.tabs) { transition: none; }
+.kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
 .kb .board, .kb .col-body { overflow-anchor: none; }
-.kb [data-layout-animating="card"] { transform-origin: top left; will-change: transform, opacity; }
-.kb .kb-layout-copy:is(.column, .card, .col-head, .divider, .empty) {
-  position: fixed; z-index: 5; margin: 0; pointer-events: none;
-  transform-origin: top left; content-visibility: visible; overflow: hidden;
-  box-sizing: border-box; will-change: transform, opacity;
-}
-/* Live SVG glyphs animate on the main thread. The board's layout motion holds
-   their pose until its own compositor animation has finished. */
-.kb .kb-page[data-layout-animating="page"] .mglyph[data-live="1"]::before,
-.kb .kb-page[data-layout-animating="page"] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase) { animation-play-state: paused !important; }
-.kb .kb-layout-copy .mglyph::before { animation: none !important; }
-.kb .kb-layout-copy * { animation: none !important; transition: none !important; }
-.kb .kb-layout-copy.kb-layout-shell { z-index: 3; }
-.kb .kb-layout-copy.kb-layout-destination { z-index: 4; }
-.kb .kb-layout-copy.kb-layout-frame { z-index: 1; }
-.kb .column[data-layout-animating="frame"] { background: transparent !important; border-color: transparent !important; transition: none; }
-.kb .kb-page[data-layout-animating="page"] { z-index: 2; }
-.kb .column[data-layout-animating="frame"] > .col-body { position: relative; z-index: 2; }
-@media (prefers-reduced-motion: reduce) {
-  .kb .kb-layout-copy:is(.column, .card, .col-head, .divider, .empty) { display: none; }
-}
+/* Promotion exists only while these real surfaces are moving. */
+.kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
+.kb [data-layout-animating="content"] { transform-origin: top left; will-change: transform, opacity; }
+/* The promoted content owns these SVGs. Pause their main-thread drawing in
+   the same bounded batches as promotion, and resume on layer cleanup. */
+.kb [data-layout-animating="content"].mglyph::before,
+.kb [data-layout-animating="content"] .mglyph::before,
+.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase) { animation-play-state: paused !important; }
 .kb .column.wide {
   background-color: var(--surface-canvas);
   background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px);
@@ -225,8 +220,8 @@
   border: 1px solid var(--border-default);
 }
 .kb .column[data-status="assigned"].shelf { background: var(--surface-well); border-color: transparent; }
-.kb .board.scroll .column.wide { flex-basis: 480px; }
-.kb .board.scroll .column[data-status="assigned"].shelf { flex-basis: 280px; }
+.kb .board.scroll .column.wide { --kb-column-width: 480px; }
+.kb .board.scroll .column[data-status="assigned"].shelf { --kb-column-width: 280px; }
 .kb .col-head .icon-btn.col-pin[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
 /* The mouse resting in a narrow column is about to widen it
    (`useColumnDwell`): the column's frame and its Widen button take the accent,
@@ -272,7 +267,7 @@
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
    16 px foot, so a list scrolled to its end shows its last card above it. */
-.kb .col-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
+.kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
 .kb .empty strong { display: block; color: var(--color-secondary); font-weight: 600; margin-bottom: 2px; }
 
@@ -1063,12 +1058,12 @@
 /* A shelf column holding an open conversation widens to reading width; the
    board then scrolls sideways inside itself, never the page. */
 .kb .board.reading { overflow-x: auto; }
-.kb .board.scroll .column.reading { flex-basis: 460px; }
+.kb .board.scroll .column.reading { --kb-column-width: 460px; }
 
 /* Written as specific as the Assigned shelf's 280 px basis above, and after
    it, so an Assigned column that gave the wide share away keeps the agent's
    minimum too. */
-.kb .board.scroll .column[data-status].agent { flex-basis: var(--agent-min); }
+.kb .board.scroll .column[data-status].agent { --kb-column-width: var(--agent-min); }
 
 /* An empty column folds to a strip. Rested on by a mouse (`.open`, set after
    DWELL_CUE_MS), focused or under a dragged card (`.drop`) it opens to the
@@ -1078,7 +1073,7 @@
 .kb .board:has(> .column.strip[data-status="assigned"]:is(.open, :focus-within, .drop)) { --kb-open-assigned: var(--kb-track-assigned); }
 .kb .board:has(> .column.strip[data-status="blocked"]:is(.open, :focus-within, .drop)) { --kb-open-blocked: var(--kb-track-blocked); }
 .kb .board:has(> .column.strip[data-status="done"]:is(.open, :focus-within, .drop)) { --kb-open-done: var(--kb-track-done); }
-.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { flex-basis: var(--strip-w); }
+.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { --kb-column-width: var(--strip-w); }
 .kb .column.strip:not(.open, :focus-within, .drop) { overflow: hidden; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu]) { display: none; }

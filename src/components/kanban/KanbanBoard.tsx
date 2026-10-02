@@ -29,6 +29,7 @@ import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
+import { COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
@@ -210,6 +211,7 @@ interface SheetTarget {
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
+const NO_REMOTE_AGENTS: readonly RemoteAgentView[] = [];
 const NO_READERS: readonly OpenReader[] = [];
 /** Parts of the board's root that belong to the Viewer, where the board answers no key. */
 const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
@@ -304,7 +306,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The other machines' agents and lanes. On the Overview the feed
      covers every linked project, and only its lanes and hosts are drawn. */
   const remoteFeed = useRemoteFeed(props.overview ? null : project);
-  const remoteAgents = !props.overview && remoteFeed ? remoteFeed.agents.filter((row) => row.p === project) : [];
+  const remoteAgents = useMemo(() => !props.overview && remoteFeed ? remoteFeed.agents.filter((row) => row.p === project) : NO_REMOTE_AGENTS, [props.overview, remoteFeed, project]);
   const remoteCards = useMemo(() => remoteCardsFor(allTasks, remoteFeed), [allTasks, remoteFeed]);
   const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
@@ -632,29 +634,44 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    const next = new Map<string, { rect: DOMRect; status: string | undefined }>();
-    const moved: Array<{ element: HTMLElement; from: DOMRect }> = [];
-    const reduce = prefersReducedMotion();
-    root.querySelectorAll<HTMLElement>(".card[data-id]").forEach((element) => {
-      const id = element.dataset.id!;
-      const rect = element.getBoundingClientRect();
-      const status = element.closest<HTMLElement>(".column")?.dataset.status;
-      next.set(id, { rect, status });
-      const before = previousRects.current.get(id);
-      if (!before || !rect.width) return;
-      if (before.status && status && before.status !== status) moved.push({ element, from: before.rect });
-    });
-    previousRects.current = next;
-    if (!moved.length) return;
-    if (reduce || moved.length > 6) {
-      for (const { element } of moved) {
-        element.classList.remove("moved-static");
-        void element.offsetWidth;
-        element.classList.add("moved-static");
+    const measure = () => {
+      if (root.hasAttribute("data-column-layout")) return;
+      const next = new Map<string, { rect: DOMRect; status: string | undefined }>();
+      const moved: Array<{ element: HTMLElement; from: DOMRect }> = [];
+      const reduce = prefersReducedMotion();
+      root.querySelectorAll<HTMLElement>(".card[data-id]").forEach((element) => {
+        const id = element.dataset.id!;
+        const rect = element.getBoundingClientRect();
+        const status = element.closest<HTMLElement>(".column")?.dataset.status;
+        next.set(id, { rect, status });
+        const before = previousRects.current.get(id);
+        if (!before || !rect.width) return;
+        if (before.status && status && before.status !== status) moved.push({ element, from: before.rect });
+      });
+      previousRects.current = next;
+      if (!moved.length) return;
+      if (reduce || moved.length > 6) {
+        for (const { element } of moved) {
+          element.classList.remove("moved-static");
+          void element.offsetWidth;
+          element.classList.add("moved-static");
+        }
+        return;
       }
-      return;
-    }
-    for (const { element, from } of moved) fly(element, from, root);
+      for (const { element, from } of moved) fly(element, from, root);
+    };
+    /* The width helper owns geometry until its transforms finish. Measuring
+       every card in React's commit here forced the final wrapping too early. */
+    let frame = 0;
+    const settled = () => {
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; measure(); });
+    };
+    measure();
+    root.addEventListener(COLUMN_LAYOUT_END, settled);
+    return () => {
+      root.removeEventListener(COLUMN_LAYOUT_END, settled);
+      if (frame) cancelAnimationFrame(frame);
+    };
   });
 
   /* ── Status moves ────────────────────────────────────────────────────── */
@@ -2971,6 +2988,12 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const { t } = useLocale();
   const column = model.columns[status];
   const shown = column.shown;
+  /* A width-only render keeps each card's remote list, so its memo can hold. */
+  const remoteAgentsByTask = useMemo(() => {
+    const byTask = new Map<string, RemoteAgentView[]>();
+    for (const row of remoteAgents) if (row.task) byTask.set(row.task, [...(byTask.get(row.task) ?? []), row]);
+    return byTask;
+  }, [remoteAgents]);
   const renderCard = (card: KanbanCardModel) => (
     <KanbanCard
       key={card.id}
@@ -2979,7 +3002,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       pending={card.task ? pendingIds.pending(card.task.id) : false}
       collapsed={collapsed.has(card.id)}
       nowMs={nowMs}
-      remoteAgents={card.task ? remoteAgents.filter((row) => row.task === card.task!.id) : []}
+      remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_AGENTS : NO_REMOTE_AGENTS}
       remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
       stagePanels={panelsByCard.get(card.id) ?? ""}
