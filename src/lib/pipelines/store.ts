@@ -1222,27 +1222,17 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
   delivery.journal = [...delivery.journal, { at: new Date().toISOString(), kind, ownerId: delivery.ownerId, epoch: delivery.epoch, conversationId, reason }].slice(-100);
 }
 
-function terminalDeliveryFailure(pipeline: Pipeline): string | null {
-  const terminalAttempt = pipeline.state === "needs_decision" && pipeline.cursor
-    ? pipeline.runs.find((run) => run.stageId === pipeline.cursor!.stageId)?.attempts.findLast((attempt) => !attempt.historical)
-    : null;
-  return terminalAttempt?.verdict?.status === "fail" && terminalAttempt.completedAt
-    ? `${pipeline.cursor!.stageId}:${terminalAttempt.n}:${terminalAttempt.startedAt ?? ""}` : null;
-}
-
 function releaseTerminalDelivery(pipeline: Pipeline): void {
   if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
-  const failure = terminalDeliveryFailure(pipeline);
-  const failed = failure !== null && failure !== delivery?.settledFailure;
-  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed" && !failed)) return;
+  // Parks retain the lane's claim so its cursor can resume and publish.
+  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
   if (delivery.operation?.state === "running") return;
   delivery.active = false;
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
-  if (failed) delivery.settledFailure = failure;
-  deliveryJournal(pipeline, "release", failed ? "terminal failure without an active fail edge" : `pipeline ${pipeline.state}`);
+  deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -1324,8 +1314,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       tx.put(old);
     }
     pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
-      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal,
-      settledFailure: terminalDeliveryFailure(pipeline) ?? pipeline.delivery.settledFailure };
+      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
