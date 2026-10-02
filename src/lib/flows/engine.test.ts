@@ -3283,3 +3283,81 @@ test.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering acco
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
+
+test("an OAuth race schedules bounded provider retries without spending review rounds", async () => {
+  const startedAt = new Date().toISOString();
+  const cwd = "/repo";
+  const implementer = writeCodexEntry("retry-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f117"].join("-"), cwd }, Date.now() / 1_000);
+  const flow: Flow = {
+    id: "flow-provider-retry",
+    template: "implement-review-loop",
+    project: "repo",
+    cwd,
+    implementerPath: implementer.path,
+    roles: {
+      implementer: { engine: "codex", model: null, effort: "high" },
+      reviewer: { engine: "codex", model: null, effort: "xhigh" },
+    },
+    reviewerFallback: { engine: "claude", model: "fable", effort: "high" },
+    baseRef: "base",
+    baseMode: "head",
+    mode: "auto",
+    reviewerMode: "headless",
+    roundLimit: 5,
+    state: "reviewing",
+    pausedState: null,
+    stateDetail: null,
+    rounds: [{
+      n: 1,
+      reviewerPath: null,
+      reviewerRole: { engine: "codex", model: null, effort: "xhigh" },
+      accountId: "default",
+      attemptedAccounts: ["codex:default"],
+      autoRetryCount: 0,
+      sessionId: null,
+      reviewerPid: 999_999_999,
+      reviewerPane: null,
+      findingsPath: null,
+      triggeredBy: "marker",
+      readyNote: null,
+      verdict: null,
+      findingsCount: null,
+      startedAt,
+      spawnStartedAt: startedAt,
+      relayStartedAt: null,
+      reviewedAt: null,
+      relayedAt: null,
+      error: null,
+    }],
+    createdAt: startedAt,
+    closedAt: null,
+  };
+  const race = "Failed to refresh OAuth token: another process is refreshing it; retry in a minute";
+  const now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    for (let n = 0; n < 4; n += 1) {
+      const current = n === 0 ? flow : loadFlows()[0]!;
+      current.state = "reviewing";
+      current.rounds[0]!.spawnStartedAt = startedAt;
+      current.rounds[0]!.reviewerPid = 999_999_999;
+      current.rounds[0]!.launchNotBefore = null;
+      fs.mkdirSync(path.dirname(outputPathFor(flow.id, 1)), { recursive: true });
+      fs.writeFileSync(outputPathFor(flow.id, 1), race);
+      saveFlows([current]);
+      await tickFlows([implementer]);
+      const next = loadFlows()[0]!;
+      expect(next.rounds).toHaveLength(1);
+      expect(next.rounds[0]!.autoRetryCount).toBe(0);
+      if (n < 3) {
+        expect(next.state).toBe("spawning");
+        expect(Date.parse(next.rounds[0]!.launchNotBefore!)).toBe(now + 60_000 * 2 ** n);
+        await tickFlows([implementer]);
+        expect(loadFlows()[0]!.rounds[0]!.spawnStartedAt).toBeNull();
+      } else {
+        expect(next.state).toBe("needs_decision");
+        expect(next.stateDetail).toContain("auth refresh race");
+      }
+    }
+  } finally { clock.mockRestore(); }
+});

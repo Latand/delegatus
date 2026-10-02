@@ -4318,7 +4318,7 @@ test("a terminal spawn receipt parks while runtime liveness still reports active
   expect(parked.runs[0]!.attempts[0]!.error).toBe(reason);
 });
 
-test("an unregistered stage with only its launch record parks and the lane closes (#1325)", async () => {
+test("an unregistered stage with only its launch record relaunches and the lane closes (#1325)", async () => {
   const h = harness();
   const pipeline = await runningStructuredStage(h);
   h.setConversationActive(null);
@@ -4336,13 +4336,13 @@ test("an unregistered stage with only its launch record parks and the lane close
 
   const parked = loadPipelines()[0]!;
   expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: "stage verdict recovery exhausted after 3 checks: the stage host died before its session registered",
+    state: "running",
+    stateDetail: expect.stringContaining("relaunching after stage host died without output"),
   });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({
-    state: "needs_decision",
+    state: "failed",
     completedAt: expect.any(String),
-    verdictRecovery: { state: "exhausted", checks: 3 },
+    error: "stage host died without output",
   });
 
   h.setHostsResident(false);
@@ -8869,7 +8869,7 @@ const usageLimitStage = (account?: string) => [{
   ...(account ? { account } : {}),
 }];
 
-test("a usage-limit terminal transcript parks promptly with the earliest allowed reset (#1371)", async () => {
+test("a usage-limit terminal transcript waits for its source reset while checking other accounts (#1371)", async () => {
   const h = harness();
   const currentReset = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const earlierReset = Math.floor(Date.parse("2026-09-02T10:05:00.000Z") / 1_000);
@@ -8886,9 +8886,9 @@ test("a usage-limit terminal transcript parks promptly with the earliest allowed
   await tickPipelines([], h.ports);
 
   const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
-  const detail = `rate limited until ${new Date(earlierReset * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`;
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail });
-  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: detail });
+  const detail = expect.stringContaining(new Date(currentReset * 1_000).toISOString());
+  expect(parked).toMatchObject({ state: "running", stateDetail: detail });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "running", error: null, providerWait: { resetsAt: currentReset } });
 });
 
 test("an unpinned usage-limited stage respawns on another allowed account (#1371)", async () => {
@@ -8912,7 +8912,7 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
 
   await tickPipelines([], h.ports);
   const retrying = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
-  expect(retrying.stateDetail).toContain(`rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`);
+  expect(retrying.stateDetail).toContain("relaunching after codex usage limit");
   expect(retrying.runs[0]!.attempts).toHaveLength(2);
   expect(retrying.runs[0]!.attempts[0]).toMatchObject({ state: "failed" });
   expect(retrying.runs[0]!.attempts[1]).toMatchObject({ state: "pending" });
@@ -8920,7 +8920,7 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
   await tickPipelines([], h.ports);
 
   const failedOver = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
-  expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: null, unavailableAccountIds: [LIMITED_ACCOUNT] });
+  expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: SPARE_ACCOUNT, unavailableAccountIds: [LIMITED_ACCOUNT] });
   expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
 });
 
@@ -8967,12 +8967,13 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const forkId = "7d1c2b3a-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d";
     const sourceRoot = path.join(root, "claude-source");
     const targetRoot = path.join(root, "claude-target");
-    fs.mkdirSync(sourceRoot);
-    fs.mkdirSync(targetRoot);
+    fs.mkdirSync(sourceRoot, { mode: 0o700 });
+    fs.mkdirSync(targetRoot, { mode: 0o700 });
     const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
     const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
     fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
       .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
+    fs.chmodSync(sourcePath, 0o600);
     const fork = forkClaudeHistory({
       sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
       sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
@@ -9046,7 +9047,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
   }
 });
 
-test("a Claude stage parks without a free allowed account and resumes its conversation when capacity returns", async () => {
+test("a Claude stage waits without a free allowed account and resumes its conversation when capacity returns", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -9060,9 +9061,9 @@ test("a Claude stage parks without a free allowed account and resumes its conver
 
   await tickPipelines([], h.ports);
   const parked = loadPipelines().find((item) => item.id === pipeline.id)!;
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: `rate limited until an unknown reset time, account ${LIMITED_ACCOUNT_LABEL}` });
+  expect(parked).toMatchObject({ state: "running", stateDetail: expect.stringContaining("waiting for claude session limit") });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
-  expect(parked.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "failed" });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
 
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
     engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed",
@@ -9131,15 +9132,16 @@ test("a Claude stage retains the source account's confirmed reset when no allowe
   await tickPipelines([], h.ports);
   const parked = loadPipelines().find((item) => item.id === pipeline.id)!;
   expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`,
+    state: "running",
+    stateDetail: expect.stringContaining("waiting for claude session limit"),
   });
   expect(parked.runs[0]!.attempts[0]!.usageLimitedAccounts).toMatchObject([
     { accountId: LIMITED_ACCOUNT, resetsAt },
   ]);
 
-  const dateNow = spyOn(Date, "now").mockImplementation(() => (resetsAt + 1) * 1_000);
+  const dateNow = spyOn(Date, "now").mockImplementation(() => (resetsAt + 61) * 1_000);
   try {
+    h.ports.now = () => new Date(Date.now()).toISOString();
     h.ports.resumeSeveredTurn = async () => true;
     await tickPipelines([], h.ports);
     const resumed = loadPipelines().find((item) => item.id === pipeline.id)!;
@@ -9151,7 +9153,7 @@ test("a Claude stage retains the source account's confirmed reset when no allowe
   }
 });
 
-test("a parked Claude stage continues its original conversation after that account's capacity returns", async () => {
+test("a waiting Claude stage continues its original conversation after that account's capacity returns", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -9170,11 +9172,11 @@ test("a parked Claude stage continues its original conversation after that accou
   h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); return true; };
 
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
   recovered = true;
   allowed = [SPARE_ACCOUNT];
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
   allowed = [LIMITED_ACCOUNT];
   await tickPipelines([], h.ports);
   const resumed = loadPipelines()[0]!;
@@ -9184,7 +9186,7 @@ test("a parked Claude stage continues its original conversation after that accou
   expect(continuations).toEqual([attempt.conversationId!]);
 });
 
-test("a previously limited Claude account becomes available for a later stage reseat and parked reconciliation", async () => {
+test("a previously limited Claude account becomes available for a later stage reseat and waiting reconciliation", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -9226,7 +9228,7 @@ test("a previously limited Claude account becomes available for a later stage re
   currentPath = "/codex/stage-2.jsonl";
   await tickPipelines([], h.ports);
   const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
+  expect(parked.state).toBe("running");
   expect(parked.runs[0]!.attempts[0]!.usageLimitedAccounts).toMatchObject([
     { accountId: LIMITED_ACCOUNT, limitedAt: Date.parse("2026-08-27T09:41:00.000Z"), turnId: expect.any(String) },
     { accountId: SPARE_ACCOUNT, limitedAt: Date.parse("2026-08-27T09:50:00.000Z"), turnId: expect.any(String) },
@@ -9270,7 +9272,7 @@ test("separate Claude limit turns on one account receive separate registry deliv
     return true;
   };
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
   recovered = true;
   await tickPipelines([], h.ports);
   expect(deliveries).toHaveLength(1);
@@ -9284,14 +9286,14 @@ test("separate Claude limit turns on one account receive separate registry deliv
       message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: PROVIDER_LIMIT_NOTICE }] } },
   ]);
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
   recovered = true;
   await tickPipelines([], h.ports);
   expect(new Set(deliveries).size).toBe(2);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
 });
 
-test("an explicitly pinned Claude stage parks despite another free account and resumes on its own", async () => {
+test("an explicitly pinned Claude stage waits despite another free account and resumes on its own", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage(LIMITED_ACCOUNT)[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -9311,7 +9313,7 @@ test("an explicitly pinned Claude stage parks despite another free account and r
   h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); return true; };
 
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
   expect(reseats).toEqual([]);
   recovered = true;
   await tickPipelines([], h.ports);
@@ -9524,7 +9526,7 @@ test("a delivered Claude limit continuation releases later dead-host recovery", 
   readFixtures(h, { [sourcePath]: sourcePath });
   usageLimitPorts(h, { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT] });
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
 
   h.ports.claudeAccountRecovered = () => true;
   h.ports.resumeSeveredTurn = async (input) => {
@@ -9543,8 +9545,11 @@ test("a delivered Claude limit continuation releases later dead-host recovery", 
   h.ports.durableTurnEvidence = async () => null;
   h.ports.conversationHostUnavailableSince = async () => new Date(1).toISOString();
   await tickPipelines([], h.ports);
+  h.advanceWallClock(30_000);
+  await tickPipelines([], h.ports);
   const recovered = loadPipelines()[0]!;
-  expect(recovered.state).toBe("needs_decision");
+  expect(recovered.state).toBe("running");
+  expect(recovered.runs[0]!.attempts).toHaveLength(2);
   expect(recovered.stateDetail).not.toContain("Claude limit: continuing");
   expect(h.calls.some((call) => call.startsWith("stop-host:build:1:"))).toBe(true);
 });
@@ -9626,7 +9631,7 @@ test("a usage limit hit after the stage moved to another engine retries there wi
   expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
 });
 
-test("a failover whose remaining capacity disappears parks with the limit detail (#1371)", async () => {
+test("a failover whose remaining capacity disappears waits with the limit detail (#1371)", async () => {
   const h = harness();
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage() as never);
@@ -9656,12 +9661,12 @@ test("a failover whose remaining capacity disappears parks with the limit detail
   const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
   expect(h.spawnInputs).toHaveLength(1);
   expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`,
+    state: "running",
+    stateDetail: expect.stringContaining("waiting for codex usage limit"),
   });
 });
 
-test("successive usage limits park on the earliest reset across failed-over accounts (#1371)", async () => {
+test("successive usage limits wait on the current source reset across failed-over accounts (#1371)", async () => {
   const h = harness();
   const firstReset = Math.floor(Date.parse("2026-09-02T10:05:00.000Z") / 1_000);
   const secondReset = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
@@ -9692,16 +9697,16 @@ test("successive usage limits park on the earliest reset across failed-over acco
 
   const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
   expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: `rate limited until ${new Date(firstReset * 1_000).toISOString()}, account ${SPARE_ACCOUNT_LABEL}`,
+    state: "running",
+    stateDetail: expect.stringContaining(new Date(secondReset * 1_000).toISOString()),
   });
-  expect(parked.runs[0]!.attempts[1]?.usageLimitedAccounts).toEqual([
+  expect(parked.runs[0]!.attempts[1]?.usageLimitedAccounts).toMatchObject([
     { accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt: firstReset },
     { accountId: SPARE_ACCOUNT, engine: "codex", resetsAt: secondReset },
   ]);
 });
 
-test("a pinned usage-limited stage parks on its account and names the reset (#1371)", async () => {
+test("a pinned usage-limited stage waits on its account and names the reset (#1371)", async () => {
   const h = harness();
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage(LIMITED_ACCOUNT) as never);
@@ -9725,9 +9730,9 @@ test("a pinned usage-limited stage parks on its account and names the reset (#13
   await tickPipelines([], h.ports);
 
   const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
-  const detail = `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`;
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail });
-  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: detail });
+  const detail = expect.stringContaining(new Date(resetsAt * 1_000).toISOString());
+  expect(parked).toMatchObject({ state: "running", stateDetail: detail });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "running", error: null });
   expect(selectionCalls).toBe(0);
 });
 
@@ -13134,40 +13139,41 @@ test("a review flow paused on the scan in a phase past spawning parks at once (#
   expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
 });
 
-test("a failed receipt that staged a session is not re-dispatched into a read-write worktree holding changes (#1678 review)", async () => {
+test("a failed staged read-write startup keeps dirty work and automatically relaunches (#1678)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
   ] as never);
   await tickPipelines([], h.ports);
-  /* The staged host left an edit behind, so only retry-stage's reset may
-     clear the way for another writer. */
   const baseExec = h.ports.exec;
-  h.ports.exec = (rawCommand, rawArgs, cwd) => rawArgs[0] === "status"
-    ? { code: 0, stdout: " M src/partial-edit.ts\n", stderr: "" }
-    : baseExec(rawCommand, rawArgs, cwd);
+  h.ports.exec = (command, args, cwd) => args[0] === "status"
+    ? { code: 0, stdout: " M src/partial-edit.ts\n", stderr: "" } : baseExec(command, args, cwd);
   const claims: string[] = [];
-  let spawnCalls = 0;
-  h.ports.spawnAgent = async (_input, onReserved) => {
-    spawnCalls += 1;
-    onReserved({ launchId: "launch-staged", conversationId: "conversation_staged" });
+  const spawnAgent = h.ports.spawnAgent;
+  let calls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    if (++calls > 1) return spawnAgent(input, onReserved);
+    await onReserved({ launchId: "launch-staged", conversationId: "conversation_staged" });
     throw new Error(HOST_UNAVAILABLE);
   };
-  h.ports.spawnReceipt = () => ({ ...failedReceipt("launch-staged", "conversation_staged", HOST_UNAVAILABLE), staged: true });
-  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  h.ports.spawnReceipt = (id) => id === "launch-staged" ? { ...failedReceipt(id, "conversation_staged", HOST_UNAVAILABLE), staged: true } : null;
+  h.ports.claimSpawnRetry = (id) => { claims.push(id); return "claimed"; };
+  const stoppedLaunches: Array<string | null | undefined> = [];
+  h.ports.stopStageAgent = async (target) => {
+    stoppedLaunches.push(target.launchId);
+    return target.launchId ? { outcome: "not-running" } : { outcome: "failed", error: "missing launch identity" };
+  };
   Object.assign(h.ports, { sleep: forbiddenSleep });
-
   await tickPipelines([], h.ports);
-
-  const parked = loadPipelines()[0]!;
-  expect(spawnCalls).toBe(1);
-  expect(claims).toEqual([]);
-  expect(parked).toMatchObject({
-    state: "needs_decision",
-    stateDetail: `${HOST_UNAVAILABLE}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`,
-  });
-  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-staged" });
-  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+  expect(stoppedLaunches).toEqual(["launch-staged"]);
+  expect(claims).toEqual(["launch-staged"]);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  h.advanceWallClock(5_000);
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(2);
+  expect(h.spawnInputs[0]!.prompt).toContain("failed startup");
+  expect(h.spawnInputs[0]!.prompt).toContain("keeping uncommitted work");
+  expect(h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
 });
 
 test("a failed receipt that staged a session still retries a read-only stage (#1678 review)", async () => {
@@ -15479,4 +15485,471 @@ test("an omitted pipeline review budget runs three reviews before the last fix c
   expect(pipeline.state).toBe("completed");
   expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
+});
+
+function recoveryReport(at: string): import("./types").PipelineStageReport {
+  return { seq: 1, calls: 1, at, actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+    verdict: { status: "pass" }, summary: "Finished work",
+    provenance: { head: STAGE_HEAD, branch: "pipeline/test", uncommitted: [], pullRequest: null, outputs: [] } };
+}
+
+// Recovery regressions use the existing injected controller ports.
+for (const parked of [false, true]) {
+  test(`recorded report wins with an unreadable transcript, parked=${parked}`, async () => {
+    const h = harness();
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const pipeline = loadPipelines()[0]!;
+    const attempt = pipeline.runs[0]!.attempts[0]!;
+    attempt.report = recoveryReport(h.ports.now());
+    if (parked) {
+      pipeline.state = "needs_decision";
+      pipeline.stateDetail = "stage spawn recovery stopped: transcript publication pending";
+      attempt.state = "needs_decision";
+      attempt.error = pipeline.stateDetail;
+    }
+    savePipelines([pipeline]);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+    expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  });
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} provider cut waits and continues once with a stable key`, async () => {
+    const h = harness();
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    let now = Date.parse(h.ports.now());
+    h.ports.now = () => new Date(now).toISOString();
+    const pipeline = loadPipelines()[0]!;
+    pipeline.stages[0]!.effectiveRole.engine = engine;
+    pipeline.stages[0]!.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+    pipeline.runs[0]!.attempts[0]!.effectiveRole.engine = engine;
+    pipeline.runs[0]!.attempts[0]!.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+    savePipelines([pipeline]);
+    const sends: string[] = [];
+    h.ports.resumeSeveredTurn = async (input) => { sends.push(input.clientMessageId); return true; };
+    h.durableTurns.set("/codex/stage-1.jsonl", {
+      turn: "terminal", message: { text: "provider failure", ts: now },
+      terminalProviderMessage: { text: "Failed to refresh OAuth token: retry in a minute", ts: now, errorClass: "server_error" },
+    });
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race");
+    expect(sends).toHaveLength(0);
+    now += 60_000;
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(new Set(sends).size).toBe(1);
+    expect(sends).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+  });
+}
+
+async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: string, text: string, resetDelay: number | null = null, pinned = false) {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  pipeline.stages[0]!.effectiveRole.engine = engine;
+  pipeline.stages[0]!.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+  attempt.effectiveRole.engine = engine;
+  attempt.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+  if (pinned) {
+    pipeline.stages[0]!.account = LIMITED_ACCOUNT;
+    if (attempt.definition) attempt.definition.account = LIMITED_ACCOUNT;
+  }
+  savePipelines([pipeline]);
+  const resetsAt = resetDelay === null ? null : Math.floor((now + resetDelay) / 1_000);
+  h.ports.claudeAccountReset = () => resetsAt;
+  h.ports.accountLabel = () => "account A";
+  h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  const sends: string[] = [];
+  h.ports.resumeSeveredTurn = async (input) => { sends.push(input.clientMessageId); return true; };
+  const cut = () => h.durableTurns.set("/codex/stage-1.jsonl", {
+    turn: "terminal", message: { text, ts: now },
+    terminalProviderMessage: { text, ts: now, errorClass,
+      ...(errorClass === "rate_limit" || errorClass.startsWith("usage_limit") ? { usageLimit: { resetsAt } } : {}) },
+  });
+  cut();
+  return { h, sends, cut, now: () => now, advance: (ms: number) => { now += ms; }, resetsAt };
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  for (const pinned of [false, true]) {
+    test(`${engine} weekly limit keeps running until reset, pinned=${pinned}`, async () => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your weekly limit · resets 2:30pm", 120_000, pinned);
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(loadPipelines()[0]!.stateDetail).toContain("weekly limit");
+      expect(loadPipelines()[0]!.stateDetail).toContain(new Date(f.resetsAt! * 1_000).toISOString());
+      f.advance(120_000);
+      await tickPipelines([], f.h.ports);
+      expect(f.sends).toHaveLength(0);
+      f.advance(60_000);
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(f.sends).toHaveLength(1);
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    });
+  }
+}
+
+test("a report wins over a terminal limit without sending a continuation", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit");
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  attempt.report = recoveryReport(f.h.ports.now());
+  savePipelines([pipeline]);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+  expect(f.sends).toHaveLength(0);
+});
+
+test("unknown usage reset probes at 30 minutes and parks at six hours with its cause", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've reached your Fable limit");
+  await tickPipelines([], f.h.ports);
+  f.advance(30 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  f.advance(6 * 60 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("fable limit");
+});
+
+test("three delayed auth race continuations exhaust with the provider cause", async () => {
+  const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
+  for (let n = 0; n < 3; n += 1) {
+    f.cut();
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(n);
+    f.advance(60_000 * 2 ** n);
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(n + 1);
+    f.advance(1_000);
+  }
+  f.cut();
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race after 3 tries");
+});
+
+test("a silent dead read-write host relaunches with WIP and parks on its second death", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, launchOnly: true });
+  const launchId = loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId;
+  const stoppedLaunches: Array<string | null | undefined> = [];
+  h.ports.stopStageAgent = async (target) => {
+    stoppedLaunches.push(target.launchId);
+    return target.launchId ? { outcome: "not-running" } : { outcome: "failed", error: "missing launch identity" };
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage host died without output");
+  now += 30_000;
+  await tickPipelines([], h.ports);
+  expect(stoppedLaunches).toEqual([launchId]);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.prompt).toContain("Its changes remain in this worktree");
+  expect(h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[0]!.attempts[1]!.paneId = null;
+  savePipelines([pipeline]);
+  h.durableTurns.set("/codex/stage-2.jsonl", { turn: "busy", message: null, launchOnly: true });
+  await tickPipelines([], h.ports);
+  now += 30_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("died without output twice");
+  expect(h.spawnInputs).toHaveLength(2);
+});
+
+test("a staged unpublished report bypasses the recovery probe and follows the pass edge", async () => {
+  const f = await stagedRecoveryHarness();
+  await tickPipelines([], f.h.ports);
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  attempt.report = recoveryReport(f.h.ports.now());
+  savePipelines([pipeline]);
+  f.h.ports.conversationAgentActive = async () => false;
+  pinStageHead(f.h);
+  f.advance(3 * 60_000);
+  const probes = f.lookups.length;
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().state).toBe("passed");
+  expect(f.lookups).toHaveLength(probes);
+});
+
+test("audit item B: a Codex turn_aborted resumes with WIP and never requests a verdict or spends a fix round", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  const cutAt = now;
+  const artifact = stageTranscript("aborted-stage", [
+    { timestamp: new Date(now - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: new Date(now).toISOString(), type: "event_msg", payload: { type: "turn_aborted" } },
+  ]);
+  readFixtures(h, { "/codex/stage-1.jsonl": artifact });
+  const sent: Parameters<NonNullable<PipelinePorts["resumeSeveredTurn"]>>[0][] = [];
+  h.ports.resumeSeveredTurn = async (input) => { sent.push(input); return true; };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("aborted stage turn");
+  now = cutAt + 30_000;
+  await tickPipelines([], h.ports);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text).toContain("keeping uncommitted work");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("plan");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict).toBeNull();
+  expect(h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
+});
+
+test("unknown resets retain the six-hour bound across repeated limit turns", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit");
+  const started = f.now();
+  for (let n = 0; n < 4; n += 1) {
+    f.cut();
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    f.advance(30 * 60_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(n + 1);
+    f.advance(1_000);
+  }
+  f.advance(6 * 60 * 60_000 - (f.now() - started));
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("weekly limit");
+});
+
+for (const pinned of [false, true]) {
+  test(`authentication required with no permitted switch parks with its condition, pinned=${pinned}`, async () => {
+    const f = await providerRecoveryHarness("claude", "authentication_failed", "OAuth session expired and could not be refreshed", null, pinned);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.stateDetail).toContain("authentication required");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+    expect(f.sends).toHaveLength(0);
+  });
+}
+
+test("authentication required switches an unpinned Claude stage to an allowed account", async () => {
+  const f = await providerRecoveryHarness("claude", "authentication_failed", "expired");
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(f.sends).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("running");
+});
+
+test("four limit-cut lanes wait without parking and continue independently once reset", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000);
+  const source = loadPipelines()[0]!;
+  const lanes = Array.from({ length: 4 }, (_, n) => {
+    const lane = structuredClone(source);
+    lane.id = `${source.id.slice(0, 7)}${n}`;
+    Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
+    if (lane.delivery) {
+      lane.delivery.ownerId = lane.id;
+      lane.delivery.target.branch = `refs/heads/${lane.branch}`;
+    }
+    return lane;
+  });
+  savePipelines(lanes);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines().map((lane) => lane.state)).toEqual(["running", "running", "running", "running"]);
+  expect(loadPipelines().every((lane) => lane.stateDetail?.includes(new Date(f.resetsAt! * 1_000).toISOString()))).toBe(true);
+  f.advance(180_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(4);
+  expect(new Set(f.sends).size).toBe(4);
+});
+
+test("a resumed provider-cut host that dies before new output relaunches with WIP", async () => {
+  const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  f.h.ports.conversationHostUnavailableSince = async () => new Date(f.now() - 5 * 60_000).toISOString();
+  await tickPipelines([], f.h.ports);
+  f.advance(30_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdictRequest).toBeUndefined();
+});
+
+for (const reason of ["structured stage ended before its session was discovered", "stage agent exited before its session was discovered"]) {
+  test(`a parked discovery failure settles its report: ${reason}`, async () => {
+    const h = harness();
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    lane.state = "needs_decision";
+    lane.stateDetail = reason;
+    attempt.state = "needs_decision";
+    attempt.error = reason;
+    attempt.report = recoveryReport(h.ports.now());
+    savePipelines([lane]);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+  });
+}
+
+test("Codex auth failover launches the selected allowed account and excludes failed credentials", async () => {
+  const f = await providerRecoveryHarness("codex", "unauthorized", "expired");
+  f.h.ports.resolveProjectSpawn = (_engine, input) => input.unavailableIds?.includes(SPARE_ACCOUNT)
+    ? { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] }
+    : { kind: "available", account: { engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } };
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[1]!;
+  attempt.accountId = SPARE_ACCOUNT;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  f.h.durableTurns.set("/codex/stage-2.jsonl", { turn: "terminal", message: null,
+    terminalProviderMessage: { errorClass: "unauthorized", text: "expired", ts: f.now() + 1_000 } });
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("authentication required");
+  expect(f.h.spawnInputs).toHaveLength(2);
+});
+
+
+test("a pending Codex failover reopens when a formerly limited account resets", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  f.h.ports.resolveProjectSpawn = (_engine, input) => input.unavailableIds?.includes(LIMITED_ACCOUNT)
+    ? { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] }
+    : { kind: "available", account: { engine: "codex", accountId: LIMITED_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } };
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  f.advance(180_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.unavailableAccountIds).not.toContain(LIMITED_ACCOUNT);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+  expect(loadPipelines()[0]!.state).toBe("running");
+});
+
+test("a pending provider capacity wait does not spin the pipelines controller", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  let ticks = 0;
+  const unregister = registerPipelineTick(async () => { ticks += 1; });
+  try {
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ticks).toBe(0);
+    f.advance(300_000);
+    await tickPipelines([], f.h.ports);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ticks).toBe(0);
+  } finally {
+    unregister();
+  }
+});
+
+test("a failed host teardown has a bounded recovery wait without spending a fix round", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  h.ports.stopStageAgent = async () => ({ outcome: "failed", error: "recorded host ownership cannot be verified" });
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, launchOnly: true });
+  await tickPipelines([], h.ports);
+  now += 30_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  now += 11 * 60_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage host died without output");
+  expect(loadPipelines()[0]!.stateDetail).toContain("ownership cannot be verified");
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("plan");
+});
+
+test("a freshly recorded report waits for its live turn when the transcript still shows an older completed turn", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(true);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.report = recoveryReport(h.ports.now());
+  savePipelines([lane]);
+  const oldTurnAt = Date.parse(attempt.report.at) - 1_000;
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: oldTurnAt,
+    message: { text: PASS_TEXT, ts: oldTurnAt } });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("plan");
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", lastRecordAt: Date.parse(attempt.report.at) + 1_000,
+    message: { text: PASS_TEXT, ts: Date.parse(attempt.report.at) + 1_000 } });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+});
+
+test("a failed staged read-write receipt that settled before retry is never stopped", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  h.ports.spawnAgent = async (_input, reserved) => {
+    await reserved({ launchId: "launch-recovered", conversationId: "conversation_recovered" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = () => ({ ...failedReceipt("launch-recovered", "conversation_recovered", HOST_UNAVAILABLE), staged: true });
+  let stopped = 0;
+  h.ports.stopStageAgent = async () => { stopped += 1; return { outcome: "stopped" }; };
+  h.ports.claimSpawnRetry = () => "settled";
+  h.ports.sleep = forbiddenSleep;
+  await tickPipelines([], h.ports);
+  expect(stopped).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+test.each([false, true])("refused provider continuations keep their delivery key and exhaust a bounded transport wait, throws=%s", async (throws) => {
+  const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
+  const keys: string[] = [];
+  f.h.ports.resumeSeveredTurn = async (input) => { keys.push(input.clientMessageId); if (throws) throw new Error("transport unavailable"); return false; };
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(keys).toHaveLength(1);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  expect(new Set(keys).size).toBe(1);
+  f.advance(11 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race");
+  expect(loadPipelines()[0]!.stateDetail).toContain("continuation refused");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.tries).toBe(0);
 });

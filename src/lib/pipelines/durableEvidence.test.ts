@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { readStableTailRecords } from "@/lib/scanner/activity";
+import { oauthFailureWithRecoveryTail } from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
 
 import { durableStageTurnEvidence, MAX_REPORT_EVIDENCE_BYTES } from "./durableEvidence";
 
@@ -572,4 +573,65 @@ test("a Codex turn that completed normally carries no provider notice (#1141)", 
   ]);
 
   expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ turn: "terminal", terminalProviderMessage: null });
+});
+
+for (const [code, text, kind] of [
+  ["rate_limit", "You've hit your weekly limit · resets 2:30pm", "usage_limit"],
+  ["rate_limit", "You've hit your Opus limit", "usage_limit"],
+  ["rate_limit", "You've reached your Fable limit", "usage_limit"],
+  ["server_error", "Failed to refresh OAuth token: retry in a minute", "transient"],
+  ["authentication_failed", "expired", "auth_required"],
+  ["overloaded", "busy", "transient"],
+] as const) {
+  test(`terminal Claude ${code} carries its provider class: ${kind}`, async () => {
+    const file = writeTranscript(`provider-${kind}-${text.length}.jsonl`, [
+      { type: "user", timestamp: "2026-10-02T10:00:00Z", message: { role: "user", content: "continue" } },
+      { type: "assistant", timestamp: "2026-10-02T10:01:00Z", isApiErrorMessage: true, error: code,
+        message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text }] } },
+    ]);
+    const evidence = await durableStageTurnEvidence("claude", file);
+    expect(evidence?.terminalProviderMessage).toMatchObject({ errorClass: code });
+    if (kind === "usage_limit") expect(evidence?.terminalProviderMessage?.usageLimit).toEqual({ resetsAt: null });
+  });
+}
+
+for (const engine of ["codex", "claude"] as const) {
+  test(`${engine} native aborted turn carries cut evidence and drops stale assistant output`, async () => {
+    const file = writeTranscript(`${engine}-native-abort.jsonl`, engine === "codex" ? [
+      { timestamp: "2026-10-02T10:00:00Z", type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: "2026-10-02T10:01:00Z", type: "event_msg", payload: { type: "agent_message", message: "unfinished edit" } },
+      { timestamp: "2026-10-02T10:02:00Z", type: "event_msg", payload: { type: "turn_aborted" } },
+    ] : [
+      { timestamp: "2026-10-02T10:00:00Z", type: "user", message: { role: "user", content: "continue" } },
+      { timestamp: "2026-10-02T10:01:00Z", type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "unfinished edit" }] } },
+      { timestamp: "2026-10-02T10:02:00Z", type: "user", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } },
+    ]);
+    const evidence = await durableStageTurnEvidence(engine, file);
+    expect(evidence).toMatchObject({ turn: "terminal", terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-10-02T10:02:00Z") } });
+  });
+}
+
+for (const code of ["authentication_failed", "rate_limit", "server_error"] as const) {
+  test(`Claude shutdown recovery bookkeeping preserves the native ${code} failure`, async () => {
+    const records = oauthFailureWithRecoveryTail();
+    if (code === "rate_limit") records[1] = { ...records[1], error: code,
+      message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: "You've hit your weekly limit" }] } };
+    if (code === "server_error") records[1] = { ...records[1], error: code,
+      message: { role: "assistant", stop_reason: "stop_sequence", content: [{ type: "text", text: "Failed to refresh OAuth token: retry in a minute" }] } };
+    const file = writeTranscript(`claude-${code}-recovery-tail.jsonl`, records);
+    const evidence = await durableStageTurnEvidence("claude", file);
+    expect(evidence).toMatchObject({ turn: "terminal", terminalProviderMessage: { errorClass: code } });
+    if (code === "rate_limit") expect(evidence?.terminalProviderMessage?.usageLimit).toEqual({ resetsAt: null });
+  });
+}
+
+test("a real Claude continuation cut is newer than an earlier provider failure", async () => {
+  const records = oauthFailureWithRecoveryTail();
+  records.splice(2, records.length - 2,
+    { type: "user", timestamp: "2026-07-24T08:00:00Z", message: { role: "user", content: "Continue the stage after the account switch." } },
+    { type: "user", timestamp: "2026-07-24T08:01:00Z", interruptedByShutdown: true,
+      message: { role: "user", content: "[Request interrupted by user]" } });
+  const file = writeTranscript("claude-real-continuation-cut.jsonl", records);
+  expect(await durableStageTurnEvidence("claude", file)).toMatchObject({ turn: "terminal",
+    terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-07-24T08:01:00Z") } });
 });

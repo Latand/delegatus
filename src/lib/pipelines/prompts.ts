@@ -102,3 +102,8 @@ export function renderStagePrompt(
     "Its status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
   ].join("\n");
 }
+
+/** A cut attempt keeps its worktree and receives a durable recovery note. */
+export function renderCutRetryInput(previousInput: string | null, n: number, reason: string): string {
+  return `${previousInput ?? ""}\n\nAttempt ${n} was cut by ${reason}. Its changes remain in this worktree. Continue from them, keeping uncommitted work, and report when the stage is complete.`;
+}

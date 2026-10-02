@@ -945,3 +945,42 @@ test("stored review budgets remain unchanged", async () => isolatedDelivery(() =
   savePipelines([record]);
   expect(loadPipelines()[0]!.stages[0]!.onFail!.maxRounds).toBe(5);
 }));
+
+function providerStoreFixture(): Pipeline {
+  const lane = deliveryFixture("recover1");
+  lane.state = "running";
+  lane.cursor!.state = "running";
+  lane.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(lane.stages[0]!.effectiveRole),
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: null, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+    providerWait: { condition: { kind: "transient", scope: null, resetLabel: null, label: "auth refresh race" },
+      text: "retry in a minute", accountId: null, turnTs: 1, tries: 0,
+      startedAt: "2026-10-02T10:00:00Z", resumeAt: "2026-10-02T10:01:00Z", resetsAt: null, failedAccounts: [] },
+    providerRecoveries: [{ action: "wait", at: "2026-10-02T10:00:00Z",
+      condition: { kind: "transient", scope: null, resetLabel: null, label: "auth refresh race" }, summary: "waiting" }],
+  });
+  return lane;
+}
+
+test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
+  for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" }]) {
+    const lane = providerStoreFixture();
+    lane.runs[0]!.attempts[0]!.providerWait = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+  const lane = providerStoreFixture();
+  lane.runs[0]!.attempts[0]!.providerRecoveries = [{ action: "unknown" }] as never;
+  expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+}));
+
+test("loaded provider recovery state does not alias the cached persisted record", async () => isolatedDelivery(() => {
+  savePipelines([providerStoreFixture()]);
+  const first = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  first.providerWait!.condition.label = "mutated";
+  first.providerWait!.failedAccounts!.push("account-other");
+  first.providerRecoveries![0]!.condition.label = "mutated";
+  const second = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(second.providerWait!.condition.label).toBe("auth refresh race");
+  expect(second.providerWait!.failedAccounts).toEqual([]);
+  expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
+}));

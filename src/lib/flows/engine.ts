@@ -1,3 +1,5 @@
+import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
+import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -941,7 +943,8 @@ function headlessReviewerMayRun(flows: readonly Flow[], launchId: string): boole
   return false;
 }
 
-function retryHeadlessRound(flow: Flow, round: Round): void {
+function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null): void {
+  const provider = providerLabel !== null;
   forgetHeadlessReview(flow.id, round.n, round);
   endHeadlessReviewerMarker(round);
   clearHeadlessReviewArtifacts(flow.id, round.n);
@@ -959,7 +962,9 @@ function retryHeadlessRound(flow: Flow, round: Round): void {
     verdict: null,
     findingsCount: null,
     reviewHeadSha: null,
-    autoRetryCount: (round.autoRetryCount ?? 0) + 1,
+    autoRetryCount: (round.autoRetryCount ?? 0) + (provider ? 0 : 1),
+    providerRetryCount: (round.providerRetryCount ?? 0) + (provider ? 1 : 0),
+    launchNotBefore: provider ? new Date(Date.now() + 60_000 * 2 ** (round.providerRetryCount ?? 0)).toISOString() : null,
     startedAt: isoNow(),
     spawnStartedAt: null,
     launchId: null,
@@ -976,6 +981,10 @@ function retryHeadlessRound(flow: Flow, round: Round): void {
     error: null,
   });
   flow.state = "spawning";
+  if (provider) {
+    flow.stateDetail = `waiting to relaunch reviewer after ${providerLabel} (${round.providerRetryCount} of 3), next try at ${round.launchNotBefore}`;
+    return;
+  }
   flow.stateDetail = `reviewer produced no verdict; retrying automatically (${round.autoRetryCount}/${MAX_HEADLESS_NO_VERDICT_RETRIES})`;
 }
 
@@ -1279,6 +1288,7 @@ export async function tickFlow(
   if (!round) return JSON.stringify(flow) !== before;
 
   if (flow.state === "spawning") {
+    if (round.launchNotBefore && Date.now() < unixMs(round.launchNotBefore)) return false;
     const submission = flow.agentDecisions?.find((item) => item.decision === "submit-review" && item.disposition === "applied" && item.round + 1 === round.n);
     if (submission && !round.spawnStartedAt && (!decisionStillOwned(flow, submission)
       || !decisionStageMatches(flow, submission.stage, loadPipelines())
@@ -1380,13 +1390,27 @@ export async function tickFlow(
         const parsed = parseFindings(status.finalOutput) ?? fallbackReviewFromTranscript(round, entriesByPath, reviewerRoleFor(flow, round).engine);
         if (parsed) {
           applyVerdict(flow, round, parsed);
-        } else if ((round.autoRetryCount ?? 0) < MAX_HEADLESS_NO_VERDICT_RETRIES) {
-          retryHeadlessRound(flow, round);
         } else {
-          const rawPath = round.findingsPath ?? findingsPathFor(flow.id, round.n);
-          atomicWriteText(rawPath, status.finalOutput || status.stdout || status.stderr);
-          round.findingsPath = rawPath;
-          markNeedsDecision(flow, markRoundError(round, status.status === "timeout" ? "reviewer timed out" : status.stderr.trim() || "reviewer verdict was unparseable"));
+          const raw = status.finalOutput || status.stdout || status.stderr;
+          const terminal = round.reviewerPath
+            ? (await durableStageTurnEvidence(reviewerRoleFor(flow, round).engine, round.reviewerPath))?.terminalProviderMessage
+            : null;
+          // A standalone CLI failure is admissible; ordinary reviewer prose is not.
+          const standaloneRace = /^(?:Failed to refresh OAuth token[^\n]*|[^\n]*retry in a minute[^\n]*)$/i.test(raw.trim());
+          const condition = terminal
+            ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, terminal.errorClass, terminal.text)
+            : standaloneRace ? classifyProviderCondition(reviewerRoleFor(flow, round).engine, "server_error", raw) : null;
+          if (condition?.kind === "transient") {
+            if ((round.providerRetryCount ?? 0) < 3) retryHeadlessRound(flow, round, condition.label);
+            else markNeedsDecision(flow, markRoundError(round, `reviewer cut by ${condition.label} after 3 retries`));
+          } else if ((round.autoRetryCount ?? 0) < MAX_HEADLESS_NO_VERDICT_RETRIES) {
+            retryHeadlessRound(flow, round);
+          } else {
+            const rawPath = round.findingsPath ?? findingsPathFor(flow.id, round.n);
+            atomicWriteText(rawPath, status.finalOutput || status.stdout || status.stderr);
+            round.findingsPath = rawPath;
+            markNeedsDecision(flow, markRoundError(round, status.status === "timeout" ? "reviewer timed out" : status.stderr.trim() || "reviewer verdict was unparseable"));
+          }
         }
         return JSON.stringify(flow) !== before;
       }
