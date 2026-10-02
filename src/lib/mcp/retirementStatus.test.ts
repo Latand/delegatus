@@ -85,7 +85,7 @@ test("rows a failed collection fell back on are marked stale one by one, beside 
     readResourcesWithDiagnostic: async () => read(stale),
   } as never);
 
-  const fallback = await bindings.resources({ clientRequestId: "stale", fresh: true }) as Record<string, unknown>;
+  const fallback = await bindings.resources({ clientRequestId: "stale", fresh: true, full: true }) as Record<string, unknown>;
   expect(fallback.freshness).toMatchObject({ capturedAtScope: "system", sessionsCapturedAt, sessionsStale: true,
     refreshSucceeded: false, cache: "durable", reason: "collector-crash" });
   expect((fallback.freshness as { sessionsAgeMs: number }).sessionsAgeMs).toBeGreaterThan(3 * 86_400_000);
@@ -93,7 +93,7 @@ test("rows a failed collection fell back on are marked stale one by one, beside 
   expect(fallback.viewer).toEqual(viewer);
 
   stale = false;
-  const current = await bindings.resources({ clientRequestId: "current", fresh: true }) as Record<string, unknown>;
+  const current = await bindings.resources({ clientRequestId: "current", fresh: true, full: true }) as Record<string, unknown>;
   expect(current.freshness).toMatchObject({ sessionsStale: false, refreshSucceeded: true, cache: "miss" });
   expect(current.sessions).toEqual([row]);
 });

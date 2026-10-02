@@ -1387,10 +1387,21 @@ const emailAddressSource =
 // Only complete RAW package-version tokens earn this exemption. Detection
 // keeps every view intact; source correspondence is checked per occurrence.
 const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?`;
-const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:])`;
+const packageVersionBoundary = String.raw`(?=$|[\x09-\x0d "'\x60)\],;:\\])`;
 
 const rawPackageVersion = new RegExp(`${packageVersionSource}${packageVersionBoundary}`, "y");
-const packageVersionFollowing = /^[\x09-\x0d "'`)\],;:]$/;
+
+function isEscapedAsciiControlBoundary(text: string, offset: number): boolean {
+  if (offset + 1 === text.length) return true;
+  const escape = /^\\(?:([bfnrtv])|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]{1,6})\})/.exec(text.slice(offset));
+  if (!escape) return false;
+  const simpleEscapes: Record<string, number> = { b: 0x08, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
+  const codePoint = escape[1]
+    ? simpleEscapes[escape[1]]
+    : Number.parseInt(escape[2] ?? escape[3] ?? escape[4], 16);
+  return codePoint <= 0x20 || codePoint === 0x7f;
+}
+const packageVersionFollowing = /^[\x09-\x0d "'`)\],;:\\]$/;
 
 /* RFC 6761 reserves `.test` for exactly this and guarantees it can never
    resolve to anyone — the same reason `.invalid` is already skipped here.
@@ -1460,25 +1471,30 @@ function emailTextViews(text: string): EmailTextView[] {
   return views;
 }
 
-function isRawPackageVersion(text: string, domainStart: number, source?: EmailTextView["source"]): boolean {
+function rawPackageVersionEnd(text: string, domainStart: number, source?: EmailTextView["source"]): number | undefined {
   const start = domainStart - 1; // Include the @: an encoded separator earns no exemption.
   const rawStart = source ? source.raw.offsets[start] : start;
-  if (rawStart === undefined || rawStart < 0) return false;
+  if (rawStart === undefined || rawStart < 0) return undefined;
   const rawText = source ? source.raw.text : text;
-  if (rawText[rawStart] !== "@") return false;
+  if (rawText[rawStart] !== "@") return undefined;
   rawPackageVersion.lastIndex = rawStart + 1;
   const version = rawPackageVersion.exec(rawText)?.[0];
-  if (!version || version.endsWith(".")) return false;
+  if (!version || version.endsWith(".")) return undefined;
   const end = start + 1 + version.length;
-  if (text.slice(start, end) !== "@" + version) return false;
+  if (text.slice(start, end) !== "@" + version) return undefined;
   if (source) {
     for (let i = start; i < end; i += 1) {
-      if (source.raw.offsets[i] !== rawStart + i - start) return false;
+      if (source.raw.offsets[i] !== rawStart + i - start) return undefined;
     }
   }
   const following = text[end];
-  return following === undefined || packageVersionFollowing.test(following)
-    || (following === "." && (text[end + 1] === undefined || /^[\x09-\x0d ]$/.test(text[end + 1])));
+  if (following === "\\") {
+    if (!isEscapedAsciiControlBoundary(text, end)) return undefined;
+  } else if (following !== undefined && !packageVersionFollowing.test(following)
+    && !(following === "." && (text[end + 1] === undefined || /^[\x09-\x0d ]$/.test(text[end + 1])))) {
+    return undefined;
+  }
+  return end;
 }
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */
@@ -1486,7 +1502,13 @@ function* emailOccurrences(text: string, source?: EmailTextView["source"]): Gene
   const pattern = new RegExp(emailAddressSource, "giu");
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const following = text[pattern.lastIndex];
-    if (!match[1].startsWith('"') && isRawPackageVersion(text, pattern.lastIndex - match[2].length, source)) continue;
+    const exemptVersionEnd = !match[1].startsWith('"')
+      ? rawPackageVersionEnd(text, pattern.lastIndex - match[2].length, source)
+      : undefined;
+    if (exemptVersionEnd !== undefined) {
+      pattern.lastIndex = exemptVersionEnd;
+      continue;
+    }
     // A quoted mailbox can contain another real address. Systemd names have
     // unquoted local parts, so that outer mailbox earns no unit exemption.
     if (!match[1].startsWith('"') && systemdUnitDomain.test(match[2])) {

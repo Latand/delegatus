@@ -47,6 +47,7 @@ jobs:
   # check at all. A doubt runs the job: anything this job cannot establish,
   # its own failure included, runs the macOS job.
   scope:
+    timeout-minutes: 3
     name: Scope (macOS)
     runs-on: ubuntu-latest
     outputs:
@@ -72,6 +73,7 @@ jobs:
           --prefix src/app/api/accounts/
 
   darwin-identity:
+    timeout-minutes: 10
     needs: scope
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.result != 'success' || needs.scope.outputs.run == 'true') }}
     runs-on: macos-latest
