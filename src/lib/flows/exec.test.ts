@@ -241,7 +241,7 @@ test("a headless review exit schedules one flow and pipeline reconciliation", as
   });
 
   try {
-    startHeadlessReview(
+    await startHeadlessReview(
       "flow-completion-signal",
       1,
       { engine: "codex", model: null, effort: null },
@@ -269,7 +269,7 @@ test("an owned reviewer stays running when process identity is briefly unavailab
     { mode: 0o700 },
   );
   let identityReads = 0;
-  const launched = startHeadlessReview(
+  const launched = await startHeadlessReview(
     "flow-delayed-identity",
     1,
     { engine: "codex", model: null, effort: null },

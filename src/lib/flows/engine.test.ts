@@ -3437,7 +3437,7 @@ test.each([false, true])("headless limit recovery probes capacity and relaunches
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => exhausted
     ? { kind: "exhausted" as const, resetsAt: Math.floor(now / 1_000) - 600, allowedAccountIds: ["account-a"] }
     : { kind: "available" as const, account });
-  const launch = spyOn(exec, "startHeadlessReview").mockReturnValue({ pid: null, identity: null, sessionId: null, reviewerPath: null });
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "capacity-retry-session", reviewerPath: null });
   const status = spyOn(exec, "headlessReviewStatus").mockImplementation((_id, _n, persisted) => persisted.spawnStartedAt
     ? { status: "running", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null }
     : null);
@@ -3470,6 +3470,7 @@ test.each([false, true])("headless limit recovery probes capacity and relaunches
     } else {
       expect(result.state).toBe("reviewing");
       expect(result.rounds[0]!.accountId).toBe("account-a");
+      expect(result.rounds[0]!.sessionId).toBe("capacity-retry-session");
       expect(launch).toHaveBeenCalledTimes(1);
       expect(launch.mock.calls[0]![2].engine).toBe("codex");
     }
@@ -3483,7 +3484,7 @@ test("a transient reviewer retry retains its frozen engine after configuration c
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-frozen-retry-"));
   const { accountManager } = await import("@/lib/accounts/manager");
   const exec = await import("./exec");
-  const launch = spyOn(exec, "startHeadlessReview").mockReturnValue({ pid: null, identity: null, sessionId: null, reviewerPath: null });
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "frozen-engine-retry-session", reviewerPath: null });
   const resolve = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation((engine) => engine === "codex"
     ? { kind: "available", account: { engine: "codex", accountId: "account-a", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" } } }
     : { kind: "unavailable" });
@@ -3498,6 +3499,7 @@ test("a transient reviewer retry retains its frozen engine after configuration c
     saveFlows([flow]);
     await tickFlows([implementer]);
     expect(loadFlows()[0]!.state).toBe("reviewing");
+    expect(loadFlows()[0]!.rounds[0]!.sessionId).toBe("frozen-engine-retry-session");
     expect(launch).toHaveBeenCalledTimes(1);
     expect(launch.mock.calls[0]![2].engine).toBe("codex");
     expect(resolve.mock.calls.every(call => call[0] === "codex")).toBe(true);

@@ -110,7 +110,7 @@ test("closeFlow rejects a replacement reviewer binding while preserving concurre
   const round = newRound(flow, "button", null);
   flow.rounds.push(round);
   flow.state = "reviewing";
-  const launched = startHeadlessReview(
+  const launched = await startHeadlessReview(
     flow.id,
     round.n,
     flow.roles.reviewer,
@@ -164,7 +164,7 @@ test("cancelRound rejects a replacement reviewer binding while preserving concur
   const round = newRound(flow, "button", null);
   flow.rounds.push(round);
   flow.state = "reviewing";
-  const launched = startHeadlessReview(flow.id, round.n, flow.roles.reviewer, sandbox, "review", 5_000, null, null, { command: executablePath });
+  const launched = await startHeadlessReview(flow.id, round.n, flow.roles.reviewer, sandbox, "review", 5_000, null, null, { command: executablePath });
   round.reviewerPid = launched.pid;
   round.reviewerIdentity = launched.identity;
   saveFlows([flow]);

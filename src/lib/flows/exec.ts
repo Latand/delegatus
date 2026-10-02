@@ -29,7 +29,7 @@ function runKey(flowId: string, round: number): string {
   return `${flowId}:${round}`;
 }
 
-export function startHeadlessReview(
+export async function startHeadlessReview(
   flowId: string,
   round: number,
   role: RoleConfig,
@@ -41,7 +41,7 @@ export function startHeadlessReview(
   runtime?: HeadlessReviewRuntime,
   spawnCapability?: string,
   sandbox: "bypass" | "read-only" = "bypass",
-): HeadlessReviewLaunch {
+): Promise<HeadlessReviewLaunch> {
   const key = runKey(flowId, round);
   const idle: HeadlessReviewLaunch = { pid: null, identity: null, sessionId: null, reviewerPath: null };
   if (runs.has(key)) return idle;

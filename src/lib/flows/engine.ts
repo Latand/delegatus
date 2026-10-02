@@ -876,7 +876,7 @@ async function launchReviewer(
     return;
   }
   const spawnCapability = agentRegistry().rotateSpawnCapabilityForReceipt(reservation.receipt.launchId);
-  const launched = startHeadlessReview(
+  const launched = await startHeadlessReview(
     flow.id,
     round.n,
     role,
