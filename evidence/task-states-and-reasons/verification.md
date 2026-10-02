@@ -149,3 +149,53 @@ on current main. The pre-existing clipped Done column, Ukrainian conversation
 wording and grey phone Working line remain outside the pinned findings. At
 narrower desktop widths the filters remain horizontally scrollable; the
 Ukrainian search placeholder truncates at 1440 as the field gives room first.
+
+
+## Malformed checklist and narrow filter follow-up
+
+Merged current main at `70f13157d` before fixing the two remaining findings.
+Merge resolution retains status notes and task motion as separate components
+on desktop, phone cards and the phone task screen, and combines both sets of
+REST/MCP fields, guards and regression cases.
+
+The store now removes a checklist rejected by `storedTaskSteps` after the raw
+row spread. Eleven persisted shapes each have a regression through
+`loadTasks` → `projectTaskWorkflows` → `buildTaskBands` → `buildKanbanModel` →
+`buildPhoneKanban`: string, number, boolean, null, object, empty array, null
+entry, primitive entries, nested array, missing fields and invalid state.
+The checks exercise legacy import and the subsequent SQLite read, retaining
+the task without steps. A mixed-array regression retains both valid entries.
+All eleven malformed cases failed before the fix, including the production
+`steps.map` and null `step.ref` crashes; the mixed-array case already passed.
+
+Filters retain their search-row placement at 1440. Below 1168 px of actual
+bar width they occupy a wrapping row directly beneath the bar. The existing
+shared driver now checks 1280/1024 in both languages: all five reasons fit,
+there is no document or filter-group horizontal overflow, and filtering can
+be toggled without losing the checklist. Its original complete task/card
+contract remains at 1440/390 in both languages. The added 1280 bar regression
+failed before the layout change (296 px of filters in 183 px of space).
+
+Final verification:
+
+- 301 tests pass across 13 targeted files, each run separately through the
+  memory-capped gate with an isolated state directory.
+- The shared browser case passes 498 assertions over eight width/locale
+  combinations. Search remains at y=7.5..39.5 inside the y=0..48 bar. At 1440,
+  filters occupy y=14.5..32.5 and have identical client/scroll widths (296 px
+  en, 311 px uk). At 1280/1024, filters occupy y=48..82 with identical
+  client/scroll widths. Measurements are in `renders.json`.
+- Opened bar/filter frames at every desktop width in both languages, plus
+  progress, Waiting and full-reason phone frames. The driver closes its
+  contexts, browser and ephemeral fixture server in its finalizer.
+- `bunx tsc --noEmit` and `git diff --check` pass. ESLint on the four changed
+  TypeScript files reports 70 errors/four warnings; a file/rule/severity/message
+  comparison with current main gives exactly the same diagnostics.
+- Privacy with `--check-commits` passes using the scanner from a detached
+  worktree of current main against the candidate repository.
+
+Existing board/card clipping at narrower desktop widths, Ukrainian
+conversation wording and grey phone Working text remain outside the two
+findings. No product changes were made for those observations. The old
+schema-description failure recorded above is resolved by the main merge;
+the complete schema-parity file now passes all 32 tests.

@@ -14813,15 +14813,15 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 
 
 describe("task motion and waiting reasons", () => {
-  browserTest("states and reasons stay readable at 1440 and 390 px in en and uk", async () => {
-    const out = path.resolve(".artifacts/task-states/renders");
+  browserTest("states and reasons stay readable at 1440, 1280, 1024 and 390 px in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     let browser: Browser | null = null;
     const cases: Record<string, unknown>[] = [];
     try {
       browser = await chromium.launch(LAUNCH);
-      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1280, 1024, 390]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-motion`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
           const phone = width === 390;
@@ -14836,10 +14836,13 @@ describe("task motion and waiting reasons", () => {
           const topbar = phone ? null : await page.locator('.bar[data-bar="project"]').evaluate((bar) => {
             const rect = bar.getBoundingClientRect();
             const search = bar.querySelector('[data-kanban-search]')!.getBoundingClientRect();
-            const filters = bar.querySelector('[data-reason-filters]') as HTMLElement;
+            const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
             const filterRect = filters.getBoundingClientRect();
             return {
-              top: rect.top, bottom: rect.bottom, height: rect.height,
+              top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
+              belowBar: !bar.contains(filters),
+              barRight: rect.right,
+              documentOverflow: document.documentElement.scrollWidth > innerWidth,
               searchTop: search.top, searchBottom: search.bottom,
               filtersTop: filterRect.top, filtersBottom: filterRect.bottom,
               filtersRight: filterRect.right,
@@ -14855,11 +14858,35 @@ describe("task motion and waiting reasons", () => {
             expect(topbar.searchTop).toBeGreaterThanOrEqual(Math.max(0, topbar.top));
             expect(topbar.searchBottom).toBeLessThanOrEqual(topbar.bottom);
             expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
-            expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
+            if (width === 1440) {
+              expect(topbar.belowBar, JSON.stringify(topbar)).toBeFalse();
+              expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
+            } else {
+              expect(topbar.belowBar).toBeTrue();
+              expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.bottom);
+            }
+            expect(topbar.documentOverflow).toBeFalse();
+            expect(topbar.filtersRight).toBeLessThanOrEqual(topbar.barRight);
             expect(topbar.filterCount).toBe(5);
             expect(topbar.lastFilterRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.filtersRight);
             expect(topbar.filtersScrollWidth).toBeLessThanOrEqual(topbar.filtersClientWidth + 1);
             await page.locator('.bar[data-bar="project"]').screenshot({ path: path.join(out, `${width}-${locale}-topbar.png`) });
+            await page.locator("[data-reason-filters]").screenshot({ path: path.join(out, `${width}-${locale}-filters.png`) });
+          }
+          if (width === 1280 || width === 1024) {
+            // These widths lock down the filter overflow finding. The existing
+            // full card/phone contract below remains at its named 1440/390 faces.
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
+            await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
+            const queued = page.locator('[data-reason-filter="queued"]');
+            await queued.click();
+            expect(await page.locator(selector("motion-checklist")).count()).toBe(1);
+            expect(await page.locator(selector("motion-bare")).count()).toBe(0);
+            await queued.click();
+            expect(await page.locator(selector("motion-bare")).count()).toBe(1);
+            expect(pageErrors).toEqual([]);
+            cases.push({ width, height: 844, locale, topbar, filter: "toggled", pageErrors });
+            continue;
           }
           const stopped = page.locator(`${selector("motion-stopped")} [data-motion="stopped"]`);
           expect(await stopped.textContent()).toContain(translate(locale, "kanban.motion.stopped"));

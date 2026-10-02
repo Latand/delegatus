@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { loadTasks } from "@/lib/tasks/store";
 
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -1307,4 +1312,51 @@ test("known overdue task and step holds stay postponed; unknown reasons agree wi
   expect(unknown.shown.map(card => card.task?.id).sort()).toEqual(["t914", "t915", "t916", "t917"]);
   expect(unknown.noReason).toBe(unknown.shown.length);
   expect(board.columns.blocked.noReason).toBe(4);
+});
+
+
+const malformedChecklists: Array<[string, unknown]> = [
+  ["string", "invalid extension"], ["number", 7], ["boolean", true],
+  ["null", null], ["object", { id: "item" }], ["empty array", []],
+  ["null entry", [null]], ["primitive entries", ["bad", 4, false]],
+  ["array entry", [[]]], ["missing fields", [{}]],
+  ["invalid state", [{ id: "item", text: "Item", state: "invalid" }]],
+];
+
+test.each(malformedChecklists)("persisted %s checklist retains its task and projects safely on desktop and phone", (_shape, steps) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-checklist-read-"));
+  const file = path.join(directory, "tasks.json");
+  try {
+    fs.writeFileSync(file, JSON.stringify({ tasks: [{ ...task("t930", "blocked"), steps }] }));
+    // First read imports legacy JSON; the second reads the SQLite collection.
+    for (let read = 0; read < 2; read++) {
+      const rows = loadTasks(file);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.id).toBe("t930");
+      const board = model(rows, []);
+      expect(rows[0]!.steps).toBeUndefined();
+      expect(board.columns.blocked.cards).toHaveLength(1);
+      expect(board.columns.blocked.cards[0]!.stepSummary).toBeNull();
+      const phone = buildPhoneKanban({ model: board, now: NOW });
+      expect(phone.columns.blocked.cards).toHaveLength(1);
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a mixed persisted checklist keeps valid entries through both board projections", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-checklist-read-"));
+  const file = path.join(directory, "tasks.json");
+  const valid: NonNullable<BoardTask["steps"]> = [{ id: "done", text: "Fixed cause", state: "done" }, { id: "open", text: "Remaining cause", state: "open" }];
+  try {
+    fs.writeFileSync(file, JSON.stringify({ tasks: [{ ...task("t931", "blocked"), steps: [null, valid[0], {}, "bad", valid[1]] }] }));
+    for (let read = 0; read < 2; read++) {
+      const rows = loadTasks(file);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.steps).toEqual(valid);
+      const board = model(rows, []);
+      expect(board.columns.blocked.cards[0]!.stepSummary).toMatchObject({ done: 1, total: 2, open: 1 });
+      const phone = buildPhoneKanban({ model: board, now: NOW });
+      expect(phone.columns.blocked.cards[0]!.card.stepSummary).toMatchObject({ done: 1, total: 2, open: 1 });
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

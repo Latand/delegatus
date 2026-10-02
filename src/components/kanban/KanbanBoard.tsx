@@ -297,6 +297,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The header bar's tier (#1801): labelled controls from BAR_WIDE_MIN of bar, icons below. */
   const [barWide, setBarWide] = useState(true);
   const [barWrap, setBarWrap] = useState(false);
+  const [reasonsBelowBar, setReasonsBelowBar] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
   const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
@@ -601,6 +602,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       setMode(kanbanLayoutModeBeside(beside, seatWidth + (railShown ? OPEN_RAIL_WIDTH[tier] : 0)));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
+      setReasonsBelowBar(barWidth < 1168);
     };
     apply();
     if (typeof ResizeObserver !== "function") return;
@@ -2645,8 +2647,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     </label>
   );
   const representedReasons = [...new Set(KANBAN_STATUSES.flatMap((status) => model.columns[status].cards.flatMap(taskReasonFiltersOfCard)))];
-  const reasonFilterControls = () => representedReasons.length ? (
-    <div className="reason-filters" role="group" aria-label={t("kanban.filterReasons")} data-reason-filters="">
+  const reasonFilterControls = (belowBar = false) => representedReasons.length ? (
+    <div className={`reason-filters${belowBar ? " reason-filter-row" : ""}`} role="group" aria-label={t("kanban.filterReasons")} data-reason-filters="">
       {representedReasons.map((reason) => (
         <button key={reason} type="button" className="reason-filter" data-reason-filter={reason} aria-pressed={reasonFilter === reason}
           onClick={() => setReasonFilter((current) => current === reason ? undefined : reason)}>
@@ -2658,7 +2660,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const searchTools = (group?: string) => (
     <div className="bar-find" data-bar-group={group}>
       {searchField()}
-      {reasonFilterControls()}
+      {props.overview || !reasonsBelowBar ? reasonFilterControls() : null}
     </div>
   );
   /* Narrow, the project's pill is icon and count, the shape Tasks has (#1801), and its name moves to the tooltip. */
@@ -2750,6 +2752,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
           <BarIslandSlot />
         </header>
       )}
+
+      {!props.overview && reasonsBelowBar ? reasonFilterControls(true) : null}
 
       <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
       {seatSide && seatView}

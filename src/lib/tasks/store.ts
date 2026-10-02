@@ -214,6 +214,8 @@ function coerceTask(value: unknown): BoardTask | null {
     updatedAt: raw.updatedAt!,
   };
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
+  // A rejected checklist must not survive the raw extension spread above.
+  if (!steps) delete task.steps;
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;

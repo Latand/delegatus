@@ -79,6 +79,7 @@
 .kb .bar .search svg { position: absolute; left: 9px; top: 8px; width: 15px; height: 15px; color: var(--color-muted); pointer-events: none; }
 .kb .bar-find { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .kb .reason-filters { display: flex; min-width: 0; max-width: 420px; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.kb > .reason-filter-row { flex: 0 0 auto; flex-wrap: wrap; max-width: none; padding: 8px var(--kb-edge); overflow: visible; }
 .kb .reason-filter { flex: 0 0 auto; min-height: 18px; padding: 0 6px; border: 1px solid var(--border-default); border-radius: 999px; background: var(--surface-card); color: var(--color-secondary); font-size: 10px; line-height: 16px; white-space: nowrap; }
 .kb .reason-filter[aria-pressed="true"] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card)); color: var(--color-primary); }
 
@@ -110,8 +111,8 @@
    once the search sits at its floor the rest falls to the lead as before. */
 .kb .bar[data-bar="project"] .bar-find { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
 .kb .bar[data-bar="project"] .bar-find .search { flex: 0 1 auto; max-width: none; min-width: 0; }
-/* The filters share the search row and reserve their natural width. In a
-   narrow bar they scroll after the search reaches 64 px, plus the 8 px gap. */
+/* Filters share the search row in a wide bar; below 1168 px of bar width the component
+   puts them in their own wrapping row beneath the bar. */
 .kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; flex-direction: row; align-items: center; gap: 8px; }
 .kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 112px; }
 .kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
