@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { ENGINE_MODELS } from "@/lib/agent/models";
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
+const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-durable-create-"));
@@ -19,6 +21,7 @@ const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefine
 setAgentRegistryForTests(registry);
 
 afterAll(() => {
+  restorePolicyReader();
   setAgentRegistryForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
@@ -110,7 +113,7 @@ test("closeFlow rejects a replacement reviewer binding while preserving concurre
   const round = newRound(flow, "button", null);
   flow.rounds.push(round);
   flow.state = "reviewing";
-  const launched = startHeadlessReview(
+  const launched = await startHeadlessReview(
     flow.id,
     round.n,
     flow.roles.reviewer,
@@ -164,7 +167,7 @@ test("cancelRound rejects a replacement reviewer binding while preserving concur
   const round = newRound(flow, "button", null);
   flow.rounds.push(round);
   flow.state = "reviewing";
-  const launched = startHeadlessReview(flow.id, round.n, flow.roles.reviewer, sandbox, "review", 5_000, null, null, { command: executablePath });
+  const launched = await startHeadlessReview(flow.id, round.n, flow.roles.reviewer, sandbox, "review", 5_000, null, null, { command: executablePath });
   round.reviewerPid = launched.pid;
   round.reviewerIdentity = launched.identity;
   saveFlows([flow]);
