@@ -1,0 +1,309 @@
+{
+  "issue": 2459,
+  "base": "e7185fec5f75d1a343676dbb51df09af020f452c",
+  "subject": "production code in this commit",
+  "runtime": "Bun 1.3.3, Linux",
+  "isolation": "synthetic journals on tmpfs; private socket and ephemeral ports; Docker stub",
+  "fixture": {
+    "events": 300000,
+    "engineEvents": 280000,
+    "enginePrefixes": 400,
+    "otherKeyedEvents": 10000,
+    "unkeyedEvents": 10000,
+    "initialReceipts": 10400
+  },
+  "measurementNotes": [
+    "Durations are observations and have no pass threshold.",
+    "WAL frames are counted under a pinned reader at no more than 30000 events.",
+    "synchronous=FULL is retained; commit frames count durability-bearing commits.",
+    "wchar and syscw are process write byte and syscall deltas.",
+    "Interrupted fixture has 26000 engine, 3000 other keyed and 1000 unkeyed events; all 3000 other receipts are initially missing."
+  ],
+  "measurements": {
+    "journal": {
+      "base": [
+        {
+          "boot": "cold-300k",
+          "durationMs": 12966.714809000001,
+          "wchar": 3779020506,
+          "syscw": 1758770,
+          "receiptsBefore": 10400,
+          "receiptsAfter": 290000
+        },
+        {
+          "boot": "repeated-300k",
+          "durationMs": 12963.514443,
+          "wchar": 4020000524,
+          "syscw": 1874099
+        },
+        {
+          "boot": "medium.sqlite",
+          "durationMs": 25525.106060000006,
+          "wchar": 342375757,
+          "syscw": 165971,
+          "frames": 82705,
+          "commits": 27603
+        },
+        {
+          "boot": "small.sqlite",
+          "durationMs": 10.826545000003534,
+          "wchar": 61832,
+          "syscw": 31,
+          "frames": 15,
+          "commits": 3
+        },
+        {
+          "boot": "cold.sqlite",
+          "durationMs": 25466.289676999993,
+          "wchar": 342375757,
+          "syscw": 165971,
+          "frames": 82705,
+          "commits": 27603
+        },
+        {
+          "boot": "overhead.sqlite",
+          "durationMs": 10.265478000001167,
+          "wchar": 61832,
+          "syscw": 31,
+          "frames": 15,
+          "commits": 3
+        },
+        {
+          "boot": "interrupted",
+          "frames": 83204,
+          "commits": 28603
+        }
+      ],
+      "head": [
+        {
+          "boot": "cold-300k",
+          "durationMs": 5006.331281999999,
+          "wchar": 20672,
+          "syscw": 20,
+          "receiptsBefore": 10400,
+          "receiptsAfter": 10400
+        },
+        {
+          "boot": "repeated-300k",
+          "durationMs": 3615.3946030000006,
+          "wchar": 12360,
+          "syscw": 6
+        },
+        {
+          "boot": "medium.sqlite",
+          "durationMs": 370.0257500000007,
+          "wchar": 12392,
+          "syscw": 7,
+          "frames": 3,
+          "commits": 1
+        },
+        {
+          "boot": "small.sqlite",
+          "durationMs": 4.438643000001321,
+          "wchar": 12392,
+          "syscw": 7,
+          "frames": 3,
+          "commits": 1
+        },
+        {
+          "boot": "cold.sqlite",
+          "durationMs": 494.0461069999983,
+          "wchar": 20632,
+          "syscw": 11,
+          "frames": 5,
+          "commits": 2
+        },
+        {
+          "boot": "overhead.sqlite",
+          "durationMs": 4.497483999999531,
+          "wchar": 12392,
+          "syscw": 7,
+          "frames": 3,
+          "commits": 1
+        },
+        {
+          "boot": "interrupted",
+          "frames": 137,
+          "commits": 4
+        },
+        {
+          "boot": "interrupt.sqlite",
+          "durationMs": 432.4250319999992,
+          "wchar": 2064152,
+          "syscw": 1003,
+          "frames": 501,
+          "commits": 12
+        },
+        {
+          "boot": "copy-2.sqlite",
+          "durationMs": 556.3541869999972,
+          "wchar": 2616264,
+          "syscw": 1272,
+          "frames": 635,
+          "commits": 15
+        },
+        {
+          "boot": "interrupt-overhead.sqlite",
+          "durationMs": 4.5592539999997825,
+          "wchar": 12392,
+          "syscw": 7,
+          "frames": 3,
+          "commits": 1
+        },
+        {
+          "boot": "legacy.sqlite",
+          "durationMs": 36.789685000003374,
+          "wchar": 12392,
+          "syscw": 7,
+          "frames": 3,
+          "commits": 1
+        }
+      ]
+    },
+    "handoff": {
+      "base": [
+        {
+          "boot": "handoff-probes",
+          "polls": 561,
+          "refused": 559,
+          "journalProgressPolls": 0
+        }
+      ],
+      "head": [
+        {
+          "boot": "handoff-probes",
+          "polls": 211,
+          "refused": 0,
+          "journalProgressPolls": 155
+        },
+        {
+          "boot": "handoff-300k",
+          "durationMs": 4144,
+          "pollsDuringJournal": 155,
+          "refusedAfterStableEntry": 0
+        },
+        {
+          "boot": "staged-generation",
+          "phase": "succeeded",
+          "untracked": false,
+          "dockerCalls": [
+            "container inspect llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+          ]
+        }
+      ]
+    },
+    "selfHandoff": {
+      "base": [
+        {
+          "boot": "staged-generation",
+          "phase": "failed",
+          "untracked": true,
+          "dockerCalls": [
+            "image inspect agent-log-viewer:rehearsal-aaaaaaaaaaaa",
+            "tag agent-log-viewer:rehearsal-aaaaaaaaaaaa agent-log-viewer:node22",
+            "container start llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c",
+            "container inspect llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+          ]
+        }
+      ],
+      "head": [
+        {
+          "boot": "staged-generation",
+          "phase": "succeeded",
+          "untracked": false,
+          "dockerCalls": [
+            "container inspect llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+          ]
+        }
+      ]
+    }
+  },
+  "regressions": [
+    {
+      "file": "src/runtime-host/journalStartup.test.ts",
+      "newTests": 7,
+      "base": "7 failures",
+      "head": "7 passes",
+      "redEvidence": [
+        "cold receipts: expected 10400, received 290000",
+        "warm frames: expected 15, received 82705",
+        "cold migration commits beyond overhead: expected 1, received 27600",
+        "interrupted child: expected SIGKILL, received no signal",
+        "pre-receipt set includes superseded engine keys",
+        "RuntimeJournal.open is not a function"
+      ]
+    },
+    {
+      "file": "src/runtime-host/runtimeHostStartup.test.ts",
+      "newTests": 3,
+      "base": "3 failures, 4 existing passes",
+      "head": "7 passes",
+      "redEvidence": [
+        "stableEntryListening is not a function",
+        "runtimeHostStartupState is not a function",
+        "progress is not a function"
+      ]
+    },
+    {
+      "file": "src/runtime-host/runtimeHostSuccession.process.test.ts",
+      "newTests": 2,
+      "base": "2 failures; self-handoff rerun with complete Compose fixture also fails",
+      "head": "2 passes; self-handoff rerun passes",
+      "redEvidence": [
+        "561 stable-entry polls, 559 refused, no journal progress records",
+        "deployment phase: expected succeeded, received failed; generation untracked"
+      ]
+    },
+    {
+      "file": "src/app/api/runtime/snapshot/route.test.ts",
+      "newTests": 1,
+      "base": "1 failure",
+      "head": "1 pass",
+      "redEvidence": [
+        "503 lacks runtime-host-booting and journal progress"
+      ]
+    },
+    {
+      "file": "src/runtime-host/hostRehearsal.test.ts",
+      "newTests": 1,
+      "base": "1 failure, 14 existing passes",
+      "head": "15 passes",
+      "redEvidence": [
+        "matching-generation readiness probes: expected 3, received 0"
+      ]
+    }
+  ],
+  "checks": {
+    "localPassed": [
+      "journal.test.ts (94)",
+      "runtimeHostStartup.test.ts (7)",
+      "hostRehearsal.test.ts (15)",
+      "hostRehearsalRun.test.ts (7)",
+      "deployment.test.ts (30)",
+      "deploymentProxy.test.ts (20 pass, 2 skip)",
+      "journalRetention.test.ts (6)",
+      "journalSessionMetadata.test.ts (6)",
+      "socket.test.ts (5)",
+      "journalStartup.test.ts (7)",
+      "runtimeHostSuccession.process.test.ts (2)",
+      "snapshot/route.test.ts (1)",
+      "bun-runtime-workflow.test.ts (7)",
+      "tsc --noEmit",
+      "privacy:check"
+    ],
+    "runtimeHostRehearsal": {
+      "windowMs": 15000,
+      "stableAnswered": 31,
+      "stablePolls": 31,
+      "socketAnswered": 31,
+      "socketPolls": 31,
+      "successorTookOverMs": 1008
+    },
+    "remaining": [
+      "independent fresh full-diff review by controller stage",
+      "hosted CI",
+      "designated manager deployment with operator approval",
+      "rendered browser and API verification after deployment"
+    ]
+  }
+}

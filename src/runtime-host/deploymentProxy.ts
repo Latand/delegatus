@@ -23,7 +23,7 @@ function readTarget(filename: string): ViewerReleaseIdentity | null {
 const UNAVAILABLE = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
 
 /** Each accepted connection reads one atomically replaced release target. */
-export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host = "127.0.0.1"): net.Server {
+export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host = "127.0.0.1", options: { deferListen?: boolean } = {}): net.Server {
   const server = net.createServer({ pauseOnConnect: true }, (downstream) => {
     /* #1254: this listener is the stable endpoint, so a connection failure
        here must never reach the process. Bun 1.3.3 dropped a failed socket
@@ -95,7 +95,7 @@ export function serveViewerDeploymentProxy(targetFile: string, port = 8898, host
     downstream.resume();
     downstream.once("close", () => upstream?.destroy());
   });
-  server.listen(port, host);
+  if (!options.deferListen) server.listen(port, host);
   return server;
 }
 
@@ -288,6 +288,7 @@ function endpointAddress(target: ViewerReleaseIdentity): { host: string; port: n
 }
 
 export interface ViewerLocalEntryOptions {
+  deferListen?: boolean;
   /** Read per request, so trust is granted and withdrawn without a restart. */
   gatewayFile: string;
   releaseCredential: (target: ViewerReleaseIdentity) => string | null;
@@ -408,6 +409,31 @@ export function serveViewerLocalEntry(
     socket.on("error", () => undefined);
     socket.destroy();
   });
-  server.listen(port, host);
+  if (!options.deferListen) server.listen(port, host);
   return server;
+}
+
+/** A predecessor can still be closing its stable listener after releasing the
+ * fence. Attach the error handler before the first listen and bound retries. */
+export async function listenViewerEntry(server: net.Server | http.Server, port: number, host = "127.0.0.1"): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let attempts = 0;
+    const onError = (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE" && ++attempts < 40) {
+        setTimeout(() => server.listen(port, host), 250);
+      } else {
+        server.removeListener("listening", onListening);
+        reject(error);
+      }
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      // Later listener failures remain process-safe and visible.
+      server.on("error", (error) => console.error(`[runtime host] viewer entry unavailable: ${error.message}`));
+      resolve();
+    };
+    server.on("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
 }
