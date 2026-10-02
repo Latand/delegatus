@@ -149,6 +149,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createServer } from "node:net";
 
 import { chromium, type Browser, type Page } from "playwright-core";
 
@@ -203,7 +204,7 @@ const TASKS: { title: string; roles: string[]; busy: number[] }[] = [
 ];
 
 function git(cwd: string, ...args: string[]): void {
-  const result = Bun.spawnSync(["git", ...args], { cwd, env: { ...process.env, HOME: path.join(BASE, "git-home"), GIT_AUTHOR_NAME: "demo", GIT_AUTHOR_EMAIL: "demo@example.invalid", GIT_COMMITTER_NAME: "demo", GIT_COMMITTER_EMAIL: "demo@example.invalid" } });
+  const result = Bun.spawnSync(["git", ...args], { cwd, env: { ...process.env, HOME: path.join(BASE, "git-home"), GIT_AUTHOR_NAME: "demo", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "demo", GIT_COMMITTER_EMAIL: "noreply@example.invalid" } });
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
 }
 
@@ -5980,7 +5981,121 @@ async function installPingMain(): Promise<void> {
 }
 
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
-if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
+/** Hard reloads of the production Viewer, including its real hydration boundary.
+ * BOARD_CAPTURE_CASE=hydration uses only the synthetic home above. Set
+ * HYDRATION_MUTATE_SHELL=1 to prove that a server/client text mismatch fails the gate.
+ */
+async function hydrationMain(): Promise<void> {
+  const { reviewers } = seedHome();
+  /* Scanner-only transcripts have no canonical conversation id. Register a
+     quiet fixture before boot so #c= exercises a real durable identity. The
+     subprocess imports the registry only after its isolated environment exists. */
+  const registered = Bun.spawnSync([CAPTURE_BUN, "-e", `
+    import { agentRegistry } from "./src/lib/agent/registry";
+    const registry = agentRegistry();
+    registry.ensureConversation("claude", process.env.HYDRATION_TARGET_PATH, null);
+    registry.close();
+  `], { cwd: repoRoot, env: { ...buildEnvironment(0), HYDRATION_TARGET_PATH: reviewers[0]!.path } });
+  if (registered.exitCode !== 0) throw new Error("could not register the synthetic conversation");
+  const reserve = createServer();
+  await new Promise<void>((resolve, reject) => {
+    reserve.once("error", reject);
+    reserve.listen(0, "127.0.0.1", resolve);
+  });
+  const port = (reserve.address() as { port: number }).port;
+  await new Promise<void>((resolve) => reserve.close(() => resolve()));
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    const payload = await (await fetch(`${baseUrl}/api/files`)).json() as { files: { path: string; conversationId: string; project: string }[] };
+    const target = payload.files.find((file) => file.path === reviewers[0]!.path);
+    if (!target?.conversationId) throw new Error("the seeded transcript has no canonical conversation id");
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const landings = [
+      { name: "clean", hash: "", saved: null },
+      { name: "saved-project", hash: "", saved: project },
+      { name: "project-hash", hash: `#p=${encodeURIComponent(project)}`, saved: "other-project" },
+      { name: "file-link", hash: `#f=${encodeURIComponent(target.path)}`, saved: "other-project" },
+      { name: "conversation-link", hash: `#c=${encodeURIComponent(target.conversationId)}`, saved: "other-project" },
+    ];
+    frames: for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const landing of landings) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, locale: lang, timezoneId: "Europe/Kyiv", reducedMotion: "reduce" });
+      try {
+        await context.addInitScript(({ lang, saved }) => {
+          localStorage.setItem("llv_lang", lang);
+          localStorage.setItem("llvSound", "0");
+          if (saved) localStorage.setItem("llvProject", saved);
+        }, { lang, saved: landing.saved });
+        const page = await context.newPage();
+        const hydration: string[] = [];
+        const pageErrors: string[] = [];
+        let presence: { project: string | null; focusedPath: string | null } | null = null;
+        page.on("request", (request) => {
+          if (request.url() === baseUrl + "/api/view/presence" && request.method() === "POST") {
+            const payload = request.postDataJSON() as { project: string | null; focusedPath: string | null };
+            presence = { project: payload.project, focusedPath: payload.focusedPath };
+          }
+        });
+        page.on("console", (message) => {
+          if (["warning", "error"].includes(message.type()) && /hydrat|server rendered|didn't match|#418|#425/i.test(message.text())) hydration.push(message.text());
+        });
+        page.on("pageerror", (error) => {
+          pageErrors.push(error.message);
+          if (/hydrat|#418|#425/i.test(error.message)) hydration.push(error.message);
+        });
+        if (process.env.HYDRATION_MUTATE_SHELL === "1") {
+          await page.route(baseUrl + "/", async (route) => {
+            const response = await route.fetch();
+            const body = await response.text();
+            const mutated = body.replace(/(<span data-boot-lang="en">)[^<]+/, "$1Hydration negative control");
+            if (mutated === body) throw new Error("negative control did not find a boot label");
+            await route.fulfill({ response, body: mutated });
+          });
+        }
+        for (const load of ["navigate", "reload"]) {
+          presence = null;
+          if (load === "navigate") await page.goto(baseUrl + "/" + landing.hash);
+          else await page.reload();
+          await page.waitForFunction(() => !document.querySelector("[data-boot-shell]") && Boolean(document.querySelector("button")), undefined, { timeout: 60_000 });
+          await page.waitForTimeout(1_000);
+          const expectedProject = landing.name === "clean" ? null : project;
+          const linked = landing.name === "file-link" || landing.name === "conversation-link";
+          const restored = () => presence?.project === expectedProject && (!linked || presence.focusedPath === target.path);
+          const deadline = Date.now() + 15_000;
+          while (!restored() && Date.now() < deadline) await page.waitForTimeout(100);
+          const tag = `${width}-${lang}-${landing.name}-${load}`;
+          const reading = await page.evaluate(() => ({ locale: document.documentElement.lang, layout: document.querySelector("[data-mobile2-bar]") ? "phone" : "desktop", text: document.body.innerText }));
+          report.frames[tag] = { hydrationWarnings: hydration.length, pageErrors: pageErrors.length, locale: reading.locale, layout: reading.layout, projectRestored: restored(), linkFocused: linked ? restored() : null };
+          if (hydration.length) report.failures.push(`${tag}: ${hydration.length} hydration warnings`);
+          if (pageErrors.length) report.failures.push(`${tag}: ${pageErrors.length} page errors`);
+          if (reading.locale !== lang) report.failures.push(`${tag}: locale was not restored`);
+          if (!restored()) report.failures.push(`${tag}: target project or conversation was not restored in presence`);
+          if (reading.layout !== (width === 390 ? "phone" : "desktop")) report.failures.push(`${tag}: wrong viewport layout`);
+          if (!linked && !reading.text.includes("harbor")) report.failures.push(`${tag}: seeded board did not render`);
+          await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
+          if (process.env.HYDRATION_MUTATE_SHELL === "1" && report.failures.length) break frames;
+        }
+      } finally { await context.close(); }
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  fs.writeFileSync(path.join(OUT_DIR, "hydration.json"), JSON.stringify(report, null, 2) + "\n");
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
+}
+
+if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
