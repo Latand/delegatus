@@ -1422,6 +1422,16 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           { name: `raw template group comment prefix ${form} ${boundary}`, text: `${tick}\u0024{//comment${line}("${value}")}${tick}`, pass: false },
           { name: `raw template group comment suffix ${form} ${boundary}`, text: `${tick}\u0024{("${value}")//comment${line}}${tick}`, pass: false },
         ])),
+      ...[host, origin, discovery].flatMap((value, form) => [
+        ...["&#160;", "&#x200b;", "&nbsp;", "&amp;#160;", "%26#160;", "&#38;nbsp;"].flatMap((gap, encoding) => [
+          { name: `raw encoded trivia call ${form} ${encoding}`, text: `f${gap} /*comment*/ ("${value}")`, pass: false },
+          { name: `raw encoded trivia index ${form} ${encoding}`, text: `x${gap} ["${value}"]`, pass: false },
+        ]),
+        ...["&amp;#160;", "%26#160;", String.raw`\u0026#160;`].flatMap((prefix, encoding) => [
+          { name: `raw encoded hash call ${form} ${encoding}`, text: `${prefix}f /* " */ ("${value}")`, pass: false },
+          { name: `raw encoded hash index ${form} ${encoding}`, text: `${prefix}x /* ${tick} */ ["${value}"]`, pass: false },
+        ]),
+      ]),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
       { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
       { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: false },
@@ -2041,6 +2051,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         || c.name.startsWith("raw entity quoted comment ")
         || c.name.startsWith("raw Unicode trivia ")
         || c.name.startsWith("raw template group ")
+        || c.name.startsWith("raw encoded ")
         || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
         || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
         || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {

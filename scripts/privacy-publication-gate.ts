@@ -203,7 +203,7 @@ function maskApprovedPublicValues(text: string): string {
   // Treat '#' in entities, member access or a private declaration as syntax.
   // Unclosed block comments and quoted tokens consume their remaining span once;
   // retrying a closing-delimiter search at each inner opener is quadratic.
-  const literals = text.matchAll(/\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?![\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
+  const literals = text.matchAll(/\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?!(?:[xX][0-9a-fA-F]+|[0-9]+);|[\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
   let literal = literals.next().value;
   let previousLiteralEnd = 0;
   let syntaxCursor = 0;
@@ -484,13 +484,29 @@ function maskApprovedPublicValues(text: string): string {
   const candidateRawGroups = new Map<(typeof candidates)[number], RawGroup>();
   let rawCommentCursor = 0;
   let rawCommentFrame: { end: number; depth: number; completed: Map<number, RawGroup> } | undefined;
-  function skipRawTrivia(before: number): { before: number; unicode: boolean } {
+  const rawEncodedTriviaStarts = new Map<number, number | null>();
+  function encodedTriviaStart(end: number): number | null {
+    if (text[end] !== ";") return null;
+    const cached = rawEncodedTriviaStarts.get(end);
+    if (cached !== undefined) return cached;
+    let start = end;
+    while (start > 0 && !/[\t\n\v\f\r "'`()\[\]{},=]/.test(text[start - 1])) start -= 1;
+    const token = text.slice(start, end + 1);
+    const decoded = decodeSensitiveText(token, true, true);
+    // Decoding can only withhold approval here. Keep encoded separators from
+    // making a call look standalone after the normal inspection views decode it.
+    const result = decoded.error || (decoded.text !== token && /[\s\p{Default_Ignorable_Code_Point}]$/u.test(decoded.text))
+      ? start : null;
+    rawEncodedTriviaStarts.set(end, result);
+    return result;
+  }
+  function skipRawTrivia(before: number): { before: number; disallowedTrivia: boolean } {
     // Trivia belongs inside the raw callee span. Its Unicode bytes stay intact;
     // the callee's outer neighbours still use the strict ASCII boundary rules.
-    let unicode = false;
+    let disallowedTrivia = false;
     for (;;) {
       while (before >= 0 && /[\s\p{Default_Ignorable_Code_Point}]/u.test(text[before])) {
-        unicode ||= text.charCodeAt(before) > 0x7f;
+        disallowedTrivia ||= text.charCodeAt(before) > 0x7f;
         before -= 1;
       }
       let commentStart = rawTriviaEnds.get(before);
@@ -505,23 +521,29 @@ function maskApprovedPublicValues(text: string): string {
           rawTriviaEnds.set(before, blockStart);
         }
       }
-      if (commentStart === undefined) return { before, unicode };
+      if (commentStart === undefined) {
+        const encodedStart = encodedTriviaStart(before);
+        if (encodedStart === null) return { before, disallowedTrivia };
+        disallowedTrivia = true;
+        before = encodedStart - 1;
+        continue;
+      }
       before = commentStart - 1;
     }
   }
-  function rawCalleeBefore(start: number): { before: number; unicode: boolean } {
+  function rawCalleeBefore(start: number): { before: number; disallowedTrivia: boolean } {
     const initial = skipRawTrivia(start - 1);
-    let { before, unicode } = initial;
+    let { before, disallowedTrivia } = initial;
     for (;;) {
       const end = before;
       while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
-      if (before === end) return { before, unicode };
+      if (before === end) return { before, disallowedTrivia };
       const member = /^[?.]$/.test(text[before + 1]);
       const previous = skipRawTrivia(before);
       // Trivia inside member access belongs to the callee too. An unrelated
       // preceding identifier remains outside this raw call/index envelope.
-      if (!member && text[previous.before] !== ".") return { before, unicode };
-      unicode ||= previous.unicode;
+      if (!member && text[previous.before] !== ".") return { before, disallowedTrivia };
+      disallowedTrivia ||= previous.disallowedTrivia;
       before = previous.before;
     }
   }
@@ -545,7 +567,7 @@ function maskApprovedPublicValues(text: string): string {
       const character = text[rawCursor++];
       if (/[([{]/.test(character)) {
         const start = rawCursor - 1;
-        const calleeSpan = /[([]/.test(character) ? rawCalleeBefore(start) : { before: start - 1, unicode: false };
+        const calleeSpan = /[([]/.test(character) ? rawCalleeBefore(start) : { before: start - 1, disallowedTrivia: false };
         const { before } = calleeSpan;
         const completed = rawCommentFrame?.completed ?? completedRawGroups;
         const callee = completed.get(before);
@@ -554,7 +576,7 @@ function maskApprovedPublicValues(text: string): string {
         // A standalone group keeps its own opening edge (for example an arrow
         // callback body). Calls/indexes retain their named or returned callee.
         const envelopeStart = callee?.envelopeStart ?? (namedCallee || unicodeCallee ? before + 1 : start);
-        rawGroups.push({ start, envelopeStart, attached: calleeSpan.unicode, parent: rawGroups.at(-1) });
+        rawGroups.push({ start, envelopeStart, attached: calleeSpan.disallowedTrivia, parent: rawGroups.at(-1) });
       } else if (/[)\]}]/.test(character)) {
         // Source-comment delimiters cannot close a surrounding code group or
         // become a returned callee after the comment. Their own groups still
