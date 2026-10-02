@@ -28,8 +28,9 @@ import type { TaskStatus } from "@/lib/tasks/types";
  *     opening reads the rectangles again, until the opening is over (a pointer
  *     that stands still is not tested again: the columns moving under it would
  *     flip the target back and forth), and only then;
- *   - while a card is held, the board takes no pointer events (CSS), so no
- *     hover restyles the cards the ghost passes over;
+ *   - the pointer is captured on the held card, so no hover restyles the
+ *     cards the ghost passes over (no `pointer-events` or `user-select` is set
+ *     on the board);
  *   - nothing is rendered by React: the hint is a node appended by hand.
  */
 
@@ -61,7 +62,7 @@ export interface CardDragOptions {
   hint: string;
   /** The card was dropped over another column. */
   onDrop: (to: TaskStatus) => void;
-  /** A drag began or ended: the board holds its own polling while it runs. */
+  /** A drag began or ended: column dwell is suspended while it runs. */
   onActive: (active: boolean) => void;
 }
 
