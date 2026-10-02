@@ -44,8 +44,9 @@ export interface AutoState {
   drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean; acknowledgedAt?: string; force?: boolean } | null;
   rollback: { target: string | null } | null;
   pending: AutoPending | null;
-  /** Written before asking the runtime host; replay uses the same key after a web restart. */
-  managedPending: { target: Revision; clientKey: string; at: string; from?: string | null } | null;
+  /** Written before asking the runtime host; an accepted id fences request
+      replay even if the separate receipt or the host's lookup index is lost. */
+  managedPending: { target: Revision; clientKey: string; at: string; from?: string | null; deploymentId?: string } | null;
   rollbackPointer: string | null;
   rollbackCaptured: boolean;
 }

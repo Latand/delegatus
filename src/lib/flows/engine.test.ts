@@ -18,6 +18,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 import type { Flow } from "./types";
+import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 
 let relayDeliveries = 0;
 let releaseRelayDeliveries: Array<() => void> = [];
@@ -1476,6 +1477,55 @@ function raceFlow(over: Partial<Flow>): Flow {
     ...over,
   } as unknown as Flow;
 }
+
+test.each(["pane", "headless"] as const)("automatic update holds a fresh %s reviewer without consuming its round", async (reviewerMode) => {
+  const implementer = writeCodexEntry(`drain-${reviewerMode}-implementer.jsonl`, { id: `drain-${reviewerMode}`, cwd: "/missing-drain-worktree" }, Date.now() / 1_000);
+  const flow = raceFlow({ state: "spawning", reviewerMode, implementerPath: implementer.path });
+  const entries = [implementer];
+  const byPath = new Map([[implementer.path, implementer]]);
+  flow.rounds = [newRound(flow, "marker", "ready")];
+  const before = structuredClone(flow);
+  writeDrain(drainFile(), { id: "flow-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    for (let i = 0; i < 3; i++) expect(await tickFlow(flow, entries, byPath, () => {})).toBe(false);
+    expect(flow).toEqual(before);
+    releaseDrain(drainFile(), "flow-drain");
+    // Admission resumes into the existing launch path; this fixture has no checkout.
+    await tickFlow(flow, entries, byPath, () => {});
+    expect(flow.state).toBe("needs_decision");
+    expect(flow.rounds).toHaveLength(1);
+  } finally { releaseDrain(drainFile(), "flow-drain"); }
+});
+
+test("automatic update holds fresh fix relays, while manual relays and released work deliver once", async () => {
+  const implementer = writeCodexEntry("drain-relay-implementer.jsonl", { id: "drain-relay", cwd: "/missing-drain-worktree" }, Date.now() / 1_000);
+  const entries = [implementer];
+  const byPath = new Map([[implementer.path, implementer]]);
+  const file = path.join(process.env.LLV_STATE_DIR!, "drain-relay-findings.md");
+  fs.writeFileSync(file, "VERDICT: REQUEST_CHANGES\n\nRepair the issue.\n");
+  const makeFlow = (mode: "auto" | "manual") => {
+    const flow = raceFlow({ id: `drain-${mode}`, state: "relaying", mode, implementerPath: implementer.path });
+    flow.rounds = [{ ...newRound(flow, "marker", "ready"), findingsPath: file, verdict: "REQUEST_CHANGES", findingsCount: 1 }];
+    return flow;
+  };
+  let delivered = 0;
+  const restore = setRelayDeliveryForTest(async (flow) => { delivered++; return flow.implementerPath; });
+  writeDrain(drainFile(), { id: "flow-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    const auto = makeFlow("auto");
+    const before = structuredClone(auto);
+    for (let i = 0; i < 3; i++) expect(await tickFlow(auto, entries, byPath, () => {})).toBe(false);
+    expect(auto).toEqual(before);
+    expect(delivered).toBe(0);
+    await tickFlow(makeFlow("manual"), entries, byPath, () => {});
+    expect(delivered).toBe(1);
+    releaseDrain(drainFile(), "flow-drain");
+    await tickFlow(auto, entries, byPath, () => {});
+    expect(auto.state).toBe("fixing");
+    expect(delivered).toBe(2);
+    expect(auto.rounds[0]!.relayedAt).not.toBeNull();
+  } finally { restore(); releaseDrain(drainFile(), "flow-drain"); }
+});
 
 test("terminal flows remain in tick results and scanner annotations", async () => {
   const flow = raceFlow({

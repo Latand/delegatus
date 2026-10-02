@@ -2,6 +2,18 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { statePath } from "@/lib/configDir";
+import type { Flow } from "@/lib/flows/types";
+
+/** A fresh automatic round waits for admission. Already submitted work keeps
+    its custody and is observed to completion during the drain. */
+export function flowAwaitingAdmission(flow: Pick<Flow, "mode" | "state" | "rounds">): boolean {
+  if (flow.mode !== "auto") return false;
+  const round = flow.rounds.at(-1);
+  if (!round) return false;
+  if (flow.state === "spawning") return !round.spawnStartedAt && !round.launchId
+    && !round.reviewerPath && !round.sessionId && !round.reviewerPane && round.reviewerPid == null;
+  return flow.state === "relaying" && !round.relayStartedAt && !round.relayPendingSettlement && !round.relayedAt;
+}
 
 export const DRAIN_NOTICE_MS = 6 * 60 * 60_000;
 export const DRAIN_LEASE_MS = 10 * 60_000;

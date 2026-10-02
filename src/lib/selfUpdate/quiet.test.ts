@@ -13,6 +13,31 @@ function ports(turn = "idle", host = "hosted", cursor = "pending", ageMinutes = 
   };
 }
 
+test("held review flows stop blocking deployment while admitted reviewers and relays remain blockers", async () => {
+  const p = ports();
+  p.pipelines = () => [{ id: "lane", state: "running", cursor: { stageId: "review", state: "reviewing" },
+    runs: [{ stageId: "review", attempts: [{ flowId: "review-flow", conversationId: null }] }] }] as never;
+  let state: "spawning" | "relaying" = "spawning";
+  let started = false;
+  let mode: "auto" | "manual" = "auto";
+  const withFlows = { ...p, flows: () => [{ id: "review-flow", state, mode,
+    rounds: [{ spawnStartedAt: state === "spawning" && started ? "started" : null,
+      relayStartedAt: state === "relaying" && started ? "started" : null, relayedAt: null }] }] as never };
+  for (state of ["spawning", "relaying"]) {
+    expect((await probeQuiet(snapshot, withFlows, NOW, true)).quiet).toBe(true);
+    expect((await probeQuiet(snapshot, withFlows, NOW, false)).quiet).toBe(false);
+    started = true;
+    expect((await probeQuiet(snapshot, withFlows, NOW, true)).quiet).toBe(false);
+    started = false;
+    mode = "manual";
+    expect((await probeQuiet(snapshot, withFlows, NOW, true)).quiet).toBe(false);
+    mode = "auto";
+    withFlows.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "operator-turn", host: "hosted", turn: "running" }] }) as never;
+    expect((await probeQuiet(snapshot, withFlows, NOW, true)).quiet).toBe(false);
+    withFlows.runtimeSnapshot = p.runtimeSnapshot;
+  }
+});
+
 test("live turns and transitioning hosts block either restart", async () => {
   for (const turn of ["running", "interrupt_requested"]) expect((await probeQuiet(snapshot, ports(turn), NOW)).quiet).toBe(false);
   for (const host of ["registering", "recovering"]) expect((await probeQuiet(snapshot, ports("idle", host), NOW)).quiet).toBe(false);

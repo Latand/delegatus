@@ -13,6 +13,7 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadFlows } from "@/lib/flows/store";
 import { listPresence } from "@/lib/view/presenceStore";
 import { requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
 import { stateDir, statePath } from "@/lib/configDir";
@@ -121,6 +122,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
         return client.snapshot(undefined, { timeoutMs: 10_000 });
       },
       pipelines: loadPipelinesForList,
+      flows: () => loadFlows(),
       turnLiveness: async (id) => {
         const verdict = await conversationTurnLiveness(agentRegistry(), id);
         if (!verdict) return null;

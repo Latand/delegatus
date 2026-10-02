@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { RuntimeHostUnavailableError } from "@/lib/runtime/client";
@@ -85,6 +85,67 @@ function scenario(enabled = true) {
   };
 }
 
+test.each(["succeeded", "rolled-back", "failed"] as const)("accepted receipt persistence failure retains custody through reconstruction and healthy %s", async (phase) => {
+  const h = scenario();
+  let service = h.service();
+  let ticks = 0;
+  h.deps.requestPipelineTick = () => { ticks++; };
+  let hostRevision = OLD;
+  let hostAnswers = true;
+  h.deps.hostHealth = async () => hostAnswers ? { pid: 102, startIdentity: "fixture", hostEpoch: 1, generation: { revision: hostRevision } } : null;
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const auto = () => readAuto(join(h.dir, "auto.json"));
+  const receiptFile = join(h.dir, "managed.json");
+  try {
+    await service.autoTick();
+    const holdId = held()!.id;
+    h.advance(60_000);
+    mkdirSync(receiptFile);
+    await service.autoTick(); // The host accepts; the real receipt rename fails with EISDIR.
+    expect(h.requests).toHaveLength(1);
+    expect(held()?.id).toBe(holdId);
+    const pending = auto().managedPending;
+    expect(pending).not.toBeNull();
+    expect(auto().enabled).toBe(true);
+    expect((await service.snapshot()).update).toMatchObject({ state: "running", deploymentId: "deployment-1" });
+    await service.setAuto(false);
+    service.stop();
+    h.advance(DRAIN_LEASE_MS + 1);
+    service = h.service();
+    await service.autoTick(); // Recover acceptance with lookup while persistence still fails.
+    expect(h.receiptReads()).toBe(1);
+    expect(auto().managedPending).toEqual(pending);
+    expect(held()?.id).toBe(holdId);
+    expect(h.requests).toHaveLength(1);
+    // Repair only this fixture's obstacle, then prove observation retries the receipt write.
+    rmSync(receiptFile, { recursive: true });
+    await service.snapshot();
+    expect(readManagedRecord(receiptFile)).toMatchObject({ deploymentId: "deployment-1", idempotencyKey: h.requests[0]!.idempotencyKey });
+    h.setRelease(TARGET); // Web has moved; the old host must still fence launches.
+    h.finish(phase);
+    await service.snapshot();
+    expect(held()?.id).toBe(holdId);
+    expect(ticks).toBe(0);
+    service.stop();
+    service = h.service();
+    await service.autoTick();
+    expect(held()?.id).toBe(holdId);
+    const settledRevision = phase === "succeeded" ? TARGET : OLD;
+    h.setRelease(settledRevision);
+    hostRevision = settledRevision;
+    hostAnswers = false;
+    await service.autoTick();
+    expect(held()?.id).toBe(holdId);
+    hostAnswers = true;
+    await service.autoTick();
+    expect(held()).toBeNull();
+    expect(auto().managedPending).toBeNull();
+    await service.autoTick();
+    expect(ticks).toBe(1);
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
+});
+
 test.each(["succeeded", "rolled-back", "failed"] as const)("early managed admission holds launches across reconstruction until %s", async (phase) => {
   const h = scenario();
   let service = h.service();
@@ -105,6 +166,35 @@ test.each(["succeeded", "rolled-back", "failed"] as const)("early managed admiss
   await service.snapshot();
   expect(lease()).toBeNull();
   service.stop();
+});
+
+test("a reconstructed accepted intent never resubmits when its receipt lookup is empty", async () => {
+  const h = scenario();
+  let service = h.service();
+  const receiptFile = join(h.dir, "managed.json");
+  try {
+    await service.autoTick();
+    h.advance(60_000);
+    mkdirSync(receiptFile);
+    await service.autoTick();
+    const holdId = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())!.id;
+    service.stop();
+    h.deps.findDeploymentByIdempotencyKey = async () => null;
+    service = h.service();
+    for (let i = 0; i < 3; i++) {
+      h.advance(60_000);
+      await service.autoTick();
+    }
+    expect(h.requests).toHaveLength(1);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(holdId);
+    expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+    // The host's direct read can recover an accepted deployment despite a missing index entry.
+    rmSync(receiptFile, { recursive: true });
+    h.finish("succeeded");
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
 });
 
 test.each(["failed", "rolled-back", "lost"] as const)("terminal managed %s retains custody until both processes are freshly healthy on one revision", async (phase) => {
@@ -703,6 +793,11 @@ test("a successful deployment settles after a web restart and keeps auto enabled
   h.finish("succeeded");
   h.setRelease(OLD); // The hot target may lag the host's terminal receipt.
   await service.refreshManaged();
+  await service.snapshot();
+  expect(readAuto(join(h.dir, "auto.json")).managedPending).not.toBeNull();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  h.setRelease(TARGET);
+  await service.snapshot();
   expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, managedPending: null, off: null, waitingSince: null });
   await service.autoTick();
   expect(h.requests).toHaveLength(1);

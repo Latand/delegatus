@@ -4,6 +4,8 @@ import type { HostProcessLivenessEvidence, TurnLiveness } from "@/lib/runtime/li
 import type { HostState } from "@/lib/runtime/engineHost";
 import type { RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { Flow } from "@/lib/flows/types";
+import { flowAwaitingAdmission } from "./drain";
 import type { StoredViewSession } from "@/lib/view/types";
 import type { Snapshot } from "./types";
 
@@ -26,6 +28,7 @@ export interface QuietBlockers {
 export interface QuietPorts {
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
   pipelines(): readonly Pipeline[];
+  flows?(): readonly Flow[];
   presence(now: number): readonly StoredViewSession[];
   memoryAvailableMb?(): number;
   controllerIdle?(): Promise<boolean>;
@@ -72,12 +75,15 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   }
   try {
     const pipelines = ports.pipelines();
+    const flows = draining ? ports.flows?.() ?? [] : [];
     const stages: BlockingStage[] = [];
     for (const pipeline of pipelines) {
       const cursor = pipeline.cursor;
       if (pipeline.state !== "running" || !cursor || !["spawning", "running", "reviewing", "committing"].includes(cursor.state)) continue;
       const attempt = pipeline.runs?.find((run) => run.stageId === cursor.stageId)?.attempts.findLast((attempt) => !attempt.historical);
       const conversationId = attempt?.conversationId ?? null;
+      if (draining && cursor.state === "reviewing" && attempt?.flowId
+        && flows.some((flow) => flow.id === attempt.flowId && flowAwaitingAdmission(flow))) continue;
       // Reserved custody has no engine yet. The drain holds it before claiming
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"

@@ -155,6 +155,7 @@ export class SelfUpdateService {
   private runner: RunnerPort | null = null;
   private runnerRecord: string | null = null;
   private managed: ManagedRecord | null;
+  private managedNeedsSave = false;
   private decision: { value: ModeDecision; at: number } | null = null;
   private pendingRestart: PendingManualRestart | null = null;
   private readonly described = new Map<string, Revision>();
@@ -204,6 +205,26 @@ export class SelfUpdateService {
   private get managedFile(): string { return join(this.deps.dir, "managed.json"); }
   private get autoFile(): string { return join(this.deps.dir, "auto.json"); }
   private get historyFile(): string { return join(this.deps.dir, "history.jsonl"); }
+
+  /** Host acceptance remains authoritative when the local receipt cannot be
+      written. The durable automatic intent keeps its key for cold lookup. */
+  private saveManaged(): void {
+    if (!this.managed) return;
+    this.managedNeedsSave = true;
+    try {
+      writeManagedRecord(this.managedFile, this.managed);
+      this.managedNeedsSave = false;
+    } catch (error) {
+      console.error("[self-update] deployment receipt persistence failed", error instanceof Error ? error.name : "unknown");
+    }
+    const pending = this.auto.managedPending;
+    if (this.managed.trigger === "auto" && pending
+      && this.managed.idempotencyKey === managedIdempotencyKey(pending.target.sha, pending.clientKey)
+      && pending.deploymentId !== this.managed.deploymentId) {
+      this.auto = { ...this.auto, managedPending: { ...pending, deploymentId: this.managed.deploymentId } };
+      this.saveAuto();
+    }
+  }
 
   private saveAuto(): void { writeAuto(this.autoFile, this.auto); this.persistNow(); this.changes.emit(); }
 
@@ -575,13 +596,14 @@ export class SelfUpdateService {
           stage: "deploy", reason: record.error || (record.lost ? "deployment record was lost" : "deployment failed") } };
         this.saveAuto();
       }
-      const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
-      const healthy = snapshot && [snapshot.processes.web, snapshot.processes.runtimeHost]
-        .every((process) => process.state === "healthy" && process.lastHealthOk === true);
-      const consistent = snapshot && [pending.from ?? this.slice.installed?.sha, pending.target.sha]
-        .some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
-      if (!healthy || !consistent) return;
     }
+    const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
+    const healthy = snapshot && [snapshot.processes.web, snapshot.processes.runtimeHost]
+      .every((process) => process.state === "healthy" && process.lastHealthOk === true);
+    const settledTargets = failed ? [pending.from ?? this.slice.installed?.sha, pending.target.sha] : [pending.target.sha];
+    const consistent = snapshot && settledTargets
+      .some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
+    if (!healthy || !consistent) return;
     this.endDrain();
     this.auto = {
       ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
@@ -612,15 +634,16 @@ export class SelfUpdateService {
       let accepted: ViewerDeploymentStatus | null;
       try { accepted = await this.deps.findDeploymentByIdempotencyKey(idempotencyKey); }
       catch { return; }
-      if (accepted) {
+      if (accepted || pending.deploymentId) {
         const record: ManagedRecord = {
-          deploymentId: accepted.deploymentId, idempotencyKey, trigger: "auto",
-          target: accepted.revision, targetShort: shortSha(accepted.revision), targetVersion: pending.target.version || null,
-          requestedAt: accepted.createdAt, observed: {}, lastStep: null, finishedAt: null,
+          deploymentId: accepted?.deploymentId ?? pending.deploymentId!, idempotencyKey, trigger: "auto",
+          target: accepted?.revision ?? pending.target.sha, targetShort: shortSha(accepted?.revision ?? pending.target.sha), targetVersion: pending.target.version || null,
+          requestedAt: accepted?.createdAt ?? pending.at, observed: {}, lastStep: null, finishedAt: null,
           phase: null, error: null, servingProgress: null,
         };
         this.managed = observeDeployment(record, accepted);
-        writeManagedRecord(this.managedFile, this.managed);
+        this.saveManaged();
+        if (managedActive(this.managed)) this.watchDeployment();
         this.finishManagedAuto();
         if (!managedActive(this.managed) && this.auto.managedPending) await this.snapshot();
         this.changes.emit();
@@ -1014,19 +1037,20 @@ export class SelfUpdateService {
 
   private async deploy(target: Revision, clientKey: string, trigger: "operator" | "auto" = "operator"): Promise<DeploymentResult> {
     if (managedActive(this.managed)) return busy("update");
+    let record: ManagedRecord;
     try {
-      const record = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now, trigger);
-      writeManagedRecord(this.managedFile, record);
-      this.managed = record;
-      this.watchDeployment();
-      this.changes.emit();
-      return { ok: true };
+      record = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now, trigger);
     } catch (error) {
       if (error instanceof DeploymentBusyError) return refuse(409, "deployment-busy", error.message);
       const detail = error instanceof Error ? error.message : undefined;
       return { ...refuse(503, "deployment-refused", "The runtime host did not take the deployment", detail),
         ...(isRuntimeHostTransportFailure(error) ? { deliveryUncertain: true } : {}) };
     }
+    this.managed = record;
+    this.saveManaged();
+    this.watchDeployment();
+    this.changes.emit();
+    return { ok: true };
   }
 
   private afterUpdate(): void {
@@ -1105,19 +1129,23 @@ export class SelfUpdateService {
 
   /** Reads the deployment once more while it is active. */
   async refreshManaged(): Promise<void> {
-    if (!managedActive(this.managed)) return;
+    if (!managedActive(this.managed)) {
+      if (this.managedNeedsSave) this.saveManaged();
+      return;
+    }
     try {
       const status = await this.deps.readDeployment(this.managed!.deploymentId);
       const next = status ? observeDeployment(this.managed!, status) : observeMissing(this.managed!, this.deps.now());
       if (JSON.stringify(next) !== JSON.stringify(this.managed)) {
-        writeManagedRecord(this.managedFile, next);
         this.managed = next;
+        this.managedNeedsSave = true;
         this.changes.emit();
         if (!managedActive(next) && next.phase === "succeeded") void this.check();
       }
     } catch {
       /* The web process is replaced mid-deployment; the next one reads on. */
     }
+    if (this.managedNeedsSave) this.saveManaged();
     this.finishManagedAuto();
   }
 

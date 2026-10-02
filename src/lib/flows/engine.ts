@@ -1,6 +1,7 @@
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { activeDrain, flowAwaitingAdmission } from "@/lib/selfUpdate/drain";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1176,6 +1177,7 @@ export async function tickFlow(
     if (round.reviewerPath) round.reviewerPath = currentConversationPath(round.reviewerConversationId, round.reviewerPath);
   }
   if (flow.state === "closed" || flow.state === "paused") return JSON.stringify(flow) !== before;
+  if (flowAwaitingAdmission(flow) && activeDrain()) return JSON.stringify(flow) !== before;
   const decision = flow.agentDecisions?.find((item) => item.disposition === "accepted");
   if (decision) {
     const evidence = await flowTurn(flow);
