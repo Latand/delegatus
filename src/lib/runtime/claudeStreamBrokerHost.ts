@@ -126,12 +126,23 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
       } else {
         const state = states.find((candidate) => candidate.entry.id === record.entryId);
         if (state) {
+          // Separate MCP/Viewer writers can both pass the allocation read
+          // before either appends. Replay gives the first durable UUID owner
+          // authority, including after adoption or a process restart.
+          if (state.delivered && state.engineMessageId !== record.engineMessageId) continue;
+          if (record.engineMessageId && states.some((candidate) => candidate.delivered
+            && candidate.entry.id !== record.entryId && candidate.engineMessageId === record.engineMessageId)) continue;
           state.delivered = true;
           state.engineMessageId = record.engineMessageId;
           /* Before the source was persisted, direct and transcript-inferred
              confirmations shared one shape. Revalidate legacy rows before
              granting them operation authority or allowing a replay. */
-          state.confirmation = record.confirmation ?? "unverified";
+          const confirmation = record.confirmation ?? "unverified";
+          // Repeated legacy rows cannot weaken a verified binding.
+          if (state.confirmation !== "operation-bound"
+            && (state.confirmation !== "inferred" || confirmation === "operation-bound")) {
+            state.confirmation = confirmation;
+          }
         }
       }
     }
@@ -160,6 +171,9 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     if (engineMessageId && this.load(sessionId).some((candidate) => candidate.delivered
       && candidate.engineMessageId === engineMessageId && candidate.entry.id !== entryId)) return "refused";
     this.append(sessionId, { kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(), confirmation });
+    const allocation = this.load(sessionId).find((candidate) => candidate.entry.id === entryId);
+    if (!allocation?.delivered || allocation.engineMessageId !== engineMessageId
+      || allocation.confirmation === "unverified") return "refused";
     return "accepted";
   }
 

@@ -175,6 +175,40 @@ function fakeSpawn(
   };
 }
 
+test("ledger replay retains the first UUID allocation and accepts its legacy upgrade and a later distinct echo", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-allocation-replay-"));
+  try {
+    const sessionId = "allocation-replay";
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    ledger.recordQueued(sessionId, { id: "first", text: "same instruction" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "second", text: "same instruction" }, "turn-started");
+    const filename = path.join(directory, `${sessionId}.jsonl`);
+    const delivered = (entryId: string, engineMessageId: string) => JSON.stringify({
+      kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(),
+    }) + "\n";
+    // Legacy confirmation can be upgraded for the same owner and UUID.
+    fs.appendFileSync(filename, delivered("first", "first-user"));
+    expect(ledger.confirmDelivered(sessionId, "first", "first-user", "inferred")).toBe("accepted");
+    // A conflicting append may already exist from overlapping old writers.
+    fs.appendFileSync(filename, delivered("second", "first-user") + delivered("first", "other-user")
+      + delivered("first", "first-user"));
+    const reopened = new FileClaudeDeliveryLedger(directory);
+    expect(reopened.load(sessionId).map((state) => ({
+      id: state.entry.id, delivered: state.delivered, uuid: state.engineMessageId, confirmation: state.confirmation,
+    }))).toEqual([
+      { id: "first", delivered: true, uuid: "first-user", confirmation: "inferred" },
+      { id: "second", delivered: false, uuid: undefined, confirmation: undefined },
+    ]);
+    expect(reopened.confirmDelivered(sessionId, "first", "first-user", "inferred")).toBe("already-confirmed");
+    expect(reopened.confirmDelivered(sessionId, "second", "first-user")).toBe("refused");
+    expect(reopened.confirmDelivered(sessionId, "second", "second-user")).toBe("accepted");
+    expect(new FileClaudeDeliveryLedger(directory).load(sessionId).map((state) => state.engineMessageId))
+      .toEqual(["first-user", "second-user"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("provider host gives Claude a private relay alias for fresh and adopted sessions", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-host-"));
   const secret = ["local", "provider", "host", "fixture"].join("-");

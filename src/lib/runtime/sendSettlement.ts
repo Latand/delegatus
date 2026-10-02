@@ -838,7 +838,8 @@ export type OriginalSendEvidence =
   | { kind: "contradictory" };
 
 /**
- * The CURRENT answer for one found operation, projected without writing.
+ * The CURRENT answer for one found operation, without changing its reservation
+ * or journal. Canonical recipient evidence is durably allocated before reporting.
  *
  * A durable record that is already terminal is the answer. One still in flight
  * is checked against the journal's current retry leaf, and a terminal verdict
@@ -881,8 +882,9 @@ async function projectCurrentSend(
 
 /**
  * The lookup above, then the current answer for the one operation it found.
- * Read-only end to end: the registry snapshot and the journal row are read,
- * and neither is changed. A journal or registry that cannot be read keeps the
+ * The registry snapshot and journal row stay unchanged; canonical recipient
+ * evidence is allocated in its ledger before reporting delivery.
+ * A journal or registry that cannot be read keeps the
  * identity the durable record established and marks the current answer
  * unreadable; it never turns into an absence.
  */

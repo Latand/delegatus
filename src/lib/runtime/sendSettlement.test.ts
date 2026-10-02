@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 /* Isolated state only: this suite writes real registry files and a real runtime
    journal, neither of which may be the operator's. Nothing here addresses a
@@ -1533,6 +1534,202 @@ const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
 const { deliveryDedupToken } = await import("./deliveryDedup");
 const { encodeCodexStructuredUserText } = await import("./codexStructuredUserText.server");
 const { structuredContent } = await import("./structuredContent");
+
+test("status honors its own concurrent operation-bound echo even before the transcript exists", async () => {
+  const active = fixture("claude-own-echo-race", { engine: "claude" });
+  const ledger = new FileClaudeDeliveryLedger();
+  const { operationId, deliveryId } = acceptSend(active, { text: "confirm this exact send" });
+  ledger.recordQueued(active.generationId, { id: operationId, text: "confirm this exact send" }, "turn-started");
+  active.journal.transitionOperation(operationId, "delivering");
+  active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+  active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+  let wrote = false;
+  const load = FileClaudeDeliveryLedger.prototype.load;
+  const loadSpy = spyOn(FileClaudeDeliveryLedger.prototype, "load").mockImplementation(function (this: InstanceType<typeof FileClaudeDeliveryLedger>, sessionId) {
+    const snapshot = load.call(this, sessionId);
+    if (sessionId === active.generationId && !wrote) {
+      wrote = true;
+      const writer = `
+        const { FileClaudeDeliveryLedger } = await import(${JSON.stringify(new URL("./claudeStreamBrokerHost.ts", import.meta.url).href)});
+        if (new FileClaudeDeliveryLedger().confirmDelivered(${JSON.stringify(sessionId)}, ${JSON.stringify(operationId)}, "own-user-echo") !== "accepted") {
+          throw new Error("fixture echo was refused");
+        }
+      `;
+      const child = spawnSync(process.execPath, ["--eval", writer], {
+        cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 10_000,
+      });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+    }
+    return snapshot;
+  });
+  try {
+    expect(await resolveSendReceipt(operationId, { registry: new AgentRegistry(active.registryPath), client: active.client }))
+      .toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+    expect(wrote).toBe(true);
+    expect(active.journal.effectBatch(100)).toEqual([]);
+  } finally {
+    loadSpy.mockRestore();
+    active.close();
+  }
+});
+
+test("a Claude acknowledgement keeps its bound UUID when a later unrelated user repeats its text", async () => {
+  const active = fixture("claude-bound-inferred-echo", { engine: "claude" });
+  try {
+    const text = "repeat the acknowledged instruction";
+    const { operationId, deliveryId } = acceptSend(active, { text });
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+    expect(ledger.confirmDelivered(active.generationId, operationId, "bound-user", "inferred")).toBe("accepted");
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    fs.writeFileSync(active.transcriptPath, canonicalClaudeUser("bound-user", text, new Date(Date.now() + 10).toISOString()));
+    const { confirmedSend } = await import("./confirmedSend");
+    expect(await confirmedSend(active.registry.readOnlySnapshot(), operationId, false)).toBe(true);
+    fs.appendFileSync(active.transcriptPath, canonicalClaudeUser("unrelated-user", text, new Date(Date.now() + 20).toISOString()));
+    expect(await resolveSendReceipt(operationId, { registry: new AgentRegistry(active.registryPath), client: active.client }))
+      .toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+    expect(ledger.load(active.generationId).find((state) => state.entry.id === operationId)?.engineMessageId).toBe("bound-user");
+    expect(active.journal.effectBatch(100)).toEqual([]);
+  } finally { active.close(); }
+});
+
+for (const laterEvidence of ["pending-equal-text", "repeated-bound-frame"] as const) {
+  test(`an allocated Claude acknowledgement survives ${laterEvidence}`, async () => {
+    const active = fixture(`claude-allocated-${laterEvidence}`, { engine: "claude" });
+    try {
+      const text = "retain this acknowledged instruction";
+      const { operationId, deliveryId } = acceptSend(active, { text });
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+      expect(ledger.confirmDelivered(active.generationId, operationId, "allocated-user", "inferred")).toBe("accepted");
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+      active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+      const user = canonicalClaudeUser("allocated-user", text, new Date(Date.now() + 1000).toISOString());
+      fs.writeFileSync(active.transcriptPath, user);
+      const { confirmedSend } = await import("./confirmedSend");
+      expect(await confirmedSend(active.registry.readOnlySnapshot(), operationId, false)).toBe(true);
+      if (laterEvidence === "pending-equal-text") {
+        // A coarse or skewed engine timestamp can also match a later pending
+        // send. A's already allocated UUID remains its own recipient evidence.
+        ledger.recordQueued(active.generationId, { id: "later-pending", text }, "queued-next-turn");
+      } else {
+        fs.appendFileSync(active.transcriptPath, user);
+      }
+      expect(await resolveSendReceipt(operationId, { registry: new AgentRegistry(active.registryPath), client: active.client }))
+        .toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+      expect(ledger.load(active.generationId).find((state) => state.entry.id === "later-pending")?.delivered ?? false).toBe(false);
+      expect(active.journal.effectBatch(100)).toEqual([]);
+    } finally { active.close(); }
+  });
+}
+
+for (const mode of ["status", "startup", "original-key"] as const) {
+  for (const boundary of ["ledger-snapshot", "refreshed-snapshot", "confirmation", "allocation-append"] as const) {
+    if (mode === "original-key" && boundary !== "ledger-snapshot" && boundary !== "refreshed-snapshot") continue;
+    test(`${mode} keeps an unacknowledged Claude send checking when another process claims its candidate at ${boundary}`, async () => {
+      const active = fixture(`claude-claim-race-${mode}-${boundary}`, { engine: "claude" });
+      const ledger = new FileClaudeDeliveryLedger();
+      const text = "identical concurrent instruction";
+      const uuid = "concurrent-canonical-user";
+      const a = acceptSend(active, { text, operationId: "op_race_a", clientMessageId: "race-a" });
+      const b = acceptSend(active, { text, operationId: "op_race_b", clientMessageId: "race-b" });
+      for (const send of [a, b]) {
+        active.journal.transitionOperation(send.operationId, "delivering");
+        active.journal.transitionOperation(send.operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+        active.registry.recordDeliveryOutcome(send.deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+      }
+      ledger.recordQueued(active.generationId, { id: a.operationId, text }, "turn-started");
+      let wrote = false;
+      const concurrentWriter = () => {
+        if (wrote) return;
+        wrote = true;
+        // A separate Viewer/MCP process persists B's real echo while A holds
+        // an older ledger snapshot. No engine input is sent by reconciliation.
+        const writer = `
+          import fs from "node:fs";
+          const { FileClaudeDeliveryLedger } = await import(${JSON.stringify(new URL("./claudeStreamBrokerHost.ts", import.meta.url).href)});
+          const ledger = new FileClaudeDeliveryLedger();
+          const session = ${JSON.stringify(active.generationId)};
+          ledger.recordQueued(session, ${JSON.stringify({ id: b.operationId, text })}, "turn-started");
+          if (ledger.confirmDelivered(session, ${JSON.stringify(b.operationId)}, ${JSON.stringify(uuid)}) !== "accepted") {
+            throw new Error("concurrent fixture confirmation was refused");
+          }
+          fs.writeFileSync(${JSON.stringify(active.transcriptPath)}, JSON.stringify({
+            type: "user", uuid: ${JSON.stringify(uuid)}, timestamp: new Date(Date.now() + 10).toISOString(),
+            message: { role: "user", content: ${JSON.stringify(text)} }
+          }) + "\\n");
+        `;
+        const child = spawnSync(process.execPath, ["--eval", writer], {
+          cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 10_000,
+        });
+        expect(child.error).toBeUndefined();
+        expect(child.status).toBe(0);
+      };
+      if (boundary !== "ledger-snapshot") {
+        fs.writeFileSync(active.transcriptPath, canonicalClaudeUser(uuid, text, new Date(Date.now() + 10).toISOString()));
+      }
+      const load = FileClaudeDeliveryLedger.prototype.load;
+      const confirm = FileClaudeDeliveryLedger.prototype.confirmDelivered;
+      let confirmingA = false;
+      let confirmationReads = 0;
+      let snapshotReads = 0;
+      let confirmationOutcome: ReturnType<typeof confirm> | undefined;
+      const loadSpy = spyOn(FileClaudeDeliveryLedger.prototype, "load").mockImplementation(function (this: InstanceType<typeof FileClaudeDeliveryLedger>, sessionId) {
+        const snapshot = load.call(this, sessionId);
+        if (sessionId === active.generationId && boundary === "ledger-snapshot") concurrentWriter();
+        if (sessionId === active.generationId && boundary === "refreshed-snapshot"
+          && ++snapshotReads === 2) concurrentWriter();
+        if (sessionId === active.generationId && confirmingA && boundary === "allocation-append"
+          && ++confirmationReads === 2) concurrentWriter();
+        return snapshot;
+      });
+      const confirmSpy = spyOn(FileClaudeDeliveryLedger.prototype, "confirmDelivered").mockImplementation(function (this: InstanceType<typeof FileClaudeDeliveryLedger>, ...args) {
+        if (args[0] === active.generationId && args[1] === a.operationId && boundary === "confirmation") concurrentWriter();
+        confirmingA = args[0] === active.generationId && args[1] === a.operationId;
+        try {
+          const result = confirm.apply(this, args);
+          if (confirmingA) confirmationOutcome = result;
+          return result;
+        }
+        finally { confirmingA = false; }
+      });
+      try {
+        const reopened = new AgentRegistry(active.registryPath);
+        if (mode === "startup") {
+          const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+          await bindStructuredDeliveryQueue([], { registry: reopened, client: active.client });
+        } else if (mode === "original-key") {
+          expect(await resolveOriginalSend({ conversationId: active.conversationId, clientMessageId: "race-a" }, {
+            registry: reopened, client: active.client,
+          })).toMatchObject({ kind: "found", current: { readable: true, value: {
+            state: "failed", resend: "verify-first", duplicateRisk: true,
+          } } });
+        } else {
+          expect(await resolveSendReceipt(a.operationId, { registry: reopened, client: active.client }))
+            .toMatchObject({ state: "failed", resend: "verify-first", duplicateRisk: true });
+        }
+        expect(wrote).toBe(true);
+        if (boundary === "confirmation" || boundary === "allocation-append") expect(confirmationOutcome).toBe("refused");
+        expect(sendReceiptFor(reopened.readOnlySnapshot(), a.operationId))
+          .toMatchObject({ state: "failed", resend: "verify-first", duplicateRisk: true });
+        expect(await resolveSendReceipt(b.operationId, { registry: reopened, client: active.client }))
+          .toMatchObject({ state: "delivered", resend: "not-needed", duplicateRisk: false });
+        expect(new FileClaudeDeliveryLedger().load(active.generationId).find((state) => state.entry.id === a.operationId))
+          .toMatchObject({ delivered: false });
+        expect(new AgentRegistry(active.registryPath).readOnlySnapshot().heldDeliveries[a.deliveryId]?.state).toBe("failed");
+        expect(active.journal.effectBatch(100)).toEqual([]);
+      } finally {
+        confirmSpy.mockRestore();
+        loadSpy.mockRestore();
+        active.close();
+      }
+    });
+  }
+}
 
 for (const evidence of ["echo", "transcript", "startup"] as const) {
   test(`Viewer restart settles an uncertain Claude send from late ${evidence} without replay`, async () => {
