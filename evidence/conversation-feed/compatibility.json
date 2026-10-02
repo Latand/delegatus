@@ -224,5 +224,92 @@
     "Four existing prepend-anchor DOM cases remain skipped; the real desktop and phone history drivers exercise the rendered seam.",
     "No changes from the history branch were added to the product branch. Hosted CI was not awaited.",
     "A later unpinned run on the shared host had one 200ms frame while its longest task was 119ms. The final unmodified desktop driver passed with affinity to six initially idle CPUs; timing assertions were not relaxed for that result."
-  ]
+  ],
+  "mainMergeRecheck": {
+    "sourceHead": "504690f7b788d2872b60e3e4581367153b1ac85f",
+    "scratchMergeHead": "375779b50b8d8111d04d3010e97d0bc5a7f16f67",
+    "mainHead": "27e3583a9",
+    "historyHead": "189a7c0963e03c6791ce51c427e2efc436d2cc87",
+    "reviewedProductSource": "bacf85740040dc83a5fe40dffaea138c2441c085",
+    "productDiff": "No changes to this PR's handoff, parser, assistant-row projection or outbox since the reviewed source above.",
+    "conflict": {
+      "path": "src/components/kanban/issue1695Evidence.fixture.tsx",
+      "hunk": "STRUCTURED initializer",
+      "resolution": "Preserve both STREAMING from main and FEED_CONTINUITY from this branch."
+    },
+    "focusedTests": {
+      "passed": 529,
+      "failed": 0,
+      "exactPaths": 17
+    },
+    "compositionUnits": {
+      "passed": 440,
+      "failed": 0
+    },
+    "compositionDom": {
+      "passed": 76,
+      "failed": 0,
+      "skipped": 4
+    },
+    "sourceFeedBrowser": {
+      "passed": 2,
+      "assertions": 64,
+      "locales": [
+        "en",
+        "uk"
+      ],
+      "widths": [
+        1440,
+        390
+      ]
+    },
+    "typesAndBuild": {
+      "status": "blocked",
+      "diagnostic": "src/lib/pipelines/engine.ts(3158,5): TS2554: Expected 5 arguments, but got 4.",
+      "origin": "The same omitted persist argument remains in fetched main afe93fa58.",
+      "scope": "Outside the conversation-feed scope; product branch is unchanged."
+    },
+    "scratchOnlyProposal": {
+      "path": "src/lib/pipelines/engine.ts",
+      "change": "Pass persist as the fifth argument to commitPassedStage in the fixer completion path.",
+      "types": "passed",
+      "fixerTests": {
+        "passed": 38,
+        "failed": 0
+      },
+      "appliedToProductBranch": false,
+      "upstreamFixPr": 2488
+    },
+    "desktopRepeat": {
+      "passed": 0,
+      "failed": 1,
+      "maxFrameMs": 200,
+      "limitMs": 120,
+      "assertionsRelaxed": false,
+      "note": "The historical successful reading above remains tied to its original source and scratch heads; this repeat does not establish a green frame budget."
+    },
+    "compositionPhoneBrowser": {
+      "passed": 1,
+      "failed": 0,
+      "assertions": 5
+    },
+    "compositionFeedBrowser": {
+      "passed": 2,
+      "failed": 0,
+      "assertions": 64
+    },
+    "browserScratchNote": "These composed browser reruns used the scratch-only persist repair; the fixture bundle does not import the pipeline engine.",
+    "desktopControl": {
+      "sourceHead": "189a7c0963e03c6791ce51c427e2efc436d2cc87",
+      "feedChangesPresent": false,
+      "passed": 0,
+      "failed": 1,
+      "maxFrameMs": 167,
+      "limitMs": 120,
+      "longTaskMaxMs": 86,
+      "keptNodes": 300,
+      "rows": 2800,
+      "note": "The same unmodified test exceeds its frame budget on the history PR alone under the same CPU affinity. This control does not establish a feed regression or a current passing timing result."
+    }
+  }
 }

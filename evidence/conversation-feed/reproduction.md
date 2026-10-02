@@ -38,12 +38,12 @@ No history-loading behavior changes. Compatibility with the current #2448 head
 is rehearsed separately in a scratch merge; its results are recorded in
 `compatibility.json` and the pull request description.
 
-Final focused verification: 529 passing tests across 17 exact paths. The mounted
+Focused verification (also repeated after the main merge): 529 passing tests across 17 exact paths. The mounted
 LogFeed suite contributes 15 tests, including completion, reconnect, delayed
 echo, source ordering, markdown and deputy boundaries. A fresh independent
 review of the full diff reported no findings and passed 197 checks.
 
-The local checks also exercise the production Viewer build, its 23 server
+Before the latest main merge, local checks passed the production Viewer build, its 23 server
 modules and real HTTP root, MCP size budgets, runtime-host succession and
 negative controls. Native Codex checks pass 1,075 tests for each of 0.154.0 and
 0.159.0 after separating the pre-existing failing delivery fixture suite below.
@@ -70,4 +70,29 @@ The publication privacy gate is run with `--require-known-values` and
 
 The documented hook escape is used for these reproduced baseline failures;
 privacy, type checking, rendered checks and the remaining local gates are run
-explicitly. These are not reported as a fully green aggregate pre-push hook.
+explicitly, with the later main-merge results separated below. These are not reported as a fully green aggregate pre-push hook.
+
+## Main-merge recheck and outstanding scope decision
+
+After merging main `27e3583a9`, the 529 focused tests and both feed browser
+cases still pass. The scratch merge with #2448 still passes 440 unit and 76 DOM
+tests. The only main-merge conflict was the fixture's `STRUCTURED` initializer;
+both `STREAMING` and `FEED_CONTINUITY` flags are retained.
+
+The production build and TypeScript check now stop at
+`src/lib/pipelines/engine.ts:3158`: upstream omitted the required fifth `persist`
+argument to `commitPassedStage`. Fetched main `afe93fa58` still has that omission.
+A scratch-only one-line repair passes TypeScript and 38 fixer-path tests. It has
+not been applied to this branch because pipeline-engine source is outside the
+authorized conversation-feed scope. Full current-head acceptance is incomplete.
+
+A repeated unmodified desktop history driver records a 200 ms frame against its
+120 ms limit. The earlier passing run remains recorded against its original
+source and scratch heads; the new run is not counted as passing.
+
+The same unmodified desktop history test on #2448 alone also fails its frame
+limit (167 ms; 86 ms longest task), retaining all 300 marked nodes and all 2,800
+rows. The merged phone history and both feed browser cases pass. These browser
+reruns used the scratch-only engine repair; their fixture bundle does not import
+the pipeline engine. The missing-argument repair already has a separate PR,
+#2488, so the feed branch records the dependency without duplicating that change.
