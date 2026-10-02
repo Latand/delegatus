@@ -15697,6 +15697,24 @@ test("a staged unpublished report bypasses the recovery probe and follows the pa
   expect(f.lookups).toHaveLength(probes);
 });
 
+test("a silent dead pane-hosted stage relaunches with WIP after the bounded wait", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.paneId = "%cut-stage";
+  savePipelines([lane]);
+  h.setPaneAlive(false);
+  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, launchOnly: true });
+  await tickPipelines([{ ...entry("/codex/stage-1.jsonl"), activity: "live" }], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage host died without output");
+  h.advanceWallClock(30_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
+  expect(h.calls.some((call) => /reset|clean/.test(call))).toBe(false);
+});
+
 test("audit item B: a Codex turn_aborted resumes with WIP and never requests a verdict or spends a fix round", async () => {
   const h = harness();
   await runningStructuredStage(h);
@@ -15901,6 +15919,32 @@ test("a pending provider capacity wait does not spin the pipelines controller", 
   } finally {
     unregister();
   }
+});
+
+test("a legacy parked hostless failover returns to pending capacity recovery", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  const lane = loadPipelines()[0]!;
+  const retry = lane.runs[0]!.attempts[1]!;
+  lane.state = "needs_decision";
+  lane.stateDetail = `rate limited until ${new Date(f.resetsAt! * 1_000).toISOString()}, account B`;
+  retry.state = "needs_decision";
+  retry.error = lane.stateDetail;
+  delete retry.providerWait;
+  savePipelines([lane]);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  await tickPipelines([], f.h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.cursor?.state).toBe("pending");
+  expect(waiting.stateDetail).toContain("waiting for codex usage limit");
+  f.advance(180_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: LIMITED_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
 });
 
 test("a failed host teardown has a bounded recovery wait without spending a fix round", async () => {

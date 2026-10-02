@@ -3991,6 +3991,7 @@ async function tickRunStage(
   const structuredActive = !attempt.paneId && attempt.conversationId
     ? await ports.conversationAgentActive(attempt.conversationId)
     : null;
+  const paneActive = attempt.paneId ? await ports.paneAgentAlive(attempt.paneId) : null;
   const spawnReceipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const terminalSpawnFailure = spawnReceipt
     && (spawnReceipt.state === "failed" || spawnReceipt.state === "conflicted")
@@ -4004,7 +4005,7 @@ async function tickRunStage(
     return;
   }
   if (!attempt.agentPath) {
-    if (structuredActive === false && !attempt.report) {
+    if ((structuredActive === false || paneActive === false) && !attempt.report) {
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
         text: "stage host died without output", ts: unixMs(attempt.startedAt) + 1, resetsAt: null }, ports, persist);
       return;
@@ -4058,7 +4059,7 @@ async function tickRunStage(
     pipeline.stateDetail = null;
     persist();
   }
-  if (entry && structuredActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
+  if (entry && structuredActive !== false && paneActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
 
   if (!canSpendRecoveryCheck()) return;
 
@@ -4104,7 +4105,7 @@ async function tickRunStage(
     }
     else if (await recoverProviderCut(pipeline, stage, attempt, notice, ports, persist)) return;
   }
-  const silentDeath = unregisteredHostDeath || ((hostUnavailablePastGrace || structuredActive === false)
+  const silentDeath = unregisteredHostDeath || ((hostUnavailablePastGrace || structuredActive === false || paneActive === false)
     && durable && (!durable.message || durable.message.ts <= unixMs(attempt.startedAt)));
   if (silentDeath && !heldForDeployCut) {
     if (await recoverProviderCut(pipeline, stage, attempt, {
@@ -5214,19 +5215,20 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
   return true;
 }
 
-/** Capacity can return while a Claude stage is parked. Reopen its original
-    attempt; its terminal transcript then takes the ordinary reseat path. */
-async function reconcileParkedClaudeLimit(pipeline: Pipeline, _ports: PipelinePorts): Promise<boolean> {
+/** Reopen a legacy capacity park on either engine. An unlaunched failover
+    remains pending so account admission can run once capacity returns. */
+function reconcileParkedUsageLimit(pipeline: Pipeline): boolean {
   if (pipeline.state !== "needs_decision") return false;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   if (!stage || stage.kind !== "run" || !attempt || !attempt.error?.startsWith("rate limited until ")) return false;
-  attempt.state = "running";
+  const state = attempt.launchId || attempt.conversationId || attempt.agentPath || attempt.paneId ? "running" : "pending";
+  attempt.state = state;
   attempt.completedAt = null;
   attempt.error = null;
   pipeline.state = "running";
   pipeline.stateDetail = null;
-  setCursorState(pipeline, stage.id, "running");
+  setCursorState(pipeline, stage.id, state);
   return true;
 }
 
@@ -5873,7 +5875,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, ports, persistPipeline) || pipelineChanged;
           }
           pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
-          pipelineChanged = await reconcileParkedClaudeLimit(pipeline, ports) || pipelineChanged;
+          pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
