@@ -9332,12 +9332,12 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     const forkId = "7d1c2b3a-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d";
     const sourceRoot = path.join(root, "claude-source");
     const targetRoot = path.join(root, "claude-target");
-    fs.mkdirSync(sourceRoot);
-    fs.mkdirSync(targetRoot);
+    fs.mkdirSync(sourceRoot, { mode: 0o700 });
+    fs.mkdirSync(targetRoot, { mode: 0o700 });
     const sourcePath = path.join(sourceRoot, `${sourceId}.jsonl`);
     const sourceFixture = limitInterruptedTranscript("claude-controller-session-limit", "You've hit your session limit · resets 2:30pm (Europe/Kyiv)");
     fs.writeFileSync(sourcePath, fs.readFileSync(sourceFixture, "utf8").trimEnd().split("\n")
-      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n");
+      .map((line) => JSON.stringify({ ...JSON.parse(line), sessionId: sourceId })).join("\n") + "\n", { mode: 0o600 });
     const fork = forkClaudeHistory({
       sourcePath, sourceRoot, targetRoot, destination: path.join(targetRoot, `${forkId}.jsonl`),
       sourceSessionId: sourceId, sessionId: forkId, operationId: "stage-limit-copy",
