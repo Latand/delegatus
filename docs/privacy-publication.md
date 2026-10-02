@@ -105,7 +105,7 @@ A per-value `exactOnly: true` entry hashes the NFKC, case-folded value with
 separators preserved. It matches same-length contiguous windows of decoded
 source text after the gate's existing percent/entity decoding and Unicode
 normalization. It applies across every inspected context, including resource
-strings, HTML attributes, commit messages, metadata and OCR output. Spaces,
+strings, HTML attributes, commit messages, composed merge identity names, metadata and OCR output. Spaces,
 hyphens and other separators interrupt the match; the flag never exempts a
 context containing the contiguous value. Markdown projection cannot join split
 spellings for this policy. Generic credential, address and resource checks
@@ -163,42 +163,26 @@ The operator approved publishing the Celestia relay on 2026-10-01 at 20:00:
 - `https://chatmoderator.botfather.dev`
 - `https://chatmoderator.botfather.dev/.well-known/delegatus-relay.json`
 
-The gate masks these case-sensitive ASCII source strings only for known-value
-matching, before percent/entity/JSON escape decoding, NFKC normalization,
-case folding, or Markdown projection. The allowlist uses token boundaries: start/end of text,
-literal NUL (the metadata field separator), ASCII tab/newline/carriage
-return/space, or the quoted-code, JSON, HTML and
-Markdown delimiters declared in the gate. A dot, letter, digit, hyphen,
-underscore, `@`, slash, colon, query/fragment marker, encoding marker or
-non-ASCII continuation cannot bound an approved occurrence. HTTP, ports,
-other paths, query strings, fragments, longer hosts and alternate spellings
-receive no exemption. Percent/entity/NFKC-obfuscated spellings remain blocked.
-The surrounding text must also retain boundaries after decoding, NFKC and
-Markdown projection; wrapping a host fragment in backticks or a link label
-cannot hide its attachment to another host or URI. Non-space whitespace
-(including tabs, Unicode line separators and decoded separators) or string-literal
-concatenation or repetition (including enclosing comma/conditional, function-call
-and indexed operands),
-or literal template interpolation cannot exempt a fragment attached to an email, host or
-URI, including fragments wrapped in autolink brackets.
-Opaque URI schemes such as `data:` and whitespace-split schemes retain their
-prefix ownership, so they cannot turn the approved host into another URI.
-Decoded views retain that ownership across quoted and JSON payloads. A source
-property or type colon cannot erase an earlier enclosing URI scheme.
-Removing zero-width characters still checks direct adjacency outside quotes and
-wrappers. Unicode whitespace that NFKC folds to ASCII space retains concealed
-continuation ownership; ordinary source whitespace and terminators keep their
-boundaries around standalone literals.
-Verified opening and closing block-comment delimiters around a standalone public
-value provide source boundaries; actual email and URI continuations remain checked.
-JSON Unicode and string escapes are decoded in an additional inspection view;
-only exact ASCII source spellings receive exemptions. Quoted values must occupy
-the entire literal; URI punctuation tails such as semicolons and commas prevent
-an exemption. The original view remains inspected for literal paths and other
-private data.
+The exemption requires an exact case-sensitive sanctioned spelling in raw text,
+before percent/entity/JSON decoding, NFKC, case folding, or Markdown projection.
+The preceding character must be start of text, ASCII whitespace (space, tab,
+newline, carriage return, vertical tab, form feed), or one of `"`, `'`, backtick,
+`(`, `[`, `=`, `:`. The following character must be end of text, ASCII whitespace,
+or one of `"`, `'`, backtick, `)`, `]`, `,`, `;`. A trailing slash is not sanctioned.
+Every other adjacent character withholds the exemption, including NUL, Unicode
+spaces, zero-width characters, a dot, hyphen, letter, percent escape or entity.
+
+Quotes and balanced wrappers retain their raw outer boundaries; quoting a
+fragment cannot conceal an adjacent Unicode or encoded continuation. Source
+operand checks and decoded inspection views can revoke a raw-approved candidate
+when it belongs to an extended email, host, URI or concatenated expression.
+They cannot grant an exemption to a spelling or boundary introduced by decoding.
+The former NFKC whitespace-preservation workaround is removed: Unicode
+neighbours are rejected before normalization. JSON escapes still receive an
+additional inspection view, and other privacy rules still read the original.
 
 The same masking runs for all inspected text, including code, tests, JSON,
-commit messages, metadata and OCR. Both the committed fingerprint catalog and
+commit messages, composed merge identity names, metadata and OCR. Both the committed fingerprint catalog and
 private lists supplied through `LLV_PRIVACY_KNOWN_VALUES*` use that masked
 known-value input. The catalog stays intact: the bare base domain, private
 email addresses and other subdomains still match. Other privacy rules inspect

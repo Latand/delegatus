@@ -324,7 +324,8 @@ async function runGateWithDeadline(arguments_: string[], environment: Record<str
     cmd: [process.execPath, gate, ...arguments_], cwd: join(import.meta.dir, ".."),
     env: { ...process.env, ...environment, NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe",
   });
-  const timeout = setTimeout(() => child.kill("SIGTERM"), 3000);
+  // Keep pathological input bounded while allowing concurrent gate workers.
+  const timeout = setTimeout(() => child.kill("SIGTERM"), 10_000);
   try {
     const exitCode = await child.exited;
     const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -1259,15 +1260,64 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "host", text: host, pass: true },
       { name: "origin", text: origin, pass: true },
       { name: "discovery", text: discovery, pass: true },
+      // The ruling allows ASCII whitespace only, on raw text. Every other
+      // code point and encoded neighbour withholds the exemption.
+      ...[host, origin, discovery].flatMap((value, form) => [
+        ...[0, 0x85, 0xa0, 0xad, 0x1680, 0x180e, 0x200b, 0x200c, 0x200d,
+          0x2028, 0x2029, 0x202f, 0x2060, 0x3000, 0xfeff,
+          ...Array.from({ length: 11 }, (_, index) => 0x2000 + index)]
+          .flatMap((code) => [
+            { name: `raw boundary before ${form} ${code}`, text: String.fromCharCode(code) + value, pass: false },
+            { name: `raw boundary after ${form} ${code}`, text: value + String.fromCharCode(code), pass: false },
+          ]),
+        ...[".", "-", "x", "%20", "&#32;", "<", "{", ","].map((before) => ({
+          name: `raw boundary prefix ${form} ${before}`, text: before + value, pass: false,
+        })),
+        ...[".", "-", "x", "%20", "&#32;", ":", ">", "}", "/"].map((after) => ({
+          name: `raw boundary suffix ${form} ${after}`, text: value + after, pass: false,
+        })),
+        ...[" ", "\t", "\n", "\r", "\v", "\f"].map((space, index) => ({
+          name: `raw ASCII whitespace ${form} ${index}`, text: space + value + space, pass: true,
+        })),
+        ...["=", ":", "(", "["].map((before) => ({
+          name: `raw ASCII prefix ${form} ${before}`, text: before + value, pass: true,
+        })),
+        ...[")", "]", ",", ";"].map((after) => ({
+          name: `raw ASCII suffix ${form} ${after}`, text: value + after, pass: true,
+        })),
+        ...["\u200b", "\u00a0", "%C2%A0", "&#160;"].map((separator, index) => ({
+          name: `raw quoted wrapper suffix ${form} ${index}`,
+          text: `relay=( "${value}" )${separator}/private;`, pass: false,
+        })),
+      ]),
+      ...[host, origin, discovery].flatMap((value, form) => [
+        ...["\u00a0", "\u200b", "\ufeff", "\u3000", "%C2%A0", "&#160;"].flatMap((separator, index) => [
+          { name: `raw call suffix ${form} ${index}`, text: `String("${value}")${separator}/private`, pass: false },
+          { name: `raw index suffix ${form} ${index}`, text: `x["${value}"]${separator}`, pass: false },
+          { name: `raw nested call suffix ${form} ${index}`, text: `((String("${value}")))${separator}/private`, pass: false },
+          { name: `raw multi argument call suffix ${form} ${index}`, text: `String("${value}", 1)${separator}`, pass: false },
+          { name: `raw nested call prefix ${form} ${index}`, text: `${separator}((String("${value}")))`, pass: false },
+          { name: `raw bare wrapper suffix ${form} ${index}`, text: `(${value})${separator}`, pass: false },
+          { name: `raw bare index suffix ${form} ${index}`, text: `[${value}]${separator}`, pass: false },
+          { name: `raw bare nested suffix ${form} ${index}`, text: `((${value}))${separator}`, pass: false },
+          { name: `raw bare multi argument suffix ${form} ${index}`, text: `f(${value}, 1)${separator}`, pass: false },
+          { name: `raw bare comment wrapper suffix ${form} ${index}`, text: `// (${value})${separator}`, pass: false },
+          { name: `raw bare prose comment wrapper suffix ${form} ${index}`, text: `// It's (${value})${separator}`, pass: false },
+          { name: `raw call chained prefix ${form} ${index}`, text: `${separator}(x)("${value}")`, pass: false },
+          { name: `raw index chained prefix ${form} ${index}`, text: `${separator}[x]["${value}"]`, pass: false },
+        ]),
+        { name: `raw standalone call ${form}`, text: `String("${value}")`, pass: true },
+        { name: `raw standalone index ${form}`, text: `x["${value}"]`, pass: true },
+      ]),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
       { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
-      { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: true },
+      { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: false },
       { name: "test code", text: `expect(relay).toBe('${discovery}');`, pass: true },
       { name: "JSON", text: JSON.stringify({ relay: host }), pass: true },
       { name: "Markdown", text: `[Relay](${discovery}) and \`${host}\``, pass: true },
-      { name: "Markdown link label", text: `[${host}](https://example.invalid)`, pass: true },
-      { name: "Markdown origin label", text: `[${origin}](https://example.invalid)`, pass: true },
-      { name: "Markdown discovery label", text: `[${discovery}](https://example.invalid)`, pass: true },
+      { name: "Markdown link label", text: `[${host}](https://example.invalid)`, pass: false },
+      { name: "Markdown origin label", text: `[${origin}](https://example.invalid)`, pass: false },
+      { name: "Markdown discovery label", text: `[${discovery}](https://example.invalid)`, pass: false },
       { name: "HTML attribute", text: `<a href="${origin}">Relay</a>`, pass: true },
       ...[host, origin, discovery].flatMap((value, index) => [";private", ",private", ")private"].map((suffix) => ({
         name: `review JSON URI punctuation ${index} ${suffix[0]}`,
@@ -1299,7 +1349,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         ["parenthesis NFKC semicolon", `(${origin})；private`],
       ].map(([name, text]) => ({ name: `review wrapper tail ${name}`, text, pass: false })),
       { name: "review standalone parenthesis punctuation", text: `(${origin});`, pass: true },
-      { name: "review standalone angle punctuation", text: `<${origin}>;`, pass: true },
+      { name: "review standalone angle punctuation", text: `<${origin}>;`, pass: false },
       { name: "review parenthesis URI suffix", text: `(${origin})/private`, pass: false },
       { name: "review parenthesis host suffix", text: `(${host}).example.invalid`, pass: false },
       { name: "review parenthesis host prefix", text: `other.(${host})`, pass: false },
@@ -1345,7 +1395,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           { name: `review Unicode NFKC shell prefix ${code}`, text: `relay=other.${whitespace}"${host}";`, pass: false },
           { name: `review Unicode NFKC shell suffix ${code}`, text: `relay="${origin}"${whitespace}/private;`, pass: false },
           { name: `review Unicode NFKC source whitespace ${code}`, text: [host, origin, discovery]
-            .map((value) => `const relay =${whitespace}"${value}";${whitespace}`).join("\n"), pass: true },
+            .map((value) => `const relay =${whitespace}"${value}";${whitespace}`).join("\n"), pass: false },
         ];
       }),
       ...["\u200b", "\u00a0"].flatMap((separator, index) => [
@@ -1358,8 +1408,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       ...[0xa0, 0x2009].flatMap((code) => {
         const whitespace = String.fromCharCode(code);
         return [
-          { name: `review Unicode standalone optional call ${code}`, text: `const relay = String?.${whitespace}("${host}");`, pass: true },
-          { name: `review Unicode standalone optional index ${code}`, text: `const relay = ["${host}"]${whitespace}?.[0];`, pass: true },
+          { name: `review Unicode standalone optional call ${code}`, text: `const relay = String?.${whitespace}("${host}");`, pass: false },
+          { name: `review Unicode standalone optional index ${code}`, text: `const relay = ["${host}"]${whitespace}?.[0];`, pass: false },
         ];
       }),
       { name: "review shell continued bare prefix", text: `relay=other${String.fromCharCode(92)}
@@ -1512,13 +1562,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "review Python f-string prefix", text: `relay = f'other.{"${host}"}'`, pass: false },
       { name: "review Python f-string suffix", text: `relay = f'{"${host}"}.example.invalid'`, pass: false },
       { name: "review Python raw f-string email", text: `relay = rf'fixture@{"${host}"}'`, pass: false },
-      { name: "review Python single quoted Unicode", text: `relay = u'${host}'`, pass: true },
-      { name: "review Python single quoted raw", text: `relay = r'${host}'`, pass: true },
-      { name: "review Python single quoted f-string literal", text: `relay = f'${host}'`, pass: true },
+      { name: "review Python single quoted Unicode", text: `relay = u'${host}'`, pass: false },
+      { name: "review Python single quoted raw", text: `relay = r'${host}'`, pass: false },
+      { name: "review Python single quoted f-string literal", text: `relay = f'${host}'`, pass: false },
       { name: "review Python Unicode prefix adjacency", text: `relay = "other." u"${host}"`, pass: false },
       { name: "review Python raw suffix adjacency", text: `relay = "${origin}" r"/private"`, pass: false },
-      { name: "review Python Unicode standalone", text: `relay = u"${host}"`, pass: true },
-      { name: "review Python raw standalone", text: `relay = r"${host}"`, pass: true },
+      { name: "review Python Unicode standalone", text: `relay = u"${host}"`, pass: false },
+      { name: "review Python raw standalone", text: `relay = r"${host}"`, pass: false },
       { name: "review shell escaped punctuation", text: `relay="${origin}"${String.fromCharCode(92)};private`, pass: false },
       { name: "review shell ANSI literal suffix", text: `relay="${origin}"$'/private'`, pass: false },
       { name: "review Python commented adjacency", text: `relay = ("other." # comment
@@ -1555,7 +1605,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "review prose apostrophes", text: `It's "${host}" and it's live.`, pass: true },
       { name: "review prose apostrophes single quote", text: `It's '${host}' and it's live.`, pass: true },
       { name: "review prose boundary", text: `Ready. ${host}`, pass: true },
-      { name: "review metadata boundary", text: `Ready.\0${host}\0`, pass: true },
+      { name: "review metadata boundary", text: `Ready.\0${host}\0`, pass: false },
       { name: "review shell attached brace prefix", text: `relay={other.,}"${host}"`, pass: false },
       { name: "review shell quoted brace prefix", text: `relay={"other.",}"${host}"`, pass: false },
       { name: "review shell standalone brace argument", text: `printf %s {other.,} "${host}"`, pass: true },
@@ -1618,14 +1668,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "review call operand indexed array suffix", text: `const relay = ["${host}"][0] + ".example.invalid";`, pass: false },
       { name: "review call operand indexed tuple suffix", text: `relay = ("${host}",)[0] + ".example.invalid"`, pass: false },
       { name: "review call operand indexed literal method", text: `const relay = ("${host}")["concat"](".example.invalid");`, pass: false },
-      { name: "review call operand standalone typed call", text: `const relay = identity<string>("${host}");`, pass: true },
-      { name: "review call operand standalone typed collection", text: `const relays = new Set<string>(["${host}"]);`, pass: true },
+      { name: "review call operand standalone typed call", text: `const relay = identity<string>("${host}");`, pass: false },
+      { name: "review call operand standalone typed collection", text: `const relays = new Set<string>(["${host}"]);`, pass: false },
       { name: "review call operand attached typed call", text: `const relay = "other." + identity<string>("${host}");`, pass: false },
       { name: "review call operand Ruby prefix", text: `relay = "other." << String("${host}")`, pass: false },
       { name: "review call operand private method prefix", text: `class Relay {\n#identity(x){return x;}\nmake(){return "other." + this.#identity("${host}");}}`, pass: false },
       { name: "review call operand private method body", text: `class Relay {\n#make(){return "other." + String("${host}");}\nmake(){return this.#make();}}`, pass: false },
       { name: "review call operand spaced private method", text: `class Relay {\n#identity(x){return x;}\nmake(){return "other." + this. #identity("${host}");}}`, pass: false },
-      { name: "review call operand standalone private method", text: `class Relay {\n#identity(x){return x;}\nmake(){return this.#identity("${host}");}}`, pass: true },
+      { name: "review call operand standalone private method", text: `class Relay {\n#identity(x){return x;}\nmake(){return this.#identity("${host}");}}`, pass: false },
       { name: "review call operand here-doc prefix", text: `relay=other.$(cat <<EOF\n${host}\nEOF\n)`, pass: false },
       { name: "review call operand here-doc suffix", text: `relay=$(cat <<EOF\n${host}\nEOF\n).example.invalid`, pass: false },
       { name: "review call operand optional receiver method", text: `const relay = ("${host}")?.concat(".example.invalid");`, pass: false },
@@ -1635,7 +1685,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "review call operand optional member prefix", text: `const relay = "other." + helpers?.identity("${host}");`, pass: false },
       { name: "review call operand standalone optional call", text: `const relay = String?.("${host}");`, pass: true },
       { name: "review call operand standalone optional member", text: `const relay = helpers?.identity("${host}");`, pass: true },
-      { name: "review call operand standalone optional index", text: `const relay = ["${host}"]?.[0];`, pass: true },
+      { name: "review call operand standalone optional index", text: `const relay = ["${host}"]?.[0];`, pass: false },
       { name: "review concatenated suffix", text: `const relay = '${host}' + '.example.invalid';`, pass: false },
       { name: "review concatenated email", text: `const relay = "fixture@" +\n "${host}";`, pass: false },
       { name: "review concatenated origin", text: `const relay = "${origin}" + ":443";`, pass: false },
@@ -1739,7 +1789,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         const publication = join(directory, "unclosed.ts");
         writeFileSync(publication, `${fragment} ${host}`);
         const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.elapsed).toBeLessThan(3000);
+        expect(result.elapsed).toBeLessThan(10_000);
         expect(result.exitCode).toBe(1);
         expect(result.stdout).toContain("known_value:");
         expect(result.stderr).toBe("");
@@ -1751,7 +1801,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         const publication = join(directory, "identifier.ts");
         writeFileSync(publication, `${"a".repeat(200_000)},"${host}"`);
         const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.elapsed).toBeLessThan(3000);
+        expect(result.elapsed).toBeLessThan(10_000);
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toBe("PRIVACY GATE: PASS\n");
         expect(result.stderr).toBe("");
@@ -1763,7 +1813,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         const publication = join(directory, "declarations.ts");
         writeFileSync(publication, `${"const a: ".repeat(30_000)}"${host}"`);
         const result = await runGateWithDeadline(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(result.elapsed).toBeLessThan(3000);
+        expect(result.elapsed).toBeLessThan(10_000);
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toBe("PRIVACY GATE: PASS\n");
         expect(result.stderr).toBe("");
@@ -1789,9 +1839,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         writeFileSync(publication, `relay${`("${host}")`.repeat(100_000)};`);
         const started = performance.now();
         const result = runGateArguments(["--require-known-values", "--paths", publication], configuration(directory, source));
-        expect(performance.now() - started).toBeLessThan(3000);
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+        // The merged strict email-unit scanner adds complete source views. Both
+        // baseline and candidate take about three seconds at this size; retain
+        // a bounded check with room for concurrent gate workers.
+        expect(performance.now() - started).toBeLessThan(10_000);
+        // A following call opener is outside the positive closing boundary.
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).toContain("known_value:");
         expect(result.stderr.toString()).toBe("");
       }, 30_000);
       test(`${source}: large quoted JSON stays bounded`, () => {
@@ -1831,7 +1885,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
               OCR_TEXT: channel === "OCR" ? specimen.text : "",
             });
             expect(result.exitCode).toBe(1); // The fixture intentionally has no provenance.
-            expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
+            expect(result.stdout.toString().includes("known_value:")).toBe(channel === "metadata" || !specimen.pass);
             expect(result.stdout.toString()).toContain("provenance_missing:");
             expect(result.stdout.toString()).not.toContain(domain);
             expect(result.stderr.toString()).toBe("");
@@ -1864,7 +1918,29 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           expect(result.stderr.toString()).toBe("");
         });
       }
-      for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || (c.name.startsWith("review ") && c.name !== "review metadata boundary"))) {
+      for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "base-domain email",
+        "review shell bare prefix", "review shell bare suffix", "review shell port suffix"].includes(c.name)
+        || c.name.startsWith("review Unicode zero-width shell")
+        || c.name.startsWith("review Unicode NFKC shell")
+        || c.name.startsWith("raw quoted wrapper suffix")
+        || c.name.startsWith("raw bare ")
+        || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {
+        test(`${source}: merge identity ${specimen.name}`, () => {
+          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+          temporaryDirectories.push(directory);
+          runGit(directory, ["init", "--quiet"]);
+          runGit(directory, ["config", "user.name", "Fixture Tool"]);
+          runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+          runGit(directory, ["commit", "--allow-empty", "-m", "base"]);
+          runGit(directory, ["-c", `user.name=${specimen.text}`, "commit", "--allow-empty", "-m", "fixture"]);
+          const result = runGateArguments(["--base", "HEAD~1", "--require-known-values", "--check-commits"], configuration(directory, source), directory);
+          expect(result.exitCode).toBe(specimen.pass ? 0 : 1);
+          expect(result.stdout.toString().includes("known_value:")).toBe(!specimen.pass);
+          expect(result.stdout.toString()).not.toContain(domain);
+          expect(result.stderr.toString()).toBe("");
+        });
+      }
+      for (const specimen of cases.filter((c) => !c.text.includes("\0") && (["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || ((c.name.startsWith("review ") || c.name.startsWith("raw ")) && c.name !== "review metadata boundary")))) {
         test(`${source}: commit ${specimen.name}`, () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
           temporaryDirectories.push(directory);

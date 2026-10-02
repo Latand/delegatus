@@ -89,20 +89,47 @@ const approvedPublicValues = [
   "chatmoderator.botfather.dev",
 ] as const;
 const approvedPublicValuePattern = new RegExp(
-  String.raw`(^|[\0\t\n\r "'\x60(\[<{=,])(?:`
+  String.raw`(^|[\t\n\v\f\r "'\x60(\[=:])(?:`
   + approvedPublicValues.map((value) => value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
-  + String.raw`)(?=$|[\0\t\n\r "'\x60)\]}>;,])`,
+  + String.raw`)(?=$|[\t\n\v\f\r "'\x60)\],;])`,
   "g",
 );
 
+// These predicates run on raw source, before decoding or NFKC can erase a
+// neighbouring character. Quotes and balanced source wrappers must also have
+// positive boundaries outside them; a quoted fragment cannot hide adjacency.
+const approvedPublicLeftBoundary = /^[\t\n\v\f\r "'`(\[=:]$/;
+const approvedPublicRightBoundary = /^[\t\n\v\f\r "'`)\],;]$/;
+
+const approvedRawOuterLeft = /^[\t\n\v\f\r "'`(\[=:,{]$/;
+const approvedRawOuterRight = /^[\t\n\v\f\r "'`)\],;:}>]$/;
+
+function approvedRawBoundaries(text: string, start: number, end: number): boolean {
+  if ((start > 0 && !approvedPublicLeftBoundary.test(text[start - 1]))
+    || (end < text.length && !approvedPublicRightBoundary.test(text[end]))) return false;
+  const quote = text[start - 1];
+  if ((quote === '"' || quote === "'" || quote === "`") && text[end] === quote) {
+    return (start === 1 || approvedRawOuterLeft.test(text[start - 2]))
+      && (end + 1 === text.length || approvedRawOuterRight.test(text[end + 1]));
+  }
+  return true;
+}
+
+function approvedRawGroupBoundaries(text: string, start: number, end?: number): boolean {
+  // The raw graph supplies the complete call/index/group span,
+  // including other arguments and every enclosing wrapper. All of its edges
+  // remain raw; normalization cannot turn a neighbour into an approved one.
+  let before = start - 1;
+  if (text[start] === "(" || text[start] === "[") {
+    while (before >= 0 && /[A-Za-z0-9_$?.]/.test(text[before])) before -= 1;
+  }
+  return (before < 0 || approvedRawOuterLeft.test(text[before]))
+    && (end === undefined || end === text.length || approvedRawOuterRight.test(text[end]));
+}
+
 function approvedPublicBoundaryView(text: string, marker: string): { error: boolean; text: string } {
-  const enclosingTag = new RegExp(`<\\s*(["'\\x60]?)(${marker}\\d+${marker})\\1\\s*>`, "g");
   const enclosingParenthesis = new RegExp(`\\(\\s*(${marker}\\d+${marker})\\s*\\)`, "g");
-  // NFKC folds NBSP and other Unicode spacing characters into ASCII spaces.
-  // Preserve their concealed-continuation ownership in this boundary-only
-  // view; the generic and known-value inspection views retain their input.
-  let projected = text.replaceAll(/[^\S ]/gu, (whitespace) =>
-    whitespace.normalize("NFKC") === " " ? "\t" : whitespace).normalize("NFKC");
+  let projected = text.normalize("NFKC");
   // These projections only remove syntax. Repeating them handles nested
   // wrappers, while the bound fails closed for pathological nesting.
   for (let pass = 0; pass < 16; pass += 1) {
@@ -110,7 +137,6 @@ function approvedPublicBoundaryView(text: string, marker: string): { error: bool
       .replaceAll(/\\(?:\r\n|[\n\r\u2028\u2029])/g, "")
       .replaceAll(/\$\{(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*["'`]([^"'`]*?)["'`](?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\}/g, "$1")
       .replaceAll(/["'`](?:[\s)]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*\+(?:[\s(]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*["'`]/g, "")
-      .replaceAll(enclosingTag, "$2")
       .replaceAll(enclosingParenthesis, (match: string, value: string, offset: number, source: string) =>
         source[offset - 1] === "]" ? match : value);
     if (next === projected) return { error: false, text: projected };
@@ -366,18 +392,12 @@ function maskApprovedPublicValues(text: string): string {
       && (tokenHierarchicalUri
         || (!typedAssignment && !sourceColonValue && tokenOpaqueUri)
         || tokenEmail || text[offset - 1] === ".");
-    // URI punctuation is not a source separator unless a matching opener
-    // establishes a closing parenthesis (for example a Markdown destination).
-    const matchingClose = (delimiter === "(" && text[end] === ")")
-      || (delimiter === "[" && text[end] === "]") || (delimiter === "<" && text[end] === ">");
-    const wrapperTail = matchingClose && !(delimiter === "[" && text[end + 1] === "(")
-      && !/^(?:[)\]}>;,]*(?:$|\s))/.test(text.slice(end + 1));
-    const continued = wrapperTail || (/^[;,"'`\]}>)]$/.test(text[end] ?? "") && !matchingClose)
-      || (/^[\]}>]$/.test(text[end] ?? "") && /^[\p{L}\p{N}_]/u.test(text[end + 1] ?? ""));
+    const continued = /^[;,"'`\]}>)]$/.test(text[end] ?? "")
+      && end + 1 < text.length && !approvedPublicRightBoundary.test(text[end + 1]);
     // Bare operands (for example here-doc bodies) also inherit their enclosing
     // attachment; source quotes are not required to retain that ownership.
     candidates.push({ start, end, opensComment, closesComment, sourceColonValue, propertyKey, sourceCommentTail, sourceOptionalCall, sourceOptionalIndex, group: operandGroups.at(-1),
-      allowed: !unclosedComment && (inComment || (!pendingAttachment && compoundDepth === undefined)) && (quoted
+      allowed: approvedRawBoundaries(text, start, end) && !unclosedComment && (inComment || (!pendingAttachment && compoundDepth === undefined)) && (quoted
         ? text[end] === delimiter && !uriPrefix && !expressionFragment && (wholeLiteral || interpolatedLiteral || commentLiteral)
         : !continued && !insideLiteral && !uriPrefix) });
     return `${delimiter}${marker}${index}${marker}`;
@@ -385,6 +405,75 @@ function maskApprovedPublicValues(text: string): string {
   if (candidates.length === 0) return text;
   while (literal) completeLiteral();
   advanceSyntax(text.length);
+  // Validate raw wrapper spans independently of source comments and URI
+  // syntax. In particular, the // in a bare HTTPS origin must never hide a
+  // closing delimiter or the character outside it. Quoted contents are
+  // opaque; enclosing groups still belong to every value inside the quote.
+  const rawQuotes = text.matchAll(/"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/gu);
+  let rawQuote = rawQuotes.next().value;
+  let containingRawQuote: { start: number; end: number; quote: string } | undefined;
+  let rawCursor = 0;
+  type RawGroup = { start: number; envelopeStart: number; end?: number; attached: boolean; parent?: RawGroup };
+  const rawGroups: RawGroup[] = [];
+  const completedRawGroups = new Map<number, RawGroup>();
+  const candidateRawGroups = new Map<(typeof candidates)[number], RawGroup>();
+  function advanceRawGroups(end: number): void {
+    while (rawCursor < end) {
+      if (rawQuote && rawCursor === rawQuote.index) {
+        containingRawQuote = { start: rawQuote.index, end: rawQuote.index + rawQuote[0].length, quote: rawQuote[0][0] };
+        rawCursor += rawQuote[0].length;
+        rawQuote = rawQuotes.next().value;
+        continue;
+      }
+      const character = text[rawCursor++];
+      if (/[([{]/.test(character)) {
+        const start = rawCursor - 1;
+        const callee = completedRawGroups.get(start - 1);
+        rawGroups.push({ start, envelopeStart: callee?.envelopeStart ?? start, attached: false, parent: rawGroups.at(-1) });
+      } else if (/[)\]}]/.test(character)) {
+        const group = rawGroups.pop();
+        if (group) {
+          group.end = rawCursor;
+          completedRawGroups.set(rawCursor - 1, group);
+          group.attached = "([{".indexOf(text[group.start]) !== ")]}".indexOf(character);
+        }
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    advanceRawGroups(candidate.start);
+    if (containingRawQuote && candidate.start > containingRawQuote.start && candidate.start < containingRawQuote.end) {
+      const ownQuote = text[candidate.start - 1];
+      const quotedValue = /^["'`]$/.test(ownQuote) && text[candidate.end] === ownQuote;
+      const completeValue = containingRawQuote.start === candidate.start - 1 && containingRawQuote.end === candidate.end + 1;
+      const templateValue = containingRawQuote.quote === "`" && quotedValue;
+      if ((!completeValue && !templateValue)
+        || (containingRawQuote.start > 0 && !approvedRawOuterLeft.test(text[containingRawQuote.start - 1]))
+        || (containingRawQuote.end < text.length && !approvedRawOuterRight.test(text[containingRawQuote.end]))) candidate.allowed = false;
+    }
+    const group = rawGroups.at(-1);
+    if (group) candidateRawGroups.set(candidate, group);
+  }
+  advanceRawGroups(text.length);
+  const rawAttachments = new Map<RawGroup, boolean>();
+  for (const candidate of candidates) {
+    const visited: RawGroup[] = [];
+    let attached = false;
+    for (let group = candidateRawGroups.get(candidate); group; group = group.parent) {
+      const cached = rawAttachments.get(group);
+      if (cached !== undefined) {
+        attached = cached;
+        break;
+      }
+      visited.push(group);
+      if (group.attached || !approvedRawGroupBoundaries(text, group.envelopeStart, group.end)) {
+        attached = true;
+        break;
+      }
+    }
+    for (const group of visited) rawAttachments.set(group, attached);
+    if (attached) candidate.allowed = false;
+  }
   // The graph is final now. Memoize inherited attachment so a chain of calls
   // containing many approved literals is traversed once instead of per literal.
   const attachments = new Map<OperandGroup, boolean>();
@@ -412,8 +501,8 @@ function maskApprovedPublicValues(text: string): string {
   if (error) return text;
   // Process complete views once: splitting them at a candidate breaks link
   // parsing and repeated prefix/suffix projections have quadratic cost.
-  const leftBoundary = /^[\t\n\r "'\x60(\[<{=,]$/;
-  const rightBoundary = /^[\t\n\r "'\x60)\]}>;,]$/;
+  const leftBoundary = approvedPublicLeftBoundary;
+  const rightBoundary = approvedPublicRightBoundary;
   for (const view of views) {
     const normalized = view.normalize("NFKC");
     // Keep enclosing schemes across quoted payloads, including JSON. Blank
@@ -1281,7 +1370,7 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
       if (payload.length % 2 === 0) {
         if (startsBigEndian) payload.swap16();
         try {
-          views.push(new TextDecoder("utf-16le", { fatal: true }).decode(payload));
+          views.push(new TextDecoder("utf-16le", { fatal: true, ignoreBOM: true }).decode(payload));
           supportedEncoding = true;
         } catch {
           supportedEncoding = false;
@@ -1289,7 +1378,7 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
       }
     } else if (!startsUtf32LittleEndian && !startsUtf32BigEndian) {
       try {
-        views[0] = new TextDecoder("utf-8", { fatal: true }).decode(contents);
+        views[0] = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(contents);
         supportedEncoding = true;
       } catch {
         supportedEncoding = false;
@@ -2223,7 +2312,15 @@ export function mergeBoundaryReview(repository: string, base: string): MergeBoun
     return { findings, notices };
   }
   for (const identity of identities) {
-    const { attributable } = commitMessageAddressReview(composedAttributionMessage(identity));
+    const attribution = composedAttributionMessage(identity);
+    // Names are publication text too. A safe mailbox cannot exempt a private
+    // value in the recorded name when the forge composes its trailer.
+    for (const finding of sensitiveClasses(attribution)) {
+      if (finding === "email_address" || !commitMessageFindingClasses.has(finding)) continue;
+      addFinding(findings, finding);
+      notices.push(`merge_boundary: ${identity.commit.slice(0, 12)} ${identity.field} identity contains ${finding} (value withheld)`);
+    }
+    const { attributable } = commitMessageAddressReview(attribution);
     /* The composed trailer rules classify any exact `noreply` local part as
        machine attribution. For the forge's web-flow mailbox, the commit graph
        is the additional proof: a zero- or one-parent commit did not come from
