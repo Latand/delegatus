@@ -1,5 +1,6 @@
 import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import path from "node:path";
 
 import { commitPipelineStage, reconcilePipelineStageHead, type PipelineGitResult, type ProvisionExecPort } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -63,9 +64,17 @@ export function commitAndAdoptStageBranch(
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
   const refused = (reason: string): PipelineGitResult => ({ ok: false, error: `adopting the stage branch: ${reason}` });
-  const others = pipelines().filter((other) => other.id !== pipeline.id
-    && (other.repoDir === pipeline.repoDir || (pipeline.delivery
-      && other.delivery?.target.repository === pipeline.delivery.target.repository)));
+  const commonDirectory = (repoDir: string): string | null => {
+    const result = exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
+    return result.code === 0 && result.stdout.trim() ? path.resolve(result.stdout.trim()) : null;
+  };
+  const pipelineCommonDir = commonDirectory(pipeline.repoDir);
+  const others = pipelines().filter((other) => {
+    if (other.id === pipeline.id) return false;
+    if (other.repoDir === pipeline.repoDir || (pipeline.delivery
+      && other.delivery?.target.repository === pipeline.delivery.target.repository)) return true;
+    return pipelineCommonDir !== null && commonDirectory(other.repoDir) === pipelineCommonDir;
+  });
   const ownedByOther = (name: string) => others.some((other) => other.branch === name
     || (other.delivery?.active && other.delivery.target.branch === `refs/heads/${name}`));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
@@ -92,7 +101,9 @@ export function commitAndAdoptStageBranch(
   if (head.code !== 0 || target.code !== 0) return refused("the stage or pipeline branch tip cannot be resolved");
   const sha = head.stdout.trim();
   const targetSha = target.stdout.trim();
-  if (!protection || protection.branch !== source || protection.head !== sha) return refused("the stage branch protection observation no longer matches its head");
+  if (!protection || protection.branch !== source || protection.head !== sha) {
+    return { ok: false, deferred: true, error: "the stage branch protection observation is missing or stale; retrying settlement after a fresh observation" };
+  }
   if (protection.error) return refused(protection.error);
   if (![pipeline.baseRef, pipeline.lastPassedCommit, sha, targetSha].every((value) => /^[0-9a-f]{40}$/i.test(value))) {
     return refused("adoption requires exact base, accepted and branch commit SHAs");

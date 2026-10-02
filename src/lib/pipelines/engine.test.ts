@@ -894,7 +894,40 @@ test("a stage branch is adopted onto an owned delivery branch when the lane ref 
   }
 });
 
-test("a still-busy reported stage on a foreign branch makes no protection probes", async () => {
+test("linked-worktree pipeline ownership refuses a foreign stage branch before committing", async () => {
+  const fixture = await realWorktreeLane("stage-branch-linked-owner", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  try {
+    const { git, h, id, root, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const source = "fix/other-lane-owned";
+    git(worktree, "switch", "-c", source);
+    fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep this work\n");
+    const sourceTip = git(worktree, "rev-parse", `refs/heads/${source}`);
+    const laneTip = git(worktree, "rev-parse", `refs/heads/${lane.branch}`);
+    const linked = path.join(root, "linked");
+    git(worktree, "worktree", "add", linked, "-b", "other-lane-current");
+    const other = structuredClone(lane);
+    other.id = "other-pipeline";
+    other.repoDir = linked;
+    other.worktreeDir = linked;
+    other.branch = source;
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+
+    const result = commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, other], undefined, () => {}, null);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+    expect(git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(sourceTip);
+    expect(git(worktree, "rev-parse", `refs/heads/${lane.branch}`)).toBe(laneTip);
+    expect(git(worktree, "status", "--porcelain")).toContain("uncommitted.txt");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a busy-to-terminal stage retries settlement after collecting fresh branch protection", async () => {
   const fixture = await realWorktreeLane("stage-branch-busy", [
     { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
     { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
@@ -902,17 +935,30 @@ test("a still-busy reported stage on a foreign branch makes no protection probes
   try {
     const { git, h, id, worktree } = fixture;
     git(worktree, "switch", "-c", "fix/busy-stage");
-    const exec = h.ports.exec;
-    h.ports.exec = (command, args, ...rest) => command === "timeout" && args.includes("gh")
-      ? { code: 0, stdout: "[]", stderr: "" } : exec(command, args, ...rest);
     expect(await engineModule.reportStageCompletion({ verdict: "pass" },
       { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
-    h.setConversationActive(true);
     const finished = h.finish("/codex/stage-1.jsonl", "pass");
     h.durableTurns.set(finished.path, { turn: "busy", message: h.messages.get(finished.path)! });
-    h.ports.provisionExec = async () => { throw new Error("a busy stage must not probe its remote"); };
+    let activeReads = 0;
+    h.ports.conversationAgentActive = async () => {
+      if (activeReads++ === 0) {
+        // The protection pre-pass already read `busy`; terminal evidence lands
+        // while it checks liveness, before settlement reads the turn again.
+        h.durableTurns.set(finished.path, { turn: "terminal", message: h.messages.get(finished.path)! });
+        return true;
+      }
+      return false;
+    };
     await tickPipelines([finished], h.ports);
-    expect(loadPipelines().find((item) => item.id === id)).toMatchObject({ state: "running", cursor: { stageId: "build", state: "running" } });
+    const deferred = loadPipelines().find((item) => item.id === id)!;
+    expect(deferred).toMatchObject({ state: "running", cursor: { stageId: "build", state: "committing" } });
+    expect(deferred.runs[0]!.attempts[0]!.state).toBe("committing");
+    const stageTip = git(worktree, "rev-parse", "refs/heads/fix/busy-stage");
+    h.ports.conversationAgentActive = async () => false;
+    await tickPipelines([], h.ports);
+    const adopted = loadPipelines().find((item) => item.id === id)!;
+    expect(adopted).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" } });
+    expect(adopted.lastPassedCommit).toBe(stageTip);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

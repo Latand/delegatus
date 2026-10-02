@@ -2931,6 +2931,12 @@ function commitPassedStage(
     }, ports.stageBranchProtections?.get(pipeline.id))
     : commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
   if (!result.ok) {
+    if (result.deferred) {
+      // Keep the durable committing cursor. The next tick repeats the forge
+      // observation outside the mutation lease, then retries this settlement.
+      persist();
+      return;
+    }
     park(pipeline, result.error, attempt);
     return;
   }
