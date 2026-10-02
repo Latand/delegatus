@@ -682,6 +682,30 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
   }
 }
 
+/** `git cherry` strips whitespace before comparing patch IDs. Keep its fast
+    history scan, then require the changed file paths, modes and exact added /
+    removed lines and context to agree before treating a whitespace-insensitive
+    match as retained. Hunk positions are omitted so a replay still matches
+    after surrounding lines move on a newer base. */
+function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): string | null | { error: string } {
+  const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
+    "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", commit], pipeline.worktreeDir);
+  if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
+  const evidence: string[] = [];
+  let binary = false;
+  for (const line of patch.stdout.split("\n")) {
+    if (line.startsWith("diff --git ") || /^(?:old mode|new mode|new file mode|deleted file mode|GIT binary patch|literal |delta )/.test(line)) {
+      evidence.push(line);
+      binary = line === "GIT binary patch";
+    } else if (binary) evidence.push(line);
+    else if ((line.startsWith("+") && !line.startsWith("+++")) || (line.startsWith("-") && !line.startsWith("---"))
+      || line.startsWith(" ") || line.startsWith("\\ No newline")) {
+      evidence.push(line);
+    }
+  }
+  return evidence.length ? evidence.join("\n") : null;
+}
+
 /** Retained patch history admits subsequent builder edits just as ordinary
     ancestry does. Merge commits have no cherry patch-id; unique merge content
     therefore needs the controlled tree proof. Record the builder's unchanged
@@ -701,7 +725,30 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
   if (tree.code !== 0) return failure("reading the stage tree", tree);
   const cherry = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", head, accepted], pipeline.worktreeDir);
   if (cherry.code !== 0) return failure("checking accepted patch history", cherry);
-  const dropped = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
+  const cherryLines = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ") || line.startsWith("- "));
+  const retainedByCherry = cherryLines.filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
+  const replayedPatches = new Map<string, number>();
+  if (retainedByCherry.length) {
+    const candidates = exec("git", ["rev-list", "--no-merges", `${accepted}..${head}`], pipeline.worktreeDir);
+    if (candidates.code !== 0) return failure("checking replayed commit patches", candidates);
+    for (const candidate of candidates.stdout.split("\n").filter(Boolean)) {
+      const signature = exactCommitPatch(pipeline, candidate, exec);
+      if (signature && typeof signature === "object") return { ok: false, error: signature.error };
+      if (signature) replayedPatches.set(signature, (replayedPatches.get(signature) ?? 0) + 1);
+    }
+  }
+  const dropped = cherryLines.filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
+  for (const acceptedCommit of retainedByCherry) {
+    const signature = exactCommitPatch(pipeline, acceptedCommit, exec);
+    if (signature && typeof signature === "object") return { ok: false, error: signature.error };
+    // An empty commit has no patch to preserve. Its SHA need not block a
+    // content-based rebase reconciliation.
+    if (!signature) continue;
+    const count = replayedPatches.get(signature) ?? 0;
+    if (count === 0) dropped.push(acceptedCommit);
+    else if (count === 1) replayedPatches.delete(signature);
+    else replayedPatches.set(signature, count - 1);
+  }
   const merges = exec("git", ["rev-list", "--min-parents=2", "--parents", `${head}..${accepted}`], pipeline.worktreeDir);
   if (merges.code !== 0) return failure("checking accepted merge history", merges);
   let replayedCheckpoints: string[] | undefined;

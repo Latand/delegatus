@@ -1261,6 +1261,30 @@ test.each(["ours", "union"])("stage reconciliation ignores repository %s merge p
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test.each([
+  ["Python indentation", "def deliver(allowed):\n    sent = []\n    if allowed:\n        pass\n        sent.append('sent')\n    return sent\n", "def deliver(allowed):\n    sent = []\n    if allowed:\n        pass\n    sent.append('sent')\n    return sent\n"],
+  ["significant token spacing", "value = 'a b'\n", "value = 'ab'\n"],
+])("stage reconciliation parks a whitespace-only loss in accepted %s work", (_case, acceptedContent, rewrittenContent) => {
+  const box = rebasedStageSandbox((fixture) => {
+    fs.writeFileSync(path.join(fixture.subject.worktreeDir, "policy.py"), acceptedContent);
+    git(fixture.subject.worktreeDir, "add", "policy.py");
+  });
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "policy.py"), rewrittenContent);
+    git(box.subject.worktreeDir, "add", "policy.py");
+    git(box.subject.worktreeDir, "commit", "--amend", "--no-edit");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    expect(git(box.subject.worktreeDir, "cherry", head, box.accepted)).toBe(`- ${box.accepted}`);
+
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test("stage reconciliation retains accepted replacements when the builder extends an existing file", () => {
   const box = rebasedStageSandbox((fixture) => { fixture.commit("base.txt", "accepted replacement\n"); });
   try {
