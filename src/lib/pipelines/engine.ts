@@ -984,7 +984,15 @@ async function stopStageHostByRecordedIdentity(
   if (refusal) {
     return refused(`${refusal.error} (pid ${ref.pid}); ${generation}`);
   }
-  const outcome = await terminateStructuredHostTree(ref, { ...termination, authorize });
+  const outcome = await terminateStructuredHostTree(ref, {
+    ...termination,
+    authorize,
+    persistCapturedTree: termination.persistCapturedTree ?? (identities => registry.recordStructuredTerminationSurvivors(
+      probe.key,
+      { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+      identities,
+    )),
+  });
   if (outcome.ok) {
     return {
       outcome: "stopped",
