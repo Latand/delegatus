@@ -106,9 +106,9 @@ test("exit read catches missed watch; release and an unmarked SIGKILL are never 
 });
 test("watchdog kills the largest owned process and identity-fences fatal cleanup", () => {
   const killed: number[] = [];
-  let identities = new Map([[123,"123:a"],[124,"124:b"]]);
+  const identities = new Map([[123,"123:a"],[124,"124:b"]]);
   let samples = [{ pid: 123, identity: "123:a", rss: GIB, name: "agent" }, { pid: 124, identity: "124:b", rss: 16 * GIB, name: "tool" }];
-  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null }, { identity: (pid) => identities.get(pid) ?? null, readPpid: () => 123, sample: () => samples, kill: (pid) => { killed.push(pid); } });
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null }, { identity: (pid) => identities.get(pid) ?? null, readPpid: () => 123, sample: () => samples, kill: (pid) => { killed.push(pid); identities.delete(pid); } });
   cell.attach(123);
   tickAgentMemoryWatchdogs([cell]);
   expect(killed).toEqual([124]);
@@ -116,9 +116,40 @@ test("watchdog kills the largest owned process and identity-fences fatal cleanup
   samples = [{ pid: 123, identity: "123:a", rss: 16 * GIB, name: "agent" }, { pid: 124, identity: "124:b", rss: GIB, name: "tool" }];
   tickAgentMemoryWatchdogs([cell]);
   expect(cell.snapshot().lastKill?.fatal).toBe(true);
-  identities = new Map([[123,"123:a"],[124,"124:reused"]]);
+  identities.set(124, "124:reused");
   cell.settleExit({ expected: false });
-  expect(killed).toEqual([124,123,123]);
+  expect(killed).toEqual([124,123]);
+});
+
+for (const platform of ["linux", "darwin"] as const) test(`fatal watchdog root kill contains its owned child before root exit on ${platform}`, () => {
+  const killed: number[] = [];
+  const identities = new Map([[123, "123:owned"], [124, "124:owned"], [125, "125:replacement"]]);
+  const samples = [
+    { pid: 123, identity: "123:owned", rss: 101, name: "agent" },
+    { pid: 124, identity: "124:owned", rss: 1, name: "tool" },
+  ];
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", platform, limitBytes: 100, unit: null }, {
+    identity: (pid) => identities.get(pid) ?? null,
+    readPpid: (pid) => pid === 124 ? 123 : null,
+    sample: () => samples,
+    kill: (pid) => {
+      killed.push(pid);
+      if (pid === 123) identities.set(pid, "123:replacement");
+      else identities.delete(pid);
+    },
+  });
+  try {
+    cell.attach(123);
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([124, 123]);
+    expect(identities.get(124)).toBeUndefined();
+    expect(identities.get(125)).toBe("125:replacement");
+    expect(cell.snapshot().lastKill?.fatal).toBe(true);
+    cell.settleExit({ expected: false });
+    tickAgentMemoryWatchdogs([cell]);
+    expect(killed).toEqual([124, 123]);
+    expect(identities.get(123)).toBe("123:replacement");
+  } finally { cell.close(); }
 });
 
 test("a size without a suffix means bytes", () => {
@@ -358,22 +389,23 @@ test("Linux fatal cleanup refuses reparented descendants and a dead owned root",
   } finally { cell.close(); }
 });
 
-for (const limit of ["agent", "shared"] as const) test(`macOS ${limit} enforcement and fatal cleanup signal only the direct child`, () => {
+for (const limit of ["agent", "shared"] as const) test(`macOS ${limit} enforcement contains verified descendants before fatal root cleanup`, () => {
   const killed: number[] = [];
+  const identities = new Map([[123, "123:owned"], [124, "124:owned"]]);
   const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", platform: "darwin", unit: null,
     limitBytes: limit === "agent" ? 100 : 200, budgetBytes: 100 }, {
-    identity: (pid) => `${pid}:owned`,
+    identity: (pid) => identities.get(pid) ?? null,
     sample: () => [{ pid: 123, identity: "123:owned", rss: 1, name: "agent" }, { pid: 124, identity: "124:owned", rss: 101, name: "tool" }],
-    readPpid: () => { throw new Error("macOS ancestry is cached and cannot authorize signals"); },
-    kill: (pid) => { killed.push(pid); },
+    readPpid: (pid) => pid === 124 ? 123 : null,
+    kill: (pid) => { killed.push(pid); identities.delete(pid); },
   });
   try {
     cell.attach(123, watchdogChild() as unknown as ChildProcessWithoutNullStreams);
     tickAgentMemoryWatchdogs([cell]);
-    expect(killed).toEqual([123]);
+    expect(killed).toEqual([124, 123]);
     expect(cell.snapshot().lastKill).toMatchObject({ limit, fatal: true, process: "tool" });
     cell.settleExit({ expected: false });
-    expect(killed.every((pid) => pid === 123)).toBe(true);
+    expect(killed).toEqual([124, 123]);
   } finally { cell.close(); }
 });
 
@@ -398,7 +430,7 @@ for (const change of ["unrelated", "reused", "owned"] as const) test(`macOS prod
     expect(killed).toEqual([]);
     expect(cell.snapshot().kills).toBe(0);
     tickAgentMemoryWatchdogs([cell]);
-    expect(killed).toEqual(change === "owned" ? [root] : []);
+    expect(killed).toEqual(change === "owned" ? [descendant, root] : []);
     expect(cell.snapshot().kills).toBe(change === "owned" ? 1 : 0);
     expect(cell.snapshot().lastKill?.fatal ?? null).toBe(change === "owned" ? true : null);
     expect(observations).toBe(2);

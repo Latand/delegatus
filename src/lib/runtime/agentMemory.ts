@@ -129,6 +129,7 @@ interface CellPorts {
 const watchdogCells = new Set<AgentMemoryCell>();
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let portableWatchdogPids = new Set<number>();
+let portableWatchdogParents = new Map<number, number>();
 function linuxTree(root: number): number[] {
   const seen = new Set<number>(), stack = [root];
   while (stack.length) {
@@ -184,6 +185,7 @@ function sampleTrees(roots: number[], platform: NodeJS.Platform): Map<number, Me
     const ppids = new Map<number, number>();
     const rows = text.split("\n").flatMap((line) => { const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line); if (!m) return []; ppids.set(Number(m[1]), Number(m[2])); return [`${m[1]} ${m[3]}`]; });
     const memory = parsePsMemory(rows.join("\n"));
+    portableWatchdogParents = ppids;
     portableWatchdogPids = new Set(roots.flatMap((root) => descendantPids(root, ppids)));
     for (const root of roots) result.set(root, descendantPids(root, ppids).flatMap((pid) => {
       const identity = identities.get(pid), rss = memory.get(pid);
@@ -358,16 +360,47 @@ export class AgentMemoryCell {
   private canSignal(victim: MemorySample): boolean {
     if (this.pid === null || !this.rootIdentity || this.closed) return false;
     const identity = this.ports.identity ?? procBackend.processIdentity;
-    if (this.plan.platform !== "linux") return victim.pid === this.pid && victim.identity === this.rootIdentity && identity(this.pid) === this.rootIdentity;
     const identities = new Map(this.lastSample.map((sample) => [sample.pid, sample.identity]));
     identities.set(this.pid, this.rootIdentity);
-    return identities.get(victim.pid) === victim.identity && verifiedTreeMember(this.pid, victim.pid, identities, identity, this.ports.readPpid ?? linuxBackend.readPpid);
+    const readPpid = this.ports.readPpid ?? (this.plan.platform === "linux"
+      ? linuxBackend.readPpid
+      : (pid: number) => portableWatchdogParents.get(pid) ?? null);
+    return identities.get(victim.pid) === victim.identity && verifiedTreeMember(this.pid, victim.pid, identities, identity, readPpid);
   }
   killSample(victim: MemorySample, limit: AgentMemoryKill["limit"]): void {
     if ((this.ports.identity ?? procBackend.processIdentity)(victim.pid) !== victim.identity) return;
-    // Cached macOS ancestry supplies evidence, never permission to signal a descendant.
     const target = this.plan.platform === "linux" ? victim : this.lastSample.find((sample) => sample.pid === this.pid);
     if (!target || this.killedThisTick.has(target.pid) || !this.canSignal(target)) return;
+    // Contain verified descendants while the root still anchors their ownership.
+    // Deepest-first keeps each remaining parent alive until its children are signalled.
+    if (target.pid === this.pid) {
+      const ppidMap = this.plan.platform === "darwin" && !this.ports.readPpid ? portableWatchdogParents : null;
+      const readPpid = this.ports.readPpid ?? (ppidMap
+        ? (pid: number) => ppidMap.get(pid) ?? null
+        : this.plan.platform === "linux" ? linuxBackend.readPpid : (pid: number) => portableWatchdogParents.get(pid) ?? null);
+      const identity = this.ports.identity ?? procBackend.processIdentity;
+      const identities = new Map(this.lastSample.map((sample) => [sample.pid, sample.identity]));
+      identities.set(this.pid!, this.rootIdentity!);
+      const descendants = this.lastSample.filter((sample) => sample.pid !== this.pid).flatMap((sample) => {
+        if (!verifiedTreeMember(this.pid!, sample.pid, identities, identity, readPpid)) return [];
+        let depth = 0, current = sample.pid;
+        while (current !== this.pid && depth <= identities.size) {
+          const parent = readPpid(current);
+          if (parent === null) return [];
+          current = parent;
+          depth++;
+        }
+        return current === this.pid ? [{ sample, depth }] : [];
+      }).sort((left, right) => right.depth - left.depth);
+      for (const { sample } of descendants) {
+        if (this.killedThisTick.has(sample.pid) || !this.canSignal(sample)) continue;
+        if (identity(sample.pid) !== sample.identity) continue;
+        this.killedThisTick.add(sample.pid);
+        try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { /* Already gone. */ }
+      }
+      // A descendant signal may race with a root exit or PID reuse.
+      if (!this.canSignal(target)) return;
+    }
     // Do not run listeners between the final ownership check and the signal.
     this.recordKill(limit, target.pid === this.pid, victim.name, 1, false);
     this.killedThisTick.add(target.pid);
@@ -409,6 +442,7 @@ export class AgentMemoryCell {
       if (watchdogTimer) clearInterval(watchdogTimer);
       watchdogTimer = null;
       portableWatchdogPids.clear();
+      portableWatchdogParents.clear();
     }
   }
 }

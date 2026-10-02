@@ -656,7 +656,7 @@ for (const mechanism of ["scope", "watchdog"] as const) for (const platform of [
     await host.release();
     await Bun.sleep(5);
     child.emit("close", null, "SIGKILL");
-    expect(memory.signals).toEqual(mechanism === "watchdog" ? [child.pid] : []);
+    expect(memory.signals).toEqual(mechanism === "watchdog" ? [child.pid + 1, child.pid] : []);
     expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
     expect(groupSignals).toEqual([]);
     expect(child.signals).toEqual([]);
