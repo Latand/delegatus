@@ -17,9 +17,28 @@ export function slugifyCwd(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-/** Transcript path a claude session with a pre-chosen id writes under ~/.claude/projects. */
+/** Claude starts in the physical cwd. Keep the supplied spelling too for
+    transcripts recorded before a directory was reached through a symlink. */
+export function claudeCwdSlugs(cwd: string): string[] {
+  let physical = cwd;
+  try { physical = fs.realpathSync.native(cwd); } catch { /* Gone or inaccessible: retain the recorded cwd. */ }
+  return [...new Set([slugifyCwd(physical), slugifyCwd(cwd)])];
+}
+
+/** Prefer an existing readable transcript in either cwd form; a new Claude
+    session writes under the physical cwd's project slug. */
 export function claudeTranscriptPath(cwd: string, sessionId: string, projectsRoot = path.join(os.homedir(), ".claude", "projects")): string {
-  return path.join(projectsRoot, slugifyCwd(cwd), sessionId + ".jsonl");
+  const candidates = claudeCwdSlugs(cwd).map((slug) => path.join(projectsRoot, slug, sessionId + ".jsonl"));
+  if (candidates.length > 1) {
+    for (const candidate of candidates) {
+      try {
+        if (!fs.statSync(candidate).isFile()) continue;
+        fs.accessSync(candidate, fs.constants.R_OK);
+        return candidate;
+      } catch { /* Try the other cwd spelling before predicting a fresh path. */ }
+    }
+  }
+  return candidates[0]!;
 }
 
 const HEAD_BYTES = 65_536;

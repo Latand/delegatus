@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { claudeProjectRoots } from "@/lib/accounts/claude";
 
 import type { FileEntry } from "../types";
 
@@ -9,6 +14,13 @@ const processes: Array<{
   cwd: string;
   tty: number;
 }> = [];
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-scanner-symlink-"));
+const originalClaudeHome = process.env.LLV_CLAUDE_HOME;
+afterEach(() => {
+  if (originalClaudeHome === undefined) delete process.env.LLV_CLAUDE_HOME;
+  else process.env.LLV_CLAUDE_HOME = originalClaudeHome;
+});
+afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 // Path → holder pid, populated per test to simulate a process keeping a
 // transcript's rollout open for writing.
@@ -49,6 +61,7 @@ const {
   transcriptLiveOwnership,
   transcriptProcessMayBeRunning,
   transcriptProcessOwnsEntry,
+  verifyTranscriptPid,
 } = await import("./transcripts");
 
 test("a Claude subagent resolves to the top-level session that owns its writer", () => {
@@ -128,6 +141,52 @@ describe("assignTranscriptPids", () => {
     processes.length = 0;
     holderMap = new Map<string, number>();
     exitedPids = new Set<number>();
+  });
+
+  test.each(["given", "real"])("matches both transcript encodings with a %s process cwd", (processForm) => {
+    process.env.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
+    const real = path.join(sandbox, `disk-${processForm}`);
+    const given = path.join(sandbox, `link-${processForm}`);
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, given, "junction");
+    const physical = fs.realpathSync.native(real);
+    const proc = { pid: 6601, engine: "claude" as const, argv: ["claude"], cwd: processForm === "given" ? given : physical, tty: 1 };
+    processes.push(proc);
+    for (const cwd of [given, physical]) {
+      const pathname = path.join(claudeProjectRoots()[0]!, cwd.replace(/[^A-Za-z0-9]/g, "-"), "symlink-session.jsonl");
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      // Claude records the child process's physical cwd, including when an
+      // older transcript directory used the supplied cwd spelling.
+      fs.writeFileSync(pathname, JSON.stringify({ cwd: physical }) + "\n");
+      const file = entry(pathname, { cwd: physical });
+      assignTranscriptPids([file]);
+      expect(file.pid).toBe(proc.pid);
+      expect(transcriptLiveOwnership(file, processes)).toBe("cwd");
+      expect(verifyTranscriptPid(pathname, proc.pid)).toBe(true);
+    }
+  });
+
+  test.each(["given", "real"])("a retargeted symlink cannot claim an old %s transcript or authorize killing its neighbour", (form) => {
+    process.env.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
+    const oldCheckout = path.join(sandbox, `old-${form}`);
+    const newCheckout = path.join(sandbox, `new-${form}`);
+    const given = path.join(sandbox, `retargeted-${form}`);
+    fs.mkdirSync(oldCheckout);
+    fs.mkdirSync(newCheckout);
+    fs.symlinkSync(oldCheckout, given, "junction");
+    const encoded = form === "given" ? given : fs.realpathSync.native(oldCheckout);
+    const pathname = path.join(claudeProjectRoots()[0]!, encoded.replace(/[^A-Za-z0-9]/g, "-"), "old-session.jsonl");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    fs.writeFileSync(pathname, JSON.stringify({ cwd: given }) + "\n");
+    fs.unlinkSync(given);
+    fs.symlinkSync(newCheckout, given, "junction");
+    const proc = { pid: 6602, engine: "claude" as const, argv: ["claude"], cwd: fs.realpathSync.native(newCheckout), tty: 1 };
+    processes.push(proc);
+    const file = entry(pathname, { cwd: given });
+    assignTranscriptPids([file]);
+    expect(file.pid).toBeNull();
+    expect(transcriptLiveOwnership(file, processes)).toBeNull();
+    expect(verifyTranscriptPid(pathname, proc.pid)).toBe(false);
   });
 
   test("never assigns one writing-holder pid to two transcripts", () => {

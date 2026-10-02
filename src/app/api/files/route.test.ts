@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -4067,4 +4068,25 @@ test("storage health reads failure and recovery without scanning, projecting or 
   expect(scans).toBe(0);
   expect(fs.existsSync(path.join(stateDir, "files-response-results"))).toBe(false);
   expect(fs.existsSync(database) ? fs.readFileSync(database) : null).toEqual(before);
+});
+
+test("storage health exposes fresh preserved registry ids without an auto-update or a scan", async () => {
+  const healthy = buildPipeline({ id: "healthy-health", task: "Health fixture", project: "fixture", repoDir: "/repo", stages: [],
+    srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z", state: "draft" });
+  savePipelines([healthy]);
+  const future = { ...buildPipeline({ id: "future-health", task: healthy.task, project: "fixture", repoDir: "/repo", stages: [],
+    srcPath: null, srcConversationId: null, now: healthy.createdAt, state: "draft" }), state: "future-draft-state" };
+  const raw = JSON.stringify(future);
+  const db = new Database(path.join(stateDir, "state.sqlite"));
+  const url = "http://127.0.0.1/api/files?view=storage-health";
+  try {
+    db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines',?,?,1,1,1)").run(future.id, raw);
+    expect((await (await GET(new Request(url))).json()).registryIssues).toMatchObject([{ id: future.id, reason: "unknown-but-preserved" }]);
+    expect(db.query("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=?").get(future.id)).toEqual({ value_json: raw });
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?").run(JSON.stringify({ ...future, state: "draft" }), future.id);
+    expect((await (await GET(new Request(url))).json()).registryIssues).toEqual([]);
+    db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines' AND row_key=?").run(future.id);
+    await expect(GET(new Request(url))).rejects.toThrow("corrupt pipelines SQLite row");
+    expect(scans).toBe(0);
+  } finally { db.close(); }
 });
