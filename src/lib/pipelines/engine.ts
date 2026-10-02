@@ -1,3 +1,4 @@
+import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -63,6 +64,7 @@ import { killTmuxHostIfMatches, paneInfo } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
+import { clearEngineParkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
@@ -86,7 +88,7 @@ import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
-import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderStagePrompt } from "./prompts";
+import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -262,6 +264,10 @@ export interface PipelinePorts {
       sizing rules judge the agent that briefed a launch by it
       (docs/design/model-sizing-tiers.md §2). */
   conversationRuntime?(conversationId: string): LaunchRuntime | null;
+  /** Fatal memory evidence from the latest terminal host generation. */
+  conversationOutOfMemory?(conversationId: string): Promise<AgentMemoryKill | null>;
+  /** Null means the memory mechanism cannot measure headroom. */
+  memoryHeadroom?(priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -985,7 +991,15 @@ async function stopStageHostByRecordedIdentity(
   if (refusal) {
     return refused(`${refusal.error} (pid ${ref.pid}); ${generation}`);
   }
-  const outcome = await terminateStructuredHostTree(ref, { ...termination, authorize });
+  const outcome = await terminateStructuredHostTree(ref, {
+    ...termination,
+    authorize,
+    persistCapturedTree: termination.persistCapturedTree ?? (identities => registry.recordStructuredTerminationSurvivors(
+      probe.key,
+      { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+      identities,
+    )),
+  });
   if (outcome.ok) {
     return {
       outcome: "stopped",
@@ -1265,6 +1279,16 @@ export function defaultPipelinePorts(
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
     conversationRuntime: (conversationId) => conversationRuntime(snapshot(), conversationId),
+    memoryHeadroom: (priorLimitBytes) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes),
+    conversationOutOfMemory: async (conversationId) => {
+      const current = snapshot();
+      const conversation = current.conversations[conversationId as ViewerConversationId];
+      const generation = conversation?.generations.at(-1);
+      const key = generation && conversation ? sessionKeyFromTranscript(conversation.engine, generation.path) : null;
+      const entry = key ? current.entries[sessionKeyId(key)] : null;
+      const kill = entry?.structuredHost?.memory?.lastKill;
+      return entry && (entry.status === "dead" || entry.status === "unhosted") && kill?.fatal ? kill : null;
+    },
     conversationHostUnavailableSince: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return undefined;
       const current = snapshot();
@@ -1672,7 +1696,9 @@ async function unregisteredStageHostDeathEvidence(
     : null;
 }
 
-function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null): void {
+function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
+  const noteReason = reason ?? (detail.startsWith("rate limited until ") ? { kind: "quota-reset" as const } : undefined);
+  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeParkedTaskNote(pipeline, detail, attempt, noteReason);
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt) attempt.error = detail;
   pipeline.state = "needs_decision";
@@ -2620,6 +2646,7 @@ function advancePipeline(
     return;
   }
   if (successor.next === null) {
+    clearEngineParkedTaskNote(pipeline);
     pipeline.cursor = null;
     pipeline.state = "completed";
     pipeline.stateDetail = detail;
@@ -2687,6 +2714,7 @@ function parkForReview(
   pipeline.state = "needs_review";
   pipeline.pausedState = null;
   pipeline.stateDetail = reviewPendingDetail(pipeline.reviewPending);
+  writeParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
@@ -2717,6 +2745,10 @@ function keepPassedStageUnpublished(
   detail: string,
 ): void {
   const message = `passed but unpublished: ${detail}`;
+  // The initial durable reservation is in flight, not a blocked publication.
+  if (pipeline.stateDetail !== message && !/reserved for execution|awaiting durable delivery admission/.test(detail)) {
+    writeParkedTaskNote(pipeline, message, attempt);
+  }
   attempt.error = message;
   pipeline.state = "running";
   pipeline.stateDetail = message;
@@ -3196,6 +3228,46 @@ function deployCutHoldsAttempt(cut: StageInterruption | null, ports: PipelinePor
   return cut !== null
     && (cut.state === "owed" || cut.state === "submitted")
     && unixMs(ports.now()) - unixMs(cut.recordedAt) < DEPLOY_CUT_HOLD_MS;
+}
+
+const MEMORY_WAIT_BUDGET = { budgetMs: 30 * 60_000, retryBaseMs: 60_000, retryMaxMs: 5 * 60_000 };
+function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, kill: AgentMemoryKill, ports: PipelinePorts): void {
+  const attempts = runFor(pipeline, stage.id)!.attempts;
+  const previous = attempts[attempts.indexOf(attempt) - 1];
+  const error = memoryKillText(kill);
+  attempt.state = "failed";
+  attempt.completedAt = ports.now();
+  attempt.error = error;
+  attempt.outOfMemory = { at: kill.at, limitBytes: kill.limitBytes, limit: kill.limit };
+  if (previous?.outOfMemory) {
+    park(pipeline, `${error}; the automatic retry was killed the same way`, attempt);
+    return;
+  }
+  pipeline.state = "running";
+  pipeline.stateDetail = `${error}; retrying once memory recovers`;
+  setCursorState(pipeline, stage.id, "pending");
+  const retry = newAttempt(pipeline, stage);
+  if (!retry) return;
+  retry.input = renderOutOfMemoryRetryInput(attempt.input, attempt.n, kill);
+  retry.memoryWait = { startedAt: ports.now(), rounds: 0, retryAfter: new Date(unixMs(ports.now()) + 60_000).toISOString(), budgetMs: MEMORY_WAIT_BUDGET.budgetMs, retryMaxMs: MEMORY_WAIT_BUDGET.retryMaxMs };
+  ports.scheduleTick?.(60_000);
+}
+function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  const wait = attempt.memoryWait;
+  if (!wait) return false;
+  const now = ports.now();
+  if (unixMs(wait.retryAfter) > unixMs(now)) return true;
+  const attempts = runFor(pipeline, stage.id)!.attempts;
+  const kill = attempts[attempts.indexOf(attempt) - 1]?.outOfMemory;
+  if (!kill) { delete attempt.memoryWait; return false; }
+  const headroom = ports.memoryHeadroom?.(kill.limitBytes);
+  if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
+  const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
+  if (!next) { park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }
+  attempt.memoryWait = next.wait;
+  pipeline.stateDetail = `${memoryKillText(kill)}; waiting for memory: ${(headroom.availableBytes / 2 ** 30).toFixed(1)} of ${(headroom.requiredBytes / 2 ** 30).toFixed(1)} GB free`;
+  ports.scheduleTick?.(next.delayMs);
+  return true;
 }
 
 /**
@@ -3819,6 +3891,7 @@ async function spawnRunStage(
       } else attempt.effectiveRole.serviceTier = spawned.serviceTier;
     }
     attempt.state = "running";
+    clearEngineParkedTaskNote(pipeline);
     setCursorState(pipeline, stage.id, "running");
     if (pipeline.stateDetail?.startsWith("rate limited until ")
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
@@ -3884,6 +3957,7 @@ async function tickRunStage(
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
     if (publication === "unbound") return;
     if (holdStageLaunch(pipeline, ports, persist)) return;
+    if (waitForMemory(pipeline, stage, attempt, ports)) return;
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
@@ -3957,7 +4031,12 @@ async function tickRunStage(
     const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
     if (readiness !== "connected") {
       const roleId = attempt.definition ? attempt.effectiveRole.roleId : stage.effectiveRole.roleId;
-      park(pipeline, engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness }), attempt);
+      park(
+        pipeline,
+        engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness }),
+        attempt,
+        readiness === "signed-out" ? { kind: "signed-out", engine } : undefined,
+      );
       return;
     }
     /* A publication this process is merely between is transient. Waiting for it
@@ -4135,7 +4214,9 @@ async function tickRunStage(
      every reading this function trusts says "working" and returns. The epoch
      witness is the one reading that does not, and it costs a memoized snapshot
      field until a succession actually moves it. */
-  if (await reconcileSeveredStageTurn(pipeline, stage, attempt, ports, persist) === "handled") return;
+  const memoryDeath = attempt.conversationId ? await ports.conversationOutOfMemory?.(attempt.conversationId) : null;
+  const oomDeath = memoryDeath?.fatal && unixMs(memoryDeath.at) >= unixMs(attempt.startedAt) ? memoryDeath : null;
+  if (!oomDeath && await reconcileSeveredStageTurn(pipeline, stage, attempt, ports, persist) === "handled") return;
   const unavailableSince = !attempt.paneId && attempt.conversationId
     ? await ports.conversationHostUnavailableSince?.(attempt.conversationId)
     : null;
@@ -4153,8 +4234,8 @@ async function tickRunStage(
     ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
     : reportedUnavailableAt;
   const hostUnavailablePastGrace = !heldForDeployCut
-    && unavailableAt > 0
-    && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS;
+    && (Boolean(oomDeath) || (unavailableAt > 0
+    && unixMs(ports.now()) - unavailableAt >= DEAD_RUNNING_ATTEMPT_GRACE_MS));
   if (heldForDeployCut && pipeline.stateDetail !== DEPLOY_CUT_HOLD_DETAIL) {
     pipeline.stateDetail = DEPLOY_CUT_HOLD_DETAIL;
     persist();
@@ -4284,6 +4365,7 @@ async function tickRunStage(
       return;
     }
     pipeline.stateDetail = null;
+    if (oomDeath) { retryOutOfMemoryStage(pipeline, stage, attempt, oomDeath, ports); return; }
     if (rerunHostLostReadOnlyStage(pipeline, stage, attempt, ports)) return;
     attempt.state = "failed";
     attempt.completedAt = ports.now();
@@ -5602,7 +5684,8 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
     || isRuntimeHostUnavailableSpawnFailure(failure)
     || isUnverifiedDeliverySpawnFailure(failure)
     || failure.includes("structured initial message")
-    || failure.includes("runtime host request timed out");
+    || failure.includes("runtime host request timed out")
+    || failure.includes("agent memory scope launch failed before exec; retry shortly");
 }
 
 /**
@@ -5716,7 +5799,8 @@ function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
   if (!stageId) return false;
   const attempt = currentAttempt(pipeline, stageId);
   return unixMs(attempt?.controllerWait?.retryAfter ?? "") > nowMs
-    || unixMs(attempt?.providerWait?.resumeAt ?? "") > nowMs;
+    || unixMs(attempt?.providerWait?.resumeAt ?? "") > nowMs
+    || unixMs(attempt?.memoryWait?.retryAfter ?? "") > nowMs;
 }
 
 /**

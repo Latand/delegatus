@@ -173,6 +173,47 @@ test("hint flags preserve task age for color, icon and priority edits at the MCP
   } finally { await mcp.close(); }
 });
 
+test("task notes round-trip through compact and full MCP paths without restoring default hints", async () => {
+  const task = { id: "note-cost-fixture", project: "fixture", text: "Task", details: "Private working details", status: "inbox", placement: "unplaced", assignments: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" };
+  saveTasks([task] as never);
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    ...productionDomainDependencies,
+    callerAttribution: () => ({ kind: "agent", conversationId: "conversation_fixture", role: "builder" }),
+  } as never);
+  const mcp = await protocol(bindings);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await mcp.client.callTool({ name, arguments: { taskId: task.id, ...args } });
+    expect(result.structuredContent).toMatchObject({ ok: true });
+    return result.structuredContent as Record<string, unknown>;
+  };
+  try {
+    for (const [index, options] of [{}, { includeHints: true }, { full: true }, { compact: false }].entries()) {
+      const text = `Waiting for review ${index}. `.padEnd(280, ".");
+      const written = await call("update_task", { clientRequestId: `note-cost-${index}`, note: text, ...options });
+      expect(written.changedFields).toContain("note");
+      expect(written.task).toMatchObject({ note: { text, author: { kind: "agent", conversationId: "conversation_fixture" } } });
+      if (index === 0) expect(written).not.toHaveProperty("readMore");
+      else expect(written).toHaveProperty("readMore");
+      if (index < 2) expect(written.task).not.toHaveProperty("details");
+      else expect(written.task).toHaveProperty("details", task.details);
+      const read = await call("get_task", {});
+      expect(read.task).toMatchObject({ details: task.details, note: { text } });
+      const compactRead = await call("get_task", { compact: true });
+      expect(compactRead.task).toMatchObject({ note: { text } });
+      expect(compactRead.task).not.toHaveProperty("details");
+      const listed = await call("list_tasks", { project: "fixture", ...options });
+      expect(listed.tasks).toEqual([expect.objectContaining({ note: expect.objectContaining({ text }) })]);
+      const note = (read.task as { note: unknown }).note;
+      expect(taskAcknowledgement({ ...task, note } as never, {}, []).omittedFieldCount)
+        .toBe(taskAcknowledgement(task as never, {}, []).omittedFieldCount);
+    }
+    const cleared = await call("update_task", { clientRequestId: "note-cost-clear", note: null });
+    expect(cleared.changes).toMatchObject({ note: null });
+    expect(cleared.task).not.toHaveProperty("note");
+    expect((await call("get_task", {})).task).not.toHaveProperty("note");
+  } finally { await mcp.close(); }
+});
+
 test("create source inference pins the authenticated generation, rejects ambiguous/stale lineage and preserves explicit src", async () => {
   const store = agentRegistry();
   const begun = beginLegacySpawnFixture(store, { engine: "codex", cwd: process.cwd(), role: "builder", origin: { kind: "operator" } });

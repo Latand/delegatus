@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
@@ -124,9 +125,9 @@ export type StructuredHostRegistryRef =
  * generation the row names (#1501). The row is the association: the engine
  * process the Viewer spawned or adopted (`structuredHost.process`, with its
  * start identity and boot epoch) and the generation that claimed it
- * (`claimOwner`). The ref binds to the conversation whose *current* generation
- * is this session; a row that is not the current generation of any
- * conversation is not a target. Missing identity fields refuse here, before
+ * (`claimOwner`). Resource callers bind to the current generation. A durable
+ * kill can name its conversation explicitly to retain its admitted predecessor
+ * target through succession. Missing identity fields refuse here, before
  * the termination's own fence, so the report can say which field the row lacks.
  */
 export function structuredHostKillRefFromRegistry(
@@ -135,6 +136,8 @@ export function structuredHostKillRefFromRegistry(
     snapshot?: () => RegistryFile;
     owned?: (key: SessionKey) => boolean;
     identityProbe?: ProcessIdentityProbe;
+    /** A durable kill's admitted conversation; permits its older generations. */
+    conversationId?: ViewerConversationId;
   } = {},
 ): StructuredHostRegistryRef {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
@@ -157,7 +160,9 @@ export function structuredHostKillRefFromRegistry(
     return { ok: false, error: `host boot epoch is unknown (pid ${process.pid} was recorded without one)`, owner };
   }
   const conversation = Object.values(file.conversations)
-    .find((candidate) => candidate.generations.at(-1)?.id === key.sessionId) ?? null;
+    .find((candidate) => candidate.engine === key.engine && (dependencies.conversationId
+      ? candidate.id === dependencies.conversationId && candidate.generations.some(generation => generation.id === key.sessionId)
+      : candidate.generations.at(-1)?.id === key.sessionId)) ?? null;
   if (!conversation) {
     return { ok: false, error: "the registry row is not the current generation of any conversation", owner };
   }
@@ -326,8 +331,13 @@ export interface StructuredHostTerminationDependencies {
   ppidMap?(): Map<number, number>;
   processGroupId?(pid: number): number | null;
   signal?(pid: number, signal: NodeJS.Signals): void;
+  /** Persist every verified identity in the captured tree before any runtime
+      release or process signal can make a child disappear from observation. */
+  persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
-  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity): void;
+  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void;
+  /** Previously captured descendants whose root may have exited between retries. */
+  retainedSurvivors?: readonly ProcessIdentity[];
   protectedPids?(): Set<number>;
   /** The caller's own authority over this target, asked again after every
       asynchronous boundary and one step before each signal (#1501): a seat
@@ -382,10 +392,10 @@ function signalErrorCode(error: unknown): string | null {
  * Ends one structured host and everything under it.
  *
  * Through the runtime's own lifecycle when it still holds *this* host — that
- * releases the engine host and retires the registry row in one move — and by
- * process group when it does not, which is the only thing that reaches a
- * released or orphaned host (`conversation_action kill` answers "structured
- * runtime host is unavailable" for those, #1199). Either way the sweep runs:
+ * releases the engine host — and by process group when it does not, which is
+ * the only thing that reaches a released or orphaned host (`conversation_action
+ * kill` answers "structured runtime host is unavailable" for those, #1199).
+ * Either way the sweep runs:
  * the `nsenter`/`setpriv`/shell wrapper and every descendant get SIGTERM once,
  * then SIGKILL once for whatever is still standing. The registry row is retired
  * only when the tree is confirmed gone, and only while it still names the pid
@@ -403,7 +413,9 @@ export async function terminateStructuredHostTree(
   const groupOf = dependencies.processGroupId ?? linuxProcessGroupId;
   const signal = dependencies.signal ?? ((pid: number, value: NodeJS.Signals) => { process.kill(pid, value); });
   const retire = dependencies.retireRegistryEntry
-    ?? ((key: SessionKey, expected: ProcessIdentity) => { agentRegistry().terminateStructuredHost(key, expected); });
+    ?? ((key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]) => {
+      return agentRegistry().terminateStructuredHost(key, expected, confirmed);
+    });
   const terminateOwned = dependencies.terminateOwnedHost ?? terminateStructuredDeliveryHost;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const graceMs = dependencies.graceMs ?? TERMINATION_GRACE_MS;
@@ -425,27 +437,43 @@ export async function terminateStructuredHostTree(
 
   const initialStatus = processIdentityStatus(expected, identityProbe);
   if (initialStatus === "dead" && !alive(pid)) {
-    if (key) retire(key, expected);
-    return { ok: true, via: "already-exited", pids: [] };
+    const retained = dependencies.retainedSurvivors ?? [];
+    if (retained.length === 0) {
+      if (key && retire(key, expected, []) === false) {
+        return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      }
+      return { ok: true, via: "already-exited", pids: [] };
+    }
+    const stillUnresolved = retained.filter(identity => {
+      try { return processIdentityStatus(identity, identityProbe) !== "dead" || alive(identity.pid); }
+      catch { return true; }
+    });
+    if (stillUnresolved.length === 0) {
+      if (key && retire(key, expected, retained) === false) {
+        return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      }
+      return { ok: true, via: "already-exited", pids: retained.map(identity => identity.pid) };
+    }
   }
   if (initialStatus === "unverified") {
     return { ok: false, status: 409, error: "host process identity cannot be verified — refresh the resource list", remaining: [], survivors: [] };
   }
   /* The fence the whole endpoint rests on: this pid must still be the process
      the snapshot listed, or the kernel handed it to something else. */
-  if (initialStatus === "dead") {
+  if (initialStatus === "dead" && alive(pid)) {
     return { ok: false, status: 409, error: "host has changed — refresh the resource list", remaining: [], survivors: [], stale: true };
   }
 
   /* Snapshot the tree before anything dies: a reparented child is invisible to
      a ppid walk taken after the root is gone. */
   const processParents = ppids();
-  const tree = descendantPids(pid, processParents);
+  const rootAlive = initialStatus === "alive";
+  const tree = rootAlive ? descendantPids(pid, processParents) : [];
   /* A host is spawned detached, so it leads its own group. Signalling the
      group reaches reparented members that a descendant walk cannot see. Add
      every observed member to the identity snapshot before granting that wider
      signal; any observed member without a verifiable identity refuses the kill. */
-  const groupLeader = groupOf(pid) === pid ? pid : null;
+  const groupLeader = rootAlive && groupOf(pid) === pid ? pid : null;
   if (groupLeader !== null) {
     const known = new Set(tree);
     for (const candidate of processParents.keys()) {
@@ -455,8 +483,17 @@ export async function terminateStructuredHostTree(
       }
     }
   }
-  const identities = new Map<number, ProcessIdentity>();
+  const identities = new Map<number, ProcessIdentity>([[pid, expected]]);
+  for (const retained of dependencies.retainedSurvivors ?? []) {
+    const prior = identities.get(retained.pid);
+    if (prior && (prior.startIdentity !== retained.startIdentity || prior.bootEpoch !== retained.bootEpoch)) {
+      return { ok: false, status: 409, error: `process ${retained.pid} identity changed before retry`, remaining: [retained.pid], survivors: [], stale: true };
+    }
+    identities.set(retained.pid, retained);
+    if (!tree.includes(retained.pid)) tree.push(retained.pid);
+  }
   for (const candidate of tree) {
+    if (identities.has(candidate)) continue;
     const candidateIdentity = identityOf(candidate);
     if (candidateIdentity !== null) {
       if (candidate === pid && candidateIdentity !== ref.startIdentity) {
@@ -481,6 +518,22 @@ export async function terminateStructuredHostTree(
         survivors: [],
       };
     }
+  }
+  /* A partial termination can outlive this caller. Keep the complete captured
+     identity set durable before the first effect, so a restart can finish the
+     same kill without trying to rediscover reparented children. */
+  const capturedIdentities = [...identities.values()];
+  if (dependencies.persistCapturedTree && !dependencies.persistCapturedTree(capturedIdentities)) {
+    return {
+      ok: false,
+      status: 409,
+      error: "structured termination evidence could not be persisted",
+      remaining: tree.filter(candidate => alive(candidate)),
+      survivors: capturedIdentities.filter(identity => {
+        try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
+        catch { return true; }
+      }),
+    };
   }
   let terminationStarted = false;
   const partialEvidence = () => {
@@ -531,7 +584,7 @@ export async function terminateStructuredHostTree(
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
     let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
-    if (key) {
+    if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       terminationStarted = true;
       try {
         if (await terminateOwned(key, expected)) via = "runtime";
@@ -618,8 +671,12 @@ export async function terminateStructuredHostTree(
         ...partialEvidence(),
       };
     }
-    /* The runtime path already retired the row as part of its own lifecycle. */
-    if (key && via !== "runtime") retire(key, expected);
+    /* The runtime can release its root before detached descendants are gone.
+       Retire only after the full captured tree has passed identity checks, and
+       require the registry to accept that exact evidence on every path. */
+    if (key && retire(key, expected, [...identities.values()]) === false) {
+      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+    }
     return { ok: true, via, pids: tree };
   } catch (error) {
     const evidence = partialEvidence();

@@ -144,6 +144,7 @@ export const BADGE_LABEL = {
   permission: "attention.decisionPermission",
   delivery: "needs.delivery",
   launch: "needs.launch",
+  memory: "needs.memory",
   ask: "needs.ask",
 } as const;
 
