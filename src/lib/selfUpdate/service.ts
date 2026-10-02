@@ -244,13 +244,19 @@ export class SelfUpdateService {
     } catch (error) {
       return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
     }
-    if (this.committedAutoSwitchSequence > sequence) {
-      return refuse(409, "auto-switch-superseded", "A newer automatic update switch has already been applied");
-    }
-    const currentAuto = this.auto;
+    let currentAuto: AutoState;
+    let nextAuto: AutoState;
+    do {
+      currentAuto = this.auto;
+      nextAuto = { ...currentAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : currentAuto.off, quietSince: null };
+      replaySnapshot.auto = await this.autoView(decision, replaySnapshot, nextAuto);
+      // The view performs Git observations. Revalidate after its last await,
+      // and retain any controller settlement that happened during that read.
+      if (this.committedAutoSwitchSequence > sequence) {
+        return refuse(409, "auto-switch-superseded", "A newer automatic update switch has already been applied");
+      }
+    } while (this.auto !== currentAuto);
     const autoBeforeCommit = currentAuto;
-    const nextAuto = { ...currentAuto, enabled, changedAt: at, changedBy: writer, off: enabled ? null : currentAuto.off, quietSince: null };
-    replaySnapshot.auto = await this.autoView(decision, replaySnapshot, nextAuto);
     replaySnapshot.meta.pollMinutes = nextAuto.enabled ? 15 : this.deps.pollMinutes;
     let previousAutoFile: Buffer | null;
     let previousHistoryFile: Buffer | null;

@@ -1,4 +1,4 @@
-import { realExec } from "@/lib/workflows/provision";
+import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryFromRemote } from "@/lib/projects/git";
 export { githubRepositoryFromRemote, repositoryForProjectRoot, resetRepositoryCache } from "@/lib/projects/git";
 
@@ -29,10 +29,10 @@ async function defaultBranch(cwd: string): Promise<string | null> {
   return null;
 }
 
-export async function resolveFlowMergeIdentity(cwd: string): Promise<{ repository: string; headRef: string; headSha: string } | null> {
-  const remote = (await realExec("git", ["remote", "get-url", "origin"], cwd, undefined, { timeoutMs: 2_000 }));
-  const branch = (await realExec("git", ["branch", "--show-current"], cwd, undefined, { timeoutMs: 2_000 }));
-  const head = (await realExec("git", ["rev-parse", "HEAD"], cwd, undefined, { timeoutMs: 2_000 }));
+export async function resolveFlowMergeIdentity(cwd: string, exec: ExecPort = realExec): Promise<{ repository: string; headRef: string; headSha: string } | null> {
+  const remote = (await exec("git", ["remote", "get-url", "origin"], cwd, undefined, { timeoutMs: 2_000 }));
+  const branch = (await exec("git", ["branch", "--show-current"], cwd, undefined, { timeoutMs: 2_000 }));
+  const head = (await exec("git", ["rev-parse", "HEAD"], cwd, undefined, { timeoutMs: 2_000 }));
   if (remote.code !== 0 || branch.code !== 0 || head.code !== 0) return null;
   const repository = githubRepositoryFromRemote(remote.stdout);
   const headRef = branch.stdout.trim();

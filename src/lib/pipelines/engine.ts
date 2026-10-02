@@ -25,7 +25,8 @@ import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { headCwd } from "@/lib/agent/transcript";
-import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLegacyRelayFailurePause, patchFlow } from "@/lib/flows/commands";
+import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLegacyRelayFailurePause, patchFlow, type PreparedFlowGit } from "@/lib/flows/commands";
+import { resolveFlowMergeIdentity } from "@/lib/flows/git";
 import { lastAssistantMessage, readFindingsFile } from "@/lib/flows/findings";
 import { loadFlows } from "@/lib/flows/store";
 import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flows/types";
@@ -67,7 +68,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -195,6 +196,7 @@ export interface PipelinePorts {
   /** Controller-only: committing-stage Git settles after its lease is released. */
   deferStageGit?: boolean;
   reviewIngressHead?: (pipeline: Pipeline) => import("./git").PipelineGitResult | null;
+  reviewFlowGit?: (pipeline: Pipeline) => PreparedFlowGit | null;
   /** Asynchronous Git used only by the provisioning pre-pass. */
   provisionExec?: ProvisionExecPort;
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
@@ -319,7 +321,7 @@ export interface PipelinePorts {
       gone. Optional: a harness without deputies leaves lineage as given. */
   deputySeatFor?(conversationId: string): { conversationId: string; path: string | null } | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
-  createFlow(req: CreateFlowRequest, entries: FileEntry[]): Promise<{ flow?: Flow; error?: string }>;
+  createFlow(req: CreateFlowRequest, entries: FileEntry[], preparedGit?: PreparedFlowGit): Promise<{ flow?: Flow; error?: string }>;
   patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
   closeFlow(id: string): Promise<{
     flow?: Flow;
@@ -1421,8 +1423,8 @@ export function defaultPipelinePorts(
       return principal ? { conversationId: principal.seatConversationId, path: principal.seatPath } : null;
     },
     pipelineAdoptionCandidates: (pipelineId) => adoptionCandidates().get(pipelineId) ?? [],
-    createFlow: async (request, entries) => {
-      const result = await createFlowFromRequest(request, entries);
+    createFlow: async (request, entries, preparedGit) => {
+      const result = await createFlowFromRequest(request, entries, undefined, preparedGit);
       flowSnapshot = null;
       return result;
     },
@@ -4553,6 +4555,11 @@ async function tickReviewStage(
         serviceTierSource: attempt.effectiveRole.serviceTierSource,
       } : {}),
     };
+    const preparedGit = ports.deferStageGit ? ports.reviewFlowGit?.(pipeline) : undefined;
+    if (ports.deferStageGit && !preparedGit) {
+      pipeline.stateDetail = "review flow Git observations pending";
+      return;
+    }
     const created = await ports.createFlow({
       implementerPath: implementer.agentPath,
       ...(implementer.conversationId ? { implementerConversationId: implementer.conversationId } : {}),
@@ -4568,7 +4575,7 @@ async function tickReviewStage(
       reviewerMode: "headless",
       reviewerSandbox: pipelineStageSandbox(attemptStage(stage, attempt)),
       roundLimit: DEFAULT_FAIL_EDGE_ROUNDS,
-    }, entries);
+    }, entries, preparedGit ?? undefined);
     if (!created.flow) {
       park(pipeline, `creating the review flow failed: ${created.error ?? "unknown error"}`, attempt);
       return;
@@ -5950,7 +5957,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
         }
       }
     } catch (error) { result = { ok: false, error: `remote verification failed: ${String(error)}` }; }
-    finally { clearInterval(watch); fs.closeSync(descriptor); }
+    finally { clearInterval(watch); releasePublicationFileLock(descriptor); }
     await withPipelineMutation((pipelines, persist) => {
       const pipeline = pipelines.find((item) => item.id === preview.id);
       if (!pipeline || pipeline.remoteAction?.id !== action.id || pipeline.remoteAction.state !== "pending") return;
@@ -5986,7 +5993,7 @@ function reviewIngressFence(pipeline: Pipeline): string {
 }
 
 async function collectReviewIngressHeads(ports: PipelinePorts) {
-  const observations = new Map<string, { fence: string; result: import("./git").PipelineGitResult }>();
+  const observations = new Map<string, { fence: string; result: import("./git").PipelineGitResult; flowGit: PreparedFlowGit }>();
   for (const pipeline of loadPipelinesForProjection()) {
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
@@ -6007,8 +6014,9 @@ async function collectReviewIngressHeads(ports: PipelinePorts) {
     };
     try {
       const result = await currentPipelineBranchHead(pipeline, exec);
+      const mergeIdentity = result.ok ? await resolveFlowMergeIdentity(pipeline.worktreeDir, exec) : null;
       revalidate();
-      if (!abort.signal.aborted) observations.set(pipeline.id, { fence, result });
+      if (!abort.signal.aborted) observations.set(pipeline.id, { fence, result, flowGit: { cwd: pipeline.worktreeDir, mergeIdentity } });
     } finally { clearInterval(watch); }
   }
   return observations;
@@ -6068,7 +6076,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         persist([current]);
         changed = true;
       });
-    } finally { clearInterval(watch); fs.closeSync(descriptor); }
+    } finally { clearInterval(watch); releasePublicationFileLock(descriptor); }
   }
   return changed;
 }
@@ -6125,6 +6133,9 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     const controllerPorts: PipelinePorts = { ...ports, deferStageGit: true, reviewIngressHead: (pipeline) => {
       const observed = ingressHeads.get(pipeline.id);
       return observed?.fence === reviewIngressFence(pipeline) ? observed.result : null;
+    }, reviewFlowGit: (pipeline) => {
+      const observed = ingressHeads.get(pipeline.id);
+      return observed?.fence === reviewIngressFence(pipeline) ? observed.flowGit : null;
     } };
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;

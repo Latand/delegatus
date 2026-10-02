@@ -6,6 +6,7 @@ import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provis
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
+import { tryLockFenceExclusive, type HeldFenceLock } from "@/runtime-host/fenceLock";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
 import type { Pipeline } from "./types";
@@ -1056,16 +1057,29 @@ export interface PipelinePublishRequest {
 /** Acquire a kernel lock on the parent's open file description BEFORE any
     publisher child exists. Descriptor 3 is inherited explicitly by each Git
     child, so parent death cannot open a pre-lock launch window. */
+const platformLocks = new Map<number, HeldFenceLock>();
+
 export async function acquirePublicationFileLock(lock: string): Promise<number | null> {
   let descriptor: number;
   try { descriptor = fs.openSync(lock, "a", 0o600); }
   catch { return null; }
   try {
-    const result = await realExec("flock", ["-n", "3"], path.dirname(lock), undefined, { inheritFd: descriptor, timeoutMs: 1_000 });
-    if (result.code === 0) return descriptor;
+    const held = tryLockFenceExclusive({ fd: descriptor, filename: lock });
+    if (held) {
+      // POSIX locks follow the inherited open file description. Closing the
+      // parent's descriptor leaves any still-owned child holding the fence.
+      if (process.platform === "win32") platformLocks.set(descriptor, held);
+      return descriptor;
+    }
   } catch { /* Unsupported locking fails closed. */ }
   fs.closeSync(descriptor);
   return null;
+}
+
+export function releasePublicationFileLock(descriptor: number): void {
+  const held = platformLocks.get(descriptor);
+  if (held) { platformLocks.delete(descriptor); held.release(); }
+  fs.closeSync(descriptor);
 }
 
 function publicationLockIdentity(descriptor: number): string {
@@ -1080,7 +1094,7 @@ async function withPublicationFileLock<T>(lock: string, operation: () => Promise
     if (publicationLockIdentity(descriptor) !== expectedIdentity) return { locked: false };
     return { locked: true, value: await operation() };
   }
-  finally { fs.closeSync(descriptor); }
+  finally { releasePublicationFileLock(descriptor); }
 }
 
 /**
@@ -1157,7 +1171,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     try { result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
       publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null })); }
     catch (error) { result = { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }; }
-    fs.closeSync(descriptor);
+    releasePublicationFileLock(descriptor);
     descriptorOpen = false;
     // Reacquisition proves that no orphan child retained the inherited lock.
     const completed = await withPublicationFileLock(lock, () => withDeliveryMutationAsync<PipelinePublishResult>((tx) => {
@@ -1192,7 +1206,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (!reserved) throw error;
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
       detail: `publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}` };
-  } finally { if (descriptorOpen) fs.closeSync(descriptor); }
+  } finally { if (descriptorOpen) releasePublicationFileLock(descriptor); }
 }
 
 /** Explicit recovery reads the remote only after proving the previous executor

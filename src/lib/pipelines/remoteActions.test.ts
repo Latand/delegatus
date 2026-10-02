@@ -2,15 +2,111 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-remote-actions-"));
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord, withPipelineMutation } = await import("./store");
-const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
+const { realExec } = await import("@/lib/workflows/provision");
 const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
 afterAll(() => { restore(); fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); });
 const HEAD = "a".repeat(40);
+
+test("review flow identity Git yields to a pause before the controller lease", async () => {
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { saveFlows } = await import("@/lib/flows/store");
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "flow-ingress-"));
+  const repo = path.join(root, "repo");
+  fs.mkdirSync(repo);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const head = run("rev-parse", "HEAD");
+  const lane = pipelineCorpus(2, 1)[1]!;
+  lane.repoDir = repo; lane.worktreeDir = `${repo}-pipeline-${lane.id}`;
+  run("worktree", "add", "-q", "-b", lane.branch, lane.worktreeDir, head);
+  lane.state = "running"; lane.closedAt = null; lane.publication = "internal";
+  lane.lastPassedCommit = head; lane.baseRef = head;
+  lane.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
+  lane.runs[1]!.attempts = [];
+  const transcript = path.join(root, "builder.jsonl");
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: "22222222-3333-4333-8444-555555555555", cwd: lane.worktreeDir } })}\n`);
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
+  const owner = registry.ensureConversation("codex", transcript, null);
+  lane.runs[0]!.attempts[0]!.agentPath = transcript;
+  lane.runs[0]!.attempts[0]!.conversationId = owner.id;
+  saveFlows([]);
+  savePipelines([lane]);
+  const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+  const entered = path.join(bin, "entered"), released = path.join(bin, "released");
+  fs.writeFileSync(path.join(bin, "git"), '#!/bin/sh\nif [ "$1 $2" = "remote get-url" ]; then touch "$FLOW_ENTERED"; while [ ! -f "$FLOW_RELEASED" ]; do sleep 0.01; done; fi\nexec "$FLOW_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, FLOW_ENTERED: process.env.FLOW_ENTERED, FLOW_RELEASED: process.env.FLOW_RELEASED, FLOW_GIT: process.env.FLOW_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, FLOW_ENTERED: entered, FLOW_RELEASED: released, FLOW_GIT: git });
+  const ports = { ...defaultPipelinePorts(), stageHostResident: async () => false,
+    stopStageAgent: async () => ({ outcome: "not-running" as const }),
+    conversationAgentActive: async () => false, paneAgentAlive: async () => false,
+    spawnAgent: async () => { throw new Error("test does not launch agents"); } };
+  let controller: ReturnType<typeof tickPipelines> | undefined, pause: ReturnType<typeof patchPipeline> | undefined;
+  try {
+    controller = tickPipelines([], ports);
+    const deadline = Date.now() + 2_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(entered)).toBe(true);
+    pause = patchPipeline(lane.id, { action: "pause" }, ports);
+    const answer = await Promise.race([pause, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(findPipelineRecord(lane.id)!.state).toBe("paused");
+  } finally {
+    fs.writeFileSync(released, "");
+    await controller; await pause;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("local committing stages progress with Git available and no flock utility", async () => {
+  const repo = path.join(process.env.LLV_STATE_DIR!, "git-without-flock");
+  fs.mkdirSync(repo);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: repo, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const head = run("rev-parse", "HEAD");
+  const lane = pipelineCorpus(2, 1)[1]!;
+  lane.repoDir = repo;
+  lane.worktreeDir = `${repo}-pipeline-${lane.id}`;
+  run("worktree", "add", "-q", "-b", lane.branch, lane.worktreeDir, head);
+  lane.state = "running"; lane.closedAt = null; lane.publication = "internal";
+  lane.lastPassedCommit = head;
+  lane.cursor = { stageId: "build", state: "committing", input: null, activatedBy: null };
+  lane.runs[0]!.attempts[0]!.state = "committing";
+  savePipelines([lane]);
+  const bin = path.join(repo, "git-only");
+  fs.mkdirSync(bin);
+  fs.symlinkSync(git, path.join(bin, "git"));
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin;
+  try {
+    expect((await realExec("git", ["rev-parse", "HEAD"], repo)).stdout.trim()).toBe(head);
+    expect(await settlePendingStageGit({ ...defaultPipelinePorts(), getFlow: () => null })).toBe(true);
+    expect(findPipelineRecord(lane.id)!.cursor!.stageId).toBe("review");
+  } finally { process.env.PATH = previousPath; }
+});
 
 test("a remote review retry records pending work before remote Git answers", async () => {
   const lane = pipelineCorpus(2, 1)[1]!;

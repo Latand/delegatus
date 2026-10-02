@@ -15,6 +15,7 @@ import { POST as postPresence } from "../../app/api/view/presence/route";
 import { listPresence, resetPresenceForTest } from "../view/presenceStore";
 import { statePath } from "../configDir";
 import { NextRequest } from "next/server";
+import { spawnSync } from "node:child_process";
 import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
@@ -71,6 +72,61 @@ async function postTypingPresence(role: string): Promise<void> {
   expect((await postPresence(request)).status).toBe(200);
   expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
 }
+
+test("a delayed final Git observation cannot let an older switch overwrite a newer disable", async () => {
+  const h = scenario();
+  const checkout = join(h.dir, "checkout");
+  mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha, dir: checkout }));
+  const revision = { sha, short: sha.slice(0, 7), version: "1", date: "" };
+  h.deps.describe = async () => revision;
+  h.deps.check = async () => ({ ok: true, installed: revision, available: revision, relation: "equal", ahead: 0, behind: 0, delta: null });
+  h.deps.buildEnv = () => ({});
+  h.deps.createRunner = () => ({ state: idleUpdate(), start: async () => {}, retry: async () => {}, restore: () => {}, logPath: () => "" }) as ReturnType<ServiceDeps["createRunner"]>;
+  h.deps.processAlive = () => true;
+  h.deps.hostHealth = async () => null;
+  h.deps.web = { pid: 101, port: 0, startedAt: "" };
+  h.setStage(true);
+  const service = new SelfUpdateService(h.deps);
+  const bin = join(h.dir, "bin");
+  mkdirSync(bin);
+  const count = join(h.dir, "git-count");
+  const entered = join(h.dir, "git-entered");
+  const released = join(h.dir, "git-released");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$FIXTURE_COUNT" ] || n=$(cat "$FIXTURE_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$FIXTURE_COUNT"\nif [ "$n" = 4 ]; then touch "$FIXTURE_ENTERED"; while [ ! -f "$FIXTURE_RELEASED" ]; do sleep 0.01; done; fi\nexec "$FIXTURE_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, FIXTURE_COUNT: process.env.FIXTURE_COUNT, FIXTURE_ENTERED: process.env.FIXTURE_ENTERED, FIXTURE_RELEASED: process.env.FIXTURE_RELEASED, FIXTURE_GIT: process.env.FIXTURE_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, FIXTURE_COUNT: count, FIXTURE_ENTERED: entered, FIXTURE_RELEASED: released, FIXTURE_GIT: git });
+  let older: ReturnType<SelfUpdateService["setAuto"]> | undefined;
+  try {
+    older = service.setAuto(true);
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    expect(await service.setAuto(false)).toMatchObject({ ok: true });
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    writeFileSync(released, "");
+    expect(await older).toMatchObject({ ok: false, code: "auto-switch-superseded" });
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+  } finally {
+    writeFileSync(released, "");
+    await older;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    service.stop();
+  }
+});
 
 test.each(["web", "runtime-host"] as const)("an old launcher cannot receive an automatic %s request", async (role) => {
   const h = scenario();
