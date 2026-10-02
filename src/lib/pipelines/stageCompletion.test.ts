@@ -99,7 +99,10 @@ function harness() {
     monotonicNow: () => Date.now(),
     worktreePresent: () => true,
     conversationAgentActive: async () => null,
-    durableTurnEvidence: async () => null,
+    durableTurnEvidence: async (_engine, transcriptPath) => {
+      const message = messages.get(transcriptPath);
+      return message ? { turn: "terminal", message, lastRecordAt: message.ts } : null;
+    },
     headCwd: () => loadPipelines()[0]?.worktreeDir ?? null,
     lastMessage: (item) => messages.get(item.path) ?? null,
     pathForConversation: (id) => {
