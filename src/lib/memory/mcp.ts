@@ -4,10 +4,11 @@ import type { McpToolArgs } from "@/lib/mcp/server";
 /** Stdio forwards to the serving Viewer; only that process owns the derivative. */
 export async function searchMemoryTool(args: McpToolArgs, control: ViewerControlDependencies, conversationId: string | null) {
   const requestId = typeof args.clientRequestId === "string" ? args.clientRequestId.trim() : "";
-  // The Viewer payload is spread into this exact success envelope by
-  // createMcpToolService. Reserve its serialized bytes before asking the route
-  // to build the page, including JSON escaping in the caller-controlled key.
-  const envelope = { ok: true, toolName: "search_memory", clientRequestId: requestId, replayed: false };
+  // Reserve the largest success envelope, including optional limit-clamping
+  // metadata. The service normalizes limit before dispatch, so the binding
+  // cannot tell whether that metadata will be appended. JSON escaping in the
+  // caller-controlled key also counts toward the response budget.
+  const envelope = { ok: true, toolName: "search_memory", clientRequestId: requestId, replayed: false, clamped: { limit: 20 } };
   const payloadBudget = 16_000 - (Buffer.byteLength(JSON.stringify(envelope)) - 1);
   if (typeof args.id === "string" && args.id.trim()) {
     return control.post("/api/search/memory", { id: args.id.trim(), project: args.project, requestId, conversationId, maxBytes: payloadBudget });

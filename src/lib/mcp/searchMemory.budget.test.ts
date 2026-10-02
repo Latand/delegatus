@@ -62,6 +62,22 @@ test("search_memory open stays bounded, and rejects an overlong caller key", asy
   expect(rejected.ok).toBe(false);
 });
 
+test("search_memory budgets clamped limit metadata when opening an escaped topic", async () => {
+  const directory = path.join(sandbox, ...Array.from({ length: 5 }, () => "d".repeat(200)));
+  fs.mkdirSync(directory, { recursive: true });
+  const sourcePath = path.join(directory, "escaped.md");
+  fs.writeFileSync(sourcePath, `---\nname: Widget${"\u0001".repeat(154)}\ndescription: Widget${"\u0001".repeat(394)}\ntype: feedback\n---\nWidget${"\u0001".repeat(2042)}\n`);
+  await index.refresh([{ path: sourcePath, sourceKind: "claude_memory", engine: "claude", project: "project-a" }]);
+  const id = index.search({ query: "widget", kind: "preference" }).items[0]!.id;
+  for (const limit of [999, "20", 0]) {
+    const result = await service.callTool("search_memory", { clientRequestId: `clamped-open-${limit}`, id, limit });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("search_memory open must succeed");
+    expect(result.clamped).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(16_000);
+  }
+});
+
 test("discovery and indexing refuse a hit whose source metadata alone exceeds the POST budget", async () => {
   const { discoverMemorySources } = await import("@/lib/memory/sources");
   const longRoot = path.join(sandbox, ...Array.from({ length: 12 }, () => "\u0001".repeat(240)));
