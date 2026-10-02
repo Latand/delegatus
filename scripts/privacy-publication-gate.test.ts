@@ -22,6 +22,7 @@ import {
   commitMessageFindings,
   formatPrivacyReport,
   mergeBoundaryReview,
+  sensitiveClasses,
   TRUSTED_TELEGRAM_VENDOR_EXEMPT_FINDING_CLASSES,
   TRUSTED_TELEGRAM_VENDOR_ROOT_DIGEST,
   trustedVendorRootDigest,
@@ -39,9 +40,40 @@ const systemdUnitSamples = [
   ...["service", "socket", "scope", "slice", "timer", "mount", "automount", "path", "device", "swap"]
     .map((type) => ["delegatus", `review.${type}`].join("@")),
   ["delegatus", "review.SERVICE"].join("@"),
+  `Inspect \`${["delegatus", "review.service"].join("@")}\`.`,
+  `Inspect [${["delegatus", "review.service"].join("@")}](https://fixture.invalid).`,
+  ...[" ", "\t", "\r", "\n", "\v", "\f", "/", '"', "'", "`", ")", "]", ",", ";", ":"]
+    .map((boundary) => ["delegatus", "review.service"].join("@") + boundary),
 ];
 const unitLookingRealAddresses = [
+  [JSON.stringify(["probe", "personal.dev"].join("@")), "review.service"].join("@"),
+  [JSON.stringify(["probe", "personal.dev"].join("@")), "review.service/"].join("@"),
+  ["probe", "b**.service**%E2%80%8B"].join("%40"),
+  ["probe", "b**.service**\u200B"].join("@"),
+  ["probe", "b**.service**%00"].join("%40"),
+  ["probe", "b.service&#x200B;"].join("&#64;"),
+  ["probe", "b.service%E2%80%8B"].join("%40"),
+  ["probe", "b&#46;service\u200B"].join("@"),
+  ["probe", "b.service%25E2%2580%258B"].join("%2540"),
+  ["probe", "b.service%00"].join("%40"),
+  ["probe", "b\u200B.service"].join("@"),
+  ["probe", "b.service\u200C"].join("@"),
+  ["probe", "b.service\u04C0"].join("@"),
+  `\`${["probe", "b.service"].join("@")}\`.com`,
+  `\`${["probe", "b.service"].join("@")}\`.\u0375α.com`,
+  `\`${["probe", "b.service"].join("@")}\`.💡.com`,
+  "`" + ["probe", "b.service"].join("@") + "` and " + ["probe", "b.service"].join("@") + ".",
+  ...["FEFF", "AD", "2060"].map((code) => ["probe", `b.service&#x${code};`].join("&#64;")),
+  ["probe", "͵α.com"].join("@"),
+  ["probe", "・カ.com"].join("@"),
+  ...[".", "-", "+", "!", "?", ">tail", "}", "=", "\\tail", "α", "\u0301", "\u0375", "\u30FB", "\u200B", "\u00A0", "）", "／", "💡"]
+    .map((suffix) => ["probe", `b.service${suffix}`].join("@")),
+  ["probe", "a.b.service"].join("@"),
+  ["probe", "b。service"].join("@"),
+  ["probe", "b.ｓｅｒｖｉｃｅ"].join("@"),
+  ["probe", String.raw`b\x2dworker.service+`].join("@"),
   ["someone", "company.services"].join("@"),
+  ["probe", "b.target"].join("@"),
   ["a", "b.com"].join("@"),
   ["delegatus", "review.service.com"].join("@"),
   ["delegatus", "review.service.dev"].join("@"),
@@ -599,6 +631,17 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
+  });
+
+  test("systemd boundaries reject every unlisted ASCII character and representative Unicode characters", () => {
+    const permitted = new Set([" ", "\t", "\r", "\n", "\v", "\f", "/", '"', "'", "`", ")", "]", ",", ";", ":"]);
+    const boundaries = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
+    boundaries.push("α", "\u0301", "\u0375", "\u30FB", "\u200B", "\u00A0", "）", "／", "💡");
+    for (const boundary of boundaries) {
+      const unit = ["probe", "b.service"].join("@") + boundary;
+      expect(sensitiveClasses(unit).has("email_address"), `boundary ${boundary.codePointAt(0)}`).toBe(!permitted.has(boundary));
+      expect(commitMessageAddressReview(unit).attributable.length, `boundary ${boundary.codePointAt(0)}`).toBe(permitted.has(boundary) ? 0 : 1);
+    }
   });
 
   test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD text blocked (%#)", (address) => {

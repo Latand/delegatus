@@ -30,16 +30,23 @@ prefixes. Text-like files remain inspectable with NUL bytes or UTF-16 encoding.
 Unsupported binary inputs fail closed. Publication inputs and supporting files
 with symlinks in any path component are rejected before their targets are read.
 
-Email detection skips domains ending in the systemd unit types `.service`,
+Email detection exempts a single ASCII instance label (including systemd hex
+escapes) followed by one of the systemd unit types `.service`,
 `.socket`, `.scope`, `.slice`, `.timer`, `.mount`, `.automount`, `.path`,
 `.device`, and `.swap`. These suffixes are not delegated TLDs; template unit
 names and cgroup paths therefore name no mailbox. `.target` remains reportable
 because [IANA delegates it as a TLD](https://www.iana.org/domains/root/db/target.html).
 This rule also applies to commit messages and merge-boundary identities. The
-suffix must be the final domain component: `.services` and unit-looking domains
-ending in a real TLD remain reportable.
-Internationalized domain labels are read in full before this exemption is
-applied.
+suffix must end the text or be followed immediately by ASCII whitespace,
+`/`, `"`, `'`, a backtick, `)`, `]`, `,`, `;`, or `:`. Every other following
+character disqualifies the exemption, including dots, hyphens and all
+non-ASCII characters. Extra domain components and delegated TLDs remain
+reportable. Original text and a decoded view preserving zero-width characters
+are checked alongside canonical text so decoding cannot create an accepted
+unit boundary. A Markdown projection keeps the accepted source boundary of
+the same unchanged unit before a sentence-ending period; a complete domain
+continuation remains reportable. Quoted mailbox local parts remain reportable;
+they are not systemd names and can contain a real address.
 
 Media dispatch recognizes PNG, JPEG, GIF, BMP, TIFF, WebP, ISO-BMFF, AVI, and
 Matroska signatures before applying the declared-extension fallback. Renamed
