@@ -1203,16 +1203,19 @@ function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void) {
   return { ...box, accepted, head };
 }
 
-test("stage reconciliation rejects a patch-equivalent change that was subsequently reverted", () => {
+test.each(["update", "revert"])("stage reconciliation retains accepted history followed by a builder %s", (operation) => {
   const box = rebasedStageSandbox();
   try {
-    git(box.subject.worktreeDir, "revert", "--no-edit", box.head);
+    if (operation === "revert") git(box.subject.worktreeDir, "revert", "--no-edit", box.head);
+    else box.commit("accepted.txt", "updated builder behavior\n");
     const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
     expect(git(box.subject.worktreeDir, "cherry", head, box.accepted)).toBe(`- ${box.accepted}`);
     const result = reconcilePipelineStageHead(box.subject, head, realExec);
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
-    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect(git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha)).toBe(`${result.sha} ${head} ${box.accepted}`);
     expect(box.originHead()).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -1220,7 +1223,6 @@ test("stage reconciliation rejects a patch-equivalent change that was subsequent
 test("stage reconciliation accepts squashed content, preserves the tree, and uses the controller identity", () => {
   const box = rebasedStageSandbox();
   try {
-    box.commit("accepted.txt", "accepted work\nadditional builder work\n");
     box.commit("build.txt", "new builder work\n");
     git(box.subject.worktreeDir, "reset", "--soft", "origin/main");
     git(box.subject.worktreeDir, "commit", "-m", "squashed builder work");
@@ -1239,43 +1241,21 @@ test("stage reconciliation accepts squashed content, preserves the tree, and use
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("stage reconciliation refuses a lost accepted deletion alongside preserved added-file content", () => {
+test.each(["ours", "union"])("stage reconciliation ignores repository %s merge policies when checking dropped accepted content", (policy) => {
   let deleted = "";
-  const box = rebasedStageSandbox((fixture) => { deleted = fixture.commit("base.txt", ""); });
-  try {
-    box.commit("base.txt", "base\nbuilder extra\n");
-    const head = box.commit("accepted.txt", "accepted work\nbuilder extra\n");
-    const result = reconcilePipelineStageHead(box.subject, head, realExec);
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(deleted);
-    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
-    expect(box.originHead()).toBe("");
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-test("stage reconciliation refuses an undone accepted deletion inside a file added by earlier accepted history", () => {
-  const box = rebasedStageSandbox((fixture) => { fixture.commit("accepted.txt", "accepted work\nremove\n"); });
-  try {
-    const head = box.commit("accepted.txt", "accepted work\nremove\nbuilder extra\n");
-    const result = reconcilePipelineStageHead(box.subject, head, realExec);
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
-    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
-    expect(box.originHead()).toBe("");
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-test.each(["ours", "union"])("stage reconciliation ignores repository %s merge policies when checking lost accepted content", (policy) => {
   const box = rebasedStageSandbox((fixture) => {
     fixture.commit(".gitattributes", `base.txt merge=${policy}\n`);
-    fixture.commit("base.txt", "");
+    deleted = fixture.commit("base.txt", "accepted replacement\n");
   });
   try {
     git(box.subject.worktreeDir, "config", "merge.ours.driver", "true");
-    const head = box.commit("base.txt", "base\nbuilder extra\n");
+    box.commit("base.txt", "base\nbuilder extra\n");
+    git(box.subject.worktreeDir, "reset", "--soft", "origin/main");
+    git(box.subject.worktreeDir, "commit", "-m", "rewrite dropping accepted replacement");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
     const result = reconcilePipelineStageHead(box.subject, head, realExec);
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain("dropped accepted commits");
+    expect(!result.ok && result.error).toContain(deleted);
     expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
     expect(box.originHead()).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -1294,17 +1274,215 @@ test("stage reconciliation retains accepted replacements when the builder extend
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("stage reconciliation cannot hide accepted deletions through binary diff attributes", () => {
+test.each([false, true])("stage reconciliation checks unique accepted merge content (preserved: %s)", (preserved) => {
+  let acceptedMerge = "";
   const box = rebasedStageSandbox((fixture) => {
-    fixture.commit(".gitattributes", "*.txt -diff\n");
-    fixture.commit("accepted.txt", "accepted work\nremove\n");
+    const base = git(fixture.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = fixture.commit("side.txt", "accepted side\n");
+    git(fixture.subject.worktreeDir, "reset", "--hard", base);
+    const firstParent = fixture.commit("first-parent.txt", "accepted first parent\n");
+    fixture.commit("resolution.txt", "unique merge content\n");
+    const tree = git(fixture.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    acceptedMerge = git(fixture.subject.worktreeDir, "commit-tree", tree, "-p", firstParent, "-p", side, "-m", "accepted merge resolution");
+    git(fixture.subject.worktreeDir, "reset", "--hard", acceptedMerge);
   });
   try {
-    const head = box.commit("accepted.txt", "accepted work\nremove\nbuilder extra\n");
+    // Ordinary rebase drops merge commits, including their unique resolution.
+    expect(git(box.subject.worktreeDir, "cherry", box.head, box.accepted).split("\n").every((line) => line.startsWith("- "))).toBe(true);
+    if (preserved) {
+      git(box.subject.worktreeDir, "rm", "side.txt");
+      box.commit("resolution.txt", "unique merge content\n");
+    }
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+    expect(result.ok).toBe(preserved);
+    if (result.ok) expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+    else {
+      expect(result.error).toContain(acceptedMerge);
+      expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    }
+    expect(box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation retains an automatic accepted merge followed by builder edits", () => {
+  const box = rebasedStageSandbox((fixture) => {
+    const base = git(fixture.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = fixture.commit("side.txt", "accepted side\n");
+    git(fixture.subject.worktreeDir, "reset", "--hard", base);
+    fixture.commit("first-parent.txt", "accepted first parent\n");
+    git(fixture.subject.worktreeDir, "merge", "--no-ff", "--no-edit", side);
+  });
+  try {
+    const head = box.commit("side.txt", "updated builder behavior\n");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["merge", "linear"])("stage reconciliation retains an accepted merge resolution replayed in %s history before builder edits", (history) => {
+  const box = rebasedStageSandbox((fixture) => {
+    const base = git(fixture.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = fixture.commit("side.txt", "accepted side\n");
+    git(fixture.subject.worktreeDir, "reset", "--hard", base);
+    const firstParent = fixture.commit("first-parent.txt", "accepted first parent\n");
+    fixture.commit("resolution.txt", "unique merge resolution\n");
+    const tree = git(fixture.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const merge = git(fixture.subject.worktreeDir, "commit-tree", tree, "-p", firstParent, "-p", side, "-m", "accepted resolution");
+    git(fixture.subject.worktreeDir, "reset", "--hard", merge);
+  });
+  try {
+    git(box.subject.worktreeDir, "rm", "side.txt");
+    box.commit("resolution.txt", "unique merge resolution\n");
+    if (history === "merge") {
+      const replayTree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+      const replay = git(box.subject.worktreeDir, "commit-tree", replayTree, "-p", box.head, "-p", "origin/main", "-m", "replayed merge resolution");
+      git(box.subject.worktreeDir, "reset", "--hard", replay);
+    }
+    const head = box.commit("resolution.txt", "updated builder behavior\n");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation retains an accepted octopus merge followed by builder edits", () => {
+  const box = rebasedStageSandbox((fixture) => {
+    const base = git(fixture.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = fixture.commit("side.txt", "accepted side\n");
+    git(fixture.subject.worktreeDir, "reset", "--hard", base);
+    const other = fixture.commit("other-side.txt", "accepted other side\n");
+    git(fixture.subject.worktreeDir, "reset", "--hard", base);
+    fixture.commit("first-parent.txt", "accepted first parent\n");
+    git(fixture.subject.worktreeDir, "merge", "--no-ff", "--no-edit", side, other);
+  });
+  try {
+    const head = box.commit("side.txt", "updated builder behavior\n");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    expect(reconcilePipelineStageHead(box.subject, head, realExec).ok).toBe(true);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation names a dropped merge resolution that restored common-base content", () => {
+  const box = publishSandbox();
+  try {
+    const base = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = box.commit("base.txt", "side change\n");
+    git(box.subject.worktreeDir, "reset", "--hard", base);
+    const first = box.commit("base.txt", "first change\n");
+    box.commit("base.txt", "base\n");
+    const acceptedTree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const accepted = git(box.subject.worktreeDir, "commit-tree", acceptedTree, "-p", first, "-p", side, "-m", "accepted base restoration");
+    box.subject.lastPassedCommit = accepted;
+    box.commit("main.txt", "new main\n");
+    git(box.repo, "cherry-pick", git(box.subject.worktreeDir, "rev-parse", "HEAD"));
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "reset", "--hard", "origin/main");
+    git(box.subject.worktreeDir, "cherry-pick", first);
+    const newFirst = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const wrongTree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    git(box.subject.worktreeDir, "reset", "--hard", "origin/main");
+    git(box.subject.worktreeDir, "cherry-pick", side);
+    const newSide = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const head = git(box.subject.worktreeDir, "commit-tree", wrongTree, "-p", newFirst, "-p", newSide, "-m", "rewrite drops accepted resolution");
+    git(box.subject.worktreeDir, "reset", "--hard", head);
+    expect(git(box.subject.worktreeDir, "cherry", head, accepted).split("\n").every((line) => line.startsWith("- "))).toBe(true);
     const result = reconcilePipelineStageHead(box.subject, head, realExec);
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(!result.ok && result.error).toContain(accepted);
     expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each([false, true])("stage reconciliation detects accepted merge exclusions (extra resolution: %s)", (extraResolution) => {
+  let acceptedMerge = "";
+  const box = rebasedStageSandbox((fixture) => {
+    const base = git(fixture.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = fixture.commit("excluded.txt", "excluded side change\n");
+    git(fixture.subject.worktreeDir, "reset", "--hard", base);
+    const first = fixture.commit("first.txt", "accepted first parent\n");
+    if (extraResolution) fixture.commit("resolution.txt", "unique resolution\n");
+    const tree = git(fixture.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    acceptedMerge = git(fixture.subject.worktreeDir, "commit-tree", tree, "-p", first, "-p", side, "-m", "accepted exclusion");
+    git(fixture.subject.worktreeDir, "reset", "--hard", acceptedMerge);
+  });
+  try {
+    if (extraResolution) box.commit("resolution.txt", "unique resolution\n");
+    const head = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain(acceptedMerge);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("stage reconciliation preserves accepted conflict resolution with newer main content in the same file", () => {
+  const box = publishSandbox();
+  try {
+    fs.writeFileSync(path.join(box.repo, "base.txt"), "keep\noriginal\ntail\n");
+    git(box.repo, "add", "base.txt");
+    git(box.repo, "commit", "-m", "common content");
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "rebase", "origin/main");
+    const base = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = box.commit("base.txt", "keep\nside\ntail\n");
+    git(box.subject.worktreeDir, "reset", "--hard", base);
+    const first = box.commit("base.txt", "keep\nfirst\ntail\n");
+    box.commit("base.txt", "keep\nresolved\ntail\n");
+    const acceptedTree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const accepted = git(box.subject.worktreeDir, "commit-tree", acceptedTree, "-p", first, "-p", side, "-m", "accepted conflict resolution");
+    box.subject.lastPassedCommit = accepted;
+    fs.writeFileSync(path.join(box.repo, "base.txt"), "keep\noriginal\ntail\nnew main\n");
+    git(box.repo, "add", "base.txt");
+    git(box.repo, "commit", "-m", "advance main in resolved file");
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "reset", "--hard", "origin/main");
+    git(box.subject.worktreeDir, "cherry-pick", first);
+    const newFirst = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    git(box.subject.worktreeDir, "reset", "--hard", "origin/main");
+    git(box.subject.worktreeDir, "cherry-pick", side);
+    const newSide = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    box.commit("base.txt", "keep\nresolved\ntail\nnew main\n");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const head = git(box.subject.worktreeDir, "commit-tree", tree, "-p", newFirst, "-p", newSide, "-m", "replayed resolution with main content");
+    git(box.subject.worktreeDir, "reset", "--hard", head);
+    expect(reconcilePipelineStageHead(box.subject, head, realExec).ok).toBe(true);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(tree);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each([true, false])("stage reconciliation uses the final accepted resolution after a squash (preserved: %s)", (preserved) => {
+  const box = publishSandbox();
+  try {
+    const base = git(box.subject.worktreeDir, "rev-parse", "HEAD");
+    const side = box.commit("side.txt", "accepted side\n");
+    git(box.subject.worktreeDir, "reset", "--hard", base);
+    const first = box.commit("first.txt", "accepted first parent\n");
+    box.commit("resolution.txt", "initial resolution\n");
+    const tree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const merge = git(box.subject.worktreeDir, "commit-tree", tree, "-p", first, "-p", side, "-m", "accepted resolution");
+    git(box.subject.worktreeDir, "reset", "--hard", merge);
+    const accepted = box.commit("resolution.txt", "final accepted resolution\n");
+    box.subject.lastPassedCommit = accepted;
+    fs.writeFileSync(path.join(box.repo, "main.txt"), "new main\n");
+    git(box.repo, "add", "main.txt");
+    git(box.repo, "commit", "-m", "advance main");
+    git(box.repo, "push", "origin", "main");
+    git(box.subject.worktreeDir, "reset", "--soft", "origin/main");
+    if (!preserved) fs.writeFileSync(path.join(box.subject.worktreeDir, "resolution.txt"), "initial resolution\n");
+    const head = box.commit("main.txt", "new main\n");
+    const selectedTree = git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const result = reconcilePipelineStageHead(box.subject, head, realExec);
+    expect(result.ok).toBe(preserved);
+    expect(git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}")).toBe(selectedTree);
+    if (!result.ok) expect(result.error).toContain(accepted);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 

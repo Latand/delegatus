@@ -585,10 +585,11 @@ export function pipelineWorktreeChanges(
   return { ok: true, paths: paths.slice(0, limit), truncated: paths.length > limit };
 }
 
-/** A repository's merge drivers are delivery policy, not evidence that content
-    survived. Shadow all merge attributes in a private bare repository that can
+/** Controlled attributes prove containment independently of repository merge
+    drivers. Shadow all merge attributes in a private bare repository that can
     read the lane's objects but writes only its own temporary proof objects. */
-function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, exec: ExecPort, policy: "text" | "union" = "text"): ExecResult {
+function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, exec: ExecPort,
+  options: { parents?: string[]; resolvedTree?: string; resolvedCommit?: string; candidate?: string } = {}): ExecResult & { resolutionPaths?: string[]; resolutionPreserved?: boolean } {
   const objects = exec("git", ["rev-parse", "--git-path", "objects"], pipeline.worktreeDir);
   if (objects.code !== 0) return objects;
   let proof: string | undefined;
@@ -600,13 +601,80 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
     fs.writeFileSync(path.join(proof, "HEAD"), "ref: refs/heads/proof\n");
     fs.writeFileSync(path.join(proof, "config"), "[core]\n\tbare = true\n");
     fs.writeFileSync(path.join(proof, "objects", "info", "alternates"), `${JSON.stringify(path.resolve(pipeline.worktreeDir, objects.stdout.trim()))}\n`);
-    fs.writeFileSync(path.join(proof, "info", "attributes"), `* merge=${policy}\n`);
-    return exec("git", [`--git-dir=${proof}`, "merge-tree", "--write-tree", "--name-only", "-z", "--no-messages", head, accepted], pipeline.worktreeDir, {
+    fs.writeFileSync(path.join(proof, "info", "attributes"), "* merge=text\n");
+    const env = {
       GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0", GIT_ATTR_NOSYSTEM: "1",
       GIT_CONFIG_PARAMETERS: undefined,
       GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined,
       GIT_OBJECT_DIRECTORY: undefined, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
-    });
+    };
+    const compare = (left: string, right: string) => exec("git", [`--git-dir=${proof}`, "merge-tree", "--write-tree", "--name-only", "-z", "--no-messages",
+      left, right], pipeline.worktreeDir, env);
+    let left = head, right = accepted;
+    let result = compare(left, right);
+    const conflicts = new Set<string>();
+    const collectConflicts = () => {
+      if (result.code === 1) result.stdout.split("\0").slice(1).filter(Boolean).forEach((file) => conflicts.add(file));
+    };
+    collectConflicts();
+    for (const parent of options.parents ?? []) {
+      if (result.code !== 0 && result.code !== 1) return result;
+      // Intermediate commits and trees remain entirely inside the proof repo.
+      const checkpoint = exec("git", [`--git-dir=${proof}`, "commit-tree", result.stdout.split("\0")[0].trim(),
+        "-p", left, "-p", right, "-m", "accepted merge proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+      if (checkpoint.code !== 0) return checkpoint;
+      left = checkpoint.stdout.trim();
+      right = parent;
+      result = compare(left, right);
+      collectConflicts();
+    }
+    if (options.resolvedTree && (result.code === 0 || result.code === 1)) {
+      const changed = exec("git", [`--git-dir=${proof}`, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z",
+        "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", result.stdout.split("\0")[0].trim(), options.resolvedTree], pipeline.worktreeDir, env);
+      if (changed.code !== 0) return changed;
+      const resolutionPaths = [...new Set([...conflicts, ...changed.stdout.split("\0").filter(Boolean)])];
+      let resolutionPreserved = false;
+      if (resolutionPaths.length && options.candidate && options.resolvedCommit) {
+        const automaticTree = result.stdout.split("\0")[0].trim();
+        const diff = ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none"];
+        let comparable = true;
+        for (const file of conflicts) {
+          const delta = exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
+            automaticTree, options.resolvedCommit, "--", file], pipeline.worktreeDir, env);
+          if (delta.code !== 0 && delta.code !== 1) return delta;
+          // A binary/conflict choice can equal Git's provisional tree. It
+          // needs exact evidence, since that tree encodes no resolution delta.
+          if (delta.code === 0) {
+            const exact = exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
+              options.candidate, options.resolvedCommit, "--", file], pipeline.worktreeDir, env);
+            if (exact.code !== 0 && exact.code !== 1) return exact;
+            if (exact.code === 1) { comparable = false; break; }
+          }
+        }
+        if (comparable) {
+          const base = exec("git", [`--git-dir=${proof}`, "commit-tree", automaticTree, "-p", left, "-p", right,
+            "-m", "accepted resolution baseline"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          if (base.code !== 0) return base;
+          const candidateTree = exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.candidate}^{tree}`], pipeline.worktreeDir, env);
+          if (candidateTree.code !== 0) return candidateTree;
+          const resolvedTree = exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.resolvedCommit}^{tree}`], pipeline.worktreeDir, env);
+          if (resolvedTree.code !== 0) return resolvedTree;
+          // Graft both trees onto the private baseline. This also works with
+          // Git 2.39, whose merge-tree has no explicit merge-base option.
+          const candidateProof = exec("git", [`--git-dir=${proof}`, "commit-tree", candidateTree.stdout.trim(), "-p", base.stdout.trim(),
+            "-m", "candidate resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          if (candidateProof.code !== 0) return candidateProof;
+          const resolvedProof = exec("git", [`--git-dir=${proof}`, "commit-tree", resolvedTree.stdout.trim(), "-p", base.stdout.trim(),
+            "-m", "accepted resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          if (resolvedProof.code !== 0) return resolvedProof;
+          const contained = compare(candidateProof.stdout.trim(), resolvedProof.stdout.trim());
+          if (contained.code !== 0 && contained.code !== 1) return contained;
+          resolutionPreserved = contained.code === 0 && contained.stdout.split("\0")[0].trim() === candidateTree.stdout.trim();
+        }
+      }
+      return { ...result, code: conflicts.size ? 1 : result.code, resolutionPaths, resolutionPreserved };
+    }
+    return result;
   } catch (error) {
     return { code: 128, stdout: "", stderr: `isolating the accepted content comparison: ${String(error)}` };
   } finally {
@@ -614,54 +682,10 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
   }
 }
 
-/** Union proves additions fit; separately prove it did not restore accepted
-    deletions. Count every line removed in accepted history against the final
-    accepted snapshot, including deletions inside files first added by a lane. */
-function acceptedDeletionsPreserved(pipeline: Pipeline, base: string, head: string, accepted: string, files: string[], exec: ExecPort):
-  { ok: true; preserved: boolean } | { ok: false; error: string } {
-  const counts = (text: string) => {
-    const result = new Map<string, number>();
-    for (const line of text.split("\n")) result.set(line, (result.get(line) ?? 0) + 1);
-    return result;
-  };
-  for (const file of files) {
-    const contents: string[] = [];
-    for (const revision of [accepted, head]) {
-      const entry = exec("git", ["--literal-pathspecs", "ls-tree", "-z", revision, "--", file], pipeline.worktreeDir);
-      if (entry.code !== 0) return failure("checking accepted content type", entry);
-      if (!/^100(?:644|755) blob [0-9a-f]{40}\t/.test(entry.stdout)) return { ok: true, preserved: false };
-      const blob = exec("git", ["cat-file", "blob", `${revision}:${file}`], pipeline.worktreeDir);
-      if (blob.code !== 0) return failure("reading accepted content", blob);
-      // ExecPort decodes UTF-8. Fail closed when that cannot faithfully prove
-      // binary or undecodable content, rather than compare replacement bytes.
-      if (blob.stdout.includes("\0") || blob.stdout.includes("\uFFFD")) return { ok: true, preserved: false };
-      contents.push(blob.stdout);
-    }
-    const history = exec("git", ["--literal-pathspecs", "log", "--full-history", "-m", "--format=", "--patch", "--unified=0",
-      "--text", "--output-indicator-old=-", "--output-indicator-new=+", "--output-indicator-context= ",
-      "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", `${base}..${accepted}`, "--", file], pipeline.worktreeDir);
-    if (history.code !== 0) return failure("checking accepted deletion history", history);
-    const removed = new Set<string>();
-    let inHunk = false;
-    for (const line of history.stdout.split("\n")) {
-      if (line.startsWith("diff --git ")) inHunk = false;
-      else if (line.startsWith("@@ ")) inHunk = true;
-      else if (inHunk && line.startsWith("-")) removed.add(line.slice(1));
-    }
-    const acceptedCounts = counts(contents[0]);
-    const headCounts = counts(contents[1]);
-    if ([...removed].some((line) => (headCounts.get(line) ?? 0) > (acceptedCounts.get(line) ?? 0))) {
-      return { ok: true, preserved: false };
-    }
-  }
-  return { ok: true, preserved: true };
-}
-
-/** Preserve accepted content across a history rewrite. A three-way merge must
-    add nothing to the builder's tree: patch equivalence alone would also accept
-    a cherry-pick followed by a revert. Record the same tree and two parents as
-    an `ours` merge, with a compare-and-swap ref update so a concurrent commit
-    cannot be overwritten. The existing delivery publisher still owns pushing. */
+/** Retained patch history admits subsequent builder edits just as ordinary
+    ancestry does. Merge commits have no cherry patch-id; unique merge content
+    therefore needs the controlled tree proof. Record the builder's unchanged
+    tree with both parents, then CAS the ref. Delivery still owns publication. */
 export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort): PipelineGitResult {
   const accepted = pipeline.lastPassedCommit;
   if (!/^[0-9a-f]{40}$/i.test(head) || !/^[0-9a-f]{40}$/i.test(accepted)) {
@@ -675,37 +699,63 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
   const ref = branch.stdout.trim();
   const tree = exec("git", ["rev-parse", `${head}^{tree}`], pipeline.worktreeDir);
   if (tree.code !== 0) return failure("reading the stage tree", tree);
-  let merged = compareStageTrees(pipeline, head, accepted, exec);
-  if (merged.code !== 0 && merged.code !== 1) return failure("comparing accepted stage content", merged);
-  if (merged.code === 1) {
-    const conflicts = merged.stdout.split("\0").slice(1).filter(Boolean);
-    const bases = exec("git", ["merge-base", "--all", head, accepted], pipeline.worktreeDir);
-    if (bases.code !== 0) return failure("finding the accepted stage merge base", bases);
-    const base = bases.stdout.trim();
-    if (conflicts.length > 0 && /^[0-9a-f]{40}$/i.test(base)) {
-      // Shared accepted additions can conflict with a builder's extension.
-      // Union must reproduce HEAD exactly, and accepted removals must remain.
-      const union = compareStageTrees(pipeline, head, accepted, exec, "union");
-      if (union.code !== 0 && union.code !== 1) return failure("comparing accepted file additions", union);
-      if (union.code === 0 && union.stdout.split("\0")[0].trim() === tree.stdout.trim()) {
-        const deletions = acceptedDeletionsPreserved(pipeline, base, head, accepted, conflicts, exec);
-        if (!deletions.ok) return deletions;
-        if (deletions.preserved) merged = union;
+  const cherry = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", head, accepted], pipeline.worktreeDir);
+  if (cherry.code !== 0) return failure("checking accepted patch history", cherry);
+  const dropped = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
+  const merges = exec("git", ["rev-list", "--min-parents=2", "--parents", `${head}..${accepted}`], pipeline.worktreeDir);
+  if (merges.code !== 0) return failure("checking accepted merge history", merges);
+  let replayedCheckpoints: string[] | undefined;
+  const droppedMerges: string[] = [];
+  for (const line of merges.stdout.trim().split("\n").filter(Boolean)) {
+    const [merge, firstParent, ...otherParents] = line.split(" ");
+    const trees = exec("git", ["rev-parse", `${merge}^{tree}`], pipeline.worktreeDir);
+    if (trees.code !== 0) return failure("checking accepted merge content", trees);
+    const mergeTree = trees.stdout.trim().split("\n")[0];
+    // Compare against all automatically merged parents: a first-parent-only
+    // baseline misses resolutions that exclude side-parent changes.
+    const reconstructed = compareStageTrees(pipeline, firstParent, otherParents[0], exec,
+      { parents: otherParents.slice(1), resolvedTree: mergeTree, resolvedCommit: accepted, candidate: head });
+    if (reconstructed.code !== 0 && reconstructed.code !== 1) return failure("reconstructing accepted merge content", reconstructed);
+    const resolutionPaths = reconstructed.resolutionPaths;
+    if (!resolutionPaths || resolutionPaths.some((file) => file.includes("\uFFFD"))) {
+      return { ok: false, error: "accepted merge resolution paths could not be proven" };
+    }
+    if (resolutionPaths.length === 0 || reconstructed.resolutionPreserved) continue;
+    if (!replayedCheckpoints) {
+      const candidates = exec("git", ["rev-list", `${accepted}..${head}`], pipeline.worktreeDir);
+      if (candidates.code !== 0) return failure("checking replayed merge history", candidates);
+      replayedCheckpoints = candidates.stdout.trim().split("\n").filter((sha) => sha && sha !== head);
+    }
+    // Unique resolutions may survive in linear or merged history before later
+    // builder edits. A checkpoint must already contain the parents' patches;
+    // an older main revision can coincidentally match a later resolution.
+    let preserved = false;
+    for (const replay of [head, ...replayedCheckpoints]) {
+      const compared = exec("git", ["--literal-pathspecs", "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none",
+        replay, accepted, "--", ...resolutionPaths], pipeline.worktreeDir);
+      if (compared.code !== 0 && compared.code !== 1) return failure("comparing replayed merge resolutions", compared);
+      if (compared.code === 0) {
+        if (replay !== head) {
+          const parents = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", replay, merge], pipeline.worktreeDir);
+          if (parents.code !== 0) return failure("checking resolution checkpoint ancestry", parents);
+          if (parents.stdout.split("\n").some((line) => line.startsWith("+ "))) continue;
+        }
+        preserved = true;
+        break;
       }
     }
+    if (!preserved) droppedMerges.push(merge);
   }
-  if (merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim()) {
-    const cherry = exec("git", ["cherry", head, accepted], pipeline.worktreeDir);
-    if (cherry.code !== 0) return failure("identifying dropped accepted commits", cherry);
-    let dropped = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ")).map((line) => line.slice(2).trim());
-    // Equivalent patches can have been reverted later, and merge commits have
-    // no cherry patch-id. Name the accepted-only history when cherry cannot.
-    if (dropped.length === 0) {
-      const commits = exec("git", ["rev-list", "--reverse", `${head}..${accepted}`], pipeline.worktreeDir);
-      if (commits.code !== 0) return failure("identifying changed accepted commits", commits);
-      dropped = commits.stdout.trim().split("\n").filter(Boolean);
-    }
-    return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${dropped.join(", ")}; accepted content is missing or conflicts with the stage tree` };
+  let missing = droppedMerges.length > 0;
+  if (dropped.length > 0) {
+    // Squashed patches may still be preserved in the final tree. Unique merge
+    // resolutions were checked separately, including exclusions and conflicts.
+    const merged = compareStageTrees(pipeline, head, accepted, exec);
+    if (merged.code !== 0 && merged.code !== 1) return failure("comparing accepted stage content", merged);
+    missing ||= merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim();
+  }
+  if (missing) {
+    return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${[...dropped, ...droppedMerges].join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
   const commit = exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
     "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv());
