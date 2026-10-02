@@ -196,7 +196,7 @@ Original [pilot labels](memory-selection.pilot.labels.json) and
 [first-request labels](memory-selection.labels.json) and
 [first-request results](memory-selection.results.json), remain unchanged.
 Their no-go conclusions were limited pilots. The new study replaces the
-claim that only seven eligible operator prompts exist: there are 585 under
+claim that only seven eligible operator prompts exist: there are 577 under
 the all-turn collection rule in this snapshot.
 
 
