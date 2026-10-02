@@ -9,6 +9,7 @@ import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { parseMemory, type MemoryKind, type MemorySource } from "./parsers";
+import { nativeMatch, queryFor, type Candidate } from "./selection";
 
 interface MemoryItem {
   id: string;
@@ -82,6 +83,7 @@ export class MemoryIndex {
         at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
         PRIMARY KEY (memory_id, request_id)
       );
+      CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
     `);
     return this.db;
   }
@@ -172,6 +174,7 @@ export class MemoryIndex {
     const recordOpened = () => {
       const at = new Date().toISOString();
       db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
+      db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, id, conversationId);
     };
     const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: JSON.parse(item.flags) as string[] };
     const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);
@@ -211,7 +214,119 @@ export class MemoryIndex {
   }
 
   offers(id: string) {
-    return this.database().query<{ channel: string; outcome: string; conversationId: string | null }, [string]>("SELECT channel, outcome, conversation_id AS conversationId FROM memory_offers WHERE memory_id = ? ORDER BY at").all(id);
+    return this.database().query<{ channel: string; outcome: string; score: number | null; conversationId: string | null }, [string]>("SELECT channel, outcome, score, conversation_id AS conversationId FROM memory_offers WHERE memory_id = ? ORDER BY at").all(id);
+  }
+
+  injectionCandidates(prompt: string, project: string, engine: string, conversation: string, requestDeadline = Infinity): Candidate[] {
+    // A native store can contain thousands of near matches. Optional retrieval
+    // has its own short CPU budget and abandons incomplete filtering entirely.
+    const deadline = Math.min(requestDeadline, performance.now() + 100);
+    const check = () => { if (performance.now() >= deadline) throw Error("memory candidate budget"); };
+    const query = queryFor(prompt, "recall");
+    if (!query) return [];
+    const db = this.database();
+    db.exec("PRAGMA busy_timeout = 50");
+    try {
+      check();
+      this.normalizeProjects(db);
+      const canonical = canonicalProject(project);
+      const hits = db.query<MemoryItem, [string, string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
+        WHERE memory_fts MATCH ? AND (e.project = ? OR e.scope = 'global')
+          AND e.engine != ? AND e.engine != 'shared' AND e.kind != 'instruction'
+        ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT 128 OFFSET ?`);
+      const native: MemoryItem[] = [];
+      const nativePage = db.query<MemoryItem, [string, string, string, string, number]>("SELECT * FROM memory_entries WHERE (engine = ? AND (? = 'codex' OR scope = 'global' OR project = ?)) OR (kind = 'instruction' AND (scope = 'global' OR project = ?)) ORDER BY id LIMIT 128 OFFSET ?");
+      for (let offset = 0; ; offset += 128) {
+        check();
+        const page = nativePage.all(engine, engine, canonical, canonical, offset);
+        native.push(...page);
+        if (page.length < 128) break;
+      }
+      check();
+      const offered = new Set(db.query<{ memory_id: string }, [string]>("SELECT memory_id FROM memory_offers WHERE conversation_id = ? AND channel = 'inject'").all(conversation).map(r => r.memory_id));
+      const kept: MemoryItem[] = [];
+      for (let offset = 0; ; offset += 128) {
+        check();
+        const page = hits.all(query, canonical, engine, offset);
+        for (const hit of page) {
+          check();
+          if (hit.engine === engine || hit.engine === "shared" || hit.kind === "instruction" || offered.has(hit.id)
+            || JSON.parse(hit.flags).includes("retired") || native.some(own => { check(); return nativeMatch(hit, own); })
+            || kept.some(own => nativeMatch(hit, own))) continue;
+          kept.push(hit);
+          if (kept.length === 30) return kept;
+        }
+        if (page.length < 128) break;
+      }
+      check();
+      return kept;
+    } catch { return []; }
+    finally { db.exec("PRAGMA busy_timeout = 5000"); }
+  }
+
+  private hookDatabase<T>(run: (db: BunDatabase) => T): T {
+    const db = this.database();
+    // Optional hook bookkeeping must never queue behind another writer.
+    db.exec("PRAGMA busy_timeout = 0");
+    try { return run(db); }
+    finally { db.exec("PRAGMA busy_timeout = 5000"); }
+  }
+
+  claimHook(conversation: string, request: string) {
+    return this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_hook_attempts VALUES (?, ?)").run(conversation, request).changes === 1);
+  }
+
+  recordInjection(entries: Array<Candidate & { score: number }>, requestId: string, conversation: string) {
+    this.hookDatabase(db => db.transaction(() => {
+      for (const entry of entries) db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, new Date().toISOString(), entry.score);
+    })());
+  }
+
+  turnOffers(conversation: string) {
+    return this.database().query<{ id: string; title: string; requestId: string; score: number }, [string]>(`SELECT e.id, e.title, o.request_id AS requestId, o.score
+      FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject' ORDER BY o.at LIMIT 1000`).all(conversation);
+  }
+
+  recordCitations(conversation: string, assistantText: string) {
+    this.hookDatabase(db => {
+      const block = assistantText.match(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/)?.[0];
+      if (!block) return;
+      const citations = [...block.matchAll(/^([^<>\n]+?):(\d+)(?:-(\d+))?\|note=/gm)];
+      const pending = db.query<MemoryItem, [string]>(`SELECT DISTINCT e.* FROM memory_entries e JOIN memory_offers o ON o.memory_id = e.id
+        WHERE o.conversation_id = ? AND o.channel = 'inject' AND (o.outcome IS NULL OR o.outcome != 'cited')`).all(conversation);
+      const sources = new Map<string, { lines: number; bullets: Map<string, Array<[number, number]>> } | null>();
+      const deadline = performance.now() + 50;
+      for (const memory of pending) {
+        // Outcomes are optional: never spend an operator's hook budget replaying
+        // old citations. Already cited offers were removed by the query above.
+        if (performance.now() > deadline) break;
+        const matches = citations.filter(c => memory.sourcePath === c[1] || memory.sourcePath.endsWith("/" + c[1]));
+        if (!matches.length) continue;
+        if (!sources.has(memory.sourcePath)) {
+          let source: { lines: number; bullets: Map<string, Array<[number, number]>> } | null = null;
+          try {
+            if (fsSync.statSync(memory.sourcePath).size <= 4 * 1024 * 1024) {
+              const lines = fsSync.readFileSync(memory.sourcePath, "utf8").split("\n");
+              const bullets = new Map<string, Array<[number, number]>>();
+              for (let i = 0; i < lines.length; i++) {
+                if (!/^[-*] /.test(lines[i])) continue;
+                const key = byteBound(hardenedRedact(lines[i].slice(2)), 400);
+                let last = i;
+                while (last + 1 < lines.length && /^\s+\S/.test(lines[last + 1])) last++;
+                bullets.set(key, [...(bullets.get(key) ?? []), [i + 1, last + 1]]);
+              }
+              source = { lines: lines.length, bullets };
+            }
+          } catch { /* a stale or unavailable source has no cheap citation proof */ }
+          sources.set(memory.sourcePath, source);
+        }
+        const source = sources.get(memory.sourcePath);
+        if (!source) continue;
+        const ranges = memory.sourceKind === "claude_memory" ? [[1, source.lines]] : source.bullets.get(memory.summary.split("\n")[0]) ?? [];
+        if (!ranges.some(([first, last]) => matches.some(c => Number(c[2]) <= last && Number(c[3] ?? c[2]) >= first))) continue;
+        db.query("UPDATE memory_offers SET outcome = 'cited', outcome_at = ? WHERE conversation_id = ? AND memory_id = ? AND channel = 'inject'").run(new Date().toISOString(), conversation, memory.id);
+      }
+    });
   }
 
   close() { this.db?.close(); this.db = undefined; }

@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -47,6 +47,47 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("shared memory settings", () => {
+  browserTest("project switch and explanation render in both languages at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/shared-memory"); fs.mkdirSync(out, { recursive: true });
+    let enabled = true;
+    const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+      "/api/memory/settings": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ enabled, capUsd: 1, spentUsd: .002 });
+      },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+    });
+    const browser = await launchChromium();
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        enabled = true;
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const offer = page.locator("[data-memory-offer]"); await offer.waitFor();
+          const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
+          expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
+          await offer.locator("summary").click();
+          expect(await offer.locator("p").innerText()).toContain("constraint 15");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
+          const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);
+          await control.click(); await page.waitForFunction(() => !(document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked);
+          const geometry = await setting.evaluate(el => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/settings.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
 
 describe("runtime idle performance", () => {
   browserTest("limits keep the phone stream joined without snapshot refetches", async () => {

@@ -4,6 +4,10 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "memory.label": "Shared memory for this project",
+  "memory.explanation": "Jev selects relevant memory for each of your messages and shares it with the agent; redacted context is sent to Jev.",
+  "memory.spend": "Shared Jev budget: ${spent} of ${cap} this month.",
+  "memory.offered": "Memory offered: {names}",
   "stateWrites.title": "Disk full: state writes are failing",
   "stateWrites.free": "Free space: {free}.",
   "stateWrites.unknown": "unknown",

@@ -25,6 +25,7 @@ import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } fr
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
+import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { decodeCodexStructuredUserText as decodeStructuredUserWire } from "./codexStructuredUserText";
@@ -1416,6 +1417,9 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
+    let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
+    try { if (options.codexHome) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
+    catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const args = [
@@ -1496,6 +1500,15 @@ export class CodexAppServerHost implements EngineHost {
         viewerMcpTransportForLaunch(childEnv),
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      if (memoryHook) {
+        try {
+          const listed = await provisional.rpc("hooks/list", { cwds: [options.cwd] }) as { data: Array<{ hooks: Array<{ key: string; command?: string; currentHash: string }> }> };
+          for (const hook of listed.data.flatMap(d => d.hooks)) {
+            if (hook.command !== memoryHook.command || !/^sha256:[a-f0-9]{64}$/i.test(hook.currentHash)) continue;
+            await provisional.rpc("config/value/write", { keyPath: `hooks.state.${JSON.stringify(hook.key)}.trusted_hash`, value: hook.currentHash, mergeStrategy: "replace" });
+          }
+        } catch { /* untrusted or unavailable hooks abstain; the prompt still runs */ }
+      }
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
