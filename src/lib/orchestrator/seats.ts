@@ -171,6 +171,9 @@ interface OrchestratorSeatFile {
   nextSeatEpoch: number;
   /** Active seat per project. */
   seats: Record<string, OrchestratorSeat>;
+  /** Seat conversations and epochs retained when aliases collapse independent
+      project rows onto one canonical key. */
+  seatLineage?: { project: string; conversationId: string; seatEpoch: number }[];
   /** Pending designate-and-inject intents per project. */
   pending: Record<string, OrchestratorSeat>;
   revocations: OrchestratorRevocation[];
@@ -203,7 +206,7 @@ export function canonicalOrchestratorProject(project: string): string {
 }
 
 function emptyFile(): OrchestratorSeatFile {
-  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, pending: {}, revocations: [], history: [], rollbacks: {} };
+  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, seatLineage: [], pending: {}, revocations: [], history: [], rollbacks: {} };
 }
 
 function atomicWriteJson(filePath: string, value: unknown): void {
@@ -311,15 +314,30 @@ export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
     const parsed = JSON.parse(raw) as Partial<OrchestratorSeatFile>;
     if (parsed.schemaVersion !== ORCHESTRATOR_SEATS_SCHEMA_VERSION) return null;
     const file = emptyFile();
+    const seatLineage = file.seatLineage ?? [];
+    file.seatLineage = seatLineage;
     file.nextSeatEpoch = typeof parsed.nextSeatEpoch === "number" && Number.isInteger(parsed.nextSeatEpoch) && parsed.nextSeatEpoch >= 1
       ? parsed.nextSeatEpoch
       : 1;
     for (const [project, candidate] of Object.entries(parsed.seats ?? {})) {
       const seat = normalizeSeat(candidate);
       if (seat && seat.project === project && seat.state === "active" && seat.conversationId) {
-        retainNewestSeat(file.seats, { ...seat, project: canonicalOrchestratorProject(project) });
+        const canonical = canonicalOrchestratorProject(project);
+        seatLineage.push({ project: canonical, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
+        retainNewestSeat(file.seats, { ...seat, project: canonical });
       }
     }
+    for (const candidate of Array.isArray(parsed.seatLineage) ? parsed.seatLineage : []) {
+      if (candidate && typeof candidate === "object") {
+        const lineage = candidate as { project?: unknown; conversationId?: unknown; seatEpoch?: unknown };
+        if (typeof lineage.project === "string" && lineage.project
+          && typeof lineage.conversationId === "string" && lineage.conversationId
+          && typeof lineage.seatEpoch === "number" && Number.isInteger(lineage.seatEpoch) && lineage.seatEpoch >= 1) {
+          seatLineage.push({ project: canonicalOrchestratorProject(lineage.project), conversationId: lineage.conversationId, seatEpoch: lineage.seatEpoch });
+        }
+      }
+    }
+    file.seatLineage = [...new Map(seatLineage.map((entry) => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
     for (const [project, candidate] of Object.entries(parsed.pending ?? {})) {
       const seat = normalizeSeat(candidate);
       if (seat && seat.project === project && seat.state === "pending") {
@@ -364,6 +382,7 @@ export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
        covers and be born dead. */
     const highest = Math.max(0,
       ...Object.values(file.seats).map((seat) => seat.seatEpoch),
+      ...file.seatLineage.map((seat) => seat.seatEpoch),
       ...Object.values(file.pending).map((seat) => seat.seatEpoch),
       ...Object.values(file.rollbacks).map((seat) => seat.seatEpoch),
       ...file.revocations.map((revocation) => revocation.seatEpoch),
@@ -436,6 +455,8 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
   }
 
   const normalized = emptyFile();
+  const seatLineage = normalized.seatLineage ?? [];
+  normalized.seatLineage = seatLineage;
   normalized.nextSeatEpoch = raw.nextSeatEpoch;
   for (const [project, candidate] of Object.entries(recordEvidence(raw.seats, "seats"))) {
     const seat = normalizeSeat(candidate);
@@ -443,7 +464,16 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
     const canonical = canonicalOrchestratorProject(project);
     if (normalized.seats[canonical]) throw migrationEvidenceError();
     normalized.seats[canonical] = { ...seat, project: canonical };
+    if (seat.conversationId) seatLineage.push({ project: canonical, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
   }
+  for (const candidate of arrayEvidence(raw.seatLineage, "seatLineage")) {
+    const lineage = candidate as { project?: unknown; conversationId?: unknown; seatEpoch?: unknown } | null;
+    if (!lineage || typeof lineage.project !== "string" || !lineage.project
+      || typeof lineage.conversationId !== "string" || !lineage.conversationId
+      || typeof lineage.seatEpoch !== "number" || !Number.isInteger(lineage.seatEpoch) || lineage.seatEpoch < 1) throw migrationEvidenceError();
+    seatLineage.push({ project: canonicalOrchestratorProject(lineage.project), conversationId: lineage.conversationId, seatEpoch: lineage.seatEpoch });
+  }
+  normalized.seatLineage = [...new Map(seatLineage.map((entry) => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
   for (const [project, candidate] of Object.entries(recordEvidence(raw.pending, "pending"))) {
     const seat = normalizeSeat(candidate);
     if (!seat || seat.project !== project || seat.state !== "pending") throw migrationEvidenceError();
