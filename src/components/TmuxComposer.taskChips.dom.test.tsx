@@ -8,7 +8,10 @@
  * record the conversation reference rides, plus one plain line the seat reads in
  * its turn. The conversation reference keeps working beside them.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
+import { OutboxBubbles } from "./conversation/OutboxBubbles";
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
@@ -34,6 +37,7 @@ Object.assign(globalThis, {
   MouseEvent: dom.MouseEvent,
   KeyboardEvent: dom.KeyboardEvent,
   File: dom.File,
+  FileReader: dom.FileReader,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   localStorage: dom.localStorage,
@@ -142,7 +146,7 @@ afterEach(async () => {
   viewBus.reportCards([]);
 });
 
-async function mountComposer(conversationId = COMPOSING, taskChipsFor: string | undefined = "atlas"): Promise<HTMLElement> {
+async function mountComposer(conversationId = COMPOSING, taskChipsFor: string | null | undefined = "atlas"): Promise<HTMLElement> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -305,4 +309,91 @@ test("a send the route refuses puts the words back and the chips with them", asy
   expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("start this one");
   expect(readTaskChips("atlas").map((chip) => chip.id)).toEqual([TASK_A]);
   expect(chips(host).map((chip) => chip.getAttribute("data-task-chip"))).toEqual([TASK_A]);
+});
+
+
+test("ordinary Send preserves a task refreshed while attachment preparation saves", async () => {
+  const storage = installComposerStorageForTests();
+  const originalRetain = composerSubmissionPayloads.retain.bind(composerSubmissionPayloads);
+  let release!: () => void;
+  const retain = spyOn(composerSubmissionPayloads, "retain").mockImplementation(async (...args) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    return originalRetain(...args);
+  });
+  try {
+    const host = await mountComposer();
+    await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Original" }); });
+    const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
+    const props = (input as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!;
+    await act(async () => { props.onChange({ target: { files: [new dom.File(["bytes"], "fixture.txt", { type: "text/plain" })], value: "fixture.txt" } }); });
+    for (let i = 0; i < 20; i++) await settle();
+    await sendThrough(host, COMPOSING, "start this one");
+    expect(release).toBeDefined();
+    await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Updated" }); addTaskChip("atlas", { id: TASK_B, title: "Later" }); release(); });
+    for (let i = 0; i < 20; i++) await settle();
+    expect(sent[0]?.selectedContext?.tasks).toEqual([{ id: TASK_A, title: "Original" }]);
+    expect(readTaskChips("atlas")).toEqual([{ id: TASK_A, title: "Updated" }, { id: TASK_B, title: "Later" }]);
+  } finally { retain.mockRestore(); storage.uninstall(); }
+});
+
+test("an ordinary send refusal keeps the snapshot when later chips occupy the composer", async () => {
+  const host = await mountComposer();
+  const originalFetch = globalThis.fetch;
+  let release!: () => void;
+  globalThis.fetch = (async (...args) => {
+    if (String(args[0]) === "/api/runtime/send") {
+      await new Promise<void>((resolve) => { release = resolve; });
+      refuseSends = true;
+    }
+    return originalFetch(...args);
+  }) as typeof fetch;
+  await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "Original" }); });
+  await sendThrough(host, COMPOSING, "start this one");
+  await act(async () => {
+    for (let i = 0; i < 8; i++) addTaskChip("atlas", { id: `later_${i}`, title: `Later ${i}` });
+    release();
+  });
+  for (let i = 0; i < 12; i++) await settle();
+  expect(readTaskChips("atlas")).toHaveLength(8);
+  expect(readOutbox(COMPOSING)[0]).toMatchObject({ state: "failed", selectedContext: { tasks: [{ id: TASK_A, title: "Original" }] } });
+  expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+});
+
+
+test("a rotated seat no longer takes project chips in the old conversation", async () => {
+  let seat = COMPOSING;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (...args) => String(args[0]) === "/api/orchestrator/seat?project=atlas"
+    ? new Response(JSON.stringify({ exists: true, seat: { conversationId: seat } }), { headers: { "content-type": "application/json" } })
+    : originalFetch(...args)) as typeof fetch;
+  const host = await mountComposer(COMPOSING, null);
+  await act(async () => { addTaskChip("atlas", { id: TASK_A, title: "First" }); });
+  for (let i = 0; i < 6; i++) await settle();
+  expect(chips(host)).toHaveLength(1);
+  seat = WORKER;
+  resetManagerIdentityForTest();
+  await act(async () => { addTaskChip("atlas", { id: TASK_B, title: "New seat's task" }); });
+  for (let i = 0; i < 6; i++) await settle();
+  expect(chips(host)).toHaveLength(0);
+  await sendThrough(host, COMPOSING, "ordinary worker words");
+  expect(sent[0]?.selectedContext?.tasks).toBeUndefined();
+  expect(readTaskChips("atlas")).toHaveLength(2);
+});
+
+test("the parked task row restores its chips before Attach again removes the row", async () => {
+  const host = await mountComposer();
+  const { enqueueOutbox, updateOutbox } = await import("./conversation/outbox");
+  await act(async () => { enqueueOutbox(COMPOSING, { id: "parked-task", text: "start this one", images: 1, preparing: true, at: Date.now(), selectedContext: { state: "none", tasks: [{ id: TASK_A, title: "Original" }] } }); updateOutbox(COMPOSING, "parked-task", { state: "failed", needsReattach: true, preparing: undefined }); });
+  const feed = document.createElement("div");
+  document.body.append(feed);
+  const feedRoot = createRoot(feed);
+  roots.push(feedRoot);
+  await act(async () => { feedRoot.render(<OutboxBubbles cardId={COMPOSING} entries={readOutbox(COMPOSING)} />); });
+  const restore = feed.querySelector<HTMLButtonElement>('[data-outbox-clear="parked-task"]');
+  expect(restore).not.toBeNull();
+  await act(async () => { restore!.click(); });
+  expect(readOutbox(COMPOSING)).toEqual([]);
+  expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("start this one");
+  expect(readTaskChips("atlas")).toEqual([{ id: TASK_A, title: "Original" }]);
 });

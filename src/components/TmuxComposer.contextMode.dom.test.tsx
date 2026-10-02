@@ -13,11 +13,16 @@ import type { NativeQueueDependencies } from "@/hooks/useNativeQueue";
 import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
+import { addTaskChip, readTaskChips, resetTaskChipsForTests } from "./orchestrator/taskChips";
+import { taskReferencePrelude } from "@/lib/selection/selectedContext";
+
 import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
 import { TmuxComposer } from "./TmuxComposer";
 import { CONTEXT_AUTO_STORAGE_KEY, CONTEXT_EXIT_AFTER_MS } from "./composerContextMode";
 import { withComposerSubmission } from "@/lib/composerSubmissionPayloads";
 import { resetRetainedQueueAdmissionsForTests } from "./retainedQueueAdmissions";
+import { messageRowRecovery } from "./conversation/rowRecovery";
+import { OutboxBubbles } from "./conversation/OutboxBubbles";
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
 
@@ -62,7 +67,7 @@ let mobile = false;
 const composerStorage = installComposerStorageForTests();
 afterAll(() => composerStorage.uninstall());
 
-const CARD = "conv-inject";
+const CARD = "conversation_inject";
 const realFetch = globalThis.fetch;
 
 let queueWrites: Record<string, unknown>[] = [];
@@ -78,6 +83,7 @@ let injectAnswer: Record<string, unknown> = { ok: true, status: 202, receipt: { 
 let holdInjection = false;
 let engine: "codex" | "claude" = "codex";
 let releaseInjection: (() => void) | null = null;
+let discoveredSeat = false;
 
 /** The journal's own answer, in the shape the route actually returns: the
     operation it committed, and a receipt carrying that operation's identity —
@@ -153,6 +159,7 @@ function sessionView(): RuntimeSessionView {
 
 beforeEach(() => {
   observed = {};
+  discoveredSeat = false;
   queueWrites = [];
   queueEntries = [];
   sends = [];
@@ -206,6 +213,7 @@ afterEach(() => {
   sessionStorage.clear();
   resetRetainedQueueAdmissionsForTests();
   resetOutboxForTests();
+  resetTaskChipsForTests();
   composerStorage.reset();
 });
 
@@ -232,8 +240,9 @@ const file = {
   waitingInput: null,
 } as FileEntry;
 
-async function mount(): Promise<{ host: HTMLElement; root: Root }> {
+async function mount(taskChipsFor?: string): Promise<{ host: HTMLElement; root: Root }> {
   globalThis.fetch = (async (input: string) => {
+    if (String(input) === "/api/orchestrator/seat?project=viewer" && discoveredSeat) return new Response(JSON.stringify({ exists: true, seat: { conversationId: CARD } }), { headers: { "content-type": "application/json" } });
     if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
     return new Promise(() => {}) as unknown as Response;
   }) as unknown as typeof fetch;
@@ -241,7 +250,7 @@ async function mount(): Promise<{ host: HTMLElement; root: Root }> {
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(<TmuxComposer file={{ ...file, ...observed }} />);
+    root.render(<TmuxComposer file={{ ...file, ...observed }} taskChipsFor={taskChipsFor} />);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return { host, root };
@@ -519,6 +528,7 @@ test("the dispatcher never sends a context row, held, answered or reloaded", asy
 
   /* A reload: the in-memory queue is gone, the persisted row is read back. */
   resetOutboxForTests();
+  resetTaskChipsForTests();
   turn = "idle";
   const again = await mount();
   await settle(() => {});
@@ -634,4 +644,145 @@ test("with the runtime offline, context mode refuses before anything is filed an
   expect(host.textContent).toContain("runtime is offline");
   root.unmount();
   setRuntimeBusForTests(null);
+});
+
+
+const CHIP = { id: "task_context", title: "Fix __init__.py (#42)" };
+const LATER_CHIP = { id: "task_later", title: "Next task" };
+
+for (const mode of ["automatic", "manual"] as const) {
+  test(`${mode} context Enter freezes task references into injection and history`, async () => {
+    turn = mode === "automatic" ? "running" : "idle";
+    holdInjection = true;
+    const { host, root } = await mount("viewer");
+    try {
+      if (mode === "manual") await settle(() => toggle(host)!.click());
+      await settle(() => { addTaskChip("viewer", CHIP); });
+      await type(host, "start this one");
+      await settle(() => press(textarea(host), "Enter"));
+      expect(injections[0]).toMatchObject({
+        text: taskReferencePrelude([CHIP]) + "\nstart this one",
+        selectedContext: { tasks: [CHIP] },
+      });
+      expect(contextRows()[0]).toMatchObject({ text: "start this one", selectedContext: { tasks: [CHIP] } });
+      expect(readTaskChips("viewer")).toEqual([]);
+      await settle(() => { addTaskChip("viewer", LATER_CHIP); });
+      await settle(() => releaseInjection!());
+      expect(readTaskChips("viewer")).toEqual([LATER_CHIP]);
+    } finally { await act(async () => root.unmount()); }
+  });
+}
+
+for (const fate of ["refused", "uncertain", "failed-operation"] as const) {
+  test(`task injection ${fate} follows admission rules and preserves later chips`, async () => {
+    turn = "running";
+    holdInjection = true;
+    injectAnswer = fate === "refused" ? { ok: false, error: "refused" }
+      : fate === "uncertain" ? { ok: false, error: "network" }
+      : { ok: false, error: "failed", operationId: "inject-failed" };
+    const { host, root } = await mount("viewer");
+    try {
+      await settle(() => { addTaskChip("viewer", CHIP); });
+      await type(host, "start this one");
+      await settle(() => press(textarea(host), "Enter"));
+      await settle(() => { addTaskChip("viewer", LATER_CHIP); });
+      await settle(() => releaseInjection!());
+      expect(readTaskChips("viewer")).toEqual(fate === "refused" ? [LATER_CHIP, CHIP] : [LATER_CHIP]);
+      expect(textarea(host).value).toBe(fate === "refused" ? "start this one" : "");
+      expect(contextRows()).toHaveLength(fate === "refused" ? 0 : 1);
+    } finally { await act(async () => root.unmount()); }
+  });
+}
+
+test("editing a recovered task receipt restores chips and operator words for the next send", async () => {
+  const wireText = taskReferencePrelude([CHIP, LATER_CHIP]) + "\nstart this one";
+  durableReceipts = [{
+    operationId: "recovered-task", idempotencyKey: "recovered-key", conversationId: CARD,
+    kind: "send", status: "failed", reason: "failed", text: wireText,
+    at: "2026-10-02T09:00:00.000Z", revision: 1,
+  }];
+  const { host, root } = await mount("viewer");
+  try {
+    const edit = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Edit"));
+    expect(edit).toBeDefined();
+    await settle(() => edit!.click());
+    expect(textarea(host).value).toBe("start this one");
+    expect(readTaskChips("viewer")).toEqual([CHIP, LATER_CHIP]);
+    expect(host.querySelector('[data-task-chips]')).not.toBeNull();
+    await type(host, "start these now");
+    await settle(() => press(textarea(host), "Enter"));
+    expect(sends[0]).toMatchObject({ text: taskReferencePrelude([CHIP, LATER_CHIP]) + "\nstart these now", selectedContext: { tasks: [CHIP, LATER_CHIP] } });
+    expect(readOutbox(CARD)[0]?.selectedContext?.tasks).toEqual([CHIP, LATER_CHIP]);
+    expect(durableReceipts[0]!.text).toBe(wireText);
+  } finally { await act(async () => root.unmount()); }
+});
+
+
+test("a refused injection retains its task snapshot when later chips fill the cap, then editing restores it", async () => {
+  turn = "running";
+  holdInjection = true;
+  injectAnswer = { ok: false, error: "refused" };
+  const { host, root } = await mount("viewer");
+  try {
+    await settle(() => { addTaskChip("viewer", CHIP); });
+    await type(host, "start this one");
+    await settle(() => press(textarea(host), "Enter"));
+    await settle(() => { for (let i = 0; i < 8; i++) addTaskChip("viewer", { id: `later_${i}`, title: `Later ${i}` }); });
+    await settle(() => releaseInjection!());
+    expect(contextRows()[0]).toMatchObject({ state: "failed", selectedContext: { tasks: [CHIP] } });
+    const key = contextRows()[0]!.id;
+    await settle(() => messageRowRecovery(CARD)!.editContext!(key));
+    expect(contextRows()).toHaveLength(1);
+    expect(readTaskChips("viewer")).toHaveLength(8);
+    await settle(() => resetTaskChipsForTests());
+    await type(host, "");
+    await settle(() => messageRowRecovery(CARD)!.editContext!(key));
+    expect(contextRows()).toHaveLength(0);
+    expect(textarea(host).value).toBe("start this one");
+    expect(readTaskChips("viewer")).toEqual([CHIP]);
+  } finally { await act(async () => root.unmount()); }
+});
+
+test("the failed context history row's Edit action restores its visual task references", async () => {
+  turn = "running";
+  injectAnswer = { ok: false, error: "failed", operationId: "failed-injection" };
+  const { host, root } = await mount("viewer");
+  const feed = document.createElement("div");
+  document.body.append(feed);
+  const feedRoot = createRoot(feed);
+  try {
+    await settle(() => { addTaskChip("viewer", CHIP); });
+    await type(host, "start this one");
+    await settle(() => press(textarea(host), "Enter"));
+    const key = contextRows()[0]!.id;
+    const { updateOutbox } = await import("./conversation/outbox");
+    await settle(() => updateOutbox(CARD, key, { state: "failed", error: "failed", deliveryReceipt: { operationId: "failed-injection", idempotencyKey: key, conversationId: CARD, kind: "inject", status: "failed", at: "2026-10-02T09:00:00.000Z", revision: 1 } }));
+    await act(async () => { feedRoot.render(<OutboxBubbles cardId={CARD} entries={contextRows()} />); });
+    expect(feed.querySelector('[data-task-badge="task_context"]')).not.toBeNull();
+    const edit = [...feed.querySelectorAll("button")].find((button) => button.textContent?.includes("Edit"));
+    expect(edit).toBeDefined();
+    await settle(() => edit!.click());
+    expect(contextRows()).toHaveLength(0);
+    expect(textarea(host).value).toBe("start this one");
+    expect(readTaskChips("viewer")).toEqual([CHIP]);
+  } finally { await act(async () => { feedRoot.unmount(); root.unmount(); }); }
+});
+
+
+test("a fresh phone seat recovers receipt tasks even with no unsent chips to trigger discovery", async () => {
+  discoveredSeat = true;
+  const { resetManagerIdentityForTest } = await import("./voice/managerIdentity");
+  resetManagerIdentityForTest();
+  const wireText = taskReferencePrelude([CHIP]) + "\nstart this one";
+  durableReceipts = [{ operationId: "phone-recovered", idempotencyKey: "phone-key", conversationId: CARD,
+    kind: "send", status: "failed", text: wireText, at: "2026-10-02T09:00:00.000Z", revision: 1 }];
+  const { host, root } = await mount();
+  try {
+    expect(readTaskChips("viewer")).toEqual([]);
+    const edit = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Edit"));
+    expect(edit).toBeDefined();
+    await settle(() => edit!.click());
+    expect(textarea(host).value).toBe("start this one");
+    expect(readTaskChips("viewer")).toEqual([CHIP]);
+  } finally { resetManagerIdentityForTest(); await act(async () => root.unmount()); }
 });

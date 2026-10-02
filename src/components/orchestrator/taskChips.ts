@@ -130,6 +130,24 @@ export function clearTaskChips(project: string, ids?: readonly string[]): void {
   set(project, ids ? current.filter((chip) => !ids.includes(chip.id)) : []);
 }
 
+/** Settle exactly the captured objects after asynchronous admission. A task
+    reattached or refreshed during the save belongs to the next message. */
+export function settleTaskChips(project: string, snapshot: readonly TaskChip[]): void {
+  const current = readTaskChips(project);
+  if (!snapshot.length || !current.some((chip) => snapshot.includes(chip))) return;
+  set(project, current.filter((chip) => !snapshot.includes(chip)));
+}
+
+/** Restore a refused snapshot alongside later chips without replacing their titles. */
+export function restoreTaskChips(project: string, snapshot: readonly TaskChip[]): boolean {
+  const current = readTaskChips(project);
+  if (new Set([...current, ...snapshot].map((chip) => chip.id)).size > MAX_TASK_CHIPS) return false;
+  for (const chip of snapshot) {
+    if (!readTaskChips(project).some((current) => current.id === chip.id)) addTaskChip(project, chip);
+  }
+  return true;
+}
+
 /** What a chip says to the wire: identity and title, nothing the card drew. */
 export function taskChipRefs(chips: readonly TaskChip[]): SelectedTaskRef[] {
   return chips.map(({ id, title }) => ({ id, title }));
@@ -166,23 +184,23 @@ export function useTaskChips(project: string | null | undefined): readonly TaskC
  * A surface that is the seat by construction (the dock, the kanban seat, which
  * render the seat's own conversation) names its project and is believed. Any
  * other composer, the phone's conversation screen among them, holds the seat
- * only if the project's seat route names its conversation: asked once chips
- * exist, through the same cached read the viewer-context prelude uses, and
+ * only if the project's seat route names its conversation: checked on mount
+ * and chip changes, through the cached read the viewer-context prelude uses, and
  * failing closed, so a worker's composer in the same project never takes a
  * chip meant for the orchestrator.
  */
 export function useSeatChipProject(conversationId: string, project: string | undefined, explicit: string | undefined): string | null {
   const probe = explicit ? null : project ?? null;
-  const waiting = useTaskChips(probe).length > 0;
+  const waitingChips = useTaskChips(probe);
   const [seatOf, setSeatOf] = useState<{ conversationId: string; project: string } | null>(null);
   useEffect(() => {
-    if (!probe || !waiting || !conversationId.startsWith("conversation_")) return;
+    if (!probe || !conversationId.startsWith("conversation_")) return;
     let live = true;
     void designatedManagerConversationId(probe).then((seat) => {
-      if (live && seat === conversationId) setSeatOf({ conversationId, project: probe });
+      if (live) setSeatOf(seat === conversationId ? { conversationId, project: probe } : null);
     });
     return () => { live = false; };
-  }, [probe, waiting, conversationId]);
+  }, [probe, waitingChips, conversationId]);
   if (explicit) return explicit;
   return seatOf && seatOf.conversationId === conversationId && seatOf.project === probe ? probe : null;
 }

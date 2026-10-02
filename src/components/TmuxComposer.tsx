@@ -16,7 +16,7 @@ import { useComposer } from "@/hooks/useComposer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useCodexRealtime } from "@/hooks/useCodexRealtime";
 import { interruptRuntime, useRuntimeBusState, type RuntimeSessionView } from "@/hooks/useRuntime";
-import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
+import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { useViewerSelectedContext, viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
 import { useHostTarget } from "@/hooks/useHostTarget";
@@ -50,7 +50,7 @@ import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./Composer
 import { chatState } from "./mobile/mobileChatState";
 import { SelectedContextBadge } from "./SelectedContextBadge";
 import { TaskChipRow } from "./orchestrator/TaskChipRow";
-import { addTaskChip, clearTaskChips, readTaskChips, taskChipRefs, useSeatChipProject } from "./orchestrator/taskChips";
+import { readTaskChips, taskChipRefs, restoreTaskChips, settleTaskChips, useSeatChipProject, type TaskChip } from "./orchestrator/taskChips";
 import { OutboxDispatcher } from "./conversation/OutboxDispatcher";
 import {
   adoptOutbox,
@@ -1338,6 +1338,8 @@ const unresolvedHandoffs = (id: string) =>
     can give the draft back whole. */
 interface QueueHandOffSnapshot {
   text: string;
+  chipProject: string | null;
+  chips: readonly TaskChip[];
   images: PendingImage[];
   files: PendingFile[];
 }
@@ -1986,11 +1988,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     check?: (key: string) => void;
     retryOperation?: (key: string) => void;
     discard?: (key: string) => void;
+    editContext?: (key: string) => void;
+    takeBack?: (key: string) => void;
   }>({});
   useEffect(() => publishMessageRowRecovery(cardId, {
     check: (key) => rowRecovery.current.check?.(key),
     retryOperation: (key) => rowRecovery.current.retryOperation?.(key),
     discard: (key) => rowRecovery.current.discard?.(key),
+    editContext: (key) => rowRecovery.current.editContext?.(key),
+    takeBack: (key) => rowRecovery.current.takeBack?.(key),
   }), [cardId]);
   const displayedRuntimeReceiptsRef = useRef(displayedRuntimeReceipts);
   useLayoutEffect(() => {
@@ -2767,7 +2773,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         attachments.settleDelivered(requestedImages, requestedFiles);
         /* The chips went with the message; one attached while it was being
            prepared stays for the next. */
-        if (chipProject && chipsAtSubmit.length) clearTaskChips(chipProject, chipsAtSubmit.map((chip) => chip.id));
+        if (chipProject) settleTaskChips(chipProject, chipsAtSubmit);
       }
       setStatus(null);
       inputRef.current?.focus();
@@ -2973,7 +2979,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const keepAsFailure = () => updateOutbox(cardId, outboxId, {
         state: "failed", error: reason, settledAt: nowMs(), awaitingTurn: undefined, heldForSwitch: undefined,
       });
-      if (textRef.current.trim() || attachments.attachmentsRef.current.length) { keepAsFailure(); return false; }
+      if (textRef.current.trim() || attachments.attachmentsRef.current.length || (chipProject && readTaskChips(chipProject).length)) { keepAsFailure(); return false; }
       cancelOutbox(cardId, outboxId);
       if (readOutbox(cardId).some((candidate) => candidate.id === outboxId)) { keepAsFailure(); return false; }
       outboxImages.current.delete(outboxId);
@@ -2981,7 +2987,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       outboxKeys.current.delete(outboxId);
       persistPendingDeliveries(pendingDeliveries.current.filter((pending) => pending.key !== outboxId));
       /* The task chips the refused message carried come back with its words. */
-      if (chipProject) for (const task of entry.selectedContext?.tasks ?? []) addTaskChip(chipProject, task);
+      if (chipProject) restoreTaskChips(chipProject, entry.selectedContext?.tasks ?? []);
       setText(requestedText);
       if (requestedImages.length || requestedFiles.length) attachments.replace(requestedImages, requestedFiles);
       inputRef.current?.focus();
@@ -3749,6 +3755,30 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
    * runtime and reconciles the same key. Nothing here sends a message.
    */
   rowRecovery.current = {
+    takeBack: (key) => {
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      if (!entry || entry.deliveryUncertain) return;
+      const provenUnsent = entry.state === "failed" && (entry.needsReattach || (!entry.operationId && !entry.deliveryReceipt) || entry.deliveryReceipt?.resend === "safe");
+      if (!provenUnsent && (entry.operationId || entry.deliveryReceipt)) return;
+      if (!chipProject || !restoreTaskChips(chipProject, entry.selectedContext?.tasks ?? [])) {
+        setStatus({ kind: "err", text: t("taskChip.full") });
+        return;
+      }
+      const cleared = clearParkedOutbox(cardId, key);
+      if (!cleared) cancelOutbox(cardId, key);
+      if (!readOutbox(cardId).some((candidate) => candidate.id === key) && entry.text.trim()) appendComposerDraft(cardId, entry.text);
+    },
+    editContext: (key) => {
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
+      if (!entry || entry.intent !== "context" || entry.state !== "failed" || entry.deliveryUncertain) return;
+      const tasks = entry.selectedContext?.tasks ?? [];
+      if (tasks.length && (!chipProject || !restoreTaskChips(chipProject, tasks))) {
+        setStatus({ kind: "err", text: t("taskChip.full") });
+        return;
+      }
+      withdrawContextOutbox(cardId, key);
+      if (entry.text.trim()) appendComposerDraft(cardId, entry.text);
+    },
     check: (key) => {
       const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
       /* An injection has no admission lookup: the engine does not deduplicate
@@ -3809,11 +3839,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const editRuntimeReceipt = (receipt: RuntimeReceipt) => {
     if (busy || voiceSending || !receipt.text) return;
     idempotencyKey.current = mintIdempotencyKey();
-    setText(receipt.text);
+    const draftText = chipProject ? stripTaskReferenceLines(receipt.text) : receipt.text;
+    if (chipProject && !restoreTaskChips(chipProject, taskReferencesFromText(receipt.text))) {
+      setStatus({ kind: "err", text: t("taskChip.full") });
+      return;
+    }
+    setText(draftText);
     setStatus(null);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(receipt.text!.length, receipt.text!.length);
+      inputRef.current?.setSelectionRange(draftText.length, draftText.length);
     });
   };
 
@@ -3863,15 +3898,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const requested = structuredSession ? sendRuntimeFrom(file) : undefined;
     /* #844: read at the submission instant, exactly as an ordinary send does —
        everything the reference will ever say is decided now. */
-    const reference = viewerSelectedContext();
-    const snapshot = { text: textRef.current, images: requestedImages, files: requestedFiles };
+    const chips = chipProject ? readTaskChips(chipProject) : [];
+    const reference = withSelectedTasks(viewerSelectedContext(), taskChipRefs(chips));
+    const snapshot = { text: textRef.current, images: requestedImages, files: requestedFiles, chipProject, chips };
     /* THE EXACT COMMAND, decided once and never rebuilt. The journal hashes the
        request behind an idempotency key and refuses a key whose payload changed,
        so a replay assembled from whatever the composer holds later is not a
        replay at all. */
     const mutation: NativeQueueMutation = {
       action: "add",
-      text: requestedText,
+      text: [taskReferencePrelude(reference.tasks), requestedText].filter(Boolean).join("\n"),
       ...(requestedImages.length
         ? { images: requestedImages.map((image) => ({ base64: image.base64, mime: image.mime })) as never }
         : {}),
@@ -3923,6 +3959,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     attachments.clearAll();
     setStatus({ kind: "ok", text: t("queue.queueMessage") });
     inputRef.current?.focus();
+    if (snapshot.chipProject) settleTaskChips(snapshot.chipProject, snapshot.chips);
     void submitHandOff(envelope, snapshot);
   };
 
@@ -3966,6 +4003,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setUnresolvedAdmissions(unresolvedHandoffs(cardId));
       if (composer.draftRevision.current === draftRevision) setText("");
       attachments.settleDelivered(snapshot.images, snapshot.files);
+      if (snapshot.chipProject) settleTaskChips(snapshot.chipProject, snapshot.chips);
       setStatus({ kind: "ok", text: t("queue.queueMessage") });
       inputRef.current?.focus();
       admitted = envelope;
@@ -4003,7 +4041,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        UNKNOWN outcome gives it back too, and the operation stays recoverable
        from the panel. */
     setStatus({ kind: "err", text: answer.error ?? t("queue.refused") });
-    if (textRef.current.trim() || attachments.attachmentsRef.current.length) return;
+    if (textRef.current.trim() || attachments.attachmentsRef.current.length || (snapshot.chipProject && readTaskChips(snapshot.chipProject).length)) return;
+    if (snapshot.chipProject) restoreTaskChips(snapshot.chipProject, snapshot.chips);
     setText(snapshot.text);
     if (snapshot.images.length || snapshot.files.length) attachments.replace(snapshot.images, snapshot.files);
   };
@@ -4058,7 +4097,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         return;
       }
       if (payloadOwner.current !== cardId) return;
-      const text = envelope.mutation.text ?? "";
+      const wireText = envelope.mutation.text ?? "";
+      const text = chipProject ? stripTaskReferenceLines(wireText) : wireText;
+      const tasks = envelope.mutation.selectedContext?.tasks ?? taskReferencesFromText(wireText);
       const images = (envelope.mutation.images ?? []) as unknown as Array<{ base64: string; mime: string }>;
       const files = envelope.mutation.files ?? [];
       const current = textRef.current.trim();
@@ -4069,10 +4110,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         && attachments.attachmentsRef.current.every((slot) => (slot.status === "error"
           ? slot.kind === "file" && fileNames.has(slot.name)
           : slot.status === "ready" && Boolean(slot.base64) && (slot.kind === "image" ? imageBytes : fileBytes).has(slot.base64!)));
-      if (!holdsOnlyThis) {
+      const holdsOnlyTheseChips = !chipProject || readTaskChips(chipProject).every((chip) => tasks.some((task) => task.id === chip.id && task.title === chip.title));
+      if (!holdsOnlyThis || !holdsOnlyTheseChips) {
         setStatus({ kind: "err", text: t("queue.refusedRestoreOccupied") });
         return;
       }
+      if (chipProject) restoreTaskChips(chipProject, tasks);
       setText(text);
       attachments.replace(
         images.map((image) => ({ base64: image.base64, mime: image.mime, preview: `data:${image.mime};base64,${image.base64}` })),
@@ -4152,7 +4195,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        the earlier refusal honest — it refuses pictures, which genuinely cannot
        be carried, rather than every attachment. */
     const requestedFiles = attachments.filesRef.current.map((file) => ({ ...file }));
-    const reference = viewerSelectedContext();
+    const chips = chipProject ? readTaskChips(chipProject) : [];
+    const reference = withSelectedTasks(viewerSelectedContext(), taskChipRefs(chips));
     const snapshotText = textRef.current;
     /* Capacity is a pre-flight refusal like the send path's: with every slot
        holding an unresolved operation the words stay in the field. */
@@ -4173,19 +4217,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       at: nowMs(),
       contextTurn: structuredSession.session.turn === "running" ? "running" : "idle",
       echoBaseline: transcriptEchoCount(cardId, requestedText),
-      ...(reference.state === "selected" ? {
-        selectedContext: {
-          state: "selected" as const,
-          conversationId: reference.conversationId,
-          ...(reference.project ? { project: reference.project } : {}),
-          ...(reference.label ? { label: reference.label } : {}),
-        },
-      } : {}),
+      ...(reference.state === "selected" || reference.tasks ? { selectedContext: reference } : {}),
     });
     if (!contextRow) {
       setStatus({ kind: "err", text: t("composer.outboxFull") });
       return;
     }
+    if (chipProject) settleTaskChips(chipProject, chips);
     setInjectsPending((count) => count + 1);
     setText("");
     /* THE STAGED DOCUMENTS STAY UNTIL THE ANSWER. Clearing them now would be
@@ -4207,7 +4245,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     void (async () => {
       const answer = await runtimeDependencies.injectRuntimeContext({
         conversationId: structuredSession.session.conversationId,
-        text: requestedText,
+        text: [taskReferencePrelude(reference.tasks), requestedText].filter(Boolean).join("\n"),
         idempotencyKey: clientMessageId,
         ...(requestedFiles.length
           ? { files: requestedFiles.map((file) => ({ name: file.name, base64: file.base64 })) }
@@ -4235,10 +4273,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         });
       } else if (!answer.ok && answerLost) {
         updateOutbox(cardId, clientMessageId, { deliveryUncertain: true });
-      } else if (!answer.ok) {
-        withdrawContextOutbox(cardId, clientMessageId);
       }
       const restoreDraft = !answer.ok && !operationExists && !answerLost;
+      if (restoreDraft) {
+        if (!chipProject || restoreTaskChips(chipProject, chips)) withdrawContextOutbox(cardId, clientMessageId);
+        else {
+          updateOutbox(cardId, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
+          if (payloadOwner.current === cardId) setStatus({ kind: "err", text: t("taskChip.full") });
+          return;
+        }
+      }
       /* The composer may show another conversation by now, or none. The answer
          settles the conversation that pressed it, in its stored draft, and
          leaves the words and status on screen to their owner. */

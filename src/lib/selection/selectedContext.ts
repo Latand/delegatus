@@ -303,6 +303,19 @@ export function stripTaskReferencePrelude(text: string, tasks: readonly Selected
 
 const TASK_REFERENCE_LINE = /^\[task reference — id [A-Za-z0-9_-]{1,64}, title "(?:[^"\\]|\\.)*"; read it with get_task\]$/;
 
+/** Recover bounded task identities from a receipt that retains only wire text. */
+export function taskReferencesFromText(text: string): SelectedTaskRef[] {
+  const tasks: SelectedTaskRef[] = [];
+  for (const line of text.split("\n")) {
+    if (!TASK_REFERENCE_LINE.test(line)) continue;
+    const match = /^\[task reference — id ([A-Za-z0-9_-]{1,64}), title ("(?:[^"\\]|\\.)*"); read it with get_task\]$/.exec(line);
+    if (!match) continue;
+    try { tasks.push({ id: match[1], title: JSON.parse(match[2]) }); }
+    catch { /* A malformed reference cannot reconstruct a chip. */ }
+  }
+  return tasksOf(tasks) ?? [];
+}
+
 /** The text without any line in the exact shape of a task reference, for a
     surface that holds only the wire text (a delivery receipt) and no longer
     knows which chips went with it. The shape is `taskReferenceLine`'s, whole. */

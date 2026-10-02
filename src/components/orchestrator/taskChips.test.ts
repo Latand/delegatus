@@ -13,6 +13,8 @@ import {
   resetTaskChipsForTests,
   taskChipsStorageKey,
   taskChipRefs,
+  settleTaskChips,
+  restoreTaskChips,
 } from "./taskChips";
 
 /* The tab's session storage, as a reload keeps it. */
@@ -143,4 +145,31 @@ test("opening a chip names the task and its project to the board", () => {
   openTaskChip("atlas", "t1");
   off();
   expect(heard).toEqual([{ project: "atlas", id: "t1" }]);
+});
+
+
+test("settling a captured snapshot preserves a refreshed identity and later chips", () => {
+  addTaskChip("atlas", { id: "t1", title: "First" });
+  addTaskChip("atlas", { id: "t2", title: "Second" });
+  const snapshot = readTaskChips("atlas");
+  addTaskChip("atlas", { id: "t1", title: "Updated" });
+  addTaskChip("atlas", { id: "t3", title: "Later" });
+  settleTaskChips("atlas", snapshot);
+  expect(readTaskChips("atlas")).toEqual([{ id: "t1", title: "Updated" }, { id: "t3", title: "Later" }]);
+  reloadTaskChipsForTests();
+  expect(readTaskChips("atlas")).toEqual([{ id: "t1", title: "Updated" }, { id: "t3", title: "Later" }]);
+});
+
+test("restoring a refused snapshot preserves a later version of the same task", () => {
+  addTaskChip("atlas", { id: "t1", title: "Updated" });
+  restoreTaskChips("atlas", [{ id: "t1", title: "Original" }, { id: "t2", title: "Second" }]);
+  expect(readTaskChips("atlas")).toEqual([{ id: "t1", title: "Updated" }, { id: "t2", title: "Second" }]);
+});
+
+
+test("restoring tasks refuses atomically if later chips filled the cap", () => {
+  for (let i = 0; i < MAX_TASK_CHIPS - 1; i++) addTaskChip("atlas", { id: `later_${i}`, title: `Later ${i}` });
+  const before = readTaskChips("atlas");
+  expect(restoreTaskChips("atlas", [{ id: "old_1", title: "First" }, { id: "old_2", title: "Second" }])).toBe(false);
+  expect(readTaskChips("atlas")).toBe(before);
 });

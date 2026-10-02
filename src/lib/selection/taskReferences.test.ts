@@ -14,6 +14,7 @@ import {
   stripTaskReferencePrelude,
   taskChipTitle,
   taskReferencePrelude,
+  taskReferencesFromText,
   withSelectedTasks,
   type SelectedContextRef,
 } from "./selectedContext";
@@ -187,4 +188,15 @@ test("a receipt that holds only the wire text shows the operator's words: refere
   expect(stripTaskReferenceLines(`${prelude}\n[viewer context — x]\nstart`)).toBe("[viewer context — x]\nstart");
   expect(stripTaskReferenceLines("plain words")).toBe("plain words");
   expect(stripTaskReferenceLines(`look at [task reference — id ${TASK_A}] please`)).toBe(`look at [task reference — id ${TASK_A}] please`);
+});
+
+
+test("wire-only receipt recovery decodes quoted titles and bounds task references", () => {
+  const tasks = [{ id: TASK_A, title: 'Fix "quoted" __init__.py (#42)' }, { id: TASK_B, title: "Second" }];
+  const text = taskReferencePrelude(tasks) + "\nstart this one";
+  expect(taskReferencesFromText(text)).toEqual(tasks);
+  expect(taskReferencesFromText(text + "\n" + taskReferencePrelude(tasks))).toEqual(tasks);
+  expect(taskReferencesFromText('[task reference — id bad/id, title "bad"; read it with get_task]')).toEqual([]);
+  expect(taskReferencesFromText('[task reference — id valid, title "bad\\q"; read it with get_task]')).toEqual([]);
+  expect(taskReferencesFromText(taskReferencePrelude(Array.from({ length: 10 }, (_, i) => ({ id: `task_${i}`, title: "Title" }))))).toHaveLength(MAX_SELECTED_TASKS);
 });
