@@ -2121,7 +2121,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           });
           expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
           expect(result.stdout.toString()).toBe(!exactOnly || contiguous
-            ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+            ? `PRIVACY GATE: FAIL\nknown_value: 1\n${fileNotice("docs/acceptance/issue-290/readiness-kanban.png", "known_value")}\n`
+            : "PRIVACY GATE: PASS\n");
           expect(result.stderr.toString()).toBe("");
         });
       }
