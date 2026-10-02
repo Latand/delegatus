@@ -342,3 +342,12 @@ test("title writes retain rejected record bytes and never evict them at the vali
   expect(readSessionTitles(file)).toHaveLength(MAX_TITLE_OVERRIDES);
   expect(fs.readFileSync(file, "utf8")).toContain(rejected);
 });
+
+test("a rejected title's own key stays protected even when future metadata also has an id", () => {
+  const rejected = '{ "id":"future-metadata", "key":"path:/a", "title":"Future", "revision":"later", "updatedAt":"now" }';
+  fs.writeFileSync(file, `{"version":1,"titles":[${rejected}]}`);
+  expect(() => write("path:/a", "Replacement", undefined, "t1")).toThrow("preserved title record");
+  write("path:/neighbor", "Healthy", undefined, "t1");
+  expect(readSessionTitles(file).map((record) => record.key)).toEqual(["path:/neighbor"]);
+  expect(fs.readFileSync(file, "utf8")).toContain(rejected);
+});

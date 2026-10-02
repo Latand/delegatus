@@ -1118,14 +1118,26 @@ export class SqliteStateCollection<T> {
 
   unclaimedPipelinePublications(): T[] {
     if (this.options.collection !== "pipelines") throw new Error("pipeline admission requires the pipeline collection");
-    return this.readDb.query<{ value_json: string }, []>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
-      WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
-      AND json_extract(value_json, '$.publication') = 'remote-branch'
-      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed') ORDER BY row_key LIMIT 16`).all().flatMap((row) => {
-      const decoded = this.decodeRow(row.value_json);
-      if (!decoded && !this.options.preserveRejectedRecords) throw new Error("invalid legacy pipeline row");
-      return decoded ? [this.options.clone(decoded)] : [];
-    });
+    const accepted: T[] = [];
+    let after = "";
+    // Advance by raw keys even when an entire page is opaque. Otherwise sixteen
+    // future records at the front starve every healthy publication behind them.
+    while (accepted.length < 16) {
+      const limit = 16 - accepted.length;
+      const rows = this.readDb.query<{ row_key: string; value_json: string }, [string, number]>(`SELECT row_key, value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
+        WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
+        AND json_extract(value_json, '$.publication') = 'remote-branch'
+        AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')
+        AND row_key > ? ORDER BY row_key LIMIT ?`).all(after, limit);
+      for (const row of rows) {
+        after = row.row_key;
+        const decoded = this.decodeRow(row.value_json);
+        if (!decoded && !this.options.preserveRejectedRecords) throw new Error("invalid legacy pipeline row");
+        if (decoded) accepted.push(this.options.clone(decoded));
+      }
+      if (rows.length < limit) break;
+    }
+    return accepted;
   }
 
   loadReadonly(): readonly T[] {

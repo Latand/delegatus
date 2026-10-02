@@ -106,8 +106,10 @@ function readTitlesDocument(filePath: string): { records: SessionTitleOverride[]
   const bytes = jsonArrayRecordBytes(text, "titles");
   const preserved = file.titles.flatMap((record, index) => {
     if (isRecord(record)) return [];
-    reportRegistryRecord("session-titles", record);
-    return [{ key: registryRecordKey(record), json: bytes[index]! }];
+    const ownKey = record && typeof record === "object" ? (record as { key?: unknown }).key : undefined;
+    const key = typeof ownKey === "string" && ownKey ? ownKey : registryRecordKey(record);
+    reportRegistryRecord("session-titles", { id: key });
+    return [{ key, json: bytes[index]! }];
   });
   return { records, preserved };
 }

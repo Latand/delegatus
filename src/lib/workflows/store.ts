@@ -260,10 +260,16 @@ export function normalizeTemplate(value: unknown): WorkflowTemplate | null {
 }
 
 function isWorkflow(value: unknown): value is Workflow {
+  try { return isWorkflowShape(value); }
+  catch { return false; }
+}
+
+function isWorkflowShape(value: unknown): value is Workflow {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const wf = value as Partial<Workflow>;
   return (
     typeof wf.id === "string" &&
+    (wf.project == null || typeof wf.project === "string") &&
     typeof wf.task === "string" &&
     typeof wf.repoDir === "string" &&
     typeof wf.worktreeDir === "string" &&

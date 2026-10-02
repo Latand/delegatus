@@ -3,9 +3,13 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildPipeline, findPipelineRecord, loadPipelines, pipelineRegistryHealth, PIPELINES_SCHEMA_VERSION, savePipelines, unclaimedPipelinePublications, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { buildPipeline, findPipelineRecord, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, unclaimedPipelinePublications, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import * as pipelineStore from "./store";
 import { probeQuiet } from "@/lib/selfUpdate/quiet";
 import type { Snapshot } from "@/lib/selfUpdate/types";
+
+// Keep the incident tests runnable against releases predating this diagnostic.
+const { pipelineRegistryHealth } = pipelineStore;
 
 function fixture(id: string, merger = false) {
   return buildPipeline({ id, task: "Registry compatibility", project: "fixture", repoDir: "/repo",
@@ -144,10 +148,39 @@ test("unparseable SQLite rows and legacy JSON still abort reads and writes", asy
 }));
 
 test("publication admission skips a preserved future record without blocking healthy owners", async () => isolated((root) => {
-  const healthy = fixture("healthy"); healthy.publication = "remote-branch";
+  const healthy = fixture("zhealthy"); healthy.publication = "remote-branch";
   savePipelines([healthy]);
-  const future = fixture("future"); future.publication = "remote-branch";
-  (future.stages[0] as unknown as { kind: string }).kind = "future-kind";
+  for (let index = 0; index < 16; index++) {
+    const future = fixture(`a${String(index).padStart(2, "0")}`); future.publication = "remote-branch";
+    (future.stages[0] as unknown as { kind: string }).kind = "future-kind";
+    insertRaw(root, future.id, JSON.stringify(future));
+  }
+  expect(loadPipelines().map((row) => row.id)).toEqual(["zhealthy"]);
+  expect(unclaimedPipelinePublications().map((row) => row.id)).toEqual(["zhealthy"]);
+}));
+
+test.each(["sqlite", "legacy"])("%s parsed records with invalid nested types cannot throw through validation", async (storage) => isolated(async (root) => {
+  const malformed = [
+    { ...fixture("null-creation"), creationRequest: null },
+    { ...fixture("object-state"), state: { toString: null } },
+  ];
+  if (storage === "sqlite") {
+    savePipelines([fixture("healthy")]);
+    for (const row of malformed) insertRaw(root, row.id, JSON.stringify(row));
+  } else {
+    fs.writeFileSync(path.join(root, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [fixture("healthy"), ...malformed] }));
+  }
+  expect(loadPipelines().map((row) => row.id)).toEqual(["healthy"]);
+  expect(pipelineRegistryHealth().map((issue) => [issue.id, issue.reason])).toEqual(malformed.map((row) => [row.id, "malformed"]));
+  const older = await olderStore(root);
+  expect(older.loadPipelinesForStartup().map((row) => row.id)).toEqual(["healthy"]);
+  savePipelines(loadPipelines());
+  for (const row of malformed) expect(storedBytes(root, row.id)).toBe(JSON.stringify(row));
+}));
+
+test("an empty draft with only a future state is unknown-but-preserved", async () => isolated((root) => {
+  savePipelines([fixture("healthy")]);
+  const future = { ...fixture("empty-future"), stages: [], runs: [], cursor: null, state: "future-draft-state" };
   insertRaw(root, future.id, JSON.stringify(future));
-  expect(unclaimedPipelinePublications().map((row) => row.id)).toEqual(["healthy"]);
+  expect(pipelineRegistryHealth()).toMatchObject([{ id: future.id, reason: "unknown-but-preserved" }]);
 }));

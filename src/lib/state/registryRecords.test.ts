@@ -69,6 +69,24 @@ test("a flow whose shallow history shape passes but lacks decoder fields does no
   expect(loadFlow("missing-roles")).toBeNull();
 }));
 
+test("nested invalid types cannot throw through flow or workflow validation", async () => isolated((root) => {
+  const invalidFlow = { ...flow(), id: "invalid-flow", hostClaim: { sessionKey: { toString: null } } };
+  fs.writeFileSync(path.join(root, "flows.json"), JSON.stringify({ flows: [flow(), invalidFlow] }));
+  expect(loadFlows().map((row) => row.id)).toEqual(["healthy-flow"]);
+  saveFlows(loadFlows());
+  const healthyWorkflow = buildWorkflow({ id: "healthy-workflow", name: "Fixture", task: "Task", project: "fixture", repoDir: "/repo", mode: "manual", now: "now",
+    template: normalizeTemplate({ name: "Fixture", stages: [{ kind: "implement", agent: { engine: "codex", model: null, effort: "high" }, scope: "Code" },
+      { kind: "review-loop", reviewer: { engine: "codex", model: null, effort: "high" }, fixer: { engine: "codex", model: null, effort: "high" }, roundLimit: 5, reviewerMode: "headless" }], finish: "comment" })! });
+  const invalidWorkflow = { ...healthyWorkflow, id: "invalid-workflow", project: { toString: null } };
+  fs.writeFileSync(path.join(root, "workflows.json"), JSON.stringify({ workflows: [healthyWorkflow, invalidWorkflow] }));
+  expect(loadWorkflows().map((row) => row.id)).toEqual([healthyWorkflow.id]);
+  saveWorkflows(loadWorkflows());
+  const db = new Database(path.join(root, "state.sqlite"));
+  try {
+    expect(db.query("SELECT row_key FROM state_rows WHERE row_key LIKE 'invalid-%' ORDER BY row_key").all()).toEqual([{ row_key: "invalid-flow" }, { row_key: "invalid-workflow" }]);
+  } finally { db.close(); }
+}));
+
 test.each(["flows", "workflows"])("%s unparseable SQLite rows still fail loudly", async (collection) => isolated((root) => {
   if (collection === "flows") saveFlows([]); else saveWorkflows([]);
   const db = new Database(path.join(root, "state.sqlite"));

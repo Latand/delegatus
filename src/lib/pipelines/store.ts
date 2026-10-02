@@ -730,7 +730,15 @@ function isTaskFinishWait(value: unknown): boolean {
   return typeof wait.taskId === "string" && wait.taskId.length > 0 && typeof wait.since === "string" && isStringList(wait.open);
 }
 
+/** Validation of a parsed record is total. A nested value of the wrong type
+    can throw inside a shape check (for example String({toString: null})); that
+    makes this record unreadable, while the JSON parser remains strict. */
 function isPipeline(value: unknown): value is Pipeline {
+  try { return isPipelineShape(value); }
+  catch { return false; }
+}
+
+function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
@@ -1098,7 +1106,14 @@ function pipelineRecordIssue(value: unknown, collection = "pipelines"): Registry
     }
   };
   visit(copy, "");
-  const forward = unknown.length > 0 && isPipeline(copy);
+  const unknownState = unknown.some((field) => field.startsWith("state="));
+  // Different states admit different shapes (an empty draft, a completed lane
+  // without a cursor). Try the known shapes instead of assigning one state's
+  // constraints to a future vocabulary value.
+  const forward = unknown.length > 0 && (unknownState && copy && typeof copy === "object"
+    ? ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"]
+      .some((state) => isPipeline({ ...copy, state }))
+    : isPipeline(copy));
   return reportRegistryRecord(collection, value, forward ? "unknown-but-preserved" : "malformed",
     forward ? `unsupported vocabulary (${unknown.join(", ")}); preserved without launch or settlement` : undefined);
 }
