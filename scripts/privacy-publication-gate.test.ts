@@ -1385,6 +1385,12 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           { name: `raw comment standalone call ${form} ${kind}`, text: `${comment}String("${value}")`, pass: true },
           { name: `raw comment internal close ${form} ${kind}`, text: `\u200bf(${comment}"${value}")`, pass: false },
         ])),
+      ...[host, origin, discovery].flatMap((value, form) => [
+        { name: `raw entity comment call prefix ${form}`, text: `&#160;String /*comment*/ ("${value}")`, pass: false },
+        { name: `raw entity comment continued call prefix ${form}`, text: `&#160;String /*comment*/\n ("${value}")`, pass: false },
+        { name: `raw entity comment index prefix ${form}`, text: `&#x200b;x /*comment*/ ["${value}"]`, pass: false },
+        { name: `raw entity comment chained call prefix ${form}`, text: `&#160;(x) /*comment*/ ("${value}")`, pass: false },
+      ]),
       { name: "quoted code", text: `export const relay = "${origin}";`, pass: true },
       { name: "repeated host", text: `${host}\n`.repeat(1000), pass: true },
       { name: "NUL metadata boundaries", text: `comment\0${host}\0`, pass: false },
@@ -2000,6 +2006,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         || c.name.startsWith("review Unicode NFKC shell")
         || c.name.startsWith("raw quoted wrapper suffix")
         || c.name.startsWith("raw bare ")
+        || c.name.startsWith("raw entity comment ")
         || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
         || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
         || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name))) {

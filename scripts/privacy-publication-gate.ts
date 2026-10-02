@@ -472,7 +472,18 @@ function maskApprovedPublicValues(text: string): string {
   function skipRawTrivia(before: number): number {
     for (;;) {
       while (before >= 0 && /[\t\n\v\f\r ]/.test(text[before])) before -= 1;
-      const commentStart = rawTriviaEnds.get(before);
+      let commentStart = rawTriviaEnds.get(before);
+      // A source-shaped block comment may also occur inside a prose/line
+      // comment. Its closing bytes still separate a raw callee from its group.
+      // Prefer the lexical block span when available; cache a nested span once.
+      if (text[before] === "/" && text[before - 1] === "*"
+        && (commentStart === undefined || !text.startsWith("/*", commentStart))) {
+        const blockStart = text.lastIndexOf("/*", before - 1);
+        if (blockStart >= 0 && (commentStart === undefined || blockStart > commentStart)) {
+          commentStart = blockStart;
+          rawTriviaEnds.set(before, blockStart);
+        }
+      }
       if (commentStart === undefined) return before;
       before = commentStart - 1;
     }
