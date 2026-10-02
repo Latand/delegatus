@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
+import { en } from "../src/lib/i18n/en";
+import { uk } from "../src/lib/i18n/uk";
 import { CAP_USD, charged, collect, metrics, paidReplay, parseAnswer, queryFor, requestBody, agentSendBodies, markAgentRelays,
   confidenceIntervals, sampleOperatorPrompts, machineMessage, nativeMatch, budgetSelect, entryText, offerRows, offerIntervals, contextView, replayText, summarizeVariants, REQUEST_VARIANTS, graphScores, cleanEnvelope, reservation, retrieve, samplePrompts, select, validateLabels, type Case, type Labels, type Message, type Sample } from "./memory-selection";
 
@@ -18,6 +20,31 @@ const c: Case = { id: "p01", prompt: "Investigate failures while writing to a cl
 const sample: Sample = { version: 1, seed: "test", collectedAt: "2026-01-01", counts: {}, cases: [c] };
 const labels: Labels = { rule: "A fact changes the next action.", cases: [{ id: "p01", prompt: c.prompt, candidates: c.candidates.map(m => ({ id: m.id, helpful: m.id === "c4", summary: m.summary, reason: "Fixture relevance" })) }] };
 const message = (body: string, index = 0, transcript = "one"): Message => ({ body, message_index: index, transcript_path: transcript, engine: "codex", project: "project-a", timestamp: 1 });
+
+test("UI continuation and handoff templates require an operator suffix in both languages", () => {
+  for (const dictionary of [en, uk]) {
+    for (const key of ["draft.readPrompt", "link.handoffContext"] as const) {
+      const uiMessage = dictionary[key];
+      if (typeof uiMessage !== "string") throw new Error("Expected a string UI template");
+      const template = uiMessage.replace("{src}", "transcript.jsonl")
+        .replace("{title}", "Earlier conversation").replace("{path}", "transcript.jsonl").replace("{ask}", "");
+      for (const operatorOrigin of [false, true]) {
+        expect(machineMessage(template, operatorOrigin)).toBeTrue();
+        const added = "Check the socket lifecycle regression.";
+        expect(machineMessage(template + added, operatorOrigin)).toBeFalse();
+        expect(cleanEnvelope(template + added)).toBe(added);
+        const sampled = sampleOperatorPrompts([
+          { ...message(template, 0), operatorOrigin },
+          { ...message(template + added, 1), operatorOrigin },
+        ]);
+        expect(sampled.counts).toMatchObject({ machine: 1, eligible: 1 });
+        expect(sampled.rows[0].body).toBe(added);
+        expect(sampled.rows[0].uiContext).toBe(template.trim());
+      }
+    }
+  }
+  expect(cleanEnvelope("Read the agent conversation carefully and check it.")).toBe("Read the agent conversation carefully and check it.");
+});
 
 test("sampling skips launch metadata, never promotes a later turn and folds copies", () => {
   const result = samplePrompts([
@@ -314,6 +341,40 @@ test("expanded collection keeps the prefix before later operator turns and never
   expect(result.cases[0].prompt).toBe("Continue");
   expect(result.cases[0].context!.map(t => t.text)).toEqual(["Pinned task: a generated pipeline assignment", "The socket problem remains"]);
   expect(result.cases[0].candidates.length).toBeGreaterThan(0);
+});
+
+test("collection preserves UI handoff context for retrieval and the decider, without sampling bare templates", () => {
+  const dir = root(), mp = path.join(dir, "memories.sqlite"), tp = path.join(dir, "transcripts.sqlite");
+  memoryDb(mp).close();
+  const db = new Database(tp);
+  db.exec("CREATE TABLE transcript_files(path TEXT,engine TEXT,project TEXT); CREATE TABLE transcript_messages(transcript_path TEXT,message_index INTEGER,body TEXT,timestamp INTEGER,speaker TEXT,byte_offset INTEGER)");
+  db.query("INSERT INTO transcript_files VALUES (?,?,?)").run("one", "codex", "project-a");
+  const add = db.query("INSERT INTO transcript_messages VALUES (?,?,?,?,?,NULL)");
+  const template = en["draft.readPrompt"].replace("{src}", "socket-history.jsonl");
+  const uiMessage = uk["link.handoffContext"];
+  if (typeof uiMessage !== "string") throw new Error("Expected a string UI template");
+  const handoff = uiMessage.replace("{title}", "Socket lifecycle")
+    .replace("{path}", "socket-history.jsonl").replace("{ask}", "");
+  add.run("one", 0, template, 1, "user");
+  add.run("one", 1, "Prior response", 2, "assistant");
+  add.run("one", 2, handoff + "Так", 3, "user");
+  add.run("one", 3, "Future response", 4, "assistant");
+  db.close();
+  const result = collect(tp, mp);
+  expect(result.counts).toMatchObject({ machine: 1, eligible: 1 });
+  expect(result.cases[0].prompt).toBe("Так");
+  expect(result.cases[0].context).toEqual([
+    { role: "user", text: template }, { role: "assistant", text: "Prior response" },
+    { role: "context", text: handoff.trim() },
+  ]);
+  expect(result.cases[0].candidates.length).toBeGreaterThan(0);
+  const view = contextView(result.cases[0]);
+  expect(view).toContain(template.trim());
+  expect(view).toContain(handoff.trim());
+  expect(view).not.toContain("Future response");
+  const state = requestBody(result.cases[0], "grounded").state;
+  expect("latestOperatorMessage" in state && state.latestOperatorMessage).toBe("Так");
+  expect("precedingTurns" in state && state.precedingTurns).toBe(view);
 });
 
 test("expanded FTS returns top thirty after native duplicate filtering", () => {
