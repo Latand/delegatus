@@ -12,7 +12,7 @@ import { readPeerTaskWireVersion, readTaskCursor, writeTaskCursor, type TaskCurs
 import { installPrefix } from "./stamp";
 import { applyTaskRows } from "./taskApply";
 import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
-import { decodeWireRow, MalformedRow, TASK_WIRE_VERSION, type WireRow } from "./taskWire";
+import { decodeWireRow, MalformedRow, TASK_BOARD_WIRE_VERSION, type WireRow } from "./taskWire";
 import { taskFeedSource } from "@/lib/tasks/store";
 
 export const TaskSyncError = sharedLinkState("taskExchange.errorClass", () => class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } });
@@ -77,7 +77,7 @@ export class TaskExchange {
     this.pushed = held?.pushed ?? null;
     this.pullCovered = new Set(held?.pullCovered ?? []);
     this.pushCovered = new Set(held?.pushCovered ?? []);
-    if (this.peerTaskWireVersion >= TASK_WIRE_VERSION && this.boardReplayVersion < BOARD_MEMBERSHIP_REPLAY_VERSION) {
+    if (this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION && this.boardReplayVersion < BOARD_MEMBERSHIP_REPLAY_VERSION) {
       // Earlier releases persisted v3 before replaying a fresh exchange's
       // pre-confirmation push. Rescan the sender's rows with membership now.
       this.pushed = null;
@@ -125,7 +125,7 @@ export class TaskExchange {
       else if (uncovered.length) this.pushScan = { p: uncovered.slice(0, SCAN_PROJECTS), after: "", full: false, at: null };
     }
     if (this.pushScan && !sameSet(linked, this.pushScan.p)) this.pushScan = null;
-    const filter = { self: this.self, skipPrefix: this.peerPrefix, includeBoard: this.peerTaskWireVersion >= TASK_WIRE_VERSION };
+    const filter = { self: this.self, skipPrefix: this.peerPrefix, includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION };
     if (this.pushScan) {
       const page = readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
       this.inflight = { kind: "scan", next: page.next, rows: page.rows.length };
@@ -222,7 +222,7 @@ export class TaskExchange {
   /** Replay even a fresh exchange: its first push preceded capability confirmation. */
   private confirmPeerTaskWireUpgrade(version: number, replayPull: boolean): void {
     this.peerTaskWireVersion = version;
-    if (version >= TASK_WIRE_VERSION) this.boardReplayVersion = BOARD_MEMBERSHIP_REPLAY_VERSION;
+    if (version >= TASK_BOARD_WIRE_VERSION) this.boardReplayVersion = BOARD_MEMBERSHIP_REPLAY_VERSION;
     // The confirming response already used the advertised request version.
     // Replay earlier pulls, while preserving a fresh v3 scan's current page.
     if (replayPull) {
@@ -264,7 +264,7 @@ export class TaskExchange {
     if (!linked.size) return false;
     if (this.pushScan || this.pushed === null || [...linked].some((key) => !this.pushCovered.has(key))) return true;
     const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked,
-      includeBoard: this.peerTaskWireVersion >= TASK_WIRE_VERSION });
+      includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION });
     if (page.kind === "resync" || page.rows.length) return true;
     if (JSON.stringify(page.cursor) !== JSON.stringify(this.pushed)) this.moved = true;
     this.pushed = page.cursor;

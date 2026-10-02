@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { authorizePeer, incomingSync, pairIncoming, probePair, revokeGrant } from "@/lib/links/protocol";
+import { authorizePeer, incomingSync, markGrantSync, pairIncoming, probePair, revokeGrant } from "@/lib/links/protocol";
 import { readSelf } from "@/lib/links/self";
 import { usedGrant } from "@/lib/links/state";
 import { unauthorizedPeer } from "@/lib/links/peerResponse";
@@ -48,9 +48,12 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
     // gets the same 401 as any stranger and writes nothing.
     const current = authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync");
     if (current?.id !== grant.id) return unauthorized();
-    if (malformed) return answer({ error: "malformed" }, 400);
-    try { const result = incomingSync(current, input); return answer(result.body, result.status); }
-    catch { return answer({ error: "malformed" }, 400); }
+    if (malformed) { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
+    try {
+      const result = incomingSync(current, input);
+      markGrantSync(current, result.status === 200 ? null : String((result.body as { error?: string }).error ?? "unavailable"));
+      return answer(result.body, result.status);
+    } catch { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
   }
   usedGrant(grant, false);
   return answer({ error: "not found" }, 404);

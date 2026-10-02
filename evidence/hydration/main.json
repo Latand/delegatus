@@ -1,0 +1,326 @@
+{
+  "commit": "22534207a805770880cd8020e51ca106155ccf95",
+  "frames": {
+    "1440-en-clean-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-en-clean-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-en-saved-project-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-en-saved-project-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-en-project-hash-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-en-project-hash-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-en-file-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-en-file-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-en-conversation-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-en-conversation-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-uk-clean-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-uk-clean-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-uk-saved-project-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-uk-saved-project-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-uk-project-hash-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-uk-project-hash-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "1440-uk-file-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-uk-file-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-uk-conversation-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "1440-uk-conversation-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "desktop",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-en-clean-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-en-clean-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-en-saved-project-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-en-saved-project-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-en-project-hash-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-en-project-hash-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-en-file-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-en-file-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-en-conversation-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-en-conversation-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "en",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-uk-clean-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-uk-clean-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-uk-saved-project-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-uk-saved-project-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-uk-project-hash-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-uk-project-hash-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": null
+    },
+    "390-uk-file-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-uk-file-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-uk-conversation-link-navigate": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    },
+    "390-uk-conversation-link-reload": {
+      "hydrationWarnings": 0,
+      "pageErrors": 0,
+      "locale": "uk",
+      "layout": "phone",
+      "projectRestored": true,
+      "linkFocused": true
+    }
+  },
+  "failures": []
+}
