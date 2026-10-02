@@ -85,7 +85,8 @@ import {
 import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
-import { pipelineDeliveryGuidance, renderDecisionInput, renderOutOfMemoryRetryInput, renderStagePrompt } from "./prompts";
+import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
+import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput, renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -1697,11 +1698,6 @@ function knownReset(...candidates: Array<number | null | undefined>): number | n
   return resets.length ? Math.min(...resets) : null;
 }
 
-function rateLimitParkDetail(resetsAt: number | null, accountLabel: string): string {
-  const reset = resetsAt === null ? "an unknown reset time" : new Date(resetsAt * 1_000).toISOString();
-  return `rate limited until ${reset}, account ${accountLabel}`;
-}
-
 /** Usage-limit history for `engine`. Both engines name their main account
     `default`, so a limit hit on one engine never affects an account of the
     other; an entry from before engines were recorded belongs to the engine
@@ -1710,233 +1706,284 @@ function usageLimitsOn(attempt: PipelineStageAttempt, engine: FlowEngine): NonNu
   return (attempt.usageLimitedAccounts ?? []).filter((limited) => (limited.engine ?? attempt.effectiveRole.engine) === engine);
 }
 
-/** Terminal usage-limit recovery parks an exhausted Claude stage; Codex keeps
-    its existing automatic attempt retry. Both use the same project account
-    selection and earliest known reset. */
-function recoverUsageLimitedAttempt(
-  pipeline: Pipeline,
-  stage: PipelineStage,
-  attempt: PipelineStageAttempt,
-  usageLimit: { resetsAt: number | null },
-  ports: PipelinePorts,
-): void {
-  const fromTranscript = attempt.agentPath
-    ? ports.accountForTranscript?.(attempt.effectiveRole.engine, attempt.agentPath) ?? null
-    : null;
-  const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
-  const accountId = attempt.accountId?.trim()
-    || fromTranscript?.accountId
-    || pinnedAccount
-    || null;
-  let accountLabel = "unknown";
-  if (fromTranscript?.accountId === accountId) accountLabel = fromTranscript.label;
-  else if (accountId) accountLabel = ports.accountLabel?.(attempt.effectiveRole.engine, accountId) ?? accountId;
-  const limitedEngine = attempt.effectiveRole.engine;
-  const previousLimit = usageLimitsOn(attempt, limitedEngine).find((limited) => limited.accountId === accountId);
-  const terminalReset = limitedEngine === "claude"
-    ? knownReset(usageLimit.resetsAt, previousLimit?.resetsAt,
-      accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null)
-    : knownReset(usageLimit.resetsAt);
-  const terminalDetail = rateLimitParkDetail(terminalReset, accountLabel);
-  attempt.state = "failed";
-  attempt.completedAt = ports.now();
-  attempt.error = terminalDetail;
-
-  if (pinnedAccount || !accountId) {
-    park(pipeline, terminalDetail, attempt);
-    return;
-  }
-
-  attempt.usageLimitedAccounts = [
-    ...(attempt.usageLimitedAccounts ?? []).filter((limited) => !(limited.accountId === accountId && (limited.engine ?? limitedEngine) === limitedEngine)),
-    { ...previousLimit, accountId, engine: limitedEngine, resetsAt: terminalReset },
-  ];
-  const retryWithLimits = () => {
-    pipeline.state = "running";
-    pipeline.pausedState = null;
-    pipeline.stateDetail = terminalDetail;
-    setCursorState(pipeline, stage.id, "pending");
-    const retry = newAttempt(pipeline, stage);
-    if (retry) retry.usageLimitedAccounts = attempt.usageLimitedAccounts!.map((limited) => ({ ...limited }));
-  };
-  /* An edit accepted since this attempt bound moved the stage to another
-     engine: the retry launches there, where this limit excludes nothing. */
-  if (stage.effectiveRole.engine !== limitedEngine) {
-    retryWithLimits();
-    return;
-  }
-  const usageLimitedAccounts = usageLimitsOn(attempt, limitedEngine);
-  const unavailableLimits = limitedEngine === "claude"
-    ? unavailableClaudeLimits(pipeline, attempt, ports)
-    : usageLimitedAccounts;
-  const unavailableAccountIds = unavailableLimits.map((limited) => limited.accountId);
-  let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
+function providerAccountRecovered(pipeline: Pipeline, attempt: PipelineStageAttempt, accountId: string, limitedAt: number | null, resetsAt: number | null, ports: PipelinePorts): boolean {
   try {
-    resolution = ports.resolveProjectSpawn?.(attempt.effectiveRole.engine, {
-      project: pipeline.project,
-      model: attempt.effectiveRole.model,
-      unavailableIds: unavailableAccountIds,
-    }) ?? accountManager.resolveProjectSpawn(attempt.effectiveRole.engine, {
-      project: pipeline.project,
-      model: attempt.effectiveRole.model,
-      unavailableIds: unavailableAccountIds,
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    park(pipeline, `${terminalDetail}; failover unavailable: ${reason}`, attempt);
-    return;
-  }
-
-  if (limitedEngine !== "claude" && resolution.kind === "available" && resolution.account.accountId !== accountId) {
-    retryWithLimits();
-    return;
-  }
-
-  const earliestReset = knownReset(
-    ...unavailableLimits.map((limited) => limited.resetsAt),
-    resolution.kind === "exhausted" ? resolution.resetsAt : null,
-  );
-  park(pipeline, rateLimitParkDetail(earliestReset, accountLabel), attempt);
+    const allowed = ports.allowedAccountIds?.(pipeline.project, attempt.effectiveRole.engine);
+    if (allowed && !allowed.includes(accountId)) return false;
+  } catch { return false; }
+  return resetsAt !== null && resetsAt * 1_000 + 60_000 <= unixMs(ports.now())
+    || attempt.effectiveRole.engine === "claude" && limitedAt !== null
+      && ports.claudeAccountRecovered?.(accountId, limitedAt, attempt.effectiveRole.model) === true;
 }
 
-const CLAUDE_LIMIT_CONTINUATION_TEXT =
-  "This stage turn stopped at the Claude usage limit. Continue the same stage from its current worktree and report its verdict when the work is complete.";
-
-function claudeLimitContinuationKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
-  const limited = usageLimitsOn(attempt, "claude");
-  return `stage-limit-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${limited.at(-1)?.turnId ?? limited.length}`;
+function reportTurnFinished(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
+  return Boolean(attempt.report && durable?.turn === "terminal"
+    && (durable.lastRecordAt ?? durable.terminalProviderMessage?.ts ?? durable.message?.ts ?? 0) >= unixMs(attempt.report.at));
 }
 
-function claudeSourceCapacityReturned(
-  project: string,
-  source: { accountId: string; resetsAt: number | null } | null,
-  limitedAt: number | null,
-  model: string | null,
-  ports: PipelinePorts,
-): boolean {
-  if (!source) return false;
-  try {
-    const allowed = ports.allowedAccountIds?.(project, "claude") ?? null;
-    if (allowed && !allowed.includes(source.accountId)) return false;
-  } catch {
-    return false;
-  }
-  return (source.resetsAt !== null && source.resetsAt * 1_000 <= Date.now())
-    || (limitedAt !== null && ports.claudeAccountRecovered?.(source.accountId, limitedAt, model) === true);
-}
-
-function unavailableClaudeLimits(
-  pipeline: Pipeline,
-  attempt: PipelineStageAttempt,
-  ports: PipelinePorts,
-): NonNullable<PipelineStageAttempt["usageLimitedAccounts"]> {
-  return usageLimitsOn(attempt, "claude").filter((limited) =>
-    !claudeSourceCapacityReturned(pipeline.project, limited, limited.limitedAt ?? null, attempt.effectiveRole.model, ports));
-}
-
-/** A Claude limit resumes through the conversation's ordinary reseat. The
-    stable delivery key lets the migration hold and replay this one continuation
-    across controller ticks without making another stage attempt. */
-async function continueUsageLimitedClaudeAttempt(
-  pipeline: Pipeline,
-  stage: PipelineStage,
-  attempt: PipelineStageAttempt,
-  usageLimit: { resetsAt: number | null } | null,
-  limitedAt: number | null,
-  ports: PipelinePorts,
-  persist: () => void,
+/** Reports settle only after their turn and outstanding background work end. */
+async function settleOnRecordedReport(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void, evidence?: StageTurnEvidence | null,
 ): Promise<boolean> {
-  if (attempt.effectiveRole.engine !== "claude") return false;
-  const current = attempt.agentPath ? ports.accountForTranscript?.("claude", attempt.agentPath) ?? null : null;
-  const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
-  const accountId = current?.accountId ?? attempt.accountId ?? pinnedAccount;
-  let limited = usageLimitsOn(attempt, "claude");
-  /* A Claude fork copies the source's terminal API-error and timestamp into
-     the successor before its held continuation is delivered. That copied turn
-     still belongs to its source account and keeps the same delivery receipt. */
-  const recordedTurn = limitedAt === null ? null : limited.find((item) => item.limitedAt === limitedAt);
-  if (usageLimit && accountId && !recordedTurn) {
-    const resetsAt = knownReset(
-      usageLimit.resetsAt,
-      ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model),
-    );
-    attempt.usageLimitedAccounts = [
-      ...(attempt.usageLimitedAccounts ?? []).filter((item) => item.accountId !== accountId || (item.engine ?? "claude") !== "claude"),
-      { accountId, engine: "claude", resetsAt, limitedAt, turnId: crypto.randomUUID() },
-    ];
-    limited = usageLimitsOn(attempt, "claude");
+  if (!attempt.report || attempt.verdict || attempt.legacyReview) return false;
+  const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+  const pathname = attempt.agentPath ?? (attempt.conversationId ? ports.pathForConversation(attempt.conversationId) : null)
+    ?? receipt?.transcript ?? receipt?.stagedTranscript ?? null;
+  const durable = evidence === undefined && pathname && ports.sourcePathAllowed(pathname)
+    ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report.at, attempt.startedAt)
+    : evidence;
+  const active = attempt.paneId ? await ports.paneAgentAlive(attempt.paneId)
+    : attempt.conversationId ? await ports.conversationAgentActive(attempt.conversationId) : null;
+  const recovery = stagedLaunchRecovery(receipt);
+  const stopped = recovery && (recovery.stopped || unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS);
+  if (!reportTurnFinished(attempt, durable) && active !== false && !(stopped && active !== true)) return false;
+  if (active !== false && durable && liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(ports.now())).length > 0) return false;
+  const parsed = reportedStageVerdict(attempt, null, durable?.terminalProviderMessage ? "" : durable?.message?.text ?? "", durable?.backgroundReportedAt, durable?.reportProse);
+  if (!parsed) return false;
+  if (pathname && durable && !durable.launchOnly && durable.turn !== "unknown"
+    && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(attempt.startedAt)) attempt.agentPath = pathname;
+  attempt.completedAt = null;
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = null;
+  markVerdictRecoverySucceeded(attempt, ports.now(), durable?.message?.ts ?? unixMs(attempt.report.at));
+  settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
+  return true;
+}
+
+function recordProviderRecovery(attempt: PipelineStageAttempt, action: NonNullable<PipelineStageAttempt["providerRecoveries"]>[number]["action"], condition: ProviderCondition, summary: string, at: string): void {
+  attempt.providerRecoveries = [...(attempt.providerRecoveries ?? []), { at, action, condition, summary }].slice(-8);
+}
+
+/** Begin backoff after capacity waiting, before continuation clears the wait. */
+function providerBackoffStartedAt(attempt: PipelineStageAttempt, now: string): string {
+  const wait = attempt.providerWait;
+  return wait?.condition.kind === "usage_limit" && wait.resetsAt !== null && !wait.actionAt
+    ? now : attempt.providerRecoveryBudget?.startedAt ?? wait?.startedAt ?? now;
+}
+
+function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAttempt, condition: ProviderCondition, reason: string, ports: PipelinePorts, persist: () => void): void {
+  const now = ports.now();
+  const detail = `recovery after ${condition.label}: ${redactBounded(reason, 300)}`;
+  if (bookControllerWaitRound(attempt, now, now, ports,
+    { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
+    recordProviderRecovery(attempt, "park", condition, detail, now);
+    attempt.completedAt = now;
+    park(pipeline, `provider transport recovery exhausted after 10 minutes; ${detail}`, attempt);
+  } else pipeline.stateDetail = `waiting for provider transport; ${detail}`;
+  persist();
+}
+
+/** Persist before transport. Delivery retries retain a key for this exact cut. */
+async function recoverProviderCut(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null } | null,
+  ports: PipelinePorts, persist: () => void,
+): Promise<boolean> {
+  const now = ports.now();
+  const time = unixMs(now);
+  let wait = attempt.providerWait;
+  if (notice && (!wait || notice.ts > wait.turnTs)) {
+    const engine = attempt.effectiveRole.engine;
+    const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
+    const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
+    const same = wait?.condition.kind === notice.condition.kind;
+    const budget = attempt.providerRecoveryBudget ??= { tries: wait?.tries ?? 0, startedAt: wait?.startedAt ?? now };
+    const tries = budget.tries;
+    // The closing turn's reset names the exhausted window; a cached reset
+    // can still describe an earlier session window while a weekly limit holds.
+    const resetsAt = knownReset(notice.resetsAt)
+      ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
+    const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
+      : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
+      : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
+    wait = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
+      turnTs: notice.ts, tries, startedAt: budget.startedAt,
+      resumeAt: new Date(time + delay).toISOString(), resetsAt,
+      ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
+    if (accountId && notice.condition.kind === "usage_limit") {
+      attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter((item) => item.accountId !== accountId || (item.engine ?? engine) !== engine),
+        { accountId, engine, resetsAt, limitedAt: notice.ts, turnId: String(notice.ts) }];
+    }
+    recordProviderRecovery(attempt, "wait", notice.condition, `waiting for ${notice.condition.label}`, now);
+    delete attempt.controllerWait;
     persist();
   }
-  if (!limited.length) {
-    if (usageLimit) recoverUsageLimitedAttempt(pipeline, stage, attempt, usageLimit, ports);
-    return Boolean(usageLimit);
+  if (!wait) return false;
+  const condition = wait.condition;
+  if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
+    return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
   }
-  const unavailable = unavailableClaudeLimits(pipeline, attempt, ports);
-  const stillLimited = accountId === null || unavailable.some((item) => item.accountId === accountId);
-  if (pinnedAccount && stillLimited) {
-    const source = unavailable.find((item) => item.accountId === pinnedAccount);
-    const accountLabel = ports.accountLabel?.("claude", pinnedAccount) ?? pinnedAccount;
-    const detail = rateLimitParkDetail(knownReset(source?.resetsAt ?? usageLimit?.resetsAt), accountLabel);
-    attempt.state = "failed";
-    attempt.completedAt = ports.now();
-    attempt.error = detail;
-    park(pipeline, detail, attempt);
+  const engine = attempt.effectiveRole.engine;
+  const pinned = attemptStage(stage, attempt).account?.trim();
+  const refreshReset = (candidate: number | null | undefined) => {
+    const reset = knownReset(candidate);
+    if (reset === null || reset * 1_000 + 60_000 <= time) return;
+    // A reset from this cut remains authoritative while it is still future.
+    if (wait!.resetsAt !== null && wait!.resetsAt * 1_000 + 60_000 > time) return;
+    wait!.resetsAt = reset;
+    wait!.resumeAt = new Date(reset * 1_000 + 60_000).toISOString();
+    const limited = usageLimitsOn(attempt, engine).find(item => item.accountId === wait!.accountId);
+    if (limited) limited.resetsAt = reset;
+    persist();
+  };
+  if (!wait.actionAt && condition.kind === "usage_limit" && engine === "claude" && wait.accountId) {
+    refreshReset(ports.claudeAccountReset?.(wait.accountId, attempt.effectiveRole.model));
+  }
+  let target: string | null = wait.switchedAccountId ?? null;
+  if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
+    try {
+      const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
+        project: pipeline.project, model: attempt.effectiveRole.model,
+        unavailableIds: usageLimitsOn(attempt, engine)
+          .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
+          .map((item) => item.accountId).concat(condition.kind === "auth_required" ? wait.failedAccounts ?? [] : []),
+      });
+      if (condition.kind === "usage_limit" && resolution.kind === "exhausted") refreshReset(resolution.resetsAt);
+      if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
+        && !wait.failedAccounts?.includes(resolution.account.accountId)) target = resolution.account.accountId;
+    } catch { /* No selection evidence: retain the bounded wait. */ }
+  }
+  const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit" && wait.resetsAt !== null) && wait.tries >= 3
+    || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
+  const parkCut = (reason: string) => {
+    recordProviderRecovery(attempt, "park", condition, reason, now);
+    attempt.completedAt = now;
+    park(pipeline, reason, attempt);
+  };
+  if (bounded || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
+    parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
     return true;
   }
-  const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) ?? null : null;
-  if (stillLimited && migration?.retry && attempt.conversationId && ports.requestConversationReseat) {
-    try {
-      await ports.requestConversationReseat(attempt.conversationId, migration.targetId);
-    } catch (error) {
-      pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
-      return true;
-    }
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > time) return true;
+  const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
+  if (migration?.retry && attempt.conversationId && ports.requestConversationReseat) {
+    try { await ports.requestConversationReseat(attempt.conversationId, migration.targetId); }
+    catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account switch refused: ${String(error)}`, ports, persist); return true; }
   }
-  if (stillLimited && !migration) {
-    let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
-    try {
-      resolution = ports.resolveProjectSpawn?.("claude", {
-        project: pipeline.project,
-        model: attempt.effectiveRole.model,
-        unavailableIds: unavailable.map((item) => item.accountId),
-      }) ?? accountManager.resolveProjectSpawn("claude", {
-        project: pipeline.project,
-        model: attempt.effectiveRole.model,
-        unavailableIds: unavailable.map((item) => item.accountId),
-      });
-    } catch (error) {
-      pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
-      return true;
-    }
-    if (resolution.kind !== "available" || unavailable.some((item) => item.accountId === resolution.account.accountId)) {
-      const source = accountId ? limited.find((item) => item.accountId === accountId) : null;
-      if (!claudeSourceCapacityReturned(pipeline.project, source ?? null, source?.limitedAt ?? limitedAt, attempt.effectiveRole.model, ports)) {
-        recoverUsageLimitedAttempt(pipeline, stage, attempt, usageLimit ?? { resetsAt: limited.at(-1)?.resetsAt ?? null }, ports);
-        return true;
-      }
-    } else {
-      if (!attempt.conversationId || attempt.paneId || !ports.requestConversationReseat || !ports.resumeSeveredTurn) {
-        pipeline.stateDetail = "account switch pending: this stage conversation has no structured migration host";
-        return true;
-      }
-      try {
-        await ports.requestConversationReseat(attempt.conversationId, resolution.account.accountId);
-      } catch (error) {
-        pipeline.stateDetail = `account switch pending: ${error instanceof Error ? error.message : String(error)}`;
-        return true;
-      }
-    }
+  if (wait.actionAt) return true; // This closing record belongs to an already resumed turn.
+  if (condition.kind === "auth_required" && !target) {
+    parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
+    return true;
   }
-  if (!attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return true;
-  const delivered = await ports.resumeSeveredTurn({
-    conversationId: attempt.conversationId,
-    transcriptPath: attempt.agentPath,
-    clientMessageId: claudeLimitContinuationKey(pipeline, stage, attempt),
-    text: CLAUDE_LIMIT_CONTINUATION_TEXT,
-    project: pipeline.project,
-    cwd: pipeline.repoDir,
-  });
-  pipeline.stateDetail = delivered ? "Claude limit: continuing the same conversation" : "Claude limit: continuation is pending";
+  pipeline.stateDetail = `waiting for ${condition.label}${wait.accountId ? ` on account ${ports.accountLabel?.(engine, wait.accountId) ?? wait.accountId}` : ""}${wait.resetsAt ? ` to reset at ${new Date(wait.resetsAt * 1_000).toISOString()}` : condition.resetLabel ? ` (${condition.resetLabel})` : ""}; next try at ${wait.resumeAt}; keeping the current worktree`;
+  const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
+    && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
+  if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
+    ports.scheduleTick?.(Math.min(15 * 60_000, unixMs(wait.resumeAt) - time));
+    return true;
+  }
+  if (target && !wait.switchedAccountId) {
+    if (engine === "codex" || !attempt.conversationId || !ports.requestConversationReseat) {
+      // Codex's account failover starts a fresh host in the same worktree.
+      return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
+    }
+    try { await ports.requestConversationReseat(attempt.conversationId, target); }
+    catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account switch refused: ${String(error)}`, ports, persist); return true; }
+    wait.switchedAccountId = target;
+    recordProviderRecovery(attempt, "switch", condition, `switched accounts after ${condition.label}`, now);
+    persist();
+  }
+  if (condition.kind === "host_death" || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn || attempt.paneId) {
+    return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
+  }
+  if (!target && wait.accountId) {
+    try {
+      const allowed = ports.allowedAccountIds?.(pipeline.project, engine);
+      if (allowed && !allowed.includes(wait.accountId)) {
+        parkCut(`stage cut by ${condition.label}; source account is no longer allowed`);
+        return true;
+      }
+    } catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account authorization unavailable: ${String(error)}`, ports, persist); return true; }
+  }
+  const key = `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
+  let delivered: boolean;
+  try {
+    delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
+      clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
+      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir });
+  } catch (error) {
+    waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
+    return true;
+  }
+  if (delivered) {
+    delete attempt.controllerWait;
+    const startedAt = providerBackoffStartedAt(attempt, now);
+    wait.actionAt = now;
+    wait.tries += 1;
+    attempt.providerRecoveryBudget = { tries: wait.tries, startedAt };
+    recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
+    pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
+    persist();
+  } else waitForProviderTransport(pipeline, attempt, condition, "continuation refused", ports, persist);
+  return true;
+}
+
+/** An absent registry resident does not establish that a recorded pane exited. */
+async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts): Promise<PipelineStageStopResult> {
+  const stopped = await ports.stopStageAgent(target);
+  if (stopped.outcome !== "not-running" || !target.paneId) return stopped;
+  const pane = await ports.stopStagePane(target);
+  return pane.outcome === "unknown" ? { outcome: "failed", error: pane.detail } : pane;
+}
+
+async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, condition: ProviderCondition, ports: PipelinePorts, persist: () => void, target: string | null): Promise<boolean> {
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(ports.now())) return true;
+  const attempts = runFor(pipeline, stage.id)?.attempts ?? [];
+  let losses = 0;
+  for (const prior of attempts.slice(0, attempts.indexOf(attempt)).reverse()) {
+    if (prior.error !== "stage host died without output") break;
+    losses += 1;
+  }
+  if (condition.kind === "host_death" && losses >= 1) {
+    attempt.completedAt = ports.now();
+    recordProviderRecovery(attempt, "park", condition, "stage host died without output twice; automatic relaunch exhausted", attempt.completedAt);
+    park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
+    return true;
+  }
+  const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, ports);
+  if (!["stopped", "not-running"].includes(stopped.outcome)) {
+    const now = ports.now();
+    if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
+    const stopReason = redactBounded("error" in stopped ? stopped.error : stopped.outcome, 300);
+    const reason = `stage recovery after ${condition.label} could not terminate its recorded host: ${stopReason}`;
+    if (stopped.outcome === "unresolved" || bookControllerWaitRound(attempt, now, now, ports,
+      { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
+      recordProviderRecovery(attempt, "park", condition, reason, now);
+      attempt.completedAt = now;
+      park(pipeline, reason, attempt);
+    } else pipeline.stateDetail = `waiting for the cut stage host to terminate after ${condition.label}; ${stopReason}`;
+    persist();
+    return true;
+  }
+  delete attempt.controllerWait;
+  const now = ports.now();
+  recordProviderRecovery(attempt, "relaunch", condition, `relaunching after ${condition.label}; keeping uncommitted work`, now);
+  attempt.state = "failed";
+  attempt.completedAt = now;
+  attempt.error = condition.kind === "host_death" ? "stage host died without output" : `stage cut by ${condition.label}`;
+  const input = renderCutRetryInput(attempt.input, attempt.n, condition.label);
+  setCursorState(pipeline, stage.id, "pending");
+  pipeline.cursor!.input = input;
+  const retry = newAttempt(pipeline, stage);
+  if (retry) {
+    retry.input = input;
+    retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
+    retry.providerRecoveryBudget = { tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
+      startedAt: providerBackoffStartedAt(attempt, now) };
+    if (attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
+      retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
+        resumeAt: now,
+        ...(target ? { switchedAccountId: target } : {}) };
+    }
+    if (target) retry.accountId = target;
+  }
+  pipeline.state = "running";
+  pipeline.stateDetail = `relaunching after ${condition.label}; keeping uncommitted work`;
+  persist();
+  ports.scheduleTick?.(0);
   return true;
 }
 
@@ -3493,7 +3540,7 @@ function holdForBackgroundTasks(
   if (!durable?.backgroundTasks) {
     return attempt.backgroundWait && unixMs(now) < unixMs(attempt.backgroundWait.until) ? "waiting" : "none";
   }
-  const live = liveBackgroundTasks(durable.backgroundTasks, unixMs(now));
+  const live = liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(now));
   if (live.length === 0) {
     if (attempt.backgroundWait) {
       delete attempt.backgroundWait;
@@ -3751,9 +3798,8 @@ async function spawnRunStage(
            retry of the same launch is idempotent; a claim that finds the
            receipt settled after all parks, and the completed-receipt
            reconcile adopts the launch on the next tick. */
-        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
+        const deferred = await deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
         if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
-        if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
         if (deferred === "delivered") throw new Error(unverifiedLaunchRetryRefusal(controllerFailure));
         if (deferred === "settled") throw new Error(controllerFailure);
         if (attempt.activation) attempt.activation.phase = "settled";
@@ -3837,6 +3883,7 @@ async function tickRunStage(
     ? newAttempt(pipeline, stage)
     : prior ?? newAttempt(pipeline, stage);
   if (!attempt || pipeline.state === "needs_decision" || attempt.activation) return;
+  if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist)) return;
   if (attempt.launchId && attempt.state === "spawning") {
     const receipt = ports.spawnReceipt(attempt.launchId);
     const recovery = receipt?.state === "path-pending" ? stagedLaunchRecovery(receipt) : null;
@@ -3867,6 +3914,7 @@ async function tickRunStage(
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
+    if (unixMs(attempt.providerWait?.resumeAt ?? "") > unixMs(activationNow)) return;
     /* A failover attempt is still unbound here, so it launches on whatever
        engine the stage names by the time it binds below; an edit accepted
        since it was created is checked against that engine, and only limits
@@ -3874,7 +3922,9 @@ async function tickRunStage(
     const engine = attempt.definition ? attempt.effectiveRole.engine : stage.effectiveRole.engine;
     const usageLimitedAccounts = usageLimitsOn(attempt, engine);
     if (usageLimitedAccounts.length > 0) {
-      const unavailableIds = usageLimitedAccounts.map((limited) => limited.accountId);
+      const unavailableIds = usageLimitedAccounts
+        .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
+        .map((limited) => limited.accountId);
       const latestLimited = usageLimitedAccounts.at(-1)!;
       const accountLabel = ports.accountLabel?.(engine, latestLimited.accountId) ?? latestLimited.accountId;
       let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
@@ -3883,27 +3933,50 @@ async function tickRunStage(
         resolution = ports.resolveProjectSpawn?.(engine, {
           project: pipeline.project,
           model,
+          requestedId: attemptStage(stage, attempt).account ?? undefined,
           unavailableIds,
         }) ?? accountManager.resolveProjectSpawn(engine, {
           project: pipeline.project,
           model,
+          requestedId: attemptStage(stage, attempt).account ?? undefined,
           unavailableIds,
         });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        park(pipeline, `${rateLimitParkDetail(knownReset(...usageLimitedAccounts.map((limited) => limited.resetsAt)), accountLabel)}; failover unavailable: ${reason}`, attempt);
+        attempt.completedAt = activationNow;
+        park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
         return;
       }
       if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)) {
-        const resetsAt = knownReset(
+        const resetCandidates = [
           ...usageLimitedAccounts.map((limited) => limited.resetsAt),
           resolution.kind === "exhausted" ? resolution.resetsAt : null,
-        );
-        attempt.state = "failed";
-        attempt.completedAt = activationNow;
-        park(pipeline, rateLimitParkDetail(resetsAt, accountLabel), attempt);
+        ];
+        const resetsAt = knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > unixMs(activationNow)))
+          ?? knownReset(...resetCandidates);
+        const condition: ProviderCondition = { kind: "usage_limit", scope: "usage", resetLabel: null, label: `${engine} usage limit` };
+        attempt.providerWait ??= { condition, text: "no allowed account has capacity", accountId: latestLimited.accountId,
+          turnTs: unixMs(activationNow), tries: 0, startedAt: activationNow,
+          resumeAt: new Date(resetsAt ? resetsAt * 1_000 + 60_000 : unixMs(activationNow) + 30 * 60_000).toISOString(), resetsAt };
+        const wait = attempt.providerWait;
+        wait.resetsAt = resetsAt;
+        const untilReset = resetsAt ? resetsAt * 1_000 + 60_000 - unixMs(activationNow) : 0;
+        // Waiting for a future provider reset spends no capacity probes.
+        if (untilReset <= 0) wait.capacityProbes = (wait.capacityProbes ?? 0) + 1;
+        if ((wait.capacityProbes ?? 0) >= 3
+          || !resetsAt && unixMs(activationNow) - unixMs(wait.startedAt) >= 6 * 60 * 60_000) {
+          attempt.completedAt = activationNow;
+          recordProviderRecovery(attempt, "park", condition, "account capacity recovery exhausted", activationNow);
+          park(pipeline, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, attempt);
+          return;
+        }
+        const delay = untilReset > 0 ? Math.min(15 * 60_000, untilReset) : 15 * 60_000;
+        attempt.providerWait.resumeAt = new Date(unixMs(activationNow) + delay).toISOString();
+        pipeline.stateDetail = `waiting for ${condition.label} on account ${accountLabel}${untilReset > 0 ? ` to reset at ${new Date(resetsAt! * 1_000).toISOString()}` : ""}; next try at ${attempt.providerWait.resumeAt}`;
+        ports.scheduleTick?.(delay);
         return;
       }
+      if (engine === "codex" && attempt.providerWait) attempt.providerWait.switchedAccountId = resolution.account.accountId;
     }
     /* #1876: an engine signed out since the lane started parks the stage before
        anything spawns. No launch is spent, and resuming once the engine is
@@ -3961,8 +4034,10 @@ async function tickRunStage(
         runtimeProfile: pipelineStageRuntimeProfile(bound),
         cwd: pipeline.worktreeDir,
         project: pipeline.project,
-        requestedAccountId: bound.account ?? null,
-        unavailableAccountIds: usageLimitsOn(attempt, attempt.effectiveRole.engine).map((limited) => limited.accountId),
+        requestedAccountId: bound.account ?? (attempt.effectiveRole.engine === "codex" ? attempt.providerWait?.switchedAccountId : null) ?? null,
+        unavailableAccountIds: usageLimitsOn(attempt, attempt.effectiveRole.engine)
+          .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
+          .map((limited) => limited.accountId).concat(attempt.providerWait?.failedAccounts ?? []),
         title: pipelineStageTitle(pipeline.task, stage.id),
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
@@ -4023,14 +4098,10 @@ async function tickRunStage(
          start, so its exhaustion still counts every round. */
       if (receipt.state === "failed" && receipt.error && isTransientStructuredSpawnFailure(receipt.error)) {
         const now = ports.now();
-        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
+        const deferred = await deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
         if (deferred === "waiting") return;
         if (deferred === "exhausted") {
           park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error), attempt);
-          return;
-        }
-        if (deferred === "unsafe") {
-          park(pipeline, stagedLaunchRetryRefusal(receipt.error), attempt);
           return;
         }
         if (deferred === "delivered") {
@@ -4050,6 +4121,7 @@ async function tickRunStage(
   const structuredActive = !attempt.paneId && attempt.conversationId
     ? await ports.conversationAgentActive(attempt.conversationId)
     : null;
+  const paneActive = attempt.paneId ? await ports.paneAgentAlive(attempt.paneId) : null;
   const spawnReceipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const terminalSpawnFailure = spawnReceipt
     && (spawnReceipt.state === "failed" || spawnReceipt.state === "conflicted")
@@ -4063,6 +4135,11 @@ async function tickRunStage(
     return;
   }
   if (!attempt.agentPath) {
+    if ((structuredActive === false || paneActive === false) && !attempt.report) {
+      await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
+        text: "stage host died without output", ts: unixMs(attempt.startedAt) + 1, resetsAt: null }, ports, persist);
+      return;
+    }
     if (structuredActive === false) {
       park(pipeline, "structured stage ended before its session was discovered", attempt);
     }
@@ -4114,7 +4191,7 @@ async function tickRunStage(
     pipeline.stateDetail = null;
     persist();
   }
-  if (entry && structuredActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
+  if (entry && structuredActive !== false && paneActive !== false && scanProjectsOpenTurn && !hostUnavailablePastGrace) return;
 
   if (!canSpendRecoveryCheck()) return;
 
@@ -4134,27 +4211,52 @@ async function tickRunStage(
       paneId: attempt.paneId,
       ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
     }, ports, durable);
-  if (!oomDeath && unregisteredHostDeath && !heldForDeployCut && canSpendRecoveryCheck()) {
-    recordVerdictRecoveryMiss(pipeline, attempt, ports, unregisteredHostDeath, null);
-    return;
-  }
+  if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return;
+  // Native transcript publication can lag a live turn that already filed its report.
+  if (attempt.report && !reportTurnFinished(attempt, durable) && structuredActive !== false && !hostUnavailablePastGrace) return;
+  // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
-  const terminalUsageLimit = terminalProviderMessage
-    && terminalProviderMessage.ts > unixMs(attempt.startedAt)
-    ? terminalProviderMessage.usageLimit ?? null
+  const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attempt.startedAt)
+    ? { condition: classifyProviderCondition(attempt.effectiveRole.engine, terminalProviderMessage.errorClass
+        ?? (terminalProviderMessage.usageLimit ? (attempt.effectiveRole.engine === "claude" ? "rate_limit" : "usage_limit") : null), terminalProviderMessage.text),
+        text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
     : null;
-  const claudeLimits = attempt.effectiveRole.engine === "claude" ? usageLimitsOn(attempt, "claude") : [];
-  const recordedLimitTurn = terminalUsageLimit && claudeLimits.some((item) => item.limitedAt === terminalProviderMessage?.ts);
-  const completedLimitContinuation = claudeLimits.length > 0 && attempt.conversationId
-    && ports.conversationDeliveryCompleted?.(attempt.conversationId, claudeLimitContinuationKey(pipeline, stage, attempt)) === true;
-  if (attempt.effectiveRole.engine === "claude"
-    && ((terminalUsageLimit && !recordedLimitTurn)
-      || (!completedLimitContinuation && (terminalUsageLimit || (claudeLimits.length > 0 && durable?.turn !== "busy" && !durable?.message))))) {
-    if (await continueUsageLimitedClaudeAttempt(pipeline, stage, attempt, terminalUsageLimit, terminalProviderMessage?.ts ?? null, ports, persist)) return;
+  if (!heldForDeployCut && (notice || attempt.providerWait)) {
+    const newerNormalTurn = !notice && attempt.providerWait && durable?.turn === "terminal"
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
+    const newerStageOutput = !notice && attempt.providerWait && durable?.message
+      && durable.message.ts > attempt.providerWait.turnTs;
+    const newerActiveTurn = !notice && attempt.providerWait?.actionAt && durable?.turn === "busy"
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
+    const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
+      && (!notice || notice.ts <= attempt.providerWait.turnTs);
+    if (newerNormalTurn || newerStageOutput || newerActiveTurn) {
+      if (durable?.message && durable.message.ts > attempt.providerWait!.turnTs) delete attempt.providerRecoveryBudget;
+      delete attempt.providerWait;
+      pipeline.stateDetail = null;
+    } else if (attempt.providerWait?.actionAt && attempt.providerWait.turnTs > 0 && attempt.conversationId
+      && (!notice || notice.ts <= attempt.providerWait.turnTs)
+      && (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true
+        || ports.conversationDeliveryCompleted?.(attempt.conversationId,
+          `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${attempt.providerWait.turnTs}`) === false)) {
+      // Admission can be held or queued while the recorded host is re-seated.
+      // Keep that exact delivery owed before interpreting host loss again.
+      waitForProviderTransport(pipeline, attempt, attempt.providerWait.condition, "accepted continuation delivery is still pending", ports, persist);
+      return;
+    } else if (providerHostLost) {
+      await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
+        text: "stage host died before producing output after its continuation", ts: Math.max(unixMs(ports.now()), attempt.providerWait!.turnTs + 1), resetsAt: null }, ports, persist);
+      return;
+    }
+    else if (await recoverProviderCut(pipeline, stage, attempt, notice, ports, persist)) return;
   }
-  if (terminalUsageLimit && !(recordedLimitTurn && completedLimitContinuation)) {
-    recoverUsageLimitedAttempt(pipeline, stage, attempt, terminalUsageLimit, ports);
-    return;
+  const silentDeath = unregisteredHostDeath || ((hostUnavailablePastGrace || structuredActive === false || paneActive === false)
+    && durable && (!durable.message || durable.message.ts <= unixMs(attempt.startedAt)));
+  if (silentDeath && !heldForDeployCut) {
+    if (await recoverProviderCut(pipeline, stage, attempt, {
+      condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
+      text: "stage host died without output", ts: unixMs(attempt.startedAt) + 1, resetsAt: null,
+    }, ports, persist)) return;
   }
   /* A turn that ended while its agent still holds background work is not the
      conversation's last (#1441): the harness re-invokes the agent when the
@@ -5135,6 +5237,7 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
 /** Terminalize only the retained launch that never acquired a transcript.
  * The registry's failed receipt fences late publication and owns retry claims. */
 function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
+  if (attempt.report) return false;
   if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
     || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
     || pipelineSurvivorRefusal(pipeline)) return false;
@@ -5204,7 +5307,7 @@ async function recoverWaitingStageLaunches(ports: PipelinePorts): Promise<Map<st
   for (const pipeline of loadPipelines()) {
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-    if (!stage || stage.kind !== "run" || !attempt?.launchId || attempt.activation || attempt.completedAt || attempt.verdict
+    if (!stage || stage.kind !== "run" || !attempt?.launchId || attempt.activation || attempt.completedAt || attempt.verdict || attempt.report
       || !["running", "needs_decision"].includes(pipeline.state) || pipelineSurvivorRefusal(pipeline)) continue;
     if (pipeline.state === "needs_decision" && !isStructuredSpawnPark(pipeline, attempt)) continue;
     const receipt = ports.spawnReceipt(attempt.launchId);
@@ -5273,50 +5376,20 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
   return true;
 }
 
-/** Capacity can return while a Claude stage is parked. Reopen its original
-    attempt; its terminal transcript then takes the ordinary reseat path. */
-async function reconcileParkedClaudeLimit(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
+/** Reopen a legacy capacity park on either engine. An unlaunched failover
+    remains pending so account admission can run once capacity returns. */
+function reconcileParkedUsageLimit(pipeline: Pipeline): boolean {
   if (pipeline.state !== "needs_decision") return false;
   const stage = currentStage(pipeline);
-  if (!stage || stage.kind !== "run") return false;
-  const attempt = currentAttempt(pipeline, stage.id);
-  const limited = attempt ? usageLimitsOn(attempt, "claude") : [];
-  if (!attempt || attempt.effectiveRole.engine !== "claude" || attempt.state !== "failed"
-    || !attempt.error?.startsWith("rate limited until ") || !limited.length) return false;
-  const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
-  const unavailable = unavailableClaudeLimits(pipeline, attempt, ports);
-  if (pinnedAccount) {
-    if (unavailable.some((item) => item.accountId === pinnedAccount)) return false;
-  } else {
-    let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
-    try {
-      resolution = ports.resolveProjectSpawn?.("claude", {
-        project: pipeline.project,
-        model: attempt.effectiveRole.model,
-        unavailableIds: unavailable.map((item) => item.accountId),
-      }) ?? accountManager.resolveProjectSpawn("claude", {
-        project: pipeline.project,
-        model: attempt.effectiveRole.model,
-        unavailableIds: unavailable.map((item) => item.accountId),
-      });
-    } catch {
-      return false;
-    }
-    if (resolution.kind !== "available" || unavailable.some((item) => item.accountId === resolution.account.accountId)) {
-      const accountId = attempt.agentPath
-        ? ports.accountForTranscript?.("claude", attempt.agentPath)?.accountId ?? attempt.accountId ?? null
-        : attempt.accountId ?? null;
-      const source = accountId ? limited.find((item) => item.accountId === accountId) ?? null : null;
-      const durable = attempt.agentPath ? await ports.durableTurnEvidence("claude", attempt.agentPath) : null;
-      if (!claudeSourceCapacityReturned(pipeline.project, source, source?.limitedAt ?? durable?.terminalProviderMessage?.ts ?? null, attempt.effectiveRole.model, ports)) return false;
-    }
-  }
-  attempt.state = "running";
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  if (!stage || stage.kind !== "run" || !attempt || !attempt.error?.startsWith("rate limited until ")) return false;
+  const state = attempt.launchId || attempt.conversationId || attempt.agentPath || attempt.paneId ? "running" : "pending";
+  attempt.state = state;
   attempt.completedAt = null;
   attempt.error = null;
   pipeline.state = "running";
   pipeline.stateDetail = null;
-  setCursorState(pipeline, stage.id, "running");
+  setCursorState(pipeline, stage.id, state);
   return true;
 }
 
@@ -5446,19 +5519,11 @@ function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
  * claim: that launch is alive, nothing is retired, and the caller parks so the
  * completed-receipt reconcile adopts it.
  *
- * `unsafe` is a failed receipt that had staged a session identity for a
- * read-write stage: the spawn layer can fail a receipt after the engine host
- * started and ran its first turn (a transport failure while marking the
- * first message delivered), and the host is killed on that path, but the
- * worktree may hold its partial edits. `retry-stage` resets the worktree
- * before it re-dispatches; this path does not, so it refuses and the park
- * says which action to take. A read-only stage has nothing to reset, and
- * neither has a read-write stage whose worktree is still clean at the lane's
- * last passed commit: whatever the staged host ran left nothing a reset would
- * remove, so a launch a deploy handover failed waits and relaunches under the
- * successor like any other (#1835).
+ * A staged read-write launch may have left partial edits. Confirm its host
+ * stopped through the identity-fenced retirement path before reserving another
+ * launch. The worktree stays intact and the persisted input explains the cut.
  */
-function deferRetiredLaunchRetry(
+async function deferRetiredLaunchRetry(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
@@ -5466,9 +5531,7 @@ function deferRetiredLaunchRetry(
   since: string,
   now: string,
   ports: PipelinePorts,
-): "waiting" | "exhausted" | "settled" | "unsafe" | "delivered" {
-  if (receipt.staged === true && attempt.effectiveRole.access === "read-write"
-    && !worktreeAtLastPassedCommit(pipeline, ports)) return "unsafe";
+): Promise<"waiting" | "exhausted" | "settled" | "delivered"> {
   const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
   /* The only class whose failure may already have reached the agent (#1750).
      The transcript decides: an artifact the spawn layer named and never
@@ -5480,6 +5543,30 @@ function deferRetiredLaunchRetry(
     && !(stagedTranscript !== null && ports.transcriptPresent?.(stagedTranscript) === false)) return "delivered";
   const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
   if (claim !== "claimed") return "settled";
+  const startupCondition: ProviderCondition = { kind: "host_death", scope: null, resetLabel: null, label: "failed startup" };
+  const recoverySummary = `failed startup: ${redactBounded(failure, 300)}; keeping uncommitted work`;
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+    const lastRecovery = attempt.providerRecoveries?.at(-1);
+    if (lastRecovery?.action !== "wait" || lastRecovery.condition.label !== startupCondition.label) {
+      recordProviderRecovery(attempt, "wait", startupCondition, `waiting after ${recoverySummary}`, now);
+    }
+    const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n,
+      launchId: receipt.launchId, conversationId: attempt.conversationId ?? receipt.conversationId,
+      agentPath: attempt.agentPath ?? receipt.stagedTranscript ?? receipt.transcript ?? null, paneId: attempt.paneId }, ports);
+    if (!["stopped", "not-running"].includes(stopped.outcome)) {
+      if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
+      if (stopped.outcome === "unresolved") {
+        park(pipeline, `failed startup recovery could not terminate its recorded host: ${redactBounded(stopped.error, 300)}`, attempt);
+        return "waiting";
+      }
+      if (bookControllerWaitRound(attempt, since, now, ports,
+        { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") return "exhausted";
+      pipeline.stateDetail = "waiting for the failed startup host to terminate; keeping uncommitted work";
+      return "waiting";
+    }
+    attempt.input = renderCutRetryInput(attempt.input, attempt.n, "failed startup");
+    pipeline.cursor!.input = attempt.input;
+  }
   if (bookControllerWaitRound(attempt, since, now, ports, spawnWaitBudget(failure)) === "exhausted") return "exhausted";
   const retired = attempt.retiredLaunches ?? [];
   retired.push({
@@ -5489,6 +5576,9 @@ function deferRetiredLaunchRetry(
     retiredAt: now,
   });
   attempt.retiredLaunches = retired.slice(-RETIRED_LAUNCH_LIMIT);
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+    recordProviderRecovery(attempt, "relaunch", startupCondition, `relaunching after ${recoverySummary}`, now);
+  }
   attempt.launchId = null;
   attempt.conversationId = null;
   attempt.sessionId = null;
@@ -5498,23 +5588,14 @@ function deferRetiredLaunchRetry(
   attempt.error = null;
   setCursorState(pipeline, stage.id, "pending");
   syncControllerWaitStateDetail(pipeline, attempt, failure);
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+    pipeline.stateDetail = `waiting to relaunch after ${recoverySummary}; next try at ${attempt.controllerWait?.retryAfter ?? now}`;
+  }
   return "waiting";
-}
-
-/** A clean worktree on the lane's branch whose HEAD is the last passed commit:
-    exactly what retry-stage's reset would leave, so there is nothing to reset. */
-function worktreeAtLastPassedCommit(pipeline: Pipeline, ports: PipelinePorts): boolean {
-  if (!pipeline.lastPassedCommit) return false;
-  const head = currentPipelineBranchHead(pipeline, ports.exec);
-  return head.ok && head.sha === pipeline.lastPassedCommit;
 }
 
 function controllerFailureReason(failure: string): string {
   return failure.replace(/; retry shortly$/, "");
-}
-
-function stagedLaunchRetryRefusal(failure: string): string {
-  return `${controllerFailureReason(failure)}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`;
 }
 
 function unverifiedLaunchRetryRefusal(failure: string): string {
@@ -5656,7 +5737,7 @@ function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, fa
   return `stage spawn failed after ${rounds} retries over ${seconds}s: ${controllerFailureReason(failure)}`;
 }
 
-/** A stage waiting out a controller holds a pending cursor on purpose, and its
+/** A stage waiting out a controller or provider holds a pending cursor on purpose, and its
     own scheduled tick wakes it when the backoff falls due. Treating that cursor
     as work to re-tick immediately would spin the controller through passes that
     can only defer it again (#1191). */
@@ -5664,7 +5745,9 @@ function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
   const stageId = pipeline.cursor?.stageId;
   if (!stageId) return false;
   const attempt = currentAttempt(pipeline, stageId);
-  return [attempt?.controllerWait?.retryAfter, attempt?.memoryWait?.retryAfter].some((retryAfter) => retryAfter !== undefined && unixMs(retryAfter) > nowMs);
+  return unixMs(attempt?.controllerWait?.retryAfter ?? "") > nowMs
+    || unixMs(attempt?.providerWait?.resumeAt ?? "") > nowMs
+    || unixMs(attempt?.memoryWait?.retryAfter ?? "") > nowMs;
 }
 
 /**
@@ -5956,8 +6039,14 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
         if (!pipelineSurvivorRefusal(pipeline)) {
+          const reportedStage = currentStage(pipeline);
+          const reportedAttempt = reportedStage ? currentAttempt(pipeline, reportedStage.id) : null;
+          if (pipeline.state === "needs_decision" && reportedStage?.kind === "run" && reportedAttempt?.report
+            && /stage spawn|verdict|host|rate limited|stage ended before its session|stage agent exited before its session/.test(reportedAttempt.error ?? pipeline.stateDetail ?? "")) {
+            pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, ports, persistPipeline) || pipelineChanged;
+          }
           pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
-          pipelineChanged = await reconcileParkedClaudeLimit(pipeline, ports) || pipelineChanged;
+          pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, ports) || pipelineChanged;
           pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;

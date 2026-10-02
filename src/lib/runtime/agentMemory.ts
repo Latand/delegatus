@@ -371,9 +371,11 @@ export class AgentMemoryCell {
     if ((this.ports.identity ?? procBackend.processIdentity)(victim.pid) !== victim.identity) return;
     const target = this.plan.platform === "linux" ? victim : this.lastSample.find((sample) => sample.pid === this.pid);
     if (!target || this.killedThisTick.has(target.pid) || !this.canSignal(target)) return;
-    // Contain verified descendants while the root still anchors their ownership.
+    // Contain the selected process's verified subtree while its parents still
+    // anchor ownership. On Linux, the largest process may be a native child
+    // with its own tools; on macOS, enforcement targets the wrapper root.
     // Deepest-first keeps each remaining parent alive until its children are signalled.
-    if (target.pid === this.pid) {
+    if (this.plan.platform === "linux" || target.pid === this.pid) {
       const ppidMap = this.plan.platform === "darwin" && !this.ports.readPpid ? portableWatchdogParents : null;
       const readPpid = this.ports.readPpid ?? (ppidMap
         ? (pid: number) => ppidMap.get(pid) ?? null
@@ -381,19 +383,21 @@ export class AgentMemoryCell {
       const identity = this.ports.identity ?? procBackend.processIdentity;
       const identities = new Map(this.lastSample.map((sample) => [sample.pid, sample.identity]));
       identities.set(this.pid!, this.rootIdentity!);
-      const descendants = this.lastSample.filter((sample) => sample.pid !== this.pid).flatMap((sample) => {
-        if (!verifiedTreeMember(this.pid!, sample.pid, identities, identity, readPpid)) return [];
+      const descendants = this.lastSample.filter((sample) => sample.pid !== target.pid).flatMap((sample) => {
+        if (!verifiedTreeMember(target.pid, sample.pid, identities, identity, readPpid)) return [];
         let depth = 0, current = sample.pid;
-        while (current !== this.pid && depth <= identities.size) {
+        while (current !== target.pid && depth <= identities.size) {
           const parent = readPpid(current);
           if (parent === null) return [];
           current = parent;
           depth++;
         }
-        return current === this.pid ? [{ sample, depth }] : [];
+        return current === target.pid ? [{ sample, depth }] : [];
       }).sort((left, right) => right.depth - left.depth);
       for (const { sample } of descendants) {
-        if (this.killedThisTick.has(sample.pid) || !this.canSignal(sample)) continue;
+        if (this.killedThisTick.has(sample.pid) || !this.canSignal(target)
+          || !verifiedTreeMember(target.pid, sample.pid, identities, identity, readPpid)
+          || !this.canSignal(sample)) continue;
         if (identity(sample.pid) !== sample.identity) continue;
         this.killedThisTick.add(sample.pid);
         try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { /* Already gone. */ }

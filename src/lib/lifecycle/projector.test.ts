@@ -324,3 +324,19 @@ test("a provider-throttled scheduled wait produces no stall alarm", () => {
   }, { force: true });
   expect(queryLifecycleEvents({ conversationId }).count).toBe(0);
 });
+
+test("provider wait and relaunch transitions keep stable lifecycle keys", async () => {
+  const { projectPipelineEvents } = await import("./projector");
+  const condition = { kind: "transient" as const, scope: null, resetLabel: null, label: "auth refresh race" };
+  const lane = pipelineFixture("provider-events");
+  lane.runs[0]!.attempts = [{ n: 1, state: "running", startedAt: T0, effectiveRole: BUILDER_ROLE,
+    providerRecoveries: [
+      { at: T0, action: "wait", condition, summary: "waiting after auth refresh race" },
+      { at: "2026-07-26T09:01:00Z", action: "continue", condition, summary: "continuing after auth refresh race" },
+    ],
+  }] as unknown as Pipeline["runs"][number]["attempts"];
+  const first = projectPipelineEvents([lane]);
+  expect(projectPipelineEvents([lane])).toEqual(first);
+  expect(first.filter((event) => event.type === "stage_waiting")).toHaveLength(1);
+  expect(first.filter((event) => event.type === "stage_relaunched")).toHaveLength(1);
+});

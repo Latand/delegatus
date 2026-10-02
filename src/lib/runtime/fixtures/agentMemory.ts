@@ -21,15 +21,19 @@ export function fakeAgentMemory(options: { mode?: MemoryMode; admissionFailure?:
 /** An owned child and a surviving tool; every signal stays inside this fixture. */
 export function fakeHostMemory(pid: number, platform: NodeJS.Platform, mechanism: "scope" | "watchdog") {
   let rootIdentity: string | null = `${pid}:owned`;
-  const descendant = pid + 1;
+  const native = pid + 1;
+  const tool = pid + 2;
+  const alive = new Set([pid, native, tool]);
   const signals: number[] = [];
-  const processIdentity = (target: number) => target === pid ? rootIdentity : `${target}:owned`;
+  const processIdentity = (target: number) => target === pid ? rootIdentity : alive.has(target) ? `${target}:owned` : null;
   const scope = mechanism === "scope" ? fakeAgentMemory() : null;
   const cell = scope?.cell ?? new AgentMemoryCell({ mechanism: "watchdog", platform, limitBytes: 100, budgetBytes: 200,
     reserveBytes: GIB, totalBytes: 2 * GIB, score: 500, unit: null, slice: "delegatus-agents-test.slice", viewerUnit: null, systemdVersion: 255 }, {
-    identity: processIdentity, readPpid: () => pid,
-    sample: () => [{ pid, identity: `${pid}:owned`, rss: 101, name: "agent" }, { pid: descendant, identity: `${descendant}:owned`, rss: 1, name: "surviving-tool" }],
-    kill: (target) => { signals.push(target); },
+    identity: processIdentity, readPpid: (target) => target === native ? pid : target === tool ? native : null,
+    sample: () => [{ pid, identity: `${pid}:owned`, rss: 1, name: "wrapper" },
+      { pid: native, identity: `${native}:owned`, rss: 101, name: "native-agent" },
+      { pid: tool, identity: `${tool}:owned`, rss: 1, name: "tool" }],
+    kill: (target) => { signals.push(target); alive.delete(target); },
   });
   return { cell, signals, scopeReaps: scope?.reaps ?? [], processIdentity, pidAlive: () => rootIdentity !== null,
     kill: () => scope ? scope.kill() : tickAgentMemoryWatchdogs([cell]),

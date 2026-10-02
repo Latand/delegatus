@@ -226,7 +226,7 @@ import {
   stageReportAcknowledgement,
   type AccountLimitsInput,
 } from "./compactAnswers";
-import { changedFieldNames, fieldValues, compactFlow, compactTask, firstLine, fullAnswer, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+import { changedFieldNames, fieldValues, compactFlow, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
@@ -1702,7 +1702,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   return { ...taskTextLanguageWarnings(text, dependencies), refined: result.refined, changedFields: [...new Set(Object.values(changes).flat())], changedFieldsByTask: changes, tasks: result.refined.map((entry) => {
     const task = byId.get(entry.taskId)!;
     return fullAnswer(args) ? task : compactTask(task);
-  }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, readMore: "get_task(taskId) or update_task with full:true returns the full task." };
+  }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, ...answerHint(args, "get_task(taskId) or update_task with full:true returns the full task.") };
 }
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -1712,7 +1712,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     return refineBoardTask(args, dependencies);
   }
   const taskId = required(args, "taskId");
-  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact"]);
+  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact", "includeHints"]);
   let changedFields: string[] = [];
   let prior: BoardTask | undefined;
   let liveAgent: string | undefined;
@@ -1796,9 +1796,32 @@ function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, 
   if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
 }
 
+/** A capability pins the launch receipt and its exact native generation. */
+function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
+  const authority = dependencies.attentionAuthority();
+  const capability = callerCapability();
+  const snapshot = dependencies.registrySnapshot();
+  const digest = capability ? crypto.createHash("sha256").update(capability).digest("hex") : null;
+  const receipts = digest ? Object.values(snapshot.receipts).filter(row => row.spawnCapabilityDigest === digest) : [];
+  const receipt = receipts.length === 1 ? receipts[0] : null;
+  const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+  const conversation = authority.kind !== "unidentified" && authority.conversationId
+    ? lookup.conversation(authority.conversationId as `conversation_${string}`) : null;
+  const generations = conversation?.generations.filter(row => row.path === receipt?.artifactPath) ?? [];
+  const entries = receipt?.key ? Object.values(snapshot.entries).filter(row => row.artifactPath === receipt.artifactPath
+    && row.key.engine === receipt.key!.engine && row.key.sessionId === receipt.key!.sessionId) : [];
+  if (!receipt || !conversation || !receipt.conversationId || lookup.canonicalConversationId(receipt.conversationId) !== conversation.id
+    || entries.length !== 1 || conversation.engine !== receipt.key?.engine
+    || generations.length !== 1 || !generations[0]?.path || conversation.generations.at(-1)?.path !== generations[0].path) {
+    throw new McpToolRefusal("src is required when the authenticated caller's exact transcript generation cannot be established", { code: "caller_source_unavailable" });
+  }
+  return generations[0].path;
+}
+
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
+  if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
      conversation, and the create's `src` creator when attribution names none. */
@@ -1886,7 +1909,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
      (docs/design/needs-attention.md §5): the same gate and the same attributed
      record `dismiss_attention` writes. */
   if (action === "dismiss" || action === "undismiss") return pipelineDismissal(pipelineId, action, args, dependencies);
-  const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact"]);
+  const request = withoutKeys(args, ["pipelineId", ...(PIPELINE_RECEIPT_ACTIONS.has(action) ? [] : ["clientRequestId"]), "full", "compact", "includeHints"]);
   const before = dependencies.readPipelineRecord
     ? dependencies.readPipelineRecord(pipelineId)
     : dependencies.getPipelines?.().pipelines.find(pipeline => pipeline.id === pipelineId);
@@ -1922,18 +1945,18 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       revision: recordRevision(result.pipeline),
       changedFields: changedFieldNames(beforeFields, result.pipeline),
       close: closeReportCounts(result.close),
-      readMore: "get_pipeline(pipelineId) lists every host in closeReport.",
+      ...answerHint(args, "get_pipeline(pipelineId, full:true) lists every host in closeReport."),
     });
   }
   /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
-    ...pipelineActionAcknowledgement(result.pipeline),
+    ...pipelineActionAcknowledgement(result.pipeline, fullAnswer(args) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)),
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
     ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
-    readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
-    ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
+    ...answerHint(args, "get_pipeline(pipelineId, full:true) or pipeline_action with full:true returns the full record."),
+    ...(result.pipeline.delivery && (fullAnswer(args) || action === "publish" || action === "takeover" || action === "retry-stage" || beforeFields.get("delivery") !== JSON.stringify(result.pipeline.delivery)) ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
@@ -1997,13 +2020,13 @@ async function pipelineDismissal(pipelineId: string, action: "dismiss" | "undism
   const after = read();
   if (!after) throw new Error("pipeline not found");
   return redactPayload({
-    ...pipelineActionAcknowledgement(after),
+    ...pipelineActionAcknowledgement(after, fullAnswer(args)),
     revision: recordRevision(after),
     changedFields: changedFieldNames(beforeFields, after),
     taskIds: after.taskIds,
     dismissal: { dismissed: outcome.dismissed.length > 0, alreadyClear: outcome.alreadyClear.length > 0, at: outcome.at, by: outcome.by },
     ...(fullAnswer(args) ? { pipeline: after } : { omittedRecordCount: 1 }),
-    readMore: "get_pipeline(pipelineId) or pipeline_action with full:true returns the full record.",
+    ...answerHint(args, "get_pipeline(pipelineId, full:true) or pipeline_action with full:true returns the full record."),
   });
 }
 
@@ -2498,7 +2521,10 @@ async function searchTranscripts(
     || typeof stats.tokenizer !== "string") {
     throw new ViewerControlResponseError("Viewer control returned a malformed transcript search page");
   }
-  return redactPayload(source);
+  return redactPayload({ ...source, stats: args.full === true ? stats : {
+    conversationsIndexed: stats.conversationsIndexed,
+    messagesIndexed: stats.messagesIndexed,
+  } });
 }
 
 async function getConversation(
@@ -2750,16 +2776,14 @@ async function conversationMessages(
     }
     return redactPayload({
       conversationId,
-      transcriptPath,
-      engine,
-      lastRecordAt: page.lastRecordAt,
+      ...(args.full === true || args.includeMetadata === true ? { transcriptPath, engine, lastRecordAt: page.lastRecordAt } : {}),
       /* sign-in-and-team §7.1: a human message names its member. */
       records: withRecordAuthors(conversationId, transcriptPath, page.records, {
         descriptor: pinned.descriptor, size: pinned.stat.size, engine,
       }),
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
-      scanned: page.scanned,
+      ...(args.full === true || args.includeMetadata === true || page.scanned.capped ? { scanned: page.scanned } : {}),
       ...selectedContextEcho(selected.target),
     });
   } finally {
@@ -4488,14 +4512,13 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     }
     throw new Error("pipeline not found");
   }
-  /* #1845: the two narrow reads. A stage read answers what one stage concluded;
-     a compact read answers the list row. Without either, the whole record. */
+  /* Stage conclusions and graph guards stay reachable without retained bodies. */
   const stageId = text(args.stageId);
   if (stageId) {
     const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
     return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), revision: recordRevision(pipeline) });
   }
-  if (args.compact === true) {
+  if (!fullAnswer(args)) {
     return redactPayload({
       pipelineId,
       ...pipelineCompactRow(pipeline),
@@ -4664,7 +4687,8 @@ async function listPipelines(
   const project = (pipeline: Pipeline) => {
     if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
     if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
-    return { ...pipelineCompactRow(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
+    const { stages, ...status } = pipelineCompactRow(pipeline);
+    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
@@ -4683,7 +4707,7 @@ async function listPipelines(
   const { rows: pipelines, ...pagination } = page;
   return redactPayload({ ...pagination, pipelines, compact: !fullAnswer(args),
     omittedRecordCount: args.full === true ? 0 : pipelines.length,
-    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true or get_pipeline reads complete records; compact:false returns the previous board-card projection." });
+    ...answerHint(args, "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true or get_pipeline with full:true reads complete records; compact:false returns the previous board-card projection.") });
 }
 
 function taskWithLinks(task: import("@/lib/tasks/types").BoardTask, dependencies: ViewerMcpDomainDependencies): TaskPipelineReadModel {
@@ -4746,7 +4770,7 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const { rows: tasks, ...pagination } = page;
   return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
     omittedRecordCount: args.full === true ? 0 : tasks.length,
-    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back." });
+    ...answerHint(args, "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back.") });
 }
 
 /** The pipelines a task carries, read by id when the store can, so a task read
@@ -5043,7 +5067,15 @@ async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
   const sessions = sessionsStale === true
     ? payload.sessions.map((session) => ({ ...session, stale: true, capturedAt: sessionsCapturedAt }))
     : payload.sessions;
-  return redactPayload({ ...payload, sessions, freshness: {
+  const sessionSummary = {
+    count: sessions.length,
+    rssBytes: sessions.reduce((sum, row) => sum + row.rssBytes, 0),
+    swapBytes: sessions.reduce((sum, row) => sum + row.swapBytes, 0),
+    procCount: sessions.reduce((sum, row) => sum + row.procCount, 0),
+  };
+  const summaryPayload = Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "sessions"));
+  return redactPayload({ ...summaryPayload,
+    ...(fullAnswer(args) ? { sessions } : { sessionSummary }), freshness: {
     requestedAt, capturedAt, capturedAtScope: "system", ageMs: Number.isFinite(capturedMs) ? Math.max(0, Date.now() - capturedMs) : null,
     sessionsCapturedAt,
     sessionsAgeMs: Number.isFinite(sessionsMs) ? Math.max(0, Date.now() - sessionsMs) : null,
@@ -5459,7 +5491,7 @@ async function agentActivity(
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
-      readMore: "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive." });
+      ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
   } finally {
     deadline.release();
   }

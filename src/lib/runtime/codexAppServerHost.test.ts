@@ -5561,7 +5561,6 @@ test("Codex host records injected OOM SIGKILL on its terminal row", async () => 
   } finally { await host.release(); memory.dispose(); }
 });
 
-
 test("auto scope admission failure is explicit and forced scope keeps the runner diagnostic", async () => {
   const { AgentMemoryCell, GIB } = await import("./agentMemory");
   for (const mode of ["auto", "scope"] as const) {
@@ -5597,7 +5596,9 @@ for (const mechanism of ["scope", "watchdog"] as const) for (const platform of [
     await host.release();
     await Bun.sleep(5);
     child.emit("close", null, "SIGKILL");
-    expect(memory.signals).toEqual(mechanism === "watchdog" ? [child.pid + 1, child.pid] : []);
+    expect(memory.signals).toEqual(mechanism === "watchdog"
+      ? platform === "linux" ? [child.pid + 2, child.pid + 1] : [child.pid + 2, child.pid + 1, child.pid]
+      : []);
     expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
     expect(groupSignals).toEqual([]);
     expect(child.signals).toEqual([]);

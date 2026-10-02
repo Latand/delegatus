@@ -294,14 +294,18 @@ test("flow persistence assigns a monotonic revision to binding-only generations"
       reviewedAt: null,
       relayedAt: null,
       error: null,
+      providerLimitWait: { resetsAt: null, startedAt: "2026-07-22T10:00:00.000Z", capacityProbes: 1 },
     }],
     createdAt: "2026-07-22T10:00:00.000Z",
     closedAt: null,
   } satisfies Flow;
   try {
     saveFlows([flow]);
+    loadFlows(); // Prime the persisted snapshot cache.
     const first = loadFlows()[0]!;
     expect(first.revision).toBe(1);
+    first.rounds[0]!.providerLimitWait!.capacityProbes = 2;
+    expect(loadFlows()[0]!.rounds[0]!.providerLimitWait!.capacityProbes).toBe(1);
 
     first.rounds[0]!.reviewerPath = "/reviewer-next.jsonl";
     saveFlows([first]);
@@ -309,6 +313,7 @@ test("flow persistence assigns a monotonic revision to binding-only generations"
       revision: 2,
       rounds: [{ reviewerPath: "/reviewer-next.jsonl" }],
     });
+    expect(loadFlows()[0]!.rounds[0]!.providerLimitWait!.capacityProbes).toBe(2);
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;

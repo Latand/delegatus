@@ -389,6 +389,47 @@ test("Linux fatal cleanup refuses reparented descendants and a dead owned root",
   } finally { cell.close(); }
 });
 
+for (const limit of ["agent", "shared"] as const) for (const wrapperExit of [false, true]) test(`Linux ${limit} enforcement contains a non-root native subtree before ${wrapperExit ? "wrapper exit" : "returning"}`, () => {
+  const killed: number[] = [];
+  const identities = new Map([[123, "123:wrapper"], [124, "124:native"], [125, "125:tool"], [126, "126:unrelated"], [200, "200:healthy"]]);
+  const alive = new Set(identities.keys());
+  const samples = [
+    { pid: 123, identity: "123:wrapper", rss: 1, name: "wrapper" },
+    { pid: 124, identity: "124:native", rss: 101, name: "native-agent" },
+    { pid: 125, identity: "125:tool", rss: 1, name: "tool" },
+    { pid: 126, identity: "126:unrelated", rss: 500, name: "unrelated" },
+  ];
+  const cell = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null,
+    limitBytes: limit === "agent" ? 100 : 200, budgetBytes: 100 }, {
+    identity: (pid) => alive.has(pid) ? identities.get(pid) ?? null : null,
+    readPpid: (pid) => pid === 124 ? 123 : pid === 125 ? 124 : pid === 126 ? 2 : null,
+    sample: () => samples,
+    kill: (pid) => { killed.push(pid); alive.delete(pid); },
+  });
+  const healthy = new AgentMemoryCell({ ...basePlan, mechanism: "watchdog", unit: null, limitBytes: 100 }, {
+    identity: (pid) => alive.has(pid) ? identities.get(pid) ?? null : null,
+    sample: () => [{ pid: 200, identity: "200:healthy", rss: 1, name: "healthy-agent" }],
+    kill: (pid) => { killed.push(pid); alive.delete(pid); },
+  });
+  try {
+    cell.attach(123);
+    healthy.attach(200);
+    tickAgentMemoryWatchdogs([cell, healthy]);
+    expect(killed).toEqual([125, 124]);
+    expect(alive.has(125)).toBeFalse();
+    expect(alive.has(124)).toBeFalse();
+    expect(alive.has(123)).toBeTrue();
+    expect(alive.has(126)).toBeTrue();
+    expect(alive.has(200)).toBeTrue();
+    if (wrapperExit) {
+      alive.delete(123);
+      cell.settleExit({ expected: false });
+      tickAgentMemoryWatchdogs([cell, healthy]);
+      expect(alive.has(125)).toBeFalse();
+    }
+  } finally { cell.close(); healthy.close(); }
+});
+
 for (const limit of ["agent", "shared"] as const) test(`macOS ${limit} enforcement contains verified descendants before fatal root cleanup`, () => {
   const killed: number[] = [];
   const identities = new Map([[123, "123:owned"], [124, "124:owned"]]);

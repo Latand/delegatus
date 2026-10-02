@@ -107,3 +107,8 @@ export function renderStagePrompt(
 export function renderOutOfMemoryRetryInput(previousInput: string | null, attempt: number, kill: Pick<AgentMemoryKill, "limitBytes" | "limit">): string {
   return [previousInput ?? "", `The previous attempt of this stage (attempt ${attempt}) was ${memoryKillText(kill)}. Its changes are still in this worktree; continue from them. Keep memory-heavy commands (benchmarks, browsers, large test runs) within the limit: smaller inputs, or one at a time.`].filter(Boolean).join("\n\n");
 }
+
+/** A cut attempt keeps its worktree and receives a durable recovery note. */
+export function renderCutRetryInput(previousInput: string | null, n: number, reason: string): string {
+  return `${previousInput ?? ""}\n\nAttempt ${n} was cut by ${reason}. Its changes remain in this worktree. Continue from them, keeping uncommitted work, and report when the stage is complete.`;
+}
