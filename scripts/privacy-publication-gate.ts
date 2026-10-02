@@ -644,11 +644,11 @@ const rawPackageVersion = new RegExp(`${packageVersionSource}${packageVersionBou
 
 function isEscapedAsciiControlBoundary(text: string, offset: number): boolean {
   if (offset + 1 === text.length) return true;
-  const escape = /^\\(?:([bfnrtv])|x([0-9a-f]{2})|u([0-9a-f]{4})|u\{([0-9a-f]{1,6})\})/i.exec(text.slice(offset));
+  const escape = /^\\(?:([bfnrtv])|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]{1,6})\})/.exec(text.slice(offset));
   if (!escape) return false;
   const simpleEscapes: Record<string, number> = { b: 0x08, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
   const codePoint = escape[1]
-    ? simpleEscapes[escape[1].toLowerCase()]
+    ? simpleEscapes[escape[1]]
     : Number.parseInt(escape[2] ?? escape[3] ?? escape[4], 16);
   return codePoint <= 0x20 || codePoint === 0x7f;
 }

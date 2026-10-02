@@ -48,7 +48,10 @@ const packageVersionSamples = [
   ["pkg", "1.2.3-beta"].join("@"),
   ["pkg", "1.2.3-beta.rc"].join("@"),
   ["pkg", "1.2.3-beta.com"].join("@"),
-  ...[String.raw`\n`, String.raw`\t`, String.raw`\r`, String.raw`\x0a`, String.raw`\tail`]
+  ...[
+    String.raw`\n`, String.raw`\t`, String.raw`\r`, String.raw`\x0a`, String.raw`\x0A`,
+    String.raw`\u000a`, String.raw`\u000A`, String.raw`\u{000a}`, String.raw`\u{000A}`, String.raw`\tail`,
+  ]
     .map((escape) => ["pkg", "1.2.3"].join("@") + escape),
   `Inspect \`${["pkg", "1.2.3"].join("@")}\`.`,
   `Inspect [${["pkg", "1.2.3+sha.abc"].join("@")}](https://fixture.invalid).`,
@@ -96,6 +99,16 @@ const versionLookingRealAddresses = [
   ["a", "1.2.3-beta.укр"].join("@"),
   [JSON.stringify(["someone", "b.io"].join("@")), "1.2.3"].join("@"),
   ...["\u200B", "\u0375α", "・カ", "१२३"].map((label) => ["a", `1.2.3.${label}.com`].join("@")),
+];
+const uppercaseControlEscapes = [
+  String.raw`\N`,
+  String.raw`\T`,
+  String.raw`\B`,
+  String.raw`\R`,
+  String.raw`\F`,
+  String.raw`\V`,
+  String.raw`\X0a`,
+  String.raw`\U000a`,
 ];
 const systemdUnitSamples = [
   ["user", "1000.service"].join("@"),
@@ -3742,6 +3755,31 @@ describe("mergeBoundaryReview", () => {
     ]);
   }
 
+  function commitWithIdentities(
+    repo: string,
+    message: string,
+    author: { email: string; name: string },
+    committer: { email: string; name: string },
+  ): void {
+    fixtureFile += 1;
+    writeFileSync(join(repo, `fixture-${fixtureFile}.txt`), "x");
+    runGit(repo, ["add", "."]);
+    const result = Bun.spawnSync({
+      cmd: ["git", "-C", repo, "commit", "--quiet", "-m", message],
+      env: {
+        ...process.env,
+        GIT_AUTHOR_EMAIL: author.email,
+        GIT_AUTHOR_NAME: author.name,
+        GIT_COMMITTER_EMAIL: committer.email,
+        GIT_COMMITTER_NAME: committer.name,
+      },
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+  }
+
   function head(repo: string): string {
     const result = Bun.spawnSync({ cmd: ["git", "-C", repo, "rev-parse", "HEAD"], stderr: "pipe", stdout: "pipe" });
     return result.stdout.toString().trim();
@@ -3796,6 +3834,24 @@ describe("mergeBoundaryReview", () => {
     expect(result.stdout.toString()).not.toContain(address);
     expect(result.stderr.toString()).toBe("");
   });
+
+  test.each(uppercaseControlEscapes.flatMap((escape) => ["file", "message", "author", "committer"].map((surface) => [escape, surface] as const)))(
+    "uppercase control escape %s cannot hide an email on the %s surface",
+    (escape, surface) => {
+      const repo = gitRepo();
+      const address = ["probe", `1.2.3${escape}.com`].join("@");
+      const author = { email: surface === "author" ? address : canonicalIdentity.email, name: "Fixture Author" };
+      const committer = { email: surface === "committer" ? address : canonicalIdentity.email, name: "Fixture Committer" };
+      writeFileSync(join(repo, "packages.md"), surface === "file" ? address : "safe fixture text");
+      commitWithIdentities(repo, surface === "message" ? `chore: inspect ${address}` : "chore: safe fixture message", author, committer);
+
+      const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address:");
+      expect(result.stdout.toString()).not.toContain(address);
+      expect(result.stderr.toString()).toBe("");
+    },
+  );
 
   test.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", (unit) => {
     const repo = gitRepo();
