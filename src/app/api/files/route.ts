@@ -542,6 +542,12 @@ function applyScanHeaders(response: Response, scan: CachedScan, projectionTiming
   response.headers.set("server-timing", serverTiming.join(", "));
 }
 
+/** Visible-board heartbeat: no scanner, projection or state-store work. */
+export function HEAD(request: Request): Response {
+  markBoardViewed(new URL(request.url).searchParams.get("project")?.trim() || undefined);
+  return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+}
+
 export async function GET(request: Request): Promise<Response> {
   const requiredRevision = generationHeader(request, "x-llv-files-revision");
   const requiredGeneration = generationHeader(request, "x-llv-files-generation");

@@ -1,6 +1,7 @@
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import {
   InvalidTranscriptSearchCursorError,
+  TranscriptSearchPageTooLargeError,
   searchTranscripts,
   type TranscriptSearchItem,
   type TranscriptSpeaker,
@@ -54,17 +55,20 @@ export async function GET(request: Request): Promise<Response> {
   if (!query) return Response.json({ error: "q is required" }, { status: 400 });
   const speaker = parseSpeaker(url.searchParams.get("speaker"));
   if (speaker === null) return Response.json({ error: "speaker must be user or assistant" }, { status: 400 });
+  const order = url.searchParams.get("order") ?? "newest";
+  if (order !== "newest" && order !== "relevance") return Response.json({ error: "order must be relevance or newest" }, { status: 400 });
   let page;
   try {
     page = searchTranscripts({
       query,
+      order,
       project: url.searchParams.get("project")?.trim() || undefined,
       speaker,
       cursor: url.searchParams.get("cursor"),
       limit: pageLimit(url.searchParams.get("limit")),
     });
   } catch (error) {
-    if (error instanceof InvalidTranscriptSearchCursorError) {
+    if (error instanceof InvalidTranscriptSearchCursorError || error instanceof TranscriptSearchPageTooLargeError) {
       return Response.json({ error: error.message }, { status: 400 });
     }
     throw error;

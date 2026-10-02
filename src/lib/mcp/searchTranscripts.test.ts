@@ -42,7 +42,22 @@ test("search_transcripts reads the HTTP body index with cross-project pagination
   });
 
   expect(reads).toEqual([
-    "/api/search/transcripts?q=%23%D1%82%D0%B5%D0%B3&project=reports&cursor=cursor-a&limit=25",
+    "/api/search/transcripts?q=%23%D1%82%D0%B5%D0%B3&project=reports&cursor=cursor-a&limit=25&order=relevance",
   ]);
   expect(result).toEqual(indexedPage);
+});
+
+test("MCP defaults to six conversations and optional newest retains twenty messages", async () => {
+  const reads: URL[] = [];
+  const bindings = viewerMcpBindings(undefined, {
+    get: async (pathname) => {
+      reads.push(new URL(pathname, "http://localhost"));
+      return { items: [], nextCursor: null, total: 0, order: reads.at(-1)!.searchParams.get("order"),
+        stats: { conversationsIndexed: 0, messagesIndexed: 0, fieldsSearched: ["message.body"], tokenizer: "fixture" } };
+    }, post: async () => ({}),
+  });
+  const first = await bindings.search_transcripts({ query: "quartz" });
+  await bindings.search_transcripts({ query: "quartz", order: "newest" });
+  expect(reads.map((u) => [u.searchParams.get("order"), u.searchParams.get("limit")])).toEqual([["relevance", "6"], ["newest", "20"]]);
+  expect(first.order).toBe("relevance");
 });

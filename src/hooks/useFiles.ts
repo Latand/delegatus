@@ -1268,7 +1268,29 @@ export function filesPollCadence(connection: "live" | "reconnecting" | "degraded
  * the tab hides is cancelled. What they would have fetched is remembered, and
  * the tab revalidates once — conditionally, usually as a delta — the moment it
  * is visible again. */
-export function useFiles(_project?: string | null, pinnedPath?: string | null): FilesData {
+export function boardPresenceUrl(project: string): string {
+  return "/api/files?project=" + encodeURIComponent(project);
+}
+
+export function useFiles(project?: string | null, pinnedPath?: string | null): FilesData {
+  // Catalog requests remain global. Presence has its own cheap HEAD heartbeat
+  // because a quiet live runtime stream performs no recurring catalog GET.
+  useEffect(() => {
+    if (!project) return;
+    const controller = new AbortController();
+    const heartbeat = () => {
+      if (documentHidden()) return;
+      void fetch(boardPresenceUrl(project), { method: "HEAD", cache: "no-store", signal: controller.signal }).catch(() => {});
+    };
+    heartbeat();
+    const timer = setInterval(heartbeat, 15_000);
+    document.addEventListener("visibilitychange", heartbeat);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", heartbeat);
+    };
+  }, [project]);
   const [data, setData] = useState<FilesData>(() => filesClientCache.readScope(pinnedPath));
   const requestScope = filesApiUrl(undefined, pinnedPath);
   useEffect(() => {

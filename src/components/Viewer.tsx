@@ -217,7 +217,7 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { systemHealth, files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { systemHealth, files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.path ?? null));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
