@@ -43,6 +43,7 @@
   ],
   "patchedDependencies": {
     "next@16.3.6": "patches/next-16.3.6.patch",
+    "braces@3.0.3": "patches/braces@3.0.3.patch",
   },
   "overrides": {
     "fast-uri": "^3.1.6",
