@@ -105,7 +105,9 @@ describe("batched turn settlement", () => {
             { width, working: translate(locale, "mobile2.chat.stateWorking") });
             const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
             if (width === 1440) {
-              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
+              /* The header counts tasks in motion, not conversations: this one's task also has a running
+                 pipeline, so settling its conversation leaves the count where it was. */
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]));
               expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
             }
             const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
@@ -724,7 +726,7 @@ describe("#1695 K1+K2 kanban board", () => {
 
         await page.evaluate(() => { (window as unknown as { evidence: { refuseNextTaskPatch: boolean } }).evidence.refuseNextTaskPatch = true; });
         await page.click('.card[data-id="task:t-verify-a"] [data-menu]');
-        await page.click('.menu [role="menuitemradio"]:has-text("Blocked")');
+        await page.click('.menu [role="menuitemradio"]:has-text("Waiting")');
         const refusedOnClick = await columnOf("t-verify-a");
         await page.waitForFunction(() => document.querySelector("[data-kanban-receipt].error"), undefined, { timeout: 5_000 });
         const refused = { onClick: refusedOnClick, afterAnswer: await columnOf("t-verify-a"), receipts: await receipts() };
@@ -814,7 +816,7 @@ describe("#1695 K1+K2 kanban board", () => {
         if (undone.column !== "assigned" || undone.patches !== 2) failures.push(`undo: U while the receipt shows left ${JSON.stringify(undone)}`);
 
         await undo.page.click('.card[data-id="task:t-disk"] [data-menu]');
-        await undo.page.click('.menu [role="menuitemradio"]:has-text("Blocked")');
+        await undo.page.click('.menu [role="menuitemradio"]:has-text("Waiting")');
         await undo.page.waitForFunction(() => document.querySelector('.card[data-id="task:t-disk"]')?.getAttribute("data-pending") === "0", undefined, { timeout: 5_000 });
         await undo.page.waitForFunction(() => !document.querySelector("[data-kanban-receipt] .act"), undefined, { timeout: 12_000 });
         const beforeLateUndo = await patches();
@@ -1258,7 +1260,7 @@ describe("#1695 K3 conversations inside cards", () => {
 
         /* The operator's own status move keeps it too. */
         await page.click(`${card("t-export")} [data-menu]`);
-        await page.click('.menu [role="menuitemradio"]:has-text("Assigned")');
+        await page.click('.menu [role="menuitemradio"]:has-text("In progress")');
         await page.waitForFunction((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status === "assigned", card("t-export"), { timeout: 5_000 });
         const ownMove = await page.evaluate(() => {
           const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-k3probe="draft"]');
