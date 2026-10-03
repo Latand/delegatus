@@ -1514,6 +1514,8 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   const env = { ...fixture.env };
   delete env.LLV_STATE_DIR;
   delete env.XDG_CONFIG_HOME;
+  env.HOME = path.join(fixture.root, "terminal-home");
+  mkdirSync(env.HOME, { recursive: true });
   return env;
 }
 
@@ -1558,6 +1560,7 @@ test.each(["restart-terminal", "start-launcher"] as const)("the actual %s comman
   if (adopted) expect(adopted.exitCode !== null || adopted.signalCode !== null).toBe(true);
   expect(new ApplyController(path.dirname(before.requestFile)).current?.requestId).toBe(apply.current!.requestId);
   const webEnvironment = readFileSync(`/proc/${after.web.pid}/environ`, "utf8").split("\0");
+  expect(webEnvironment).toContain(`HOME=${fixture.env.HOME}`);
   expect(webEnvironment).toContain(`XDG_CONFIG_HOME=${fixture.env.XDG_CONFIG_HOME}`);
   expect(webEnvironment).toContain(`LLV_STATE_DIR=${fixture.state}`);
 }, 45_000);

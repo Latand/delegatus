@@ -55,7 +55,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   const shellQuote = (value: string) => windows ? `'${value.replaceAll("'", "''")}'` : quote(value);
   // State custody and config belong to the install even in a clean terminal.
   // Explicit allowlisting keeps credentials out of the displayed command.
-  const context = Object.fromEntries(["LLV_STATE_DIR", "XDG_CONFIG_HOME"].flatMap(name => {
+  const context = Object.fromEntries(["HOME", "LLV_STATE_DIR", "XDG_CONFIG_HOME"].flatMap(name => {
     const value = env[name as keyof typeof env];
     return value ? [[name, value]] : [];
   }));

@@ -5668,7 +5668,7 @@ async function selfUpdateAutoMain(): Promise<void> {
     installed: revision(old), available: { ...revision(next), version: "1.6.2" },
     update: idleUpdate(["fetch", "install", "ready"]), auto: { ...idleAuto, availability: "packaged" } };
   // Commands contain invented install context and exercise wrapping at phone width.
-  const command = "env LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open";
+  const command = "env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open";
   for (const id of ["restart-terminal", "start-launcher", "start-service", "update-first", "docker-deployments"] as const) {
     const unsupported = ["start-launcher", "start-service", "docker-deployments"].includes(id);
     states[`install-${id}`] = { ...base, mode: unsupported ? "unsupported" : "checkout", unsupportedReason: id === "docker-deployments" ? "docker-deployments" : unsupported ? "no-launcher" : null,

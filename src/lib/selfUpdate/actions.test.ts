@@ -84,8 +84,9 @@ test.each(["linux", "win32"] as const)("terminal context escapes state/config an
   const state = "/srv/state ' $(literal); spaced";
   const config = "/srv/config ' $(literal); spaced";
   const action = await installAction({ mode: "checkout", record } as never, {
-    cgroup: () => "", ready: () => true, platform, env: { LLV_STATE_DIR: state, XDG_CONFIG_HOME: config, LLV_TOKEN: "synthetic-secret" } as never,
+    cgroup: () => "", ready: () => true, platform, env: { HOME: "/srv/fixture home", LLV_STATE_DIR: state, XDG_CONFIG_HOME: config, LLV_TOKEN: "synthetic-secret" } as never,
   });
+  expect(action?.command).toContain(platform === "win32" ? "$env:HOME=" : "HOME=");
   expect(action?.command).toContain("LLV_STATE_DIR");
   expect(action?.command).toContain("XDG_CONFIG_HOME");
   expect(action?.command).not.toContain("synthetic-secret");
