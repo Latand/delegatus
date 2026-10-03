@@ -643,8 +643,16 @@ function maskApprovedPublicValues(text: string): string {
           const sourcePrefix = text.slice(0, calleeSpan.before + 1);
           const sourceOperand = calleeBoundary.before < 0
             || /[=(:,[{!&|?+*%^~<>;]/.test(text[calleeBoundary.before] ?? "")
-            || /\b(?:return|yield|await|throw|case)\s*$/.test(sourcePrefix);
-          tagged = callee !== undefined || (calleeSpan.before < preceding.before && sourceOperand);
+            || /\b(?:return|yield|await|throw|case|new)\s*$/.test(sourcePrefix);
+          const escapedIdentifierPart = String.raw`\\u(?:[\da-fA-F]{4}|\{[\da-fA-F]{1,6}\})`;
+          const identifierBeforeTemplate = text.slice(0, preceding.before + 1).match(new RegExp(
+            String.raw`(?:[$_\p{ID_Start}]|${escapedIdentifierPart})(?:[$_\u200c\u200d\p{ID_Continue}]|${escapedIdentifierPart})*$`,
+            "u",
+          ))?.[0];
+          tagged = callee !== undefined
+            || (identifierBeforeTemplate !== undefined
+              && (identifierBeforeTemplate.includes("\\u") || /[^\x00-\x7f]/.test(identifierBeforeTemplate)))
+            || (calleeSpan.before < preceding.before && sourceOperand);
           // A call or computed receiver used as a tag transforms its result.
           // Keep that ownership attached to values in its completed arguments.
           if (callee) callee.attached = true;

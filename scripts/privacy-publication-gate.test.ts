@@ -1543,6 +1543,10 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         ...["f", "helpers.tag", "(f)", "x[0]"].map((tag, kind) => ({
           name: `review tagged template regression ${form} ${kind}`, text: `${tag}${tick}${value}${tick}`, pass: false,
         })),
+        ...["π", String.raw`\u03c0`, "new f"].map((tag, kind) => ({
+          name: `review tagged template identifier regression ${form} ${kind}`,
+          text: `${tag}${tick}${value}${tick}`, pass: false,
+        })),
         ...["", " /*tag trivia*/ ", "\n"].flatMap((gap, trivia) => [
           {
             name: `review returned call tagged suffix regression ${form} ${trivia}`,
