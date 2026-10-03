@@ -16,7 +16,7 @@ import { enqueueStructuredMessage, type StructuredMessageDependencies } from "@/
 import { withdrawRuntimeWake } from "@/lib/monitor/seatTickSources";
 import { existingTeamStore } from "@/lib/team/store";
 
-import { type ReportReplyRow, TelegramBotStore, type TgUpdate } from "./store";
+import { type ReportReplyRow, TelegramBotStore, type ReportSendRoute, type TgUpdate } from "./store";
 
 export interface ReplySeat { conversationId: string; path: string | null }
 export interface ReportReplyPorts {
@@ -78,6 +78,23 @@ export const productionReportReplyPorts: ReportReplyPorts = {
   },
 };
 
+/** Capture the route while the bounded bridge row and its manager origin exist. */
+export function reportRouteForSend(
+  ports: ReportReplyPorts,
+  input: { clientRequestId: string; conversationId: string | null; chatId: string; topicId: number | null; store: TelegramBotStore },
+): Omit<ReportSendRoute, "botId"> | null {
+  const match = /^bridge-report:(.+?)(?::r\d+)?$/.exec(input.clientRequestId);
+  if (!match || !input.conversationId) return null;
+  const report = ports.reports().find(candidate => candidate.id === match[1]);
+  if (!report?.project || report.origin?.kind !== "manager" || !report.origin.conversationId
+    || report.origin.conversationId !== input.conversationId || !report.telegram) return null;
+  const destination = ports.destination(report.project);
+  const chat = destination ? input.store.resolveChat(destination.chat) : null;
+  if (chat?.chatId !== input.chatId || (destination?.topicId ?? null) !== input.topicId) return null;
+  return { reportId: report.id, project: canonicalOrchestratorProject(report.project), seq: report.seq,
+    originConversationId: report.origin.conversationId, chatId: input.chatId, topicId: input.topicId };
+}
+
 /** Only ordinary, unforwarded replies from the explicitly linked human enter. */
 export function admitReportReplies(store: TelegramBotStore, botId: string, updates: readonly TgUpdate[], ports: ReportReplyPorts): void {
   const operatorId = ports.operatorId();
@@ -92,7 +109,15 @@ export function admitReportReplies(store: TelegramBotStore, botId: string, updat
       || !Number.isSafeInteger(message.message_id) || message.message_id <= 0
       || !Number.isSafeInteger(message.chat.id) || !Number.isSafeInteger(message.reply_to_message?.message_id)) continue;
     const chatId = String(message.chat.id);
-    const report = reports.find(report => {
+    const repliedMessageId = message.reply_to_message!.message_id;
+    const route = store.reportRoute(botId, chatId, repliedMessageId);
+    const durableDestination = route && ports.destination(route.project);
+    const durableChat = durableDestination ? store.resolveChat(durableDestination.chat) : null;
+    const durableReport = route && route.project && route.seq > 0 && route.originConversationId
+      && durableChat?.chatId === chatId && (durableDestination?.topicId ?? null) === (message.message_thread_id ?? null)
+      ? { project: route.project, seq: route.seq, originConversationId: route.originConversationId }
+      : null;
+    const report = durableReport ?? reports.find(report => {
       if (!report.project || report.origin?.kind !== "manager" || !report.origin.conversationId || !report.telegram) return false;
       const destination = ports.destination(report.project);
       const chat = destination ? store.resolveChat(destination.chat) : null;
@@ -100,9 +125,9 @@ export function admitReportReplies(store: TelegramBotStore, botId: string, updat
         && (destination?.topicId ?? null) === (message.message_thread_id ?? null)
         // The bot receipt commits before the report log's Telegram mirror.
         // Match it directly so a reply in that window is still admitted.
-        && store.postedReport(report.id, report.origin.conversationId, chatId, message.reply_to_message!.message_id);
+        && store.postedReport(report.id, report.origin.conversationId, chatId, repliedMessageId);
     });
-    if (!report?.project) continue;
+    if (!report?.project || (route && (route.topicId ?? null) !== (message.message_thread_id ?? null))) continue;
     // Identity is per message, independent of update id, seat, and process lifetime.
     const identity = crypto.createHash("sha256").update(`${botId}:${chatId}:${message.message_id}`).digest("hex");
     const text = message.text?.trim() || message.caption?.trim() || "A non-text reply to this report arrived in Telegram; its media is not supported.";
@@ -144,9 +169,11 @@ export async function drainReportReplies(store: TelegramBotStore, botId: string,
           if (!save({ ...row, attempt: row.attempt + 1, recipient: null, operationId: null, refused: false })) continue;
         } else continue;
       } else if (original.kind !== "absent" || row.operationId) continue;
-      else if (current?.conversationId !== row.recipient) {
-        // Absence alone never licenses sending to a different recipient.
-        if (!row.refused || !save({ ...row, attempt: row.attempt + 1, recipient: null, refused: false })) continue;
+      else if (current && current.conversationId !== row.recipient) {
+        // The durable delivery path reserves this deterministic message key
+        // before enqueueing. An absent original receipt and no saved operation
+        // prove this binding never crossed that admission boundary.
+        if (!save({ ...row, attempt: row.attempt + 1, recipient: null, operationId: null, refused: false })) continue;
       }
     }
     if (!current || !await ports.ready(current)) continue;

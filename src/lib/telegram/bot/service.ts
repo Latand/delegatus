@@ -37,7 +37,7 @@ import {
 } from "./contracts";
 import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
-import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
+import { admitReportReplies, drainReportReplies, productionReportReplyPorts, reportRouteForSend, type ReportReplyPorts } from "./reportReplies";
 import {
   createBotApiTransport,
   removeBotToken,
@@ -832,6 +832,11 @@ export class TelegramBotService {
     const attributedTo: TelegramBotAttribution = input.conversationId ? { conversationId: input.conversationId } : { unidentified: true };
     const callerKey = input.conversationId ?? "unidentified";
     const clientRequestId = input.clientRequestId.trim();
+    const reportRoute = this.deps.reportReplies
+      ? reportRouteForSend(this.deps.reportReplies, { clientRequestId, conversationId: input.conversationId,
+        chatId: chat.chatId, topicId, store })
+      : null;
+    const durableReportRoute = reportRoute && this.storedBotId() ? { ...reportRoute, botId: this.storedBotId()! } : undefined;
     const legacyRow = store.sendRow(callerKey, clientRequestId);
     const legacyKind = legacyRow ? store.sendKind(callerKey, clientRequestId) : null;
     const sendCallerKey = legacyRow && legacyKind !== "photo" ? callerKey : `text:${callerKey}`;
@@ -882,7 +887,7 @@ export class TelegramBotService {
       if (!result.ok) {
         const error = sendFailure(result, chat);
         if (sent.length) {
-          store.completeSend({ callerKey: sendCallerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now: this.deps.now() });
+          store.completeSend({ callerKey: sendCallerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, reportRoute: durableReportRoute, now: this.deps.now() });
           store.failSend(sendCallerKey, clientRequestId, "send_partial", sent.map((message) => message.messageId));
           throw new TelegramBotError("send_partial", `parts 1–${sent.length} of ${parts.length} were posted (message ids ${sent.map((message) => message.messageId).join(", ")}); the rest failed: ${error.message}. Send only the remaining text, under a new clientRequestId`, { sentMessageIds: sent.map((message) => message.messageId) });
         }
@@ -898,7 +903,7 @@ export class TelegramBotService {
       sent.push({ messageId: result.result.message_id, date: result.result.date, text, replyToMessageId: partReply, topicId });
     }
     const now = this.deps.now();
-    store.completeSend({ callerKey: sendCallerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now });
+    store.completeSend({ callerKey: sendCallerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, reportRoute: durableReportRoute, now });
     const current = store.chat(chatId);
     return {
       chat: current?.alias ?? chatId,

@@ -166,6 +166,81 @@ test("dedup survives reopening the store and replay with a different update id",
   expect(delivered).toHaveLength(1);
 });
 
+test("a crash after binding the old recipient can rotate to the successor when no send reservation exists", async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const designate = (key: string, id: string) => {
+    beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture mandate", clientRequestId: key, mode: "spawn" });
+    completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: key, conversationId: id, path: null });
+  };
+  designate("fixture-crash-seat", "conversation_seat_first");
+  ports.seat = productionReportReplyPorts.seat;
+  const update = store.updateReportReply.bind(store);
+  let crash = true;
+  store.updateReportReply = (previous, next) => {
+    const changed = update(previous, next);
+    if (changed && crash && next.recipient === "conversation_seat_first") {
+      crash = false;
+      throw new Error("fixture crash after recipient commit");
+    }
+    return changed;
+  };
+  await expect(poll([reply()])).rejects.toThrow("fixture crash after recipient commit");
+  store.close();
+  store = new TelegramBotStore(path.join(directory, "bot.sqlite"));
+  service = createService();
+  beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture successor mandate", clientRequestId: "fixture-crash-rotation", mode: "spawn" });
+  completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "fixture-crash-rotation", conversationId: "conversation_seat_second", path: null });
+  recipient = "conversation_seat_second";
+  await poll([]);
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]!.conversationId).toBe(recipient);
+  expect(delivered[0]!.clientMessageId).toEndWith("_1");
+});
+
+test("a crash after the dispatch fence and before delivery can rotate when the original reservation is absent", async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const designate = (key: string, id: string) => {
+    beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture mandate", clientRequestId: key, mode: "spawn" });
+    completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: key, conversationId: id, path: null });
+  };
+  designate("fixture-dispatch-seat", "conversation_seat_first");
+  ports.seat = productionReportReplyPorts.seat;
+  const update = store.updateReportReply.bind(store);
+  let crash = true;
+  store.updateReportReply = (previous, next) => {
+    const changed = update(previous, next);
+    if (changed && crash && previous.recipient === next.recipient && next.recipient === "conversation_seat_first") {
+      crash = false;
+      throw new Error("fixture crash after dispatch fence");
+    }
+    return changed;
+  };
+  await expect(poll([reply()])).rejects.toThrow("fixture crash after dispatch fence");
+  expect(delivered).toHaveLength(0);
+  store.close();
+  store = new TelegramBotStore(path.join(directory, "bot.sqlite"));
+  service = createService();
+  beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture successor mandate", clientRequestId: "fixture-dispatch-rotation", mode: "spawn" });
+  completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "fixture-dispatch-rotation", conversationId: "conversation_seat_second", path: null });
+  recipient = "conversation_seat_second";
+  await poll([]);
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]!.conversationId).toBe(recipient);
+  expect(delivered[0]!.clientMessageId).toEndWith("_1");
+});
+
+test("a report reply still routes after bridge log trimming and send history pruning", async () => {
+  expect(store.reportRoute(botId, String(chat.id), 10)).toMatchObject({ reportId: report.id, project: report.project, seq: report.seq });
+  ports.reports = () => [];
+  store.retain([String(chat.id)], new Date(now.getTime() + 31 * 86_400_000));
+  store.close();
+  store = new TelegramBotStore(path.join(directory, "bot.sqlite"));
+  service = createService();
+  await poll([reply()]);
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]!.text).toEndWith("[bridge ref=7]");
+});
+
 test("replays cannot replace a pending directive's admitted text", async () => {
   ready = false;
   await poll([reply()]);

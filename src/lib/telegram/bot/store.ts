@@ -113,6 +113,18 @@ export interface ReportReplyRow {
   revision: number;
 }
 
+export interface ReportRouteRow {
+  reportId: string;
+  project: string;
+  seq: number;
+  originConversationId: string;
+  chatId: string;
+  topicId: number | null;
+  messageId: number;
+}
+
+export type ReportSendRoute = Omit<ReportRouteRow, "messageId"> & { botId: string };
+
 export type MessagePage = {
   messages: TelegramBotMessageView[];
   nextCursor: string | null;
@@ -292,6 +304,17 @@ export class TelegramBotStore {
         );
         CREATE INDEX IF NOT EXISTS report_replies_pending ON report_replies(key)
           WHERE json_extract(value_json, '$.state') = 'pending';
+        CREATE TABLE IF NOT EXISTS report_routes (
+          bot_id TEXT NOT NULL,
+          chat_id TEXT NOT NULL,
+          message_id INTEGER NOT NULL,
+          report_id TEXT NOT NULL,
+          project TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          origin_conversation_id TEXT NOT NULL,
+          topic_id INTEGER,
+          PRIMARY KEY (bot_id, chat_id, message_id)
+        );
       `);
       /* The name a posted document was shown under; stores from before
          documents gain the column empty. */
@@ -315,6 +338,14 @@ export class TelegramBotStore {
     `).all(chatId, `text:${conversationId}`, conversationId, prefix);
     return rows.some(row => (row.client_request_id === prefix || /^:r\d+$/.test(row.client_request_id.slice(prefix.length)))
       && (JSON.parse(row.message_ids) as number[]).includes(messageId));
+  }
+
+  reportRoute(botId: string, chatId: string, messageId: number): ReportRouteRow | null {
+    return this.db.query<ReportRouteRow, [string, string, number]>(`
+      SELECT report_id AS reportId, project, seq, origin_conversation_id AS originConversationId,
+        chat_id AS chatId, topic_id AS topicId, message_id AS messageId
+      FROM report_routes WHERE bot_id = ?1 AND chat_id = ?2 AND message_id = ?3
+    `).get(botId, chatId, messageId) ?? null;
   }
 
   admitReportReply(row: ReportReplyRow): void {
@@ -546,6 +577,8 @@ export class TelegramBotStore {
     this.db.query("UPDATE OR IGNORE messages SET chat_id = ?2 WHERE chat_id = ?1").run(fromChatId, toChatId);
     this.db.query("DELETE FROM messages WHERE chat_id = ?1").run(fromChatId);
     this.db.query("UPDATE sends SET chat_id = ?2 WHERE chat_id = ?1").run(fromChatId, toChatId);
+    this.db.query("UPDATE OR IGNORE report_routes SET chat_id = ?2 WHERE chat_id = ?1").run(fromChatId, toChatId);
+    this.db.query("DELETE FROM report_routes WHERE chat_id = ?1").run(fromChatId);
   }
 
   /** Keeps the newest {@link RETAIN_MESSAGES} of each chat and nothing older
@@ -700,6 +733,7 @@ export class TelegramBotStore {
     chatId: string;
     conversationId: string | null;
     sent: Array<{ messageId: number; date: number; text: string | null; replyToMessageId: number | null; topicId: number | null; kind?: "text" | "photo" | "document"; filename?: string }>;
+    reportRoute?: ReportSendRoute;
     now: Date;
   }): void {
     const at = input.now.toISOString();
@@ -717,6 +751,17 @@ export class TelegramBotStore {
       this.db.query(`
         UPDATE sends SET state = 'sent', chat_id = ?3, message_ids = ?4, parts = ?5, sent_at = ?6 WHERE caller_key = ?1 AND client_request_id = ?2
       `).run(input.callerKey, input.clientRequestId, input.chatId, JSON.stringify(input.sent.map((message) => message.messageId)), input.sent.length, at);
+      if (input.reportRoute) {
+        const insertRoute = this.db.query(`
+          INSERT OR IGNORE INTO report_routes
+            (bot_id, chat_id, message_id, report_id, project, seq, origin_conversation_id, topic_id)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        `);
+        for (const message of input.sent) {
+          insertRoute.run(input.reportRoute.botId, input.chatId, message.messageId, input.reportRoute.reportId,
+            input.reportRoute.project, input.reportRoute.seq, input.reportRoute.originConversationId, input.reportRoute.topicId);
+        }
+      }
     });
   }
 }
