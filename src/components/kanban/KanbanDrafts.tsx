@@ -35,8 +35,13 @@ export const KanbanDraftContext = createContext<KanbanDraftActions | null>(null)
 
 /** The drafts one card holds, each at reading width. */
 export function CardDrafts({ ids }: { ids: readonly string[] }) {
+  /* A card with no draft reads no context, so a files poll renders only the cards that hold one. */
+  return ids.length === 0 ? null : <DraftPanes ids={ids} />;
+}
+
+function DraftPanes({ ids }: { ids: readonly string[] }) {
   const actions = useContext(KanbanDraftContext);
-  if (!actions || ids.length === 0) return null;
+  if (!actions) return null;
   return (
     <div className="agent-drafts">
       {ids.map((id) => (

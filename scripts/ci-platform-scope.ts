@@ -147,17 +147,27 @@ export function changedInMergeCommit(root: string): string[] | null {
   return diff.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
+export function changedSinceBase(root: string, base: string): string[] | null {
+  const diff = spawnSync("git", ["diff", "--no-renames", "--name-only", "-z", `${base}...HEAD`], { cwd: root, encoding: "utf8" });
+  return diff.status === 0 ? diff.stdout.split("\0").filter(Boolean) : null;
+}
+
 function main(argv: readonly string[]): void {
+  let base: string | undefined;
   let workflow: string | null = null;
   const prefixes: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--workflow") workflow = argv[++index] ?? null;
+    if (argv[index] === "--base") {
+      base = argv[++index];
+      if (!base || base.startsWith("--")) throw new Error("--base needs a revision");
+    }
+    else if (argv[index] === "--workflow") workflow = argv[++index] ?? null;
     else if (argv[index] === "--prefix") prefixes.push(argv[++index] ?? "");
     else throw new Error(`unknown argument ${argv[index]}`);
   }
   if (!workflow) throw new Error("--workflow is required");
   const root = path.resolve(import.meta.dir, "..");
-  const scope = platformScope({ root, workflow, prefixes: prefixes.filter(Boolean), changed: changedInMergeCommit(root) });
+  const scope = platformScope({ root, workflow, prefixes: prefixes.filter(Boolean), changed: base ? changedSinceBase(root, base) : changedInMergeCommit(root) });
   console.log(`${scope.run ? "run" : "skip"}: ${scope.reason}`);
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `run=${scope.run}\n`);
 }

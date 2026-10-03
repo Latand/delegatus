@@ -37,6 +37,48 @@ function registryAt(name: string) {
 }
 const holders = (conversationId: string) => loadTasks().filter((candidate) => candidate.assignments.some((assignment) => assignment.conversationId === conversationId)).map((candidate) => candidate.id);
 
+test("a task-less pipeline reviewer joins its source's work at reservation", () => {
+  saveTasks([task("reviewed-work", "Keep this task title")]);
+  const registry = registryAt("pipeline-inheritance");
+  const owner = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, transport: "structured", clientAttemptId: "reviewed_owner", origin: { kind: "operator" }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Implement the work" }), taskIds: ["reviewed-work"] });
+  if (owner.kind !== "created") throw new Error("expected owner");
+  const reviewer = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured", clientAttemptId: "pipeline_review", role: "reviewer", parentConversationId: owner.receipt.conversationId,
+    origin: { kind: "container", container: "pipeline", containerId: "review-lane", creatorConversationId: null },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Review the work" }) });
+  if (reviewer.kind !== "created") throw new Error("expected reviewer");
+  expect(holders(reviewer.receipt.conversationId)).toEqual(["reviewed-work"]);
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.text).toBe("Keep this task title");
+});
+
+test("reviewers, fixers, merge helpers and maintenance join existing work; an unowned launch gets one placeholder", () => {
+  saveTasks([task("served-work", "An operator's work", [])]);
+  const registry = registryAt("service-membership");
+  const owner = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, transport: "structured", clientAttemptId: "service_owner", origin: { kind: "operator" },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Implement the work" }), taskIds: ["served-work"] });
+  if (owner.kind !== "created") throw new Error("expected owner");
+  for (const [name, role] of [["reviewer", "reviewer"], ["fixer", "builder"], ["merge-helper", "builder"], ["maintenance", "maintainer"]]) {
+    const request = { engine: "codex" as const, cwd: stateDir, transport: "structured" as const, clientAttemptId: `service_${name}`, role,
+      origin: { kind: "operator" as const }, parentConversationId: owner.receipt.conversationId,
+      ...(role === "reviewer" ? { reviewsConversationId: owner.receipt.conversationId } : {}),
+      launchProfile: emptyLaunchProfile({ cwd: stateDir, title: `Serve the work: ${name}` }) };
+    const reserved = registry.beginSpawnRequest(request);
+    if (reserved.kind !== "created") throw new Error("expected service reservation");
+    expect(holders(reserved.receipt.conversationId)).toEqual(["served-work"]);
+    expect(registry.beginSpawnRequest(request).kind).toBe("replay");
+    expect(loadTasks()).toHaveLength(1);
+    expect(loadTasks()[0]!.text).toBe("An operator's work");
+  }
+  const request = { engine: "claude" as const, cwd: stateDir, transport: "structured" as const, clientAttemptId: "unowned_work", origin: { kind: "operator" as const },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Work without an owner" }) };
+  const unowned = registry.beginSpawnRequest(request);
+  if (unowned.kind !== "created") throw new Error("expected unowned reservation");
+  expect(registry.beginSpawnRequest(request).kind).toBe("replay");
+  expect(loadTasks()).toHaveLength(2);
+  expect(holders(unowned.receipt.conversationId)).toHaveLength(1);
+  expect(loadTasks().find(t => t.id !== "served-work")!.origin?.refinement).toBe("pending");
+});
+
 test("a dedicated task launch joins exactly its task at the reservation; the replay and the resume successor stay there", () => {
   saveTasks([task("dedicated", "Dedicated task")]);
   const registry = registryAt("dedicated");
