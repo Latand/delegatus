@@ -70,7 +70,7 @@ test("a head crash is named and blocks without hiding results from other files",
 });
 test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", () => {
   const f = fixture('import { test } from "bun:test"; globalThis.sharedFixture = 1; test("first", () => {});');
-  const second = `import { expect, test } from "bun:test"; import { stateDir } from ${JSON.stringify(path.join(root, "src/lib/configDir.ts"))}; test("isolated", () => { expect(globalThis.sharedFixture).toBeUndefined(); for (const key of ["LLV_STATE_DIR", "HOME", "TMPDIR"]) expect(process.env[key]).toStartWith("/var/tmp/delegatus-test-comparison-"); expect(stateDir()).toBe(process.env.LLV_STATE_DIR); });`;
+  const second = `import { expect, test } from "bun:test"; import { stateDir } from ${JSON.stringify(path.join(root, "src/lib/configDir.ts"))}; test("isolated", () => { expect(globalThis.sharedFixture).toBeUndefined(); for (const key of ["LLV_STATE_DIR", "HOME", "TMPDIR"]) expect(process.env[key]).toStartWith(${JSON.stringify(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"))}); expect(stateDir()).toBe(process.env.LLV_STATE_DIR); });`;
   writeFileSync(path.join(f.dir, "second.test.ts"), second);
   const result = f.run(["./example.test.ts", "./second.test.ts"]);
   expect(result.introduced).toHaveLength(0);
@@ -165,4 +165,31 @@ test("shared cache pruning tolerates six simultaneous gate processes", async () 
   })));
   expect(results).toEqual([0, 0, 0, 0, 0, 0]);
   expect(readdirSync(cache).length).toBeLessThanOrEqual(32);
+});
+
+
+test("a changed dependency patch cannot contaminate or reuse the baseline", () => {
+  const f = fixture('import { test, expect } from "bun:test"; import value from "fixture-dependency"; test("dependency returns true", () => expect(value).toBe(true));');
+  const pack = path.join(f.dir, "pack", "package"); mkdirSync(pack, { recursive: true });
+  writeFileSync(path.join(pack, "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0", main: "index.js" }));
+  writeFileSync(path.join(pack, "index.js"), "module.exports = true;\n");
+  execFileSync("tar", ["-czf", path.join(f.dir, "dependency.tgz"), "-C", path.dirname(pack), "package"]);
+  writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ name: "fixture", dependencies: { "fixture-dependency": "file:./dependency.tgz" }, patchedDependencies: { "fixture-dependency@./dependency.tgz": "dependency.patch" } }));
+  const patch = (value: string) => `diff --git a/index.js b/index.js\n--- a/index.js\n+++ b/index.js\n@@ -1 +1 @@\n-module.exports = true;\n+module.exports = ${value};\n`;
+  writeFileSync(path.join(f.dir, "dependency.patch"), patch("Boolean(1)"));
+  const install = (...flags: string[]) => execFileSync(process.execPath, ["install", "--ignore-scripts", ...flags], { cwd: f.dir, env: f.env, stdio: "pipe" });
+  install();
+  f.git("add", "package.json", "bun.lock", "dependency.tgz", "dependency.patch"); f.git("commit", "-m", "patched baseline");
+  const base = f.git("rev-parse", "HEAD"), manifest = readFileSync(path.join(f.dir, "package.json"), "utf8"), lock = readFileSync(path.join(f.dir, "bun.lock"), "utf8");
+  const run = () => touchedTests(f.dir, base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
+  writeFileSync(path.join(f.dir, "dependency.patch"), patch("false")); install("--frozen-lockfile");
+  expect(readFileSync(path.join(f.dir, "package.json"), "utf8")).toBe(manifest); expect(readFileSync(path.join(f.dir, "bun.lock"), "utf8")).toBe(lock);
+  expect(run().introduced).toHaveLength(1);
+  writeFileSync(path.join(f.dir, "dependency.patch"), patch("Boolean(1)")); install("--frozen-lockfile");
+  expect(run().introduced).toHaveLength(0);
+  expect(readdirSync(f.cache).filter(file => file.endsWith(".json"))).toHaveLength(2);
+  writeFileSync(path.join(f.dir, "dependency.patch"), patch("false")); install("--frozen-lockfile");
+  f.logs.length = 0;
+  const warm = run(); expect(warm.introduced).toHaveLength(1); expect(warm.preexisting).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("baseline cache hit");
 });

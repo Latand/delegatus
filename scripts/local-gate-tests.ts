@@ -139,6 +139,22 @@ function validRun(value: unknown): value is TestRun {
   return Array.isArray(run.completed) && run.completed.every(file => typeof file === "string") && sites(run.failures) && sites(run.passed) && Number.isFinite(run.elapsedMs) && run.elapsedMs >= 0;
 }
 
+function dependencyGraph(root: string) {
+  const manifestFile = path.join(root, "package.json");
+  const manifest = existsSync(manifestFile) ? JSON.parse(readFileSync(manifestFile, "utf8")) : {};
+  const inputs = ["package.json", "bun.lock", ...Object.values(manifest.patchedDependencies ?? {}) as string[]].sort();
+  const fingerprint = inputs.map(file => {
+    if (typeof file !== "string" || path.isAbsolute(file) || path.relative(root, path.resolve(root, file)).startsWith("..")) throw new Error("dependency patch must be a repository-relative file");
+    const target = path.join(root, file);
+    return [file, existsSync(target) ? digest(readFileSync(target)) : "missing"];
+  });
+  // Local/workspace installs can contain links back into the candidate tree.
+  // Install these graphs in the baseline rather than borrowing those links.
+  const dependencies = [manifest.dependencies, manifest.devDependencies, manifest.optionalDependencies, manifest.peerDependencies];
+  const shareable = !manifest.workspaces && !dependencies.some(group => Object.values(group ?? {}).some(value => typeof value === "string" && /^(?:file|link|workspace):/.test(value)));
+  return { fingerprint, shareable };
+}
+
 export function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { cache?: string; env?: NodeJS.ProcessEnv; log?: (line: string) => void } = {}) {
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"));
   const log = options.log ?? console.log;
@@ -152,8 +168,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
     const baseFiles = new Set(git("ls-tree", "-r", "--name-only", "-z", base, "--", ...files).split("\0"));
     const oldFiles = files.filter(file => baseFiles.has(file));
-    const dependencyInputs = ["package.json", "bun.lock"];
-    const graph = dependencyInputs.map(file => existsSync(path.join(root, file)) ? digest(readFileSync(path.join(root, file))) : "missing");
+    const graph = dependencyGraph(root);
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
     const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
@@ -180,7 +195,8 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
         command(["git", "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", base], checkout, env);
         const remote = git("config", "--get", "remote.origin.url").trim();
         command(["git", "config", "remote.origin.url", remote], checkout, env);
-        const sameGraph = dependencyInputs.every((file, i) => (existsSync(path.join(checkout, file)) ? digest(readFileSync(path.join(checkout, file))) : "missing") === graph[i]);
+        const baseGraph = dependencyGraph(checkout);
+        const sameGraph = graph.shareable && baseGraph.shareable && JSON.stringify(baseGraph.fingerprint) === JSON.stringify(graph.fingerprint);
         if (sameGraph && existsSync(path.join(root, "node_modules"))) symlinkSync(path.join(root, "node_modules"), path.join(checkout, "node_modules"), "dir");
         else if (existsSync(path.join(checkout, "bun.lock"))) command([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], checkout, env);
         baseline = runFiles(checkout, oldFiles, sandbox, inherited, "baseline");
