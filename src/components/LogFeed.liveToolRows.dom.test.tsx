@@ -463,6 +463,82 @@ test("streaming markdown holds unfinished fences and tables until completion", (
   expect(host.querySelector('[data-feed-source-id="markdown-answer"]')).toBe(row);
 });
 
+test("an event-first Codex echo shows one reply through reconnect and its identified mirror", () => {
+  file.engine = "codex"; file.fmt = "codex";
+  try {
+    sessionState.session = { ...session, liveTurn: { turnId: "event-first", text: "Event-first reply", items: [{
+      itemId: "event-first-reply", text: "Event-first reply", phase: "awaiting-echo", startedAt: AT(0), completedAt: AT(1),
+    }] } };
+    const { host, paint } = render();
+    const original = host.querySelector("[data-live-turn]")!;
+    const event = JSON.stringify({ type: "event_msg", timestamp: AT(1),
+      payload: { type: "agent_message", message: "Event-first reply" } });
+    const copies = () => [...host.querySelectorAll('[data-live-turn], [data-feed-kind="prose"]')]
+      .filter(node => node.textContent?.includes("Event-first reply"));
+    tailState.lines = [event];
+    paint();
+    expect(copies()).toHaveLength(1);
+    expect(copies()[0] === original).toBe(true);
+    sessionState.session = { ...session, turn: "unknown", liveTurn: null };
+    paint();
+    expect(copies()).toHaveLength(1);
+    expect(copies()[0] === original).toBe(true);
+    tailState.lines = [event, JSON.stringify({ type: "response_item", timestamp: "2026-08-23T08:30:01.007Z", payload: {
+      type: "message", id: "event-first-reply", role: "assistant", content: [{ type: "output_text", text: "Event-first reply" }],
+    } })];
+    paint();
+    expect(copies()).toHaveLength(1);
+    expect(host.querySelector('[data-feed-source-id="event-first-reply"]') === original).toBe(true);
+  } finally { file.engine = "claude"; file.fmt = "claude"; }
+});
+
+test("a coalesced Codex echo keeps the adopted row when its timestamp updates", () => {
+  file.engine = "codex"; file.fmt = "codex";
+  try {
+    sessionState.session = { ...session, liveTurn: { turnId: "mirror", text: "Mirror reply", items: [{
+      itemId: "mirror-reply", text: "Mirror reply", phase: "awaiting-echo", startedAt: AT(0), completedAt: AT(1),
+    }] } };
+    const { host, paint } = render();
+    const original = host.querySelector("[data-live-turn]")!;
+    const response = JSON.stringify({ type: "response_item", timestamp: AT(1), payload: {
+      type: "message", id: "mirror-reply", role: "assistant", content: [{ type: "output_text", text: "Mirror reply" }],
+    } });
+    tailState.lines = [response];
+    paint();
+    expect(host.querySelector('[data-feed-source-id="mirror-reply"]') === original).toBe(true);
+    sessionState.session = { ...sessionState.session, liveTurn: null };
+    tailState.lines = [response, JSON.stringify({ type: "event_msg", timestamp: "2026-08-23T08:30:01.500Z",
+      payload: { type: "agent_message", message: "Mirror reply" } })];
+    paint();
+    expect(host.querySelectorAll('[data-feed-source-id="mirror-reply"]')).toHaveLength(1);
+    expect(host.querySelector('[data-feed-source-id="mirror-reply"]') === original).toBe(true);
+    expect(original.isConnected).toBe(true);
+  } finally { file.engine = "claude"; file.fmt = "claude"; }
+});
+
+test.each([1, 2, 3])("a completed reply keeps its node before a deputy started at second %s", (deputySecond) => {
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(0), message: { content: "Original request" } })];
+  sessionState.session = { ...session, liveTurn: { turnId: "before-deputy", text: "Earlier reply", items: [{
+    itemId: "earlier-reply", text: "Earlier reply", phase: "awaiting-echo", startedAt: AT(1), completedAt: AT(2),
+  }] } };
+  const { host, paint } = render([{ askId: "deputy", startedAt: AT(deputySecond), state: "ended" } as SeatDeputyView]);
+  const row = host.querySelector("[data-live-turn]")!;
+  const deputy = host.querySelector("[data-deputy-block]")!;
+  const precedesDeputy = () => Boolean(row.compareDocumentPosition(deputy) & dom.Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(precedesDeputy()).toBe(true);
+  expect(row.querySelector('[data-seat-speaker="resumes"]')).toBeNull();
+  sessionState.session = { ...session, turn: "unknown", liveTurn: null };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(precedesDeputy()).toBe(true);
+  tailState.lines = [...tailState.lines, JSON.stringify({ type: "assistant", uuid: "earlier-reply", timestamp: AT(2),
+    message: { content: [{ type: "text", text: "Earlier reply" }] } })];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="earlier-reply"]')).toBe(row);
+  expect(precedesDeputy()).toBe(true);
+  expect(row.querySelector('[data-seat-speaker="resumes"]')).toBeNull();
+});
+
 test.each([false, true])("pending replies retain the seat continuation after a deputy (phone=%s)", (mobile) => {
   phone = mobile;
   tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(0), message: { content: "Original request" } })];

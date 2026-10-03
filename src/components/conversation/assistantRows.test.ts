@@ -63,12 +63,31 @@ test("unclaimed old replies go before newer rows; ids distinguish identical answ
 });
 
 test("structured multi-row echoes claim all projections once with unique keys", () => {
-  const second = { ...echo, key: "second", item: { ...echo.item, text: "Second fragment" } } as FeedEntry;
+  const second = { ...echo, key: "second", anchorKey: "row:2:1", item: { ...echo.item, text: "Second fragment" } } as FeedEntry;
   const state = projectAssistantHandoff(null, live("awaiting-echo"), [echo, second], claims);
   const rendered = rows([echo, second], state);
   expect(state.pending).toEqual([]);
   expect(new Set(rendered.map(row => row.key)).size).toBe(2);
   expect(rendered.map(row => "text" in row.item ? row.item.text : "")).toEqual(["The answer", "Second fragment"]);
+  const upgraded = [echo, second].map((entry, index) => ({ ...entry, anchorKey: `row:3:${index}`,
+    item: { ...entry.item, ts: "2026-10-02T10:00:01.500Z" } }));
+  const rebound = projectAssistantHandoff(state, null, upgraded, claims);
+  expect(rows(upgraded, rebound).map(row => row.key)).toEqual(rendered.map(row => row.key));
+});
+
+test("Codex event-first suppression consumes one occurrence inside the mirror boundary", () => {
+  const event = { ...echo, key: "event", item: { ...echo.item, engine: "codex", sourceId: undefined } } as FeedEntry;
+  const repeated = { ...event, key: "second-event", anchorKey: "row:3:0" };
+  const identified = { ...event, key: "other-source", item: { ...event.item, sourceId: "other-answer" } } as FeedEntry;
+  const late = { ...event, key: "late", item: { ...event.item, ts: "2026-10-02T10:00:02.001Z" } } as FeedEntry;
+  const feed = [event, repeated, identified, late];
+  const state = projectAssistantHandoff(null, live("awaiting-echo"), feed, claims);
+  expect([...state.hiddenEchoes]).toEqual(["event"]);
+  expect(state.pending).toHaveLength(1);
+  expect(rows(feed, state).map(row => row.key)).toEqual(["assistant-pending:0", "second-event", "other-source", "late"]);
+  const claimed = projectAssistantHandoff(null, live("awaiting-echo"), feed, new Set(["answer"]));
+  expect(claimed.pending).toEqual([]);
+  expect(claimed.hiddenEchoes.size).toBe(0);
 });
 
 test("a missed completion after reconnect replaces an idless streaming prefix", () => {

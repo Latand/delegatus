@@ -3492,8 +3492,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           else if (facts?.closes) finishTurn(false);
         } else addRecord(null, "malformed_record", { value: obj });
       } catch (error) {
-        const recordType = redactSecrets(textPart(rec(obj).type)).slice(0, 120) || "unknown";
-        const message = redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 1000);
+        const recordType = redactTranscriptText(textPart(rec(obj).type)).slice(0, 120) || "unknown";
+        const message = redactTranscriptText(error instanceof Error ? error.message : String(error)).slice(0, 1000);
         const processingError = { recordType, line: curSrc + 1, message };
         // Do not call translation or tool-card code again in its failure path.
         // The raw fallback also stays readable outside the conversation surface.

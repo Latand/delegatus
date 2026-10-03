@@ -40,3 +40,19 @@ test("processing errors keep record attribution and a bounded diagnostic; malfor
   expect(items[1].item).toMatchObject({ kind: "record", recordType: "malformed_record" });
   expect(items.at(-1)?.item).toMatchObject({ kind: "prose", text: "Following answer" });
 });
+
+test.each([
+  "Authorization: Bearer fixture-credential-value",
+  '{"api_key":"fixture-credential-value"}',
+])("processing diagnostics redact credentials in exception messages (%s)", (message) => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new Window() });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: { documentElement: {
+    set lang(_value: string) { throw new Error(message); },
+  } } });
+  resetLocaleForTests();
+  const item = parse()[0].item;
+  expect(item.kind).toBe("raw");
+  if (item.kind !== "raw") throw new Error("expected processing diagnostic");
+  expect(item.processingError?.message).not.toContain("fixture-credential-value");
+  expect(item.text).not.toContain("fixture-credential-value");
+});

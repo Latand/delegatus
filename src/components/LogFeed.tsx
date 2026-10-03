@@ -1429,7 +1429,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       }), row => row.kind === "message"
         ? row.entry?.at ?? rowInstants.get(row.anchorKey ?? row.key) ?? null
         : row.kind === "delta" ? row.instant ?? null
-          : row.kind === "item" ? transcriptInstant(row.item) : null);
+          : row.kind === "item" ? transcriptInstant(row.item)
+            : row.kind === "deputy" ? Date.parse(row.deputy.startedAt) : null,
+      // A deputy starts after seat rows at the same instant (ghost-seat §6.1).
+      row => row.kind === "deputy");
       rows.splice(0, rows.length, ...withAnswers);
     }
     /* A block splits the seat's own answer, so the first seat row after one
