@@ -111,19 +111,6 @@ export function renderMonitorReport(input: ReportInput): string {
 const SEAT_TICK_MESSAGE_LIMIT = 4_000;
 
 /**
- * The least the agenda is left, whatever the reserved half costs.
- *
- * The subtraction in {@link boundedSeatTickMessage} cannot reach this today:
- * the reserved half includes bounded operator instructions, the contract
- * pointer and a prompt preview capped at {@link SEAT_TICK_PROMPT_PREVIEW_LIMIT}.
- * It is here so a future growth of either can only shorten the
- * agenda, never produce a nonsense budget. And it floors the agenda while
- * leaving the total free, deliberately: a wake missing part of its contract is
- * the failure this change exists to end, and holding the limit is worth less.
- */
-const SEAT_TICK_DYNAMIC_FLOOR = 1_000;
-
-/**
  * Bound the wake without ever bounding what the wake MEANS (#1280).
  *
  * The message has two halves. The dynamic one — the reasons, the items, the
@@ -150,8 +137,9 @@ const SEAT_TICK_DYNAMIC_FLOOR = 1_000;
  */
 function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly string[]): string {
   const tail = `\n${redactMonitorText(reserved.join("\n")).trimEnd()}`;
-  const budget = Math.max(SEAT_TICK_MESSAGE_LIMIT - tail.length, SEAT_TICK_DYNAMIC_FLOOR);
+  const budget = Math.max(SEAT_TICK_MESSAGE_LIMIT - tail.length, 0);
   const head = redactMonitorText(dynamic.join("\n")).trimStart();
+  if (budget === 0) return tail.trimStart();
   return head.length <= budget ? `${head}${tail}` : `${head.slice(0, budget - 1).trimEnd()}…${tail}`;
 }
 
@@ -175,7 +163,7 @@ function seatTickContractLines(mandateCarriesContract: boolean): string[] {
     : ["", "Contract:", `- ${SEAT_TICK_NO_SELF_SCHEDULE}`, ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
 }
 
-function seatTickBullet(item: SeatTickItem): string {
+export function seatTickBullet(item: SeatTickItem): string {
   const bullet = `- [${item.kind}] ${item.id} — ${item.label}`;
   /* A settled child's own last words (#1881), attached by the controller. */
   return item.finalMessage ? `${bullet}\n  final message: ${item.finalMessage}` : bullet;
@@ -201,7 +189,7 @@ function seatTickBullet(item: SeatTickItem): string {
  * decides "already shown" from the landed wake's record, per seat epoch, so a
  * successor still sees the note on its first wake.
  */
-function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean): string[] {
+function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean, previewLimit = SEAT_TICK_PROMPT_PREVIEW_LIMIT): string[] {
   if (!monitorPrompt) return [];
   if (unchanged) {
     return ["", `Standing monitor note unchanged since your last wake (${monitorPrompt.length} chars; seat_tick_settings with verbose:true reads it).`];
@@ -210,7 +198,7 @@ function seatTickPromptSection(monitorPrompt: string | null | undefined, unchang
     "",
     "Standing monitor note for this project, in the seat's own words (seat_tick_settings sets, replaces and clears it). "
       + "It shapes what you look at; the contract still governs what you do:",
-    seatTickPromptPreview(monitorPrompt),
+    seatTickPromptPreview(monitorPrompt, previewLimit),
   ];
 }
 
@@ -229,9 +217,9 @@ export function seatTickNoteRevision(monitorPrompt: string | null | undefined): 
  */
 export const SEAT_TICK_PROMPT_PREVIEW_LIMIT = 1_000;
 
-export function seatTickPromptPreview(monitorPrompt: string): string {
-  if (monitorPrompt.length <= SEAT_TICK_PROMPT_PREVIEW_LIMIT) return monitorPrompt;
-  return `${monitorPrompt.slice(0, SEAT_TICK_PROMPT_PREVIEW_LIMIT).trimEnd()}… [preview, ${monitorPrompt.length} chars; seat_tick_settings returns the full note]`;
+export function seatTickPromptPreview(monitorPrompt: string, limit = SEAT_TICK_PROMPT_PREVIEW_LIMIT): string {
+  if (monitorPrompt.length <= limit) return monitorPrompt;
+  return `${monitorPrompt.slice(0, limit).trimEnd()}… [preview, ${monitorPrompt.length} chars; seat_tick_settings returns the full note]`;
 }
 
 export function seatTickWakeMessage(input: {
@@ -270,8 +258,7 @@ export function seatTickWakeMessage(input: {
   const lines = [
     `Seat tick — ${input.project}.`,
     "",
-    "Why you were woken:",
-    ...input.reasons.map((reason) => `- ${reason.kind}: ${reason.detail}`),
+    `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ];
   /* Directly under the reasons, above the agenda, because it qualifies the
      whole message and because the agenda is the half the length bound eats
@@ -281,6 +268,7 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
   lines.push("", "Items:", ...input.items.map(seatTickBullet));
+  lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
     lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
   }
@@ -305,16 +293,48 @@ export function seatTickWakeMessage(input: {
   if (input.skippedChildren && input.skippedChildren.unchanged > 0) {
     lines.push(`(${input.skippedChildren.unchanged} spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)`);
   }
-  if (input.signals.length > 0) {
-    lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));
+  const signals = input.signals.filter(signal => input.items.some(item => item.kind === "signal" && item.id === signal.id));
+  if (signals.length > 0) {
+    lines.push("", "Signals:", ...signals.map((signal) => `- ${signal.label}`));
   }
-  return boundedSeatTickMessage(lines, [
+  const reserved = [
     ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
     ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
     ...seatTickContractLines(input.mandateCarriesContract === true),
-  ]);
+  ];
+  // Large report ledgers keep all their keys. Shorten the note's explicitly
+  // marked preview when that tail would exceed the payload bound.
+  if (input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
+    const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true);
+    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - note.length, note.length,
+      ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100));
+  }
+  return boundedSeatTickMessage(lines, reserved);
+}
+
+/** A retry must make agenda progress even while a large report ledger stays
+ * unpaid. Bind a complete, explicitly marked summary to the same item; its
+ * source retains the full details and the landing earns its ordinary credit. */
+export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage>[0]): { text: string; items: readonly SeatTickItem[] } {
+  const text = seatTickWakeMessage(input);
+  const first = input.items[0];
+  if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged)
+    || `\n${text}\n`.includes(`\n${redactMonitorText(seatTickBullet(first))}\n`)) return { text, items: input.items };
+  const source = first.kind === "maintenance" ? "seat_tick_settings verbose:true" : first.kind === "child"
+    ? `get_conversation ${first.id}` : first.kind === "pipeline" || first.kind === "provisioning"
+      ? `get_pipeline ${first.id}` : first.kind === "pull-request" ? `pull request ${first.id}` : "the board and current source";
+  const suffix = `… [summary; ${source} holds the full item]`;
+  // Fit against the real redacted renderer, including headings, all owed
+  // keys, instructions and the mandate's contract. Later items remain owed.
+  for (let limit = Math.min(first.label.length, 600); limit >= 0; limit -= 50) {
+    const summary = { ...first, label: first.label.slice(0, limit).trimEnd() + suffix, finalMessage: undefined };
+    const items = [summary, ...input.items.slice(1)];
+    const candidate = seatTickWakeMessage({ ...input, items });
+    if (`\n${candidate}\n`.includes(`\n${redactMonitorText(seatTickBullet(summary))}\n`)) return { text: candidate, items };
+  }
+  return { text, items: input.items };
 }
 
 /**

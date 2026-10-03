@@ -70,6 +70,19 @@ test("one project's write leaves the others' rows alone", () => {
   expect(projects.viewer!.eventsThrough).toBe(41);
 });
 
+test("frozen acknowledgment proofs survive legacy migration and reopening", () => {
+  const file = path.join(SANDBOX, "wake-proof-migration.json");
+  const acknowledgmentLines = [{ key: "maintenance:run-one", line: "- [maintenance] card-one — finished" }];
+  const itemLines = [{ version: "lane@one", line: "- [pipeline] lane — completed" }];
+  const outstandingWake = { ...row.outstandingWake, text: "frozen delivery",
+    commit: { ...row.outstandingWake.commit, acknowledgmentLines, itemLines, itemsShown: ["lane@one"] },
+  };
+  fs.writeFileSync(file, JSON.stringify({ version: 2, projects: { viewer: { ...row, outstandingWake } } }));
+  expect(readSeatTickState("viewer", file).outstandingWake).toMatchObject(outstandingWake);
+  writeSeatTickState("other", emptySeatTickState(), file);
+  expect(readSeatTickState("viewer", file).outstandingWake).toMatchObject(outstandingWake);
+});
+
 test("a missing, unreadable or malformed file reads as an empty row rather than throwing", () => {
   expect(readSeatTickState("viewer", path.join(SANDBOX, "absent.json"))).toMatchObject(emptySeatTickState());
   const broken = path.join(SANDBOX, "broken.json");
