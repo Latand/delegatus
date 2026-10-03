@@ -6777,6 +6777,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && ((operation.passedStage === true && awaitingPassedPublication(pipeline)) || passedStagePublicationPark(pipeline, passed));
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
+          && operation.epoch === pipeline.delivery?.epoch
+          && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
             || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
         if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
@@ -6791,6 +6793,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         // A quiescent interrupted writer that did not land can safely reserve
         // publication again. Its passed stage and accepted revision stay put.
         if (operation?.state === "settled" && operation.result?.ok === false
+          && operation.sha === pipeline.lastPassedCommit && operation.epoch === pipeline.delivery?.epoch
+          && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && (operation.result.outcome === "not-landed" || operation.result.error === "interrupted publication did not leave its accepted head on the remote")
           && pipeline.state === "running") {
           delete pipeline.delivery!.operation;
