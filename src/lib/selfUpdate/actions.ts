@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
 
@@ -12,9 +13,11 @@ export function userUnit(cgroup: string): string | null {
   return match?.[1] ?? null;
 }
 function read(file: string): string { try { return readFileSync(file, "utf8"); } catch { return ""; } }
-function ready(pointer: string): boolean {
+function ready(pointer: string, root: string): boolean {
   try {
     const value = JSON.parse(read(pointer));
+    const release = new ReleasePointer(pointer, root).current();
+    if (release.sha !== value.sha || release.dir !== value.dir) return false;
     return read(join(value.dir, "bin", "launcher-relaunch.mjs")).includes("delegatus-launcher-relaunch-v1");
   } catch { return false; }
 }
@@ -26,7 +29,7 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string): boolean; argv?(pid: number): string[] } = {
+export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean; argv?(pid: number): string[] } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): InstallAction | null {
@@ -43,7 +46,7 @@ export function installAction(decision: ModeDecision, ports: { cgroup(pid: numbe
   if (decision.record?.port && !args.some(arg => ["--port", "-p"].includes(arg) || arg.startsWith("--port="))) args.push("--port", String(decision.record.port));
   const command = [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"].map(quote).join(" ");
   if (decision.record) {
-    if (!ports.ready(decision.record.releasePointer)) return { id: "update-first", button: true };
+    if (!ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
     const unit = userUnit(ports.cgroup(decision.record.launcher.pid));
     return unit ? { id: "restart-service", button: true, unit }
       : { id: "restart-terminal", button: false, command };

@@ -13,6 +13,7 @@ import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentSt
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { installAction, runInstallAction } from "./actions";
 import { initialAuto, writeAuto } from "./auto";
 import type { GreenReader, GreenVerdict } from "./green";
 import { buildEnv } from "./env";
@@ -596,6 +597,70 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect((await postUpdate(post("/update", { key: "retry-rollback", retry: true }))).status).toBe(202);
     await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
     expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ role: "relaunch", target: tipSha });
+  });
+
+  test("cold ready checkpoint resumes one launcher request", async () => {
+    const h = harness(); const r = JSON.parse(readFileSync(h.recordFile, "utf8")); r.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(r));
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    await postUpdate(post("/update", { key: "before-cold" }));
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    h.service.saveNow();
+    const file = join(h.deps.dir, "apply.json"); const intent = JSON.parse(readFileSync(file, "utf8"));
+    writeFileSync(file, JSON.stringify({ ...intent, state: "ready" })); rmSync(r.requestFile);
+    h.service.stop(); setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
+    expect((await snapshot()).busy).toBe("update");
+    expect(JSON.parse(readFileSync(r.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch", target: tipSha });
+  });
+
+  test("a dialog apply admitted during exact green lookup leaves no orphan receipt", async () => {
+    const h = harness({ holdBuild: true }); const r = JSON.parse(readFileSync(h.recordFile, "utf8")); r.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(r));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    const exact = deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "seat-concurrent" }));
+    await reading;
+    expect((await postUpdate(post("/update", { key: "dialog-concurrent" }))).status).toBe(202);
+    releaseGreen({ state: "green" });
+    expect((await exact).status).toBe(409);
+    const ledgerFile = join(h.deps.dir, "deployments.json");
+    expect(existsSync(ledgerFile) ? JSON.parse(readFileSync(ledgerFile, "utf8")) : []).toEqual([]);
+    h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+  });
+
+  test.each(["accepted", "refused"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    const releaseDir = join(h.deps.dir, "built-release");
+    await git(checkout, "fetch", "origin");
+    const checkoutResult = await runGit(["worktree", "add", "--detach", releaseDir, tipSha], checkout);
+    if (checkoutResult.code !== 0) throw new Error(checkoutResult.stderr);
+    mkdirSync(join(releaseDir, ".next")); writeFileSync(join(releaseDir, ".next", "BUILD_ID"), "fixture");
+    mkdirSync(join(releaseDir, "bin")); writeFileSync(join(releaseDir, "bin", "launcher-relaunch.mjs"), "delegatus-launcher-relaunch-v1");
+    const pointer = JSON.stringify({ sha: tipSha, dir: releaseDir, checkoutHead: firstSha }); writeFileSync(record.releasePointer, pointer);
+    const calls: string[][] = [];
+    h.deps.install = {
+      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service", ready: () => true }),
+      run: action => { if (outcome === "refused") throw new Error("manager unavailable"); runInstallAction(action, args => calls.push(args)); }, entry: () => join(checkout, "bin", "cli.mjs"),
+    };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    expect((await snapshot()).action?.id).toBe("restart-service");
+    await until(next => next.check.state !== "checking");
+    const result = await h.service.performInstallAction();
+    if (outcome === "refused") {
+      expect(result).toMatchObject({ ok: false, status: 503 });
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed" });
+      expect(existsSync(record.requestFile.replace(/^(.+\/)request/, "$1trial"))).toBe(false);
+      expect(readFileSync(record.releasePointer, "utf8")).toBe(pointer);
+      return;
+    }
+    expect(result).toEqual({ ok: true });
+    expect(calls[0]?.slice(-4)).toEqual(["systemctl", "--user", "restart", "delegatus.service"]);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", target: tipSha, rollbackPointer: pointer, externalRestart: true });
+    expect(existsSync(record.requestFile)).toBe(false);
   });
 
   test("a legacy terminal deploy returns the dialog prerequisite and sends no restart", async () => {

@@ -29,7 +29,7 @@ import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeployment
 
 import { applyCheck, initialCheck, type CheckSlice } from "./checkState";
 import { CheckError, targetOnCurrentBranch, type CheckInput, type CheckOutcome } from "./git";
-import { type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
+import { launcherControlFile, type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
 import {
   DeploymentBusyError,
   managedActive,
@@ -59,6 +59,7 @@ import {
   stoppedProcess,
   UNKNOWN_REVISION,
   type Busy,
+  type InstallAction,
   type CheckoutStepName,
   type ProcessStatus,
   type ProcessView,
@@ -86,6 +87,7 @@ export interface ServiceDeps {
   pollMinutes: number;
   bun: string;
   mode(): Promise<ModeDecision>;
+  install?: { action(decision: ModeDecision): InstallAction | null; run(action: InstallAction): void; entry(record: LauncherRecord): string | null };
   check(input: CheckInput): Promise<CheckOutcome>;
   describe(repo: string, revision: string): Promise<Revision>;
   createRunner(config: RunnerConfig, publish: (release: Release) => void, onChange: () => void): RunnerPort;
@@ -157,6 +159,7 @@ class Changes {
 export class SelfUpdateService {
   readonly changes = new Changes();
   private readonly apply: ApplyController;
+  private recoverReadyApply: boolean;
   private deploying: Promise<unknown> | null = null;
   private slice: CheckSlice = initialCheck();
   private savedUpdate: UpdateState | null = null;
@@ -182,6 +185,7 @@ export class SelfUpdateService {
 
   constructor(private readonly deps: ServiceDeps) {
     this.apply = new ApplyController(deps.dir);
+    this.recoverReadyApply = this.apply.current?.state === "ready";
     this.auto = readAuto(join(deps.dir, "auto.json"));
     this.greenReader = deps.green ?? new GreenReader();
     const persisted = this.readPersisted();
@@ -379,11 +383,22 @@ export class SelfUpdateService {
     finally { this.autoRunning = false; }
   }
 
+  private finishFailedApply(): void {
+    const intent = this.apply.current;
+    if (!intent || intent.trigger !== "auto" || intent.state !== "failed") return;
+    if (!intent.admissionRefused) this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
+    this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, quietSince: null, lastBlockers: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
+    this.saveAuto(); this.endDrain();
+    if (intent.admissionRefused && this.auto.enabled) void this.check();
+  }
+
   private async runAutoTick(): Promise<void> {
     if (this.apply.current?.state === "switching") {
       await this.snapshot();
       if (this.apply.current?.state === "switching") return;
     }
+    if (this.apply.current?.state === "failed" && this.apply.current.trigger === "auto" && this.auto.drain?.admitted
+      && this.auto.drain.target.sha === this.apply.current.target && !this.auto.pending && !this.auto.managedPending && !this.auto.rollback) this.finishFailedApply();
     // Recover a switch-off persisted before its lease cleanup during a crash.
     if (!this.auto.enabled && !this.hasAutoCustody()) this.endDrain();
     if (!this.auto.enabled && !this.hasAutoCustody()) return;
@@ -544,8 +559,7 @@ export class SelfUpdateService {
       this.beginAutoCustody(target);
       this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
       if (record.launcher.relaunch === 1) {
-        this.apply.begin(record, target.sha, "auto");
-        this.apply.patch({ rollbackPointer });
+        this.apply.begin(record, target.sha, "auto", undefined, { rollbackPointer, state: "ready", autoGateId: gateId });
         this.apply.send(record, gateId);
         requested = true;
         this.changes.emit();
@@ -1020,7 +1034,7 @@ export class SelfUpdateService {
     }
     if (value.supervision === "adopted" && value.record) {
       const identity = readStartIdentity(this.deps.web.pid);
-      if (identity) writeAtomic(value.record.requestFile.replace(/request-([^/]+)\.json$/, "adopt-$1.json"),
+      if (identity) writeAtomic(launcherControlFile(value.record.requestFile, "adopt"),
         { pid: this.deps.web.pid, startIdentity: identity, port: value.record.port, socket: value.record.socket });
     }
     /* A host that does not answer is a moment, never a fact about the
@@ -1205,6 +1219,7 @@ export class SelfUpdateService {
   }
 
   private failApply(error: unknown): void {
+    if (this.apply.current?.state !== "switching") this.apply.restoreUntaken();
     if (this.apply.current) releaseDrain(this.drainFile, this.apply.current.requestId);
     this.apply.patch({ state: "failed", detail: error instanceof Error ? error.message : String(error) });
     this.changes.emit();
@@ -1229,11 +1244,11 @@ export class SelfUpdateService {
         if (previousRoot) previousEntry = join(previousRoot, "bin", "cli.mjs");
       }
       if (!previousEntry || !this.deps.processAlive(current.record.launcher.pid, current.record.launcher.startIdentity!)) throw new Error("The launcher identity changed");
-      writeAtomic(current.record.requestFile.replace(/request-([^/]+)\.json$/, "trial-$1.json"), {
+      writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
       });
       this.apply.patch({ externalRestart: true });
-      if (installAction(current)?.id === "restart-service") {
+      if (this.actionFor(current)?.id === "restart-service") {
         const result = await this.performInstallAction();
         if (!result.ok) throw new Error(result.error);
       }
@@ -1242,24 +1257,52 @@ export class SelfUpdateService {
     this.changes.emit();
   }
 
+  private actionFor(decision: ModeDecision): InstallAction | null {
+    return this.deps.install ? this.deps.install.action(decision) : installAction(decision);
+  }
+
   async performInstallAction(): Promise<ActionResult> {
     const decision = await this.decide();
-    const action = installAction(decision);
+    const action = this.actionFor(decision);
     if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
     const record = decision.record;
     if (record && action.id === "restart-service") {
-      const intent = this.apply.current;
-      if (!intent || intent.state !== "ready") return refuse(409, "cannot-restart", "Build the launcher upgrade first");
-      const argv = readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0");
-      const previousEntry = argv.find(arg => arg.endsWith("/bin/cli.mjs"));
+      let intent = this.apply.current;
+      if (!intent || ["done", "failed"].includes(intent.state)) {
+        const release = new ReleasePointer(record.releasePointer, record.checkout ?? packageRoot(record)).current();
+        if (!/^[a-f0-9]{40}$/.test(release.sha)) return refuse(409, "cannot-restart", "Build the launcher upgrade first");
+        if (githubRepositoryOfRemote(this.deps.remote)) {
+          const green = await this.greenReader.read(this.deps.remote, this.deps.branch, release.sha, record.checkout ?? await this.deps.prepareCheckRepo());
+          if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+        }
+        if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
+        this.apply.begin(record, release.sha, "operator"); this.apply.patch({ state: "ready", externalRestart: true });
+        const runner = this.runnerFor(record);
+        runner.restore({ ...idleUpdate(CHECKOUT_STEPS), state: "done", target: release.sha, targetShort: release.sha.slice(0, 7), releaseDir: release.dir,
+          startedAt: this.apply.current!.startedAt, finishedAt: new Date(this.deps.now()).toISOString(), steps: idleUpdate(CHECKOUT_STEPS).steps.map(step => ({ ...step, state: "done" })) });
+        this.saveNow(); intent = this.apply.current;
+      }
+      if (!intent || intent.state !== "ready") return refuse(409, "cannot-restart", "A launcher apply is already active");
+      const previousEntry = this.deps.install ? this.deps.install.entry(record)
+        : readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs"));
       if (!previousEntry || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity!)) return refuse(409, "cannot-restart", "The launcher identity changed");
-      writeAtomic(record.requestFile.replace(/request-([^/]+)\.json$/, "trial-$1.json"), {
+      writeAtomic(launcherControlFile(record.requestFile, "trial"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
       });
       writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
       this.apply.patch({ state: "switching", externalRestart: true, switchedAt: new Date(this.deps.now()).toISOString() });
     }
-    try { runInstallAction(action); } catch (error) { this.failApply(error); return refuse(503, "cannot-restart", "The user service manager did not accept the action"); }
+    try { if (this.deps.install) this.deps.install.run(action); else runInstallAction(action); } catch (error) {
+      if (record && action.id === "restart-service") {
+        this.apply.restoreUntaken(record);
+        const trialFile = launcherControlFile(record.requestFile, "trial");
+        try {
+          if (JSON.parse(readFileSync(trialFile, "utf8")).requestId === this.apply.current?.requestId) rmSync(trialFile);
+        } catch { /* A handoff that was never accepted may have no trial file. */ }
+        this.failApply(error);
+      }
+      return refuse(503, "cannot-restart", "The user service manager did not accept the action");
+    }
     return { ok: true };
   }
 
@@ -1277,7 +1320,7 @@ export class SelfUpdateService {
       }
       const decision = await this.decide();
       const record = decision.record;
-      const action = installAction(decision);
+      const action = this.actionFor(decision);
       if (!record || (!record.launcher.relaunch && action?.id !== "restart-service" && !(action?.id === "update-first" && userUnit(readFileSync(`/proc/${record.launcher.pid}/cgroup`, "utf8")))))
         return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
       const snapshot = await this.snapshot();
@@ -1299,12 +1342,22 @@ export class SelfUpdateService {
       }
       const green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, record.checkout ?? await this.deps.prepareCheckRepo());
       if (green.state !== "green") throw new Error(`The requested revision is not green (${green.state})`);
+      const current = await this.decide();
+      if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
+      const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
+      if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state) || admitted)
+        return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
       const deploymentId = `checkout-${randomUUID()}`;
       const at = new Date(this.deps.now()).toISOString();
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
         phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
         health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
-      this.startCheckout(record, revision, "seat", deploymentId);
+      try { this.startCheckout(record, revision, "seat", deploymentId); }
+      catch (error) {
+        const row = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === deploymentId)!;
+        saveCheckoutDeployment(this.deps.dir, { ...row, phase: "failed", terminal: true, error: error instanceof Error ? error.message : String(error), updatedAt: new Date(this.deps.now()).toISOString(), revisionNumber: row.revisionNumber + 1 });
+        throw error;
+      }
       return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
     })();
     this.deploying = run;
@@ -1439,7 +1492,7 @@ export class SelfUpdateService {
     const decision = await this.decide();
     const now = this.deps.now();
     const base = {
-      action: installAction(decision),
+      action: this.actionFor(decision),
       mode: decision.mode,
       unsupportedReason: decision.reason,
       available: this.slice.available,
@@ -1478,6 +1531,20 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
+    if (this.recoverReadyApply) {
+      this.recoverReadyApply = false;
+      const intent = this.apply.current;
+      if (intent?.state === "ready" && record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity
+        && (!intent.externalRestart || installAction({ mode: record.checkout ? "checkout" : "package", record, reason: null })?.id === "restart-service")) {
+        try {
+          if (intent.trigger === "auto") {
+            if (!intent.autoGateId || activeRestartGate(restartGateFile(record.requestFile), this.deps.now()) !== intent.autoGateId) {
+              this.apply.restoreUntaken(record); this.apply.patch({ state: "failed", admissionRefused: true, detail: "The automatic admission expired during recovery" });
+            } else this.apply.send(record, intent.autoGateId);
+          } else await this.applyBuilt();
+        } catch (error) { this.failApply(error); }
+      }
+    }
     let installed: Revision;
     if (record.checkout) {
       const pointer = new ReleasePointer(record.releasePointer, record.checkout).current();
@@ -1497,10 +1564,7 @@ export class SelfUpdateService {
       const intent = this.apply.current!;
       appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
         outcome: intent.rolledBack ? "fell-back" : settled, detail: intent.detail });
-      if (intent.trigger === "auto" && settled === "failed") {
-        if (!intent.admissionRefused) this.auto = { ...this.auto, enabled: false, off: { at: new Date(now).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
-        this.saveAuto(); this.endDrain();
-      }
+      if (intent.trigger === "auto" && settled === "failed") this.finishFailedApply();
     }
     const at = new Date(now).toISOString();
 

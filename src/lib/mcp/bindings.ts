@@ -497,6 +497,14 @@ async function postViewerControl(
        the guidance that repeating the instruction may deliver it twice.
        Flattening those into a message is what left an ambiguous legacy send
        with nothing to ask about and no warning against sending it again. */
+    if (pathname === "/api/runtime/deployments" && result.code === "self-update-action-required" && objectRecord(result.action)) {
+      const action = result.action;
+      if (["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments"].includes(String(action.id)) && typeof action.button === "boolean") {
+        throw new McpToolRefusal(message, { code: result.code, status: response.status, action: {
+          id: action.id, button: action.button, ...(typeof action.unit === "string" ? { unit: action.unit } : {}), ...(typeof action.command === "string" ? { command: action.command } : {}),
+        } });
+      }
+    }
     const operationId = text(result.operationId);
     if (operationId) {
       throw new McpToolRefusal(message, {

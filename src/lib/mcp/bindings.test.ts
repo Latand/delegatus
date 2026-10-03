@@ -4240,7 +4240,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
   const calls: unknown[] = [];
   const reviewContinuation = { clientRequestId: "continue-1", expectedRevision: "a".repeat(64), stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, reviewContinuation, replayed: false };
@@ -4263,7 +4263,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
 
 test("continue-review from a conversation that did not create the pipeline is refused before its receipt is spent (#1938)", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
     patchPipeline: async () => { throw new Error("must not be reached"); },
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_other", role: "orchestrator" }),
   } as never);
@@ -4277,7 +4277,7 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
   const calls: unknown[] = [];
   const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
@@ -4418,4 +4418,20 @@ test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries
   const spawn = viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_fixture_caller", role: "builder" }) } as never).spawn_agent;
   await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
   expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
+});
+
+test("checkout deploy prerequisite survives the production MCP control response", async () => {
+  const originalFetch = globalThis.fetch;
+  const action = { id: "restart-terminal", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" };
+  globalThis.fetch = (async () => Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+  try {
+    const bindings = viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
+      callerProject: () => "proj-a", viewerProjects: () => ["proj-a"],
+      authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
+    } as never);
+    const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
+    expect(error).toBeInstanceOf(McpToolRefusal);
+    expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
+  } finally { globalThis.fetch = originalFetch; }
 });

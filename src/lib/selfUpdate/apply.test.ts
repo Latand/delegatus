@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ApplyController } from "./apply";
 import type { LauncherRecord } from "./launcher";
@@ -52,4 +52,17 @@ test("a launcher record cannot settle a release when host health failed", () => 
   const next = { ...r, launcher: { ...r.launcher, state: "healthy", requestId: c.current!.requestId } };
   expect(c.observe(next, false)).toBeNull();
   expect(c.current?.state).toBe("switching");
+});
+
+test("request publication failure restores the previous pointer before Retry captures it", () => {
+  const dir = mkdtempSync(join(root, "publication-")); const r = record(dir); const c = new ApplyController(dir);
+  const old = JSON.stringify({ sha: "b".repeat(40) }) + "\n"; writeFileSync(r.releasePointer, old);
+  c.begin(r, "a".repeat(40), "operator");
+  writeFileSync(r.releasePointer, JSON.stringify({ sha: "a".repeat(40) }));
+  mkdirSync(`${r.requestFile}.${process.pid}.tmp`);
+  expect(() => c.send(r)).toThrow();
+  expect(c.current?.state).toBe("failed");
+  expect(readFileSync(r.releasePointer, "utf8")).toBe(old);
+  const recovered = new ApplyController(dir); recovered.begin(r, "a".repeat(40), "operator");
+  expect(recovered.current?.rollbackPointer).toBe(old);
 });

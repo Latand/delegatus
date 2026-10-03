@@ -1,0 +1,150 @@
+{
+  "commit": "354cd2d1adb44d51a9056479540591708f2f3107",
+  "frames": {
+    "1440-en-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 349,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-action-installation": {
+      "overflow": 0,
+      "text": "Restart the launcher to enable one-click updates. Your session reconnects when the service returns.Restart launcher",
+      "action": true
+    },
+    "1440-en-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-switch-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbUpdating… step 6 of 6Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 0.0 s",
+      "action": false
+    },
+    "1440-uk-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 349,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-action-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть лаунчер, щоб увімкнути оновлення одним натисканням. Сесія перепідключиться після запуску сервісу.Перезапустити лаунчер",
+      "action": true
+    },
+    "1440-uk-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-switch-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbОновлюю… крок 6 з 6Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 0.0 с",
+      "action": false
+    },
+    "390-en-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 389,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-action-installation": {
+      "overflow": 0,
+      "text": "Restart the launcher to enable one-click updates. Your session reconnects when the service returns.Restart launcher",
+      "action": true
+    },
+    "390-en-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-switch-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbUpdating… step 6 of 6Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 0.0 s",
+      "action": false
+    },
+    "390-uk-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 425,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-action-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть лаунчер, щоб увімкнути оновлення одним натисканням. Сесія перепідключиться після запуску сервісу.Перезапустити лаунчер",
+      "action": true
+    },
+    "390-uk-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-switch-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbОновлюю… крок 6 з 6Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 0.0 с",
+      "action": false
+    }
+  },
+  "failures": []
+}
