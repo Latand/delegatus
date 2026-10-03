@@ -7,6 +7,16 @@ import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type StageBranchProtection = { branch: string; head: string; error: string | null };
 
+/** Other lanes can acquire branch claims while this lane is outside its lease.
+    Ignore their turn progress, but fence every change to repository/branch authority. */
+export function stageBranchOwnershipFence(pipelines: readonly Pipeline[], ownerId: string): string {
+  return JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
+    pipeline.id, pipeline.repoDir, pipeline.worktreeDir, pipeline.branch,
+    pipeline.delivery?.target, pipeline.delivery?.active, pipeline.delivery?.ownerId,
+    pipeline.delivery?.epoch, pipeline.delivery?.publish,
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+}
+
 /** Forge reads run before the controller mutation. Pin the observation to the
     local branch/head so a changed checkout cannot reuse its protection check. */
 export async function observeStageBranchProtection(pipeline: Pipeline, exec: ExecPort, remoteExec: ProvisionExecPort): Promise<StageBranchProtection | null> {
@@ -52,6 +62,14 @@ export async function commitAndAdoptStageBranch(
   protection: StageBranchProtection | null | undefined,
   receiptFile?: string,
 ): Promise<PipelineGitResult> {
+  const ownership = stageBranchOwnershipFence(pipelines(), pipeline.id);
+  const execute = exec;
+  exec = (command, args, cwd, env, options) => {
+    if (stageBranchOwnershipFence(pipelines(), pipeline.id) !== ownership) {
+      return { code: null, stdout: "", stderr: "pipeline branch ownership changed during stage adoption" };
+    }
+    return execute(command, args, cwd, env, options);
+  };
   const cwd = pipeline.worktreeDir;
   const branch = (await exec("git", ["branch", "--show-current"], cwd));
   if (branch.code !== 0) return { ok: false, error: `checking the stage branch: ${branch.stderr.trim()}` };

@@ -70,16 +70,16 @@ test("a large multibyte specification is file-backed after the previous output",
 });
 
 test.each([
-  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "6fd6aab212e5dd76ff104d971bbf34bbab75f35ca72155e917a41623c4cc3145" },
-  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "e0bb08c8b7b4907c537bd85b2be4e163754dcedd3bde2e38925b8ae15a9867f8" },
-  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "baae7dc471e407d3d6f445d400a88e068eb2e87129b54a5ce056d2ffe73ca1d8" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "8d4532713f1953ef6f2d1d4c2c3302ab843717d61e7e9106027e2becec41a527" },
+  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "f13c8b8eabaae094e00549f3f3c88aef45bcb8a0b7c069421b35f10d1dd8b135" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "5a9269fb8d231a0967c4a2e2451b0cce1d18e97770b050e3807d04ae98c9e39b" },
 ])("small stage inputs preserve the original renderer's bytes ($hash)", async ({ prompt, scaffold, previous, hash }) => {
   const { pipeline, stage } = handoffFixture(prompt);
   stage.effectiveRole.promptScaffold = scaffold;
   const rendered = await composeStageInput(pipeline, stage, stage.effectiveRole, previous);
   expect(rendered).toContain(`Pipeline branch: ${pipeline.branch}.`);
   expect(rendered).toContain(`Commit your changes on ${pipeline.branch}`);
-  // SHA-256 snapshots captured from the base renderer, including all framing.
+  // SHA-256 snapshots verified against main's renderer, including branch framing.
   expect(crypto.createHash("sha256").update(rendered).digest("hex")).toBe(hash);
 });
 

@@ -96,7 +96,7 @@ import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntim
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
-import { commitAndAdoptStageBranch, observeStageBranchProtection, type StageBranchProtection } from "./stageBranch";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipFence, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
@@ -6580,8 +6580,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     if (preview.cursor?.state !== "committing" && !approved) continue;
     let fingerprint = JSON.stringify(preview);
     const flowFingerprint = JSON.stringify(flow);
+    const ownershipFence = stageBranchOwnershipFence(loadPipelines(), preview.id);
     const matches = (current: Pipeline | null) => JSON.stringify(current) === fingerprint
-      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
+      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint)
+      && stageBranchOwnershipFence(loadPipelines(), preview.id) === ownershipFence;
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     let descriptor: number | null;
     try {

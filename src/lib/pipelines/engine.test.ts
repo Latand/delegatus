@@ -1026,9 +1026,10 @@ test.each(["before intent", "after intent"])("a paused lane fences async branch 
     const checking = new Promise<void>((resolve) => { entered = resolve; });
     let intercepted = false;
     h.ports.exec = async (command, args, ...rest) => {
-      const pauseAt = boundary === "after intent"
-        ? args[0] === "switch" && args.at(-1) === lane.branch
-        : args[0] === "merge-base" && args.includes("--is-ancestor") && args.includes(head);
+      const pauseAt = args[0] === "merge-base" && args.includes("--is-ancestor")
+        && (boundary === "after intent"
+          ? Boolean(loadPipelines().find((item) => item.id === id)?.runs[0]?.attempts[0]?.branchAdoption)
+          : args.includes(head));
       if (!intercepted && command === "git" && pauseAt) {
         intercepted = true;
         entered();
@@ -1056,6 +1057,45 @@ test.each(["before intent", "after intent"])("a paused lane fences async branch 
   } finally {
     release();
     await work;
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["source", "destination"])("async branch adoption rechecks a newly acquired %s claim before committing", async (claimed) => {
+  const fixture = await realWorktreeLane(`stage-adoption-claim-${claimed}`, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },
+  ]);
+  try {
+    const { git, h, id, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const source = "fix/claimed-stage";
+    await git(worktree, "switch", "-c", source);
+    fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "preserve stage work\n");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    const others = [lane];
+    const exec = h.ports.exec;
+    let acquired = false;
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+    const result = await commitAndAdoptStageBranch(lane, "build", async (command, args, ...rest) => {
+      const result = await exec(command, args, ...rest);
+      if (!acquired && command === "git" && args[0] === "symbolic-ref") {
+        const owner = structuredClone(lane);
+        owner.id = "new-owner";
+        owner.branch = "pipeline/new-owner";
+        owner.delivery = { ...lane.delivery!, active: true, ownerId: owner.id,
+          target: { ...lane.delivery!.target, branch: `refs/heads/${claimed === "source" ? source : lane.branch}` } };
+        others.push(owner);
+        acquired = true;
+      }
+      return result;
+    }, () => others, undefined, () => {}, { branch: source, head, error: null });
+    expect(acquired).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(await git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(head);
+    expect(await git(worktree, "rev-parse", `refs/heads/${lane.branch}`)).toBe(fixture.base);
+    expect(await git(worktree, "status", "--porcelain")).toContain("uncommitted.txt");
+  } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
