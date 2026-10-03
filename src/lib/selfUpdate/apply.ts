@@ -59,25 +59,35 @@ export class ApplyController {
       throw error;
     }
   }
-  observe(record: LauncherRecord, hostHealthy = true): "done" | "failed" | null {
+  observe(record: LauncherRecord, hostHealthy = true, now = Date.now()): "done" | "failed" | null {
     const intent = this.current;
     if (!intent || !["ready", "switching"].includes(intent.state)) return null;
     let result: { requestId?: string; state?: string; detail?: string } | null = null;
     try { result = JSON.parse(readFileSync(`${record.requestFile}.result.json`, "utf8")); } catch { /* no terminal admission result */ }
+    const sameLauncher = record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity;
+    const trialFile = launcherControlFile(record.requestFile, "trial");
+    let trial: { requestId?: string } | null = null;
+    try { trial = JSON.parse(readFileSync(trialFile, "utf8")); } catch { /* no readable trial */ }
+    const externalUntaken = intent.state === "switching" && intent.externalRestart && intent.switchedAt
+      && now - Date.parse(intent.switchedAt) > 60_000 && sameLauncher && hostHealthy
+      && (!record.launcher.state || record.launcher.state === "healthy")
+      && record.web.state === "healthy" && record.runtimeHost.state === "healthy"
+      && record.launcher.requestId !== intent.requestId;
     const untaken = intent.state === "switching" && !intent.externalRestart && intent.switchedAt
-      && Date.now() - Date.parse(intent.switchedAt) > 30_000 && record.launcher.state === "healthy"
+      && now - Date.parse(intent.switchedAt) > 30_000 && record.launcher.state === "healthy"
       && record.launcher.requestId !== intent.requestId && !existsSync(record.requestFile)
       && !existsSync(launcherControlFile(record.requestFile, "trial"));
-    if ((result?.requestId === intent.requestId && result.state === "rejected") || untaken) {
+    if ((result?.requestId === intent.requestId && result.state === "rejected") || untaken || externalUntaken) {
       // Restore only the pointer owned by this untaken transaction.
       this.restoreUntaken(record);
+      if (externalUntaken && trial?.requestId === intent.requestId) rmSync(trialFile, { force: true });
       this.patch({ state: "failed", admissionRefused: true, detail: result?.detail ?? "The launcher did not take the durable update request" });
       releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
     }
     const bootstrap = intent.state === "ready" && record.launcher.relaunch === 1
       && (record.launcher.pid !== intent.launcherPid || record.launcher.startIdentity !== intent.launcherIdentity);
-    if (!bootstrap && (record.launcher.requestId !== intent.requestId
-      || (!intent.externalRestart && (record.launcher.pid !== intent.launcherPid || record.launcher.startIdentity !== intent.launcherIdentity)))) return null;
+    const successor = !sameLauncher && record.launcher.relaunch === 1 && record.launcher.state === "healthy" && hostHealthy;
+    if (!bootstrap && (record.launcher.requestId !== intent.requestId || (!sameLauncher && !successor))) return null;
     const error = record.launcher.error;
     if (error?.kind === "fell-back") {
       this.patch({ state: "failed", rolledBack: true, detail: error.detail });

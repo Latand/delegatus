@@ -324,13 +324,18 @@ export class SelfUpdateService {
     return { ok: true, ...(receiptId ? { replaySnapshot } : {}) };
   }
 
+  private unsafeLegacyAuto(decision: ModeDecision): boolean {
+    return decision.mode === "checkout" && decision.record?.launcher.relaunch !== 1
+      && (decision.supervision === "adopted" || !!this.deps.env.LLV_TOKEN);
+  }
+
   private autoAvailability(decision: ModeDecision): AutoView["availability"] {
     if (decision.mode === "managed") {
       try { if (!this.deps.releaseTarget()?.revision) return "no-release-target"; }
       catch { return "no-release-target"; }
     } else {
       if (decision.mode !== "checkout" || !decision.record?.checkout) return decision.mode === "package" ? "packaged" : "launcher-upgrade";
-      if (decision.record.launcher.autoAdmission !== 1) return "launcher-upgrade";
+      if (decision.record.launcher.autoAdmission !== 1 || this.unsafeLegacyAuto(decision)) return "launcher-upgrade";
       try {
         const raw = JSON.parse(readFileSync(decision.record.releasePointer, "utf8")) as { checkoutHead?: string };
         if (!raw.checkoutHead || raw.checkoutHead !== headOf(decision.record.checkout)) return "hand-managed";
@@ -407,6 +412,15 @@ export class SelfUpdateService {
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
     if (!this.auto.enabled && !this.hasAutoCustody()) return;
     const decision = await this.decide();
+    // Older releases could admit a cohort without ever filing an operation.
+    // Release that orphan only when no durable work still owns its custody.
+    if (this.unsafeLegacyAuto(decision) && this.auto.drain?.admitted && !this.auto.pending
+      && !this.auto.managedPending && !this.auto.rollback
+      && !["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) {
+      this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, quietSince: null,
+        rollbackPointer: null, rollbackCaptured: false, lastBlockers: null };
+      this.endDrain(); this.saveAuto();
+    }
     if ((!this.auto.enabled || this.autoAvailability(decision) !== "available") && !this.hasAutoCustody()) this.endDrain();
     else if (this.auto.drain) this.refreshDrain();
     const drain = this.auto.drain;
@@ -556,6 +570,7 @@ export class SelfUpdateService {
         this.changes.emit();
         return;
       }
+      if (this.unsafeLegacyAuto(current)) return;
       this.beginAutoCustody(target);
       this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
       if (record.launcher.relaunch === 1) {
@@ -565,7 +580,6 @@ export class SelfUpdateService {
         this.changes.emit();
         return;
       }
-      if (decision.supervision === "adopted" || this.deps.env.LLV_TOKEN) return;
       requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
         this.auto = { ...this.auto, pending: request };
         this.persistNow();
@@ -1566,7 +1580,7 @@ export class SelfUpdateService {
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
     const settled = this.apply.observe(record, !!health && health.pid === record.runtimeHost.pid && health.startIdentity === record.runtimeHost.startIdentity
-      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity));
+      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity), now);
     if (settled) {
       const intent = this.apply.current!;
       appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,

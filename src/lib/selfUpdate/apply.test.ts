@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ApplyController } from "./apply";
 import { activeDrain } from "./drain";
@@ -82,4 +82,34 @@ test.each(["Relaunch target is not the installed release.", "trial persistence r
   expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull();
   expect(readFileSync(r.releasePointer, "utf8")).toBe(previous);
   expect(new ApplyController(dir).current?.state).toBe("failed");
+});
+
+
+test.each(["done", "failed"] as const)("a crash-restarted launcher settles the same durable trial as %s", outcome => {
+  const dir = mkdtempSync(join(root, "successor-")); const r = record(dir); const c = new ApplyController(dir);
+  c.begin(r, "a".repeat(40), "operator"); c.send(r); rmSync(r.requestFile);
+  const cold = new ApplyController(dir);
+  const successor = { ...r, launcher: { ...r.launcher, pid: 6, startIdentity: "8", state: "healthy", requestId: "unrelated", error: outcome === "failed" ? { kind: "fell-back" as const, revision: "aaaaaaa", detail: "candidate failed" } : null } };
+  expect(cold.observe(successor)).toBeNull(); expect(activeDrain(join(dir, "auto-drain.json"))).not.toBeNull();
+  successor.launcher.requestId = c.current!.requestId;
+  expect(cold.observe(successor, false)).toBeNull();
+  expect(cold.observe(successor, true)).toBe(outcome);
+  expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull();
+  expect(new ApplyController(dir).current?.state).toBe(outcome);
+});
+
+test("an untaken external service handoff restores its pointer and permits Retry after its deadline", () => {
+  const dir = mkdtempSync(join(root, "external-")); const r = record(dir); const c = new ApplyController(dir);
+  const previous = JSON.stringify({ sha: "b".repeat(40) }) + "\n"; writeFileSync(r.releasePointer, previous);
+  c.begin(r, "a".repeat(40), "operator"); c.send(r); rmSync(r.requestFile);
+  c.patch({ externalRestart: true });
+  const trial = r.requestFile.replace("request-", "trial-"); writeFileSync(trial, JSON.stringify({ requestId: c.current!.requestId, state: "starting" }));
+  writeFileSync(r.releasePointer, JSON.stringify({ sha: "a".repeat(40) }));
+  const cold = new ApplyController(dir); const at = Date.parse(c.current!.switchedAt!);
+  const old = { ...r, launcher: { ...r.launcher, state: undefined }, web: { ...r.web, revision: "bbbbbbb" }, runtimeHost: { ...r.runtimeHost, revision: "bbbbbbb" } };
+  expect(cold.observe(old, true, at + 1_000)).toBeNull();
+  expect(cold.observe(old, true, at + 61_000)).toBe("failed");
+  expect(readFileSync(r.releasePointer, "utf8")).toBe(previous);
+  expect(existsSync(trial)).toBe(false); expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull();
+  expect(() => cold.begin(old, "a".repeat(40), "operator")).not.toThrow();
 });

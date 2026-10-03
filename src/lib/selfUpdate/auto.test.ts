@@ -1079,3 +1079,31 @@ test("a capable launcher receives a single relaunch under automatic drain custod
     expect(JSON.parse(readFileSync(h.record.requestFile, "utf8")).requestId).toBe(request.requestId);
   } finally { service.stop(); }
 });
+
+
+test.each(["token", "adopted"] as const)("unsafe legacy %s auto admission never takes custody", async shape => {
+  const h = scenario();
+  if (shape === "token") h.deps.env = { LLV_TOKEN: "fixture-bearer" };
+  else h.deps.mode = async () => ({ mode: "checkout", reason: null, record: h.record, supervision: "adopted" });
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    expect(readAuto(join(h.dir, "auto.json")).drain?.admitted).not.toBe(true);
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(existsSync(join(h.dir, "apply.json"))).toBe(false);
+    expect(await service.setAuto(false)).toMatchObject({ ok: true }); await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(await service.setAuto(true)).toMatchObject({ ok: false, status: 409 });
+  } finally { service.stop(); }
+});
+
+test("cold unsafe legacy admission without an owned operation releases its orphan hold", async () => {
+  const h = scenario(); h.deps.env = { LLV_TOKEN: "fixture-bearer" };
+  const since = new Date(h.deps.now()).toISOString();
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), enabled: false,
+    drain: { id: "orphan-legacy", target: { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" }, since, overranAt: null, blockers: null, admitted: true } });
+  writeDrain(join(h.dir, "auto-drain.json"), { id: "orphan-legacy", target: TARGET, since, until: 0, persistent: true });
+  const service = h.service();
+  try { await service.autoTick(); expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull(); }
+  finally { service.stop(); }
+});
