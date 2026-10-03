@@ -196,10 +196,11 @@ for (const unspoken of [false, true]) {
     document.caretRangeFromPoint = () => {
       const caret = document.createRange(); caret.setStart(text, 0); return caret;
     };
-    dom.Range.prototype.getClientRects = function () {
+    (dom.Range.prototype as { getClientRects: () => unknown[] }).getClientRects = function () {
       rectReads++;
-      return [{ left: 0, right: 100, top: this.startContainer === text ? 10 : -20,
-        bottom: this.startContainer === text ? 30 : -10 }] as unknown as DOMRectList;
+      const selected = (this as unknown as Range).startContainer;
+      return [{ left: 0, right: 100, top: selected === text ? 10 : -20,
+        bottom: selected === text ? 30 : -10 }];
     };
     expect(visibleRowArea(prose, CLIP)).toBe(unspoken ? 0 : 2000);
     expect(rectReads).toBeLessThanOrEqual(400);
@@ -222,12 +223,12 @@ test("a small visible prefix does not hide the dominant tail or count the prefix
   document.caretRangeFromPoint = (_x, y) => {
     const caret = document.createRange(); caret.setStart(y < 40 ? prefix : tail, 0); return caret;
   };
-  dom.Range.prototype.getClientRects = function () {
+  (dom.Range.prototype as { getClientRects: () => unknown[] }).getClientRects = function () {
     rectReads++;
-    const text = this.startContainer;
+    const text = (this as unknown as Range).startContainer;
     const [top, bottom] = text === prefix ? [0, 1] : text === tail ? [1, 80]
       : competitor.contains(text) ? [80, 100] : [-20, -10];
-    return [{ left: 0, right: 100, top, bottom }] as unknown as DOMRectList;
+    return [{ left: 0, right: 100, top, bottom }];
   };
   const dominantArea = visibleRowArea(prose, CLIP);
   expect(dominantArea).toBe(8000);
