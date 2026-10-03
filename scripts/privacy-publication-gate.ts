@@ -541,7 +541,7 @@ function maskApprovedPublicValues(text: string): string {
   }
   const rawQuotes = rawQuoteMatches();
   let rawQuote = rawQuotes.next().value;
-  let containingRawQuote: { start: number; end: number; quote: string } | undefined;
+  let containingRawQuote: { start: number; end: number; quote: string; tagged: boolean } | undefined;
   let rawCursor = 0;
   type RawGroup = { delimiter: string; start: number; envelopeStart: number; end?: number; attached: boolean; parent?: RawGroup };
   const rawGroups: RawGroup[] = [];
@@ -632,7 +632,24 @@ function maskApprovedPublicValues(text: string): string {
         rawCommentCursor += 1;
       }
       if (rawQuote && rawCursor === rawQuote.index) {
-        containingRawQuote = { start: rawQuote.index, end: rawQuote.index + rawQuote[0].length, quote: rawQuote[0][0] };
+        const template = rawQuote[0][0] === "`";
+        let tagged = false;
+        if (template) {
+          const calleeSpan = rawCalleeBefore(rawQuote.index);
+          const completed = rawCommentFrame?.completed ?? completedRawGroups;
+          const callee = completed.get(calleeSpan.before);
+          const preceding = skipRawTrivia(rawQuote.index - 1);
+          const calleeBoundary = skipRawTrivia(calleeSpan.before);
+          const sourcePrefix = text.slice(0, calleeSpan.before + 1);
+          const sourceOperand = calleeBoundary.before < 0
+            || /[=(:,[{!&|?+*%^~<>;]/.test(text[calleeBoundary.before] ?? "")
+            || /\b(?:return|yield|await|throw|case)\s*$/.test(sourcePrefix);
+          tagged = callee !== undefined || (calleeSpan.before < preceding.before && sourceOperand);
+          // A call or computed receiver used as a tag transforms its result.
+          // Keep that ownership attached to values in its completed arguments.
+          if (callee) callee.attached = true;
+        }
+        containingRawQuote = { start: rawQuote.index, end: rawQuote.index + rawQuote[0].length, quote: rawQuote[0][0], tagged };
         rawCursor += rawQuote[0].length;
         rawQuote = rawQuotes.next().value;
         continue;
@@ -687,6 +704,7 @@ function maskApprovedPublicValues(text: string): string {
       const completeValue = containingRawQuote.start === candidate.start - 1 && containingRawQuote.end === candidate.end + 1;
       const templateValue = containingRawQuote.quote === "`" && quotedValue && candidate.interpolatedLiteral;
       if ((!completeValue && !templateValue)
+        || containingRawQuote.tagged
         || (containingRawQuote.start > 0 && !approvedRawOuterLeft.test(text[containingRawQuote.start - 1]))
         || (containingRawQuote.end < text.length && !approvedRawOuterRight.test(text[containingRawQuote.end]))) candidate.allowed = false;
     }

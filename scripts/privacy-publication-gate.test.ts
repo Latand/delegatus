@@ -1543,6 +1543,16 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         ...["f", "helpers.tag", "(f)", "x[0]"].map((tag, kind) => ({
           name: `review tagged template regression ${form} ${kind}`, text: `${tag}${tick}${value}${tick}`, pass: false,
         })),
+        ...["", " /*tag trivia*/ ", "\n"].flatMap((gap, trivia) => [
+          {
+            name: `review returned call tagged suffix regression ${form} ${trivia}`,
+            text: `f("${value}")${gap}${tick}unused${tick} + "/private"`, pass: false,
+          },
+          ...["f", "(f)", "x[0]"].map((tag, kind) => ({
+            name: `review tagged template operand suffix regression ${form} ${trivia} ${kind}`,
+            text: `"other." + ${tag}${gap}${tick}${value}${tick} + "/private"`, pass: false,
+          })),
+        ]),
         ...["/[)]/", "/[}]/", '/"/', "/`/", "/\\)/"].flatMap((regex, kind) => [
           { name: `review regex delimiter prefix regression ${form} ${kind}`, text: `"other." + f(${regex}, "${value}")`, pass: false },
           { name: `review regex delimiter suffix regression ${form} ${kind}`, text: `f("${value}", ${regex}) + "/private"`, pass: false },
@@ -2178,6 +2188,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           }
           const identityCases = cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "base-domain email",
         "review shell bare prefix", "review shell bare suffix", "review shell port suffix"].includes(c.name)
+        || c.name.startsWith("review tagged template")
+        || c.name.startsWith("review returned call tagged suffix")
         || c.name.startsWith("review Unicode zero-width shell")
         || c.name.startsWith("review Unicode NFKC shell")
         || c.name.startsWith("raw quoted wrapper suffix")
