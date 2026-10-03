@@ -708,7 +708,7 @@ describe("managed install", () => {
 describe("the rest of the surface", () => {
   test("an install that cannot update itself says why and offers nothing", () => {
     const el = render(snapshot({ mode: "unsupported", unsupportedReason: "not-a-checkout" }));
-    expect(text(el)).toContain("This Delegatus install came from a package.");
+    expect(text(el)).toContain("This package needs launcher supervision.");
     expect(button(el, "check")).toBeNull();
   });
 
@@ -799,3 +799,15 @@ for (const locale of ["en", "uk"] as const) {
     expect(container.textContent).not.toContain("Оновіть її так");
   });
 }
+
+test.each(["en", "uk"] as const)("every install prerequisite is actionable and localized in %s", (language) => {
+  setLocale(language);
+  for (const id of ["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments"] as const) {
+    const hasButton = ["restart-service", "update-first", "start-service"].includes(id);
+    const el = render(snapshot({ mode: "unsupported", unsupportedReason: "no-launcher", action: { id, button: hasButton, command: "bun bin/cli.mjs --port 45123 --no-open" } }));
+    expect(Boolean(button(el, "install-action"))).toBe(hasButton);
+    expect(text(el)).not.toContain("Update it the way you installed it");
+    expect(text(el)).not.toContain("Оновіть її так, як її встановлювали");
+    flushSync(() => root!.unmount()); root = null; host?.remove();
+  }
+});
