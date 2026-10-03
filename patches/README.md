@@ -10,8 +10,9 @@ to 100 levels, honors stricter fractional limits, and refuses cyclic parent
 chains during expansion. It preserves the published 3.0.3 quote and invalid-node
 behavior; unrelated upstream parser changes and test infrastructure are omitted.
 
-Upstream braces is MIT licensed. Its existing copyright notice and MIT license
-remain in the installed package. `scripts/braces-patch.test.ts` exercises the
+Upstream braces is MIT licensed. The upstream copyright notice and license ship
+beside the patch in `braces-LICENSE` and remain in the installed package.
+`scripts/braces-patch.test.ts` exercises the
 actual installed braces and micromatch APIs and fails if installation skips the
 patch. The publish and supply-chain workflows run that test after installation.
 
