@@ -72,7 +72,7 @@ const FILTER_SKIP = 3;
    can be thousands of inline spans and text nodes (long links, emphasis, a
    table-less wall of tokens), and a frame spent on one answer was 200-600 ms
    at 4x CPU. Reserve a few reads for visible-point hits when the initial
-   bounded scan finds only offscreen text. */
+   bounded scan ends before the visible text. */
 const MAX_TEXT_NODES = 400;
 const HIT_GRID = 3;
 const SCAN_TEXT_NODES = MAX_TEXT_NODES - HIT_GRID * HIT_GRID;
@@ -98,6 +98,7 @@ export function visibleRowArea(row: HTMLElement, clip: ScreenClip): number {
   });
   let area = 0;
   let counted = 0;
+  const measured = new Set<Node>();
   const range = document.createRange();
   const textArea = (node: Node) => {
     range.selectNodeContents(node);
@@ -107,17 +108,17 @@ export function visibleRowArea(row: HTMLElement, clip: ScreenClip): number {
   let node = walker.nextNode();
   for (; node && counted < SCAN_TEXT_NODES; node = walker.nextNode()) {
     counted += 1;
+    measured.add(node);
     area += textArea(node);
   }
-  if (area > 0 || !node) return area;
+  if (!node) return area;
   /* A single tall paragraph can contain hundreds of plain text siblings above
      the screen. Seek text under visible points instead of exhausting the
-     budget on that prefix and declaring the visible answer absent. */
+     budget on that prefix and missing the dominant visible text. */
   const box = body.getBoundingClientRect();
   const left = Math.max(box.left, clip.left), right = Math.min(box.right, clip.right);
   const top = Math.max(box.top, clip.top), bottom = Math.min(box.bottom, clip.bottom);
-  if (right <= left || bottom <= top) return 0;
-  const measured = new Set<Node>();
+  if (right <= left || bottom <= top) return area;
   for (let y = 0; y < HIT_GRID; y++) for (let x = 0; x < HIT_GRID; x++) {
     const px = left + (x + 0.5) * (right - left) / HIT_GRID;
     const py = top + (y + 0.5) * (bottom - top) / HIT_GRID;

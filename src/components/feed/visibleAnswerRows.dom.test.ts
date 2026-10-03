@@ -205,3 +205,32 @@ for (const unspoken of [false, true]) {
     expect(rectReads).toBeLessThanOrEqual(400);
   });
 }
+
+
+test("a small visible prefix does not hide the dominant tail or count the prefix twice", () => {
+  const prose = proseRow(10);
+  const body = prose.querySelector<HTMLElement>("[data-tts-body]")!;
+  body.replaceChildren();
+  body.getBoundingClientRect = () => ({ left: 0, right: 100, top: -10_000, bottom: 100,
+    width: 100, height: 10_100 }) as DOMRect;
+  for (let i = 0; i < 390; i++) body.append(document.createTextNode(`offscreen ${i}`));
+  const prefix = document.createTextNode("visible sliver");
+  const tail = document.createTextNode("dominant visible tail");
+  body.append(prefix, tail);
+  const competitor = proseRow(11);
+  viewport.append(prose, competitor);
+  document.caretRangeFromPoint = (_x, y) => {
+    const caret = document.createRange(); caret.setStart(y < 40 ? prefix : tail, 0); return caret;
+  };
+  dom.Range.prototype.getClientRects = function () {
+    rectReads++;
+    const text = this.startContainer;
+    const [top, bottom] = text === prefix ? [0, 1] : text === tail ? [1, 80]
+      : competitor.contains(text) ? [80, 100] : [-20, -10];
+    return [{ left: 0, right: 100, top, bottom }] as unknown as DOMRectList;
+  };
+  const dominantArea = visibleRowArea(prose, CLIP);
+  expect(dominantArea).toBe(8000);
+  expect(rectReads).toBeLessThanOrEqual(400);
+  expect(dominantArea).toBeGreaterThan(visibleRowArea(competitor, CLIP));
+});
