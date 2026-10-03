@@ -1868,6 +1868,7 @@ test("later deploy resume instructions drain every previously shown paused lane"
 test("cropped outcome bullets leave child, deployment and maintenance obligations unacknowledged", () => {
   const verdict: Extract<SeatTickVerdict, { kind: "wake" }> = {
     kind: "wake", reasons: [{ kind: "own-lane-settled", detail: "settled outcomes" }], deferred: 0,
+    skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [],
     items: [
       { kind: "pipeline", id: "visible-lane", label: "completed", laneAnnouncement: "visible-lane:completed", itemVersion: "lane@one" },
       { kind: "child", id: "cropped-child", label: "long child result ".repeat(500), outcomeIds: ["child-outcome"], stateTokens: ["cropped-child@one"], stallToken: "child-stall" },
