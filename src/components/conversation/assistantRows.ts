@@ -53,7 +53,9 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null): AssistantHandoff {
   const state = previous ?? empty();
   let sequence = state.sequence;
-  const pending = state.pending.slice();
+  const pending = state.pending.map(entry => liveTurn && entry.turnId !== liveTurn.turnId
+    && entry.live.startedAt === null && entry.live.phase === "streaming"
+    ? { ...entry, live: { ...entry.live, phase: "awaiting-echo" as const } } : entry);
   const retiredStreams = new Set(state.retiredStreams);
   const current = runtimeLiveTurnItems(liveTurn);
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
@@ -62,7 +64,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     if (live.tool || !live.itemId && retiredStreams.has(stream)) continue;
     const index = pending.findIndex((entry) => live.itemId && entry.live.itemId === live.itemId
       || !entry.live.itemId && entry.live.startedAt === live.startedAt
-        && (live.startedAt !== null || live.text.startsWith(entry.live.text)));
+        && (live.startedAt !== null || entry.turnId === liveTurn!.turnId && live.text.startsWith(entry.live.text)));
     if (index >= 0) {
       const observed = pending[index].live;
       // Transport budgeting can remove a prefix after the pane read it. Keep
@@ -156,10 +158,13 @@ export function retainedAssistantItems(handoff: AssistantHandoff, liveTurn: Runt
   const sameReply = (a: RuntimeLiveTurnItem, b: RuntimeLiveTurnItem) => a.itemId && a.itemId === b.itemId
     || !a.itemId && !b.itemId && a.startedAt !== null && a.startedAt === b.startedAt;
   const descriptors = runtimeLiveTurnItems(liveTurn);
+  const aggregate = descriptors.length === LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT ? descriptors[0] : null;
   const foldedButRetained = pending.filter(answer => !descriptors.some(item => sameReply(answer, item))).length;
   return [...pending, ...visible.flatMap(item => {
     if (!item.tool && pending.some(answer => sameReply(answer, item))) return [];
-    if (item.omittedItems) {
+    if (item.omittedItems && !item.itemId && aggregate && !aggregate.itemId
+      && item.startedAt === aggregate.startedAt && item.completedAt === aggregate.completedAt
+      && item.omittedItems === aggregate.omittedItems) {
       const omittedItems = Math.max(0, item.omittedItems - foldedButRetained);
       return omittedItems ? [{ ...item, omittedItems }] : [];
     }

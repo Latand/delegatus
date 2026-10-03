@@ -132,6 +132,18 @@ test("a legacy stream without timestamps remembers its complete canonical echo",
   expect(state.pending.map(entry => entry.live.text)).toEqual(["The answer"]);
 });
 
+test("timestamp-free legacy turns own distinct pending occurrences and their echoes", () => {
+  let state = projectAssistantHandoff(null, { turnId: "legacy-first", text: "Done" }, [], claims);
+  const first = state.pending[0].key;
+  state = projectAssistantHandoff(state, { turnId: "legacy-second", text: "Done with details" }, [], claims);
+  expect(state.pending.map(entry => entry.live.text)).toEqual(["Done", "Done with details"]);
+  const second = state.pending[1].key;
+  const laterEcho = { ...echo, item: { ...echo.item, text: "Done with details", sourceId: "legacy-second-answer" } } as FeedEntry;
+  state = projectAssistantHandoff(state, null, [laterEcho], claims);
+  expect(state.pending.map(entry => entry.key)).toEqual([first]);
+  expect(state.bindings.get(laterEcho.key)?.key).toBe(second);
+});
+
 test("idless echoes own a single occurrence even when a later answer repeats the text", () => {
   const second = { ...echo, key: "second", item: { ...echo.item, ts: "2026-10-02T10:01:00Z", sourceId: "second-answer" } } as FeedEntry;
   const state = projectAssistantHandoff(null, live("awaiting-echo", null), [echo, later, second], claims);
@@ -220,6 +232,15 @@ test("folded transport descriptors count retained replies once during prolonged 
   const tail = liveTurnTail(retainedAssistantItems(state, live, descriptors.filter(item => item.tool || !item.text.trim())));
   expect(tail.rows).toHaveLength(8);
   expect(tail.earlier).toBe(542);
+  live = projectRuntimeLiveTurnItem(live, "lagging-turn", { type: "assistant", uuid: "omitted-batch",
+    message: { content: [], omittedToolCalls: 10 } }, "completed", new Date(1760000001000).toISOString());
+  state = projectAssistantHandoff(state, live, [], claims);
+  const mixed = retainedAssistantItems(state, live, runtimeLiveTurnItems(live).filter(item => item.tool || !item.text.trim()));
+  expect(mixed.find(item => item.itemId === "omitted-tools:omitted-batch")?.omittedItems).toBe(10);
+  live = projectRuntimeLiveTurnItem(live, "lagging-turn", { type: "assistant", message: { content: [], omittedToolCalls: 20 } }, "completed", new Date(1760000002000).toISOString());
+  state = projectAssistantHandoff(state, live, [], claims);
+  const unidentified = retainedAssistantItems(state, live, runtimeLiveTurnItems(live).filter(item => item.tool || !item.text.trim()));
+  expect(unidentified.find(item => item.completedAt === new Date(1760000002000).toISOString())?.omittedItems).toBe(20);
 });
 
 test("a later clipped descriptor preserves the reply already observed by this pane", () => {
