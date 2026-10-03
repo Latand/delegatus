@@ -1,5 +1,5 @@
 import type { TFunction } from "@/lib/i18n";
-import { failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed, pipelineReviewSummary, terminalReviewContinuationAvailable } from "@/lib/pipelines/failEdgeBudget";
 import { MERGE_REASON_PATTERNS, MERGE_REASONS, type MergeReasonKey } from "@/lib/forge/mergeReasons";
 import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/types";
 
@@ -202,6 +202,7 @@ export function reviewStop(pipeline: Pipeline): ReviewStop | null {
   if (pipeline.state !== "needs_decision") return null;
   const stage = parkedStage(pipeline);
   if (!stage) return null;
+  if (terminalReviewContinuationAvailable(pipeline)) return { kind: "once", stage, rounds: 0, hiddenFinding: null };
   const attempt = latestAttempt(pipeline, stage.id);
   const detail = [pipeline.stateDetail, attempt?.error].filter((text): text is string => Boolean(text));
   if (stage.kind === "review-loop") {
@@ -231,7 +232,7 @@ export interface PipelineAnswers {
   /** The stage the answer is about: the parked stage, or the review stage. */
   stage: PipelineStage | null;
   /** The quiet answer first, then the primary one. */
-  choices: [PipelineAnswer, PipelineAnswer];
+  choices: [PipelineAnswer] | [PipelineAnswer, PipelineAnswer];
   /** A stop on a review (§3.4): its reason line and its plain labels. */
   stop: ReviewStop | null;
 }
@@ -248,12 +249,21 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
     return { kind: "merge", stage: null, choices: [{ action: "dismiss", ...none }, { action: "retry-merge", ...none }], stop: null };
   }
   if (pipeline.state === "needs_decision") {
-    const retry = pipelineActionOptions(pipeline).find((option) => option.action === "retry-stage");
+    const options = pipelineActionOptions(pipeline);
+    if (terminalReviewContinuationAvailable(pipeline)) {
+      const stage = parkedStage(pipeline);
+      return { kind: "decision", stage, choices: [{ action: "continue-review", stageId: null, stageName: null, expectedAttempt: null }], stop: reviewStop(pipeline) };
+    }
+    const retry = options.find((option) => option.action === "retry-stage");
     if (!retry || retry.refusal || !retry.stageId) return null;
     const stage = pipeline.stages.find((entry) => entry.id === retry.stageId) ?? null;
     const stageName = stage ? nameOf(stage) : retry.stageId;
     const base = { stageId: retry.stageId, stageName, expectedAttempt: retry.attempt };
-    return { kind: "decision", stage, choices: [{ action: "skip-stage", ...base }, { action: "retry-stage", ...base }], stop: reviewStop(pipeline) };
+    const skip = options.find((option) => option.action === "skip-stage");
+    const choices: PipelineAnswers["choices"] = skip && !skip.refusal
+      ? [{ action: "skip-stage", ...base }, { action: "retry-stage", ...base }]
+      : [{ action: "retry-stage", ...base }];
+    return { kind: "decision", stage, choices, stop: reviewStop(pipeline) };
   }
   if (pipeline.state === "needs_review") {
     const stop = reviewStop(pipeline);

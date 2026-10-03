@@ -18839,6 +18839,34 @@ test.each(["retry-stage", "skip-stage"] as const)("a failed terminal budget park
   expect(loadPipelines()[0]!.state).toBe("completed");
 });
 
+test.each([false, true])("board actions admit only a bounded terminal continuation (legacy park: %s)", async (legacy) => {
+  const { pipelineActionOptions, actionObserved } = await import("@/components/kanban/stagesModel");
+  const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  if (legacy) {
+    delete parked.reviewPending;
+    savePipelines([parked]);
+  }
+  const options = pipelineActionOptions(parked);
+  expect(options.find((option) => option.action === "continue-review")?.refusal).toBeNull();
+  for (const action of ["retry-stage", "skip-stage", "accept-head"] as const) {
+    expect(options.find((option) => option.action === action)?.refusal).not.toBeNull();
+  }
+  expect(actionObserved("continue-review", null, parked)).toBe(false);
+  expect(pipelineAnswers(parked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["continue-review"]);
+  expect((await continueReview(parked, `board-grant-${legacy}`, 2)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  await buildRound(h, "first board fix");
+  await critiqueRound(h, "fail", "retained defect");
+  await buildRound(h, "second board fix");
+  await critiqueRound(h, "pass", "fresh independent approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
 test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
@@ -18857,6 +18885,8 @@ test("terminal continuation refuses stale budget metadata after a newer review b
   await tickPipelines([entry(review.agentPath!)], h.ports);
   const blocked = loadPipelines()[0]!;
   expect(blocked.stateDetail).toBe("Review environment unavailable");
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "continue-review")?.refusal).toBe("no-review");
   expect((await continueReview(blocked, "stale-budget", 2)).status).toBe(409);
   expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
   await patchPipeline(blocked.id, { action: "pause" }, h.ports);
@@ -18886,6 +18916,33 @@ test.each([false, true])("consecutive terminal grants each buy two reviews on un
   }
 });
 
+
+test.each([{ rounds: 1, nested: false }, { rounds: 2, nested: false }, { rounds: 1, nested: true }, { rounds: 2, nested: true }])("a terminal continuation retains validation through all $rounds reviews (nested repair: $nested)", async ({ rounds, nested }) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: "validate", ...(nested ? { onFail: { to: "repair", maxRounds: 1 } } : {}) },
+    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
+    { ...BUILD_ONLY[0]!, id: "validate", next: "critique" },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  const validations = parked.runs.find((run) => run.stageId === "validate")?.attempts.length ?? 0;
+  expect((await continueReview(parked, "validation-grant", rounds)).error).toBeUndefined();
+  const continued = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && n === 2)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds);
+  const review = continued.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(review.activatedBy?.stageId).toBe("validate");
+  expect(review.activatedBy?.budgetRecheck).toBe(true);
+  expect((await continueReview(continued, "validation-resume", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("fix");
+  expect(loadPipelines()[0]!.cursor?.input).toContain(review.verdict!.findings![0]!);
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds + 1);
+});
 
 test.each([1, 2] as const)("a final granted fix repaired inside its budget remains resumable (%i rounds)", async (rounds) => {
   const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
@@ -19018,6 +19075,11 @@ test.each([false, true])("a blocked terminal reviewer retries its unspent activa
   await tickPipelines([entry(review.agentPath!)], h.ports);
   const blocked = loadPipelines()[0]!;
   expect(blocked.reviewPending).toBeUndefined();
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+  const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "retry-stage")?.refusal).toBeNull();
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "skip-stage")?.refusal).not.toBeNull();
+  expect(pipelineAnswers(blocked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["retry-stage"]);
   expect((await patchPipeline(blocked.id, { action: "skip-stage" }, h.ports)).status).toBe(409);
   expect((await patchPipeline(blocked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
   await critiqueRound(h, "pass", "environment restored; independent review passes");

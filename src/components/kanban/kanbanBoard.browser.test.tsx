@@ -8,6 +8,7 @@ import { chromium, type Browser, type LaunchOptions, type Page } from "playwrigh
 import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
+import type { Pipeline } from "@/lib/pipelines/types";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
@@ -42,6 +43,62 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+describe("terminal review budget continuation", () => {
+  browserTest("fresh and recovered parks show the bounded grant on desktop and phone in both languages", async () => {
+    const out = path.resolve(".artifacts/terminal-review-continuation");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) for (const legacy of [false, true]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-stops`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          const selector = width === 390 ? '[data-phone-card="task:t-stop-once"]' : card("t-stop-once");
+          await page.waitForSelector(selector);
+          await page.evaluate((legacy) => {
+            const evidence = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence;
+            const pipeline = evidence.storedPipeline("p-stop-once");
+            const stage = pipeline.stages.find((stage) => stage.id === "review")!;
+            stage.next = null;
+            const attempt = pipeline.runs.find((run) => run.stageId === "review")!.attempts.at(-1)!;
+            attempt.activatedBy = { stageId: "build", attempt: 3, edge: "pass", budgetRecheck: true };
+            if (legacy) delete pipeline.reviewPending;
+            else pipeline.reviewPending = {
+              terminalRecheck: true, stageId: "review", attempt: attempt.n, fixStageId: "build", fixAttempt: 3,
+              reviewedHead: pipeline.lastPassedCommit, currentHead: pipeline.lastPassedCommit, verdict: "fail", findings: 1, at: attempt.completedAt!,
+            };
+            window.dispatchEvent(new Event("llv:pipelines-changed"));
+          }, legacy);
+          if (width === 390) await page.locator(selector).click();
+          const lane = page.locator(width === 390 ? '[data-phone-task-lane="p-stop-once"]' : selector);
+          await lane.locator('[data-answer-action="continue-review"]').waitFor();
+          await lane.scrollIntoViewIfNeeded();
+          const reading = await lane.evaluate((element) => {
+            const buttons = [...element.querySelectorAll<HTMLButtonElement>("[data-answer-action]")];
+            return {
+              actions: buttons.map((button) => button.dataset.answerAction),
+              labels: buttons.map((button) => button.textContent),
+              clipped: buttons.some((button) => button.scrollWidth > button.clientWidth + 1),
+              reason: element.querySelector("[data-review-stop]")?.textContent,
+              findings: element.querySelector(".stage-findings")?.textContent,
+            };
+          });
+          expect(reading.actions).toEqual(["continue-review"]);
+          expect(reading.labels).toEqual([translate(lang, "pipelineBlock.answer.reviewAgain")]);
+          expect(reading.clipped).toBe(false);
+          expect(reading.reason).toBeTruthy();
+          expect(reading.findings).toBeTruthy();
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, width, legacy, ...reading });
+          await lane.screenshot({ path: path.join(out, `${lang}-${width}-${legacy ? "recovered" : "fresh"}.png`) });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
 
 describe("batched turn settlement", () => {
   browserTest("retained terminal events settle desktop and phone before a different turn starts", async () => {

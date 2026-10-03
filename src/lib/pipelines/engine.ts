@@ -67,7 +67,7 @@ import { clearEngineParkedTaskNote, writeParkedTaskNote, type ParkedTaskReason }
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
+import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
@@ -2765,9 +2765,16 @@ function passSuccessor(
   const recheck = Boolean(source?.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance");
   /* A spent edge's terminal re-check remains authoritative. The lineage return
      applies between granted rounds and after nested repairs before exhaustion. */
-  const terminalGrant = !recheck && attempt ? terminalReviewGrantForAttempt(pipeline, stage, attempt) : null;
-  if (terminalGrant && (stage.id === pipeline.stages.find((candidate) => candidate.id === terminalGrant.stageId)?.onFail?.to
-    || stage.next === null)) {
+  const terminalGrant = attempt ? terminalReviewGrantForAttempt(pipeline, stage, attempt) : null;
+  const grantedRecheck = recheck && terminalGrant?.stageId === source?.id;
+  if (terminalGrant && grantedRecheck && stage.next !== null && stage.next !== terminalGrant.stageId) {
+    // The last granted fix still owes its intermediate validation. Durable
+    // lineage marks the final re-check when that path reaches the reviewer.
+    return { next: stage.next, handoff: null };
+  }
+  // Retain intermediate validation, including the successor of a spent repair.
+  const next = source ? (recheck ? source.id : source.next) : stage.next;
+  if (terminalGrant && (!recheck || grantedRecheck) && (next === terminalGrant.stageId || next === null)) {
     return {
       next: terminalGrant.stageId,
       handoff: null,
@@ -2937,10 +2944,7 @@ function currentTerminalReviewPending(pipeline: Pipeline, pending = pipeline.rev
 function terminalBudgetDecisionRefusal(
   attempt: PipelineStageAttempt | null, allowBlockedRetry = false,
 ): PipelinePatchResult | null {
-  if (attempt?.activatedBy?.budgetRecheck && attempt.verdict
-    && ["failed", "needs_decision"].includes(attempt.state)
-    && verdictRoutesAsFail({ verdict: attempt.verdict, output: attempt.output ?? "" })
-    && !(allowBlockedRetry && attempt.verdict.blocked === true)) {
+  if (terminalReviewBudgetSpent(attempt, allowBlockedRetry)) {
     return { error: "terminal review budget is spent; use continue-review with addRounds and expectedRevision", status: 409 };
   }
   return null;
