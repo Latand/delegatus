@@ -23,3 +23,11 @@ test("new and Docker launchers need no bootstrap action", () => {
   expect(installAction({ mode: "checkout", record: { ...record, launcher: { ...record.launcher, relaunch: 1 } } } as never)).toBeNull();
   expect(installAction({ mode: "managed", record: null, reason: null })).toBeNull();
 });
+
+test("terminal bootstrap preserves a custom port and safe access arguments", () => {
+  const action = installAction({ mode: "checkout", record: { ...record, port: 45678 } } as never,
+    { cgroup: () => "", ready: () => true, argv: () => ["bun", "/srv/checkout/bin/cli.mjs", "--port", "45678", "--hostname", "0.0.0.0", "--tailscale", "--new-token"] });
+  expect(action?.command).toContain("'45678'");
+  expect(action?.command).toContain("'--tailscale'");
+  expect(action?.command).not.toContain("--new-token");
+});

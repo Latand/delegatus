@@ -216,13 +216,24 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
       return;
     }
     busy = true;
+    let admitted = request.autoGateId === undefined;
+    const rejected = (detail) => {
+      const file = `${requestFile}.result.json`;
+      const temporary = `${file}.${process.pid}.tmp`;
+      writeFileSync(temporary, JSON.stringify({ requestId: request.requestId, state: "rejected", detail }), { mode: 0o600 });
+      renameSync(temporary, file);
+    };
     try {
       if (request.autoGateId !== undefined) {
         let gate = null;
         try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* no valid admission */ }
         if (typeof request.autoGateId !== "string" || gate?.id !== request.autoGateId || typeof gate.until !== "number" || gate.until <= Date.now()
-          || !await admitAuto(request)) return;
+          || !await admitAuto(request)) {
+          rejected("Final automatic admission was refused or expired");
+          return;
+        }
       }
+      admitted = true;
       // Do not remove a newer request that arrived while admission was read.
       try {
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
@@ -230,6 +241,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
       rmSync(requestFile, { force: true });
       await handle(request);
     } catch (error) {
+      if (!admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       if (request.autoGateId) {

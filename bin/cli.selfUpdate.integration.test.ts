@@ -183,7 +183,7 @@ function version(fixture: ReturnType<typeof install>, extraEnv: Record<string, s
 }
 
 type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string } | null };
-type LauncherRecord = { launcher: { pid: number; autoAdmission?: number }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
+type LauncherRecord = { launcher: { pid: number; autoAdmission?: number; requestId?: string; state?: string; error?: {kind: string}; revision?: string }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -1025,7 +1025,7 @@ for (const broken of [false, true]) {
     expect(after.web.pid).not.toBe(before.web.pid);
     expect(after.runtimeHost.pid).not.toBe(before.runtimeHost.pid);
     expect(await served(running.port)).toBe(broken ? fixture.checkout : next.dir + "/dist/standalone");
-    if (broken) { expect(after.launcher.error.kind).toBe("fell-back"); expect(existsSync(before.releasePointer)).toBe(false); }
+    if (broken) { expect(after.launcher.error?.kind).toBe("fell-back"); expect(existsSync(before.releasePointer)).toBe(false); }
     else expect(after.launcher.revision).toBe(next.sha);
   }, 120_000);
 }

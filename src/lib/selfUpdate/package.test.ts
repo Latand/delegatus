@@ -7,7 +7,7 @@ import type { LauncherRecord } from "./launcher";
 const root = mkdtempSync("/var/tmp/package-update-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 test("registry metadata pins the published version to its revision", async () => {
-  const revision = await registryRevision("latest", (async () => Response.json({ version: "1.0.1", gitHead: "a".repeat(40) })) as typeof fetch);
+  const revision = await registryRevision("latest", (async () => Response.json({ version: "1.0.1", gitHead: "a".repeat(40) })) as unknown as typeof fetch);
   expect(revision).toMatchObject({ version: "1.0.1", sha: "a".repeat(40) });
 });
 for (const broken of [false, true]) test(`package install verifies runtime artifacts, broken=${broken}`, async () => {

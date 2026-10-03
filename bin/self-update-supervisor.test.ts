@@ -167,6 +167,7 @@ describe("restart requests", () => {
     try {
       await watcher.poll();
       expect(restarted).toBe(false);
+      expect(JSON.parse(readFileSync(`${file}.result.json`, "utf8"))).toMatchObject({ requestId: "unadmitted", state: "rejected" });
       expect(existsSync(file)).toBe(false);
       expect(existsSync(gateFile)).toBe(false);
     } finally { watcher.stop(); }

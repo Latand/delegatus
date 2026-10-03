@@ -88,12 +88,24 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     }
   }, [feed]);
 
+  const confirmApply = () => {
+    const work = s?.resumeWork;
+    const lines = [t("selfUpdate.applyConfirm")];
+    if (work) {
+      lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
+      lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
+      lines.push(...(work.turnList ?? []).filter(turn => !turn.stage).map(turn => `${turn.engine} · ${turn.project ?? turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`));
+      if (work.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
+    }
+    return window.confirm(lines.join("\n"));
+  };
+
   const actions: ViewActions = {
-    installAction: () => { void act("install-action", "/api/self-update/action"); },
+    installAction: () => { if (confirmApply()) void act("install-action", "/api/self-update/action"); },
     toggleAuto: () => { if (s?.auto) void act("auto", "/api/self-update/auto", { enabled: !s.auto.enabled }); },
     check: () => { void act("check", "/api/self-update/check"); },
-    update: () => { if (window.confirm(t("selfUpdate.applyConfirm"))) void act("update", "/api/self-update/update", { key: newKey() }); },
-    retry: () => { void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
+    update: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey() }); },
+    retry: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
     restartWeb: () => {
       const pid = s?.processes.web.pid ?? null;
       void act("restart-web", "/api/self-update/restart", { role: "web" }).then((ok) => { if (ok) setWebRestart({ pid }); });

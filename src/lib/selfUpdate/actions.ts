@@ -26,13 +26,22 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export function installAction(decision: ModeDecision, ports = {
+export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string): boolean; argv?(pid: number): string[] } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
+  argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): InstallAction | null {
   if (decision.mode === "managed" || decision.record?.launcher.relaunch === 1) return null;
   if (decision.reason === "docker-deployments") return { id: "docker-deployments", button: false,
     command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" };
-  const command = `${quote(process.execPath)} ${quote(join(root, "bin", "cli.mjs"))} --no-open`;
+  const args: string[] = [];
+  const original = decision.record ? ports.argv?.(decision.record.launcher.pid) ?? [] : [];
+  for (let i = 0; i < original.length; i++) {
+    const arg = original[i]!;
+    if (["--port", "-p", "--hostname", "-H"].includes(arg) && original[i + 1]) args.push(arg, original[++i]!);
+    else if (arg === "--tailscale" || arg.startsWith("--port=") || arg.startsWith("--hostname=")) args.push(arg);
+  }
+  if (decision.record?.port && !args.some(arg => ["--port", "-p"].includes(arg) || arg.startsWith("--port="))) args.push("--port", String(decision.record.port));
+  const command = [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"].map(quote).join(" ");
   if (decision.record) {
     if (!ports.ready(decision.record.releasePointer)) return { id: "update-first", button: true };
     const unit = userUnit(ports.cgroup(decision.record.launcher.pid));

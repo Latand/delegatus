@@ -1,3 +1,4 @@
+import type { QuietBlockers } from "./quiet";
 /* The self-update Snapshot (#2007): what the Update surface renders, in both
    install modes. Shared by the server modules and the client surface, so this
    file imports nothing that only runs on one side. Every string the operator
@@ -174,6 +175,7 @@ export const REFUSAL_CODES: readonly RefusalCode[] = [
 ];
 
 export interface Snapshot {
+  resumeWork?: Pick<QuietBlockers, "turns" | "stages" | "turnList" | "stageList" | "unreadable">;
   action?: InstallAction | null;
   mode: InstallMode;
   unsupportedReason: UnsupportedReason | null;

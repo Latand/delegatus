@@ -580,6 +580,24 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(ledger).toMatchObject({ state: "ok", value: { phase: "succeeded", terminal: true } });
   });
 
+  test("Retry after a verified rollback rebuilds and sends another complete apply", async () => {
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    expect((await postUpdate(post("/update", { key: "apply-rollback" }))).status).toBe(202);
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    const request = JSON.parse(readFileSync(record.requestFile, "utf8")); rmSync(record.requestFile);
+    record.launcher = { ...record.launcher, requestId: request.requestId, state: "healthy", error: { kind: "fell-back", revision: tipSha.slice(0, 7), detail: "candidate health failed" } };
+    writeFileSync(h.recordFile, JSON.stringify(record)); rmSync(record.releasePointer, { force: true });
+    await until(next => next.update.state === "failed");
+    expect((await postUpdate(post("/update", { key: "retry-rollback", retry: true }))).status).toBe(202);
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ role: "relaunch", target: tipSha });
+  });
+
   test("a legacy terminal deploy returns the dialog prerequisite and sends no restart", async () => {
     const h = harness(); setSelfUpdateServiceForTests(h.service);
     const response = await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "old-launcher" }));

@@ -29,3 +29,27 @@ test("fallback keeps operator policy and reports rollback", () => {
   expect(c.observe({ ...r, launcher: { ...r.launcher, requestId: id, error: { kind: "fell-back", revision: "aaaaaaa", detail: "broken" } } })).toBe("failed");
   expect(c.current).toMatchObject({ rolledBack: true, trigger: "operator", detail: "broken" });
 });
+
+test("a rejected automatic admission releases custody and permits another attempt", () => {
+  const dir = mkdtempSync(join(root, "rejected-")); const r = record(dir); const c = new ApplyController(dir);
+  c.begin(r, "a".repeat(40), "auto"); c.send(r, "gate-1");
+  writeFileSync(`${r.requestFile}.result.json`, JSON.stringify({ requestId: c.current!.requestId, state: "rejected", detail: "Final automatic admission expired" }));
+  expect(c.observe(r)).toBe("failed");
+  expect(c.current?.detail).toContain("admission");
+  expect(() => c.begin(r, "b".repeat(40), "operator")).not.toThrow();
+});
+test("a terminal bootstrap settles after the new launcher verifies both processes", () => {
+  const dir = mkdtempSync(join(root, "terminal-")); const r = record(dir); const c = new ApplyController(dir);
+  c.begin(r, "a".repeat(40), "operator"); c.patch({ state: "ready" });
+  const next = { ...r, launcher: { ...r.launcher, pid: 6, startIdentity: "8", state: "healthy" } };
+  expect(c.observe(next, false)).toBeNull();
+  expect(c.observe(next, true)).toBe("done");
+  expect(() => c.begin(next, "b".repeat(40), "operator")).not.toThrow();
+});
+test("a launcher record cannot settle a release when host health failed", () => {
+  const dir = mkdtempSync(join(root, "health-")); const r = record(dir); const c = new ApplyController(dir);
+  c.begin(r, "a".repeat(40), "operator"); c.send(r);
+  const next = { ...r, launcher: { ...r.launcher, state: "healthy", requestId: c.current!.requestId } };
+  expect(c.observe(next, false)).toBeNull();
+  expect(c.current?.state).toBe("switching");
+});

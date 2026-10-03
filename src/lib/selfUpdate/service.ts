@@ -1152,6 +1152,7 @@ export class SelfUpdateService {
     const decision = await this.decide();
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
+    if (this.apply.current?.state === "ready") return refuse(409, "cannot-update", "Restart the launcher using the install action before another update");
     const available = this.slice.available;
     if (!available && decision.mode === "checkout" && decision.record && this.autoAvailability(decision) === "hand-managed"
       && this.slice.check.relation === "equal" && snapshot.installed.sha) {
@@ -1177,9 +1178,14 @@ export class SelfUpdateService {
       const runner = this.runnerFor(decision.record);
       const snapshot = await this.snapshot();
       if (snapshot.busy) return busy(snapshot.busy);
-      if (runner.state.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
+      if (runner.state.state !== "failed" && this.apply.current?.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
+      if (decision.record.checkout && githubRepositoryOfRemote(this.deps.remote)) {
+        const green = await this.greenReader.read(this.deps.remote, this.deps.branch, runner.state.target!, decision.record.checkout);
+        if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+      }
       this.apply.begin(decision.record, runner.state.target!, "operator");
-      void runner.retry().then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
+      const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
+      void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
       return { ok: true };
     }
     if (decision.mode === "managed") {
@@ -1212,9 +1218,24 @@ export class SelfUpdateService {
     const current = await this.decide();
     if (!current.record) throw new Error("The launcher is unavailable");
     if (current.record.launcher.relaunch === 1) this.apply.send(current.record);
-    else if (installAction(current)?.id === "restart-service") {
-      const result = await this.performInstallAction();
-      if (!result.ok) throw new Error(result.error);
+    else {
+      const intent = this.apply.current!;
+      let previousEntry: string | undefined;
+      try { previousEntry = readFileSync(`/proc/${current.record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs")); } catch { /* The recorded serving release is available on macOS too. */ }
+      if (!previousEntry) {
+        let previousRoot = current.record.checkout ?? current.record.installRoot;
+        try { previousRoot = JSON.parse(intent.rollbackPointer ?? "{}").dir ?? previousRoot; } catch { /* no prior published release */ }
+        if (previousRoot) previousEntry = join(previousRoot, "bin", "cli.mjs");
+      }
+      if (!previousEntry || !this.deps.processAlive(current.record.launcher.pid, current.record.launcher.startIdentity!)) throw new Error("The launcher identity changed");
+      writeAtomic(current.record.requestFile.replace(/request-([^/]+)\.json$/, "trial-$1.json"), {
+        requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
+      });
+      this.apply.patch({ externalRestart: true });
+      if (installAction(current)?.id === "restart-service") {
+        const result = await this.performInstallAction();
+        if (!result.ok) throw new Error(result.error);
+      }
     }
     // Terminal upgrades remain ready, with the single command on the card.
     this.changes.emit();
@@ -1444,6 +1465,10 @@ export class SelfUpdateService {
     // immutable response across later changes.
     const auto = replayAuto ?? this.auto;
     snapshot.auto = this.autoView(decision, snapshot, auto);
+    if (this.deps.quiet) {
+      const { blockers } = await probeQuiet(snapshot, this.deps.quiet, now);
+      snapshot.resumeWork = { turns: blockers.turns, stages: blockers.stages, turnList: blockers.turnList, stageList: blockers.stageList, unreadable: blockers.unreadable };
+    }
     snapshot.history = readHistory(this.historyFile);
     snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
     return snapshot;
@@ -1451,16 +1476,6 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    const settled = this.apply.observe(record);
-    if (settled) {
-      const intent = this.apply.current!;
-      appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
-        outcome: intent.rolledBack ? "fell-back" : settled, detail: intent.detail });
-      if (intent.trigger === "auto" && settled === "failed") {
-        this.auto = { ...this.auto, enabled: false, off: { at: new Date(now).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
-        this.saveAuto(); this.endDrain();
-      }
-    }
     let installed: Revision;
     if (record.checkout) {
       const pointer = new ReleasePointer(record.releasePointer, record.checkout).current();
@@ -1474,6 +1489,16 @@ export class SelfUpdateService {
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
+    const settled = this.apply.observe(record, !!health && health.pid === record.runtimeHost.pid && health.startIdentity === record.runtimeHost.startIdentity);
+    if (settled) {
+      const intent = this.apply.current!;
+      appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
+        outcome: intent.rolledBack ? "fell-back" : settled, detail: intent.detail });
+      if (intent.trigger === "auto" && settled === "failed") {
+        if (!intent.admissionRefused) this.auto = { ...this.auto, enabled: false, off: { at: new Date(now).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
+        this.saveAuto(); this.endDrain();
+      }
+    }
     const at = new Date(now).toISOString();
 
     const fromRecord = (entry: LauncherProcess, extra: Partial<ProcessStatus>): ProcessView => {

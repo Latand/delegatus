@@ -5656,6 +5656,10 @@ async function selfUpdateAutoMain(): Promise<void> {
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
+  states["install-action"] = { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null }, action: { id: "restart-service", button: true, unit: "delegatus.service" } };
+  states["install-switch"] = { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null }, busy: "update",
+    update: { ...idleUpdate(), state: "running", target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z",
+      steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "running", startedAt: "2026-01-02T00:00:00Z", durationMs: null, exitCode: null, tail: [], failure: null }] } };
   states.overran!.auto!.decision = { id: "drain-example", at: "2026-01-02T06:00:00Z", project: "Delegatus", blockers: {
     ...auto.blockers,
     stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }],
@@ -5673,7 +5677,7 @@ async function selfUpdateAutoMain(): Promise<void> {
     const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
     if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states).filter(([name]) => !process.env.SELF_UPDATE_INSTALL_ONLY || name.startsWith("install-"))) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
       if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
       const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
@@ -5689,6 +5693,7 @@ async function selfUpdateAutoMain(): Promise<void> {
         return false;
       }, undefined, { timeout: 60_000 });
       await page.waitForSelector('[data-section="auto"]', { timeout: 30_000 });
+      await page.locator('[data-section="auto"]').scrollIntoViewIfNeeded();
       const geometry = await page.evaluate(() => {
         const dialog = document.querySelector<HTMLElement>("[data-self-update-dialog]")!;
         const card = dialog.querySelector<HTMLElement>('[data-section="auto"]')!;
@@ -5718,6 +5723,15 @@ async function selfUpdateAutoMain(): Promise<void> {
         report.failures.push(`${tag}: long blocker name did not wrap`);
       }
       if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
+      if (name === "install-action" || name === "install-switch") {
+        const target = page.locator(name === "install-action" ? '[data-section="install-action"]' : '[data-section="update"]');
+        await target.scrollIntoViewIfNeeded();
+        const installation = await target.evaluate(element => ({ overflow: element.scrollWidth - element.clientWidth, text: element.textContent,
+          action: !!element.querySelector('[data-action="install-action"]') }));
+        report.frames[`${tag}-installation`] = installation;
+        if (installation.overflow > 1 || name === "install-action" && !installation.action
+          || name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: install action or switch is unreadable`);
+      }
       const frame = path.join(OUT_DIR, `${tag}.png`);
       await page.screenshot({ path: frame });
       if (evidenceDir) {
