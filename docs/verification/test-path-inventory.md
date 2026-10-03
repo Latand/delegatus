@@ -179,6 +179,8 @@ Recipe verification used the copied runner under the documented lock/scope: `Acc
 
 The diagnostics fix-round rerun copied the same runner and invoked only `src/lib/agent/registry.sqlite.test.ts`, with `INVENTORY_PHASE=bounded-diagnostics` and `INVENTORY_TIMEOUT=300s` under the documented flock and 8 GiB scope. The whole file exited 0: **68 pass, 0 fail, 369 assertions, 30.63s process time**. The prior growing-spawn fixture exceeded its 60s test-case deadline in independent full-file runs (64.4–85.0s). Replacing it with 650 real `setEngineRouting` writes keeps the registry size bounded while preserving all four backend modes, the injected clock and every metric assertion. Diagnostics now pass in 0.80s (`off`), 1.64s (`dual-write`), 0.56s (`read`) and 0.56s (`sqlite`), with the original **30s** test-case deadline restored. This fixes the test fixture; production storage code is unchanged. The file's latest P result is now confirmed by this full-file run; inventory totals remain unchanged.
 
+The dropped-evidence-note review finding came from constructing its 205-row history through **410 SQLite mutations inside the 5s test case**; two isolated full-file reruns measured 5.908s and 5.382s. The setup now creates the rows in three JSON partitions below each partition's retention bounds, moves the durable rows to one conversation, imports them into SQLite, then uses a real SQLite delivery pair to trigger compaction. The original admission checks, uncertain-delivery retry, compaction note persistence, close/reopen restart, retained-key check, and unchanged 5s deadline remain. Five consecutive full-file runs used unique `LLV_STATE_DIR`, `HOME`, and `TMPDIR`, each under the documented lock and 8 GiB scope with a 300s process timeout: **68 pass / 0 fail and 369 assertions each**, in 25.88s, 23.58s, 24.73s, 23.84s, and 21.79s. The target case took 1.41s, 0.82s, 0.98s, 0.90s, and 1.11s. This fixes test setup cost; production compaction code is unchanged.
+
 ## Ownership
 
 O1: owned by lane d713000d (PR #2474) / lane 909814bf (PR #2430).
@@ -282,7 +284,7 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | C71 | L | Interprocess account fixture seeds/readbacks legacy JSON while SQLite state persists, causing missing controller update; reset both storage backends. | — |
 | C72 | M | CLI presence expectation assumes machine default executable availability; active identity guard work owns exact fixture. | O16 |
 | C73 | S | New spawn admission requires title; legacy launchProfile fixture omits it. | — |
-| C74 | S | Retained recipient evidence contradicts the old payload-free assertion; the growing 650-spawn diagnostics fixture also exceeded 60s. Use 650 bounded durable routing writes with unchanged metrics and restored 30s deadline; full-file rerun passes 68/0 in 30.63s. | — |
+| C74 | S | Retained recipient evidence contradicted the old payload-free assertion; the diagnostics fixture grew its registry across 650 spawns; and the dropped-evidence case built 205 rows through 410 SQLite mutations, exceeding 5s. Keep the original assertions and deadlines, bound diagnostics writes, and seed the SQLite history before triggering real compaction; five full-file runs pass 68/0. | — |
 | C75 | M | Pipeline admission now requires a signed-in account; fixture relied on machine credentials instead of isolated fake auth evidence. | — |
 | C76 | S | Child JSON result channel is contaminated by state-recovery diagnostics; redirect fixture diagnostics to stderr. | — |
 | C77 | M | CPU budget exceeded twice (1000 calls: 2335/3230 ms >2000 ms); warmed heap rerun passes; file exceeds both 120s and 300s caps. Budget/profiling decision remains. | — |
@@ -1138,7 +1140,7 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | `src/lib/agent/registry.migrationBinding.test.ts` | P | P | — |
 | `src/lib/agent/registry.projectOwnership.test.ts` | P | P | — |
 | `src/lib/agent/registry.reseat.test.ts` | P | P | — |
-| `src/lib/agent/registry.sqlite.test.ts` | T | P | C74; full-file 68 pass / 0 fail (30.63s) |
+| `src/lib/agent/registry.sqlite.test.ts` | T | P | C74; five consecutive full-file runs 68/0, 369 assertions each; target case 0.82–1.41s |
 | `src/lib/agent/registry.sqliteOnly.test.ts` | P | P | — |
 | `src/lib/agent/registry.test.ts` | P | P | — |
 | `src/lib/agent/registryBackendIdentity.test.ts` | P | P | — |

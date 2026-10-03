@@ -2095,30 +2095,89 @@ test("the seat MCP heartbeat resolves its current digest through a keyed SQLite 
 test("SQLite carries the dropped-evidence note across a restart, so a compacted key stays unknown", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-evidence-note-"));
   const filename = path.join(directory, "agent-registry.json");
-  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const conversation = sqlite.ensureConversation("codex", "/sessions/sqlite-evidence-note.jsonl", "default");
-  const original = sqlite.holdDelivery(conversation.id, "the message that was delivered", "sqlite-compacted-key");
-  sqlite.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
-  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "admitted" });
+  const seed = new AgentRegistry(filename);
+  const conversation = seed.ensureConversation("codex", "/sessions/sqlite-evidence-note.jsonl", "default");
+  const original = seed.holdDelivery(conversation.id, "the message that was delivered", "sqlite-compacted-key");
+  seed.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
 
-  /* One operation whose fate was never proven, then enough later traffic to
-     push the delivered key past the owner retention bound. */
-  const unverified = sqlite.holdDelivery(conversation.id, "the message whose fate is unknown", "sqlite-unverified-key");
-  sqlite.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  /* Build the 205-row history in small JSON partitions, below each partition's
+     retention bounds. Move those durable rows into one SQLite conversation so
+     its first real delivery mutation performs the compaction under test. */
+  const partitions = Array.from({ length: 3 }, (_, index) => seed.ensureConversation(
+    "codex", `/sessions/sqlite-evidence-note-partition-${index}.jsonl`, "default",
+  ));
+  const laterIds: string[] = [];
+  const unverifiedPartition = partitions[0]!;
+  const unverified = seed.holdDelivery(unverifiedPartition.id, "the message whose fate is unknown", "sqlite-unverified-key");
+  seed.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  laterIds.push(unverified.id);
   for (let index = 0; index < 205; index += 1) {
-    const later = sqlite.holdDelivery(conversation.id, `later SQLite message ${index}`, `sqlite-later-${index}`);
-    sqlite.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+    const partition = partitions[index % partitions.length]!;
+    const later = seed.holdDelivery(partition.id, `later SQLite message ${index}`, `sqlite-later-${index}`);
+    seed.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+    laterIds.push(later.id);
   }
-  /* Re-arming the unverified operation clears its terminal state, which puts
-     the retained group back under the bound — so nothing but the note itself
-     can still say this history has a hole in it. */
-  expect(sqlite.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
-  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const fixture = seed.snapshot();
+  const partitionIds = new Set(partitions.map((partition) => partition.id));
+  const oldestAt = new Date(Date.UTC(2025, 0, 1)).toISOString();
+  fixture.heldDeliveries[original.id]!.createdAt = oldestAt;
+  fixture.heldDeliveries[original.id]!.deliveredAt = oldestAt;
+  fixture.deliveryOperationOwners[original.command.operationId]!.createdAt = oldestAt;
+  for (const id of laterIds) {
+    const delivery = fixture.heldDeliveries[id]!;
+    delivery.conversationId = conversation.id;
+    delivery.runtimeConversationId = conversation.id;
+  }
+  fixture.heldDeliveries[unverified.id]!.admissionSeq = 2;
+  fixture.deliveryOperationOwners[unverified.command.operationId]!.conversationId = conversation.id;
+  fixture.deliveryOperationOwners[unverified.command.operationId]!.runtimeConversationId = conversation.id;
+  const moved = new Set(laterIds);
+  const orderedLater = laterIds
+    .map((id) => fixture.heldDeliveries[id]!)
+    .filter((delivery) => delivery.id !== unverified.id)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  orderedLater.forEach((delivery, index) => {
+    const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index + 1)).toISOString();
+    delivery.admissionSeq = index + 3;
+    delivery.createdAt = createdAt;
+    delivery.deliveredAt = createdAt;
+    const owner = fixture.deliveryOperationOwners[delivery.command.operationId]!;
+    owner.createdAt = createdAt;
+    owner.settledAt = createdAt;
+  });
+  for (const owner of Object.values(fixture.deliveryOperationOwners)) {
+    if (!moved.has(owner.deliveryId)) continue;
+    owner.conversationId = conversation.id;
+    owner.runtimeConversationId = conversation.id;
+  }
+  for (const id of partitionIds) delete fixture.conversations[id];
+  fs.writeFileSync(filename, JSON.stringify(fixture, null, 2));
+
+  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "admitted" });
+
+    /* One SQLite delivery mutation compacts the imported history. Retrying the
+       unverified operation then re-arms it under the bound, leaving only the
+       persisted evidence note to say that the old key was dropped. */
+    const trigger = sqlite.holdDelivery(conversation.id, "SQLite compaction trigger", "sqlite-compaction-trigger");
+    sqlite.recordDeliveryOutcome(trigger.id, "delivered", null, "delivered");
+    expect(sqlite.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+    expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+  } finally {
+    sqlite.close();
+  }
 
   const restarted = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
-  /* The retained end of the same history still answers from its own row. */
-  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-later-204")).toMatchObject({ outcome: "admitted" });
+  try {
+    expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+    /* The retained end of the same history still answers from its own row. */
+    expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-later-204")).toMatchObject({ outcome: "admitted" });
+  } finally {
+    restarted.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 /**
