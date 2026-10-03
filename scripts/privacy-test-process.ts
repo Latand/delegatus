@@ -20,7 +20,7 @@ export async function runPrivacyTestProcess(options: {
   try {
     const process = Bun.spawn(options);
     child = process;
-    // A stuck child fails independently of the workflow's outer 90-second cap.
+    // A stuck child fails independently of the workflow's outer suite cap.
     timer = setTimeout(() => process.kill("SIGKILL"), 20_000);
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(process.stdout).arrayBuffer(),

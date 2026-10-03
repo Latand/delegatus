@@ -572,7 +572,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(0);
   });
 
-  test.concurrent("blocks an unsafe live raster without provenance using redacted diagnostics", async () => {
+  // OCR-bearing cases run alone, including fixture generation before the CLI.
+  // Overlap only the text-only cases; generation-heavy OCR gets a case budget.
+  test.serial("blocks an unsafe live raster without provenance using redacted diagnostics", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -594,7 +596,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   });
 
   for (const metadataType of ["zTXt", "iTXt"] as const) {
-    test.concurrent(`detects live-source metadata inside compressed PNG ${metadataType}`, async () => {
+    test.serial(`detects live-source metadata inside compressed PNG ${metadataType}`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const image = join(directory, "capture.png");
@@ -616,7 +618,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  test.concurrent("fails closed for animated PNG publication input", async () => {
+  test.serial("fails closed for animated PNG publication input", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -633,7 +635,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects provenance that does not declare the published raster", async () => {
+  test.serial("rejects provenance that does not declare the published raster", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -647,7 +649,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects output-only provenance without source and generator bindings", async () => {
+  test.serial("rejects output-only provenance without source and generator bindings", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -703,7 +705,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(manifest.assets?.[0]?.sourceDigests).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/)]);
   });
 
-  test.concurrent("accepts media reproduced by the trusted source-bound generator", async () => {
+  test.serial("accepts media reproduced by the trusted source-bound generator", async () => {
     const repositoryRoot = mkdtempSync(join(tmpdir(), "llv-privacy-candidate-"));
     temporaryDirectories.push(repositoryRoot);
     const image = join(repositoryRoot, "docs", "acceptance", "issue-290", "readiness-kanban.png");
@@ -719,9 +721,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
-  });
+  }, 6_000);
 
-  test.concurrent("detects private text in raster pixels without echoing OCR content", async () => {
+  test.serial("detects private text in raster pixels without echoing OCR content", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -2393,7 +2395,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     for (const exactOnly of [true, false]) {
       for (const contiguous of [true, false]) {
-        test.concurrent(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, async () => {
+        // Serial pressure peak: 3260.03 ms; 6 s leaves 45.67% headroom.
+        test.serial(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, async () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
           temporaryDirectories.push(directory);
           const generation = generatePrivacyPlaceholders(directory);
@@ -2419,7 +2422,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           expect(output).not.toContain(ocrText);
           expect(output).not.toContain(value);
           expect(result.stderr.toString()).toBe("");
-        });
+        }, 6_000);
       }
     }
 
@@ -2620,7 +2623,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("samples GIF and video frames while keeping decoded content private", async () => {
+  test.serial("samples GIF and video frames while keeping decoded content private", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.gif");
@@ -2644,7 +2647,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("inspects every video stream with class-only diagnostics", async () => {
+  test.serial("inspects every video stream with class-only diagnostics", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2666,7 +2669,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("inspects metadata from every video stream", async () => {
+  test.serial("inspects metadata from every video stream", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2688,7 +2691,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("fails closed before sampling excessive video streams", async () => {
+  test.serial("fails closed before sampling excessive video streams", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2714,7 +2717,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("samples representative frame indexes when video duration is unknown", async () => {
+  test.serial("samples representative frame indexes when video duration is unknown", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2738,7 +2741,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("fails closed when protected late video frames cannot be bounded", async () => {
+  test.serial("fails closed when protected late video frames cannot be bounded", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2759,7 +2762,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("matches a Ukrainian OCR value with configured multilingual language data", async () => {
+  test.serial("matches a Ukrainian OCR value with configured multilingual language data", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -2789,7 +2792,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("fails closed when configured OCR language data is unavailable", async () => {
+  test.serial("fails closed when configured OCR language data is unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -2809,7 +2812,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("detects PNG media renamed with a Markdown extension", async () => {
+  test.serial("detects PNG media renamed with a Markdown extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.md");
@@ -2828,7 +2831,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("detects video media renamed with a text extension", async () => {
+  test.serial("detects video media renamed with a text extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const video = join(directory, "capture.txt");
@@ -2908,14 +2911,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
-  test("runs candidate privacy tests last under the 90-second budget", () => {
+  test("runs candidate privacy tests last under the 130-second budget", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
     const trustedCheck = workflow.indexOf("- name: Verify privacy gate behavior");
     const candidateCheck = workflow.indexOf("- name: Verify candidate privacy gate behavior within budget");
 
     expect(trustedCheck).toBeGreaterThanOrEqual(0);
     expect(candidateCheck).toBeGreaterThan(trustedCheck);
-    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 90s bun test scripts/privacy-*.test.ts");
+    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
   });
 
   test("scopes issue-comment audits to the triggering comment", () => {
@@ -2981,7 +2984,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects candidate-created adversarial exemptions", async () => {
+  test.serial("rejects candidate-created adversarial exemptions", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     runGit(root, ["init", "--quiet"]);
@@ -3037,7 +3040,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects live output and source digests that contradict the trusted generator", async () => {
+  test.serial("rejects live output and source digests that contradict the trusted generator", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     runGit(root, ["init", "--quiet"]);
@@ -3091,7 +3094,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects candidate-controlled generators that self-certify live media", async () => {
+  test.serial("rejects candidate-controlled generators that self-certify live media", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const directory = join(root, "published");
@@ -3139,7 +3142,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("allows adversarial exemptions already present in the trusted base", async () => {
+  test.serial("allows adversarial exemptions already present in the trusted base", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     runGit(root, ["init", "--quiet"]);
@@ -3185,7 +3188,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects symlink manifests and provenance generators", async () => {
+  test.serial("rejects symlink manifests and provenance generators", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const contents = redactedPlaceholderPng();
@@ -3234,7 +3237,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects asset and manifest paths reached through symlinked ancestors", async () => {
+  test.serial("rejects asset and manifest paths reached through symlinked ancestors", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const realDirectory = join(root, "real-publication");
@@ -3256,7 +3259,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects provenance generators reached through symlinked ancestors", async () => {
+  test.serial("rejects provenance generators reached through symlinked ancestors", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const publicationDirectory = join(root, "published");
@@ -3293,7 +3296,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("rejects provenance generators outside the asset boundary", async () => {
+  test.serial("rejects provenance generators outside the asset boundary", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const directory = join(root, "published");
@@ -3327,7 +3330,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("requires a dedicated generator version declaration", async () => {
+  test.serial("requires a dedicated generator version declaration", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3363,7 +3366,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     { name: "malformed", value: "bun latest!" },
     { name: "mismatched", value: "bun-1.3.14" },
   ]) {
-    test.concurrent(`rejects ${runtimeFixture.name} provenance generator runtime declarations`, async () => {
+    test.serial(`rejects ${runtimeFixture.name} provenance generator runtime declarations`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const image = join(directory, "capture.png");
@@ -3387,7 +3390,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  test.concurrent("classifies private network, resource, and transcript-shaped media text", async () => {
+  test.serial("classifies private network, resource, and transcript-shaped media text", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3418,7 +3421,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("scans embedded raster metadata independently from OCR", async () => {
+  test.serial("scans embedded raster metadata independently from OCR", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3437,7 +3440,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.concurrent("scans compressed PNG text, eXIf, and trailing payloads", async () => {
+  test.serial("scans compressed PNG text, eXIf, and trailing payloads", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const syntheticHome = ["", "home", "fixture-person", "metadata"].join("/");
@@ -3474,7 +3477,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     { byteOrder: "le" as const, location: "trailing payload" as const },
     { byteOrder: "be" as const, location: "trailing payload" as const },
   ]) {
-    test.concurrent(`scans odd-aligned ${fixture.byteOrder.toUpperCase()} UTF-16 in ${fixture.location}`, async () => {
+    test.serial(`scans odd-aligned ${fixture.byteOrder.toUpperCase()} UTF-16 in ${fixture.location}`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const syntheticHome = ["", "home", "fixture-person", `${fixture.byteOrder}-metadata`].join("/");
