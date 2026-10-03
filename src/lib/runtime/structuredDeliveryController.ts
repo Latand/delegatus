@@ -706,11 +706,16 @@ export async function bindStructuredDeliveryQueue(
       if (!migration || sourceIndex < 0 || migrationSourceIndex < sourceIndex) return null;
       const source = generations[sourceIndex]!;
       const current = generations.at(-1);
-      // A terminal switch leaves its migration behind. A later command admitted
-      // on the unchanged generation belongs to the operator's recovery.
+      // A terminal switch leaves its migration behind. Its intent retains the
+      // owning switch revision even after a model-only reconfigure replaces it.
+      // Later admissions on the unchanged generation belong to recovery.
       const terminal = migration.phase === "rolled-back" || migration.phase === "failed-recoverable";
-      if (terminal && current === source && !conversation.switchHold && admissionEventSeq !== undefined
-        && conversation.reconfigure && admissionEventSeq > conversation.reconfigure.revision) return null;
+      if (terminal && current === source && !conversation.switchHold && admissionEventSeq !== undefined) {
+        const requestId = registry.readOnlySnapshot().migrationIntents[migration.intentId]?.requestIds
+          .find(request => request.startsWith("reconfigure:"));
+        const switchRevision = requestId ? Number(requestId.slice(requestId.lastIndexOf(":") + 1)) : NaN;
+        if (Number.isSafeInteger(switchRevision) && admissionEventSeq > switchRevision) return null;
+      }
       // Each committed edge archives its predecessor at the successor's birth.
       // Keep that evidence when a newer migration replaces the previous receipt.
       for (let index = sourceIndex; index < migrationSourceIndex; index++) {

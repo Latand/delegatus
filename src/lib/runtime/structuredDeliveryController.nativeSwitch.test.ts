@@ -81,6 +81,7 @@ async function switchingFixture(layout = "successor thread", publish = true, fai
     },
   });
   return { ...f, writes, get successorId() { return successorId; }, publishSuccessor, finishTurn: () => { active = false; },
+    beginTurn: () => { active = true; },
     successorStatus: (status: HostState["status"]) => { successorStatus = status; },
     unreadableSuccessor: (value: boolean) => { unreadableSuccessor = value; },
     unreadableAfterPublication: () => { unreadableAfterPublication = true; },
@@ -131,6 +132,48 @@ test("pending native add follows the replacement host after a model-only switch"
     expect(f.registry.conversation(f.conversation.id)?.generations.at(-1)?.launchProfile.model).toBe("gpt-6.1-sol");
     await kickStructuredDeliveryQueue();
     expect(f.writes).toHaveLength(1);
+  } finally { await f.cleanup(); }
+});
+
+test.each(["cancelled", "failed"] as const)("a model-only switch preserves a native add admitted after a %s account migration", async outcome => {
+  const f = await switchingFixture("successor thread", true, null, false);
+  try {
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "old-switch", idempotencyKey: "old-switch",
+      conversationId: f.conversation.id, model: "gpt-6.1-sol", effort: "high", fast: false, accountId: "account-b" });
+    const effect = f.journal.effectBatch(100).find(effect => effect.kind === "runtime.reconfigure")!;
+    f.registry.claimConversationReconfigure(f.conversation.id, { operationId: "old-switch", revision: effect.eventSeq,
+      profile: { model: "gpt-6.1-sol", effort: "high", fast: false }, accountId: "account-b" });
+    const pending = f.registry.requestConversationReseat(f.conversation.id, "account-b", { operationId: "old-switch", revision: effect.eventSeq });
+    if (outcome === "cancelled") {
+      f.registry.cancelConversationSwitch(f.conversation.id, pending.migration!.revision);
+    } else {
+      await advanceConversationMigration(f.conversation.id, f.registry, {
+        create: async () => { throw new Error("successor provider failed a recoverable preflight"); },
+        verify: async () => {},
+      }, { reconfigureOperationId: "old-switch" });
+      f.registry.settleConversationReconfigure(f.conversation.id, "old-switch", effect.eventSeq, "failed",
+        "successor provider failed a recoverable preflight");
+      f.finishTurn();
+    }
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("old-switch")?.receipt.status).toBe("failed");
+    expect(f.registry.conversation(f.conversation.id)?.migration?.phase).toBe(outcome === "cancelled" ? "rolled-back" : "failed-recoverable");
+    if (outcome === "failed") f.registry.releaseSwitchHold(f.conversation.id);
+
+    f.beginTurn();
+    f.admit();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "queued", reason: null });
+    expect(f.writes).toEqual([]);
+    f.finishTurn();
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe("applied");
+    expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "applied", reason: null });
+    expect(f.journal.nativeQueueRead(f.conversation.id)[0]).toMatchObject({ state: "queued",
+      binding: { threadId: f.key.sessionId, accountId: "account-a" }, reason: null });
+    expect(f.writes).toEqual([{ threadId: f.key.sessionId, input: [{ type: "text", text: "preserve queued words" }] }]);
   } finally { await f.cleanup(); }
 });
 
