@@ -279,6 +279,7 @@ export interface ViewerControlDependencies {
 }
 
 const CONTROL_ATTEMPT_TIMEOUT_MS = 5_000;
+const CONTROL_READ_RECOVERY_BUDGET_MS = 12_000;
 const CONTROL_RECOVERY_BUDGET_MS = 8_000;
 const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
@@ -352,7 +353,7 @@ async function requestViewerControl(
   const callerBudget = deadlineAt === undefined
     ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(0, deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, callerBudget);
+  const expiresAt = now + Math.min(CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
   while (Date.now() < expiresAt) {

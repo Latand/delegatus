@@ -166,6 +166,44 @@ test("the warm HTTP catalog used by list_conversations includes a new transcript
   expect(body.items.some(entry => entry.path === newAgent)).toBe(true);
 });
 
+test("production list_conversations waits through the membership cooldown for a second transcript", async () => {
+  const seat = writeSession("transport-seat");
+  await currentFileScan();
+  const first = writeSession("transport-first");
+  await completedFileScan();
+  const second = writeSession("transport-second");
+
+  const originalControlUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: request => conversationsGet(request),
+  });
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  // Keep the fixture's cooldown start at the real timestamp while allowing
+  // the production retry adapter to measure its deadline with the real clock.
+  Date.now = realNow;
+  try {
+    const startedAt = performance.now();
+    const listed = await viewerMcpBindings().list_conversations(
+      { limit: 100 },
+      { deadlineAt: Date.now() + 30_000 },
+    ) as { conversations: Array<{ transcriptPath: string }> };
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    console.info(JSON.stringify({ observation: "production-list-conversations", elapsedMs,
+      seatVisible: listed.conversations.some(entry => entry.transcriptPath === seat),
+      firstVisible: listed.conversations.some(entry => entry.transcriptPath === first),
+      secondVisible: listed.conversations.some(entry => entry.transcriptPath === second) }));
+    expect(listed.conversations.some(entry => entry.transcriptPath === second)).toBe(true);
+    expect(elapsedMs).toBeLessThan(30_000);
+  } finally {
+    Date.now = realNow;
+    if (originalControlUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = originalControlUrl;
+    await server.stop(true);
+  }
+}, 20_000);
+
 for (const busy of [false, true]) {
   test(`scan rate: ${busy ? "busy appends and revisions" : "idle polls"}`, async () => {
     const transcript = writeSession("rate-seat");
