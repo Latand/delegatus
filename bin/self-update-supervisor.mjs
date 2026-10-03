@@ -204,8 +204,8 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
 /**
  * Polls for a restart request and hands each one to `handle`, one at a time.
  * A request that arrives while another is handled waits in its file. A
- * request is consumed (its file removed) before it is handled, so a crash
- * mid-restart never replays it.
+ * Ordinary restarts consume before handling. Relaunch consumes only after
+ * its controller has persisted the trial that owns crash recovery.
  *
  * @param {string} requestFile
  * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }) => Promise<void>} handle
@@ -249,16 +249,18 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
       try {
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
-      rmSync(requestFile, { force: true });
+      if (request.role !== "relaunch") rmSync(requestFile, { force: true });
       await handle(request);
     } catch (error) {
       if (!admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (request.autoGateId) {
+      if (request.autoGateId || request.role === "relaunch") {
         try {
           if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
         } catch { /* already consumed */ }
+      }
+      if (request.autoGateId) {
         try {
           if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
         } catch { /* already removed */ }

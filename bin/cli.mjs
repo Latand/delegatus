@@ -1053,6 +1053,7 @@ async function main() {
       pauseWebRecovery();
       return stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     } });
+  await relaunch.recoverPending();
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);

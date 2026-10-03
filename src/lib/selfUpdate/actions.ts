@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { launcherControlFile } from "./launcher";
-import { ReleasePointer } from "./release";
+import { headOf, ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
 
@@ -70,8 +70,41 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   let command = withContext(fallbackCommand);
   if (decision.record) {
     if (!await ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
+    const next = await new ReleasePointer(decision.record.releasePointer, root).current();
+    const terminalEntry = join(next.dir, "bin", "launcher-relaunch.mjs");
+    if (read(terminalEntry).includes("delegatus-terminal-bootstrap-v1") && next.dir !== root) {
+      const record = decision.record;
+      // Old code can publish B and switch only web. Its resident host still
+      // identifies A, so the current pointer cannot supply rollback custody.
+      let rollbackPointer: string | null | undefined;
+      if (record.runtimeHost.state === "healthy") {
+        if (record.checkout) {
+          const head = await headOf(root);
+          if (head?.slice(0, 7) === record.runtimeHost.revision) rollbackPointer = null;
+          else if (record.runtimeHost.revision) {
+            for (const name of readdirSync(record.releasesDir)) {
+              const dir = join(record.releasesDir, name); const sha = await headOf(dir);
+              if (sha?.slice(0, 7) === record.runtimeHost.revision && (await new ReleasePointer(record.releasePointer, dir).current()).sha === sha
+                && read(join(dir, ".next", "BUILD_ID"))) rollbackPointer = JSON.stringify({ sha, dir, checkoutHead: head }) + "\n";
+            }
+          }
+        } else if (record.runtimeHost.revision === null) rollbackPointer = null;
+      }
+      // A legitimate build already captured its prior pointer before B was
+      // published. Preserve that transaction rather than starting another.
+      let intent: { target?: string; rollbackPointer?: string | null; requestId?: string } | null = null;
+      try { intent = JSON.parse(read(join(dirname(record.requestFile), "apply.json"))); } catch { /* legacy no-intent */ }
+      if (intent?.target === next.sha && typeof intent.requestId === "string"
+        && (intent.rollbackPointer === null || typeof intent.rollbackPointer === "string")) rollbackPointer = intent.rollbackPointer;
+      const metadata = Buffer.from(JSON.stringify({ target: next.sha, root, requestFile: record.requestFile, releasePointer: record.releasePointer,
+        rollbackPointer, priorRevision: record.runtimeHost.revision, priorVersion: !record.checkout ? JSON.parse(read(join(root, "package.json"))).version : null,
+        checkout: !!record.checkout })).toString("base64");
+      const invocation = (windows ? "& " : "") + [process.execPath, terminalEntry, "--terminal", metadata, join(next.dir, "bin", "cli.mjs"), ...args, "--no-open"]
+        .map(shellQuote).join(" ");
+      command = withContext(invocation);
+      if (windows) command += "; exit $LASTEXITCODE";
+    } else
     if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
-      const next = await new ReleasePointer(decision.record.releasePointer, root).current();
       if (next.dir !== root) {
         let requestId: string | undefined;
         try {

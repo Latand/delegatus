@@ -17,6 +17,7 @@ import { afterAll, afterEach, expect, test } from "bun:test";
 
 const roots: string[] = [];
 const children = new Set<ReturnType<typeof spawn>>();
+const fixtureProcesses = new Map<number, string>();
 
 /* A child the test already stopped has fired its exit: waiting for it again
    would only run out the hook's own time. */
@@ -32,6 +33,15 @@ afterEach(async () => {
     }
   }
   children.clear();
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  for (const [pid, identity] of fixtureProcesses) {
+    if (!isAlive(pid) || readStartIdentity(pid) !== identity) continue;
+    process.kill(pid, "SIGTERM");
+    const deadline = Date.now() + 2000;
+    while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(25);
+    if (isAlive(pid) && readStartIdentity(pid) === identity) process.kill(pid, "SIGKILL");
+  }
+  fixtureProcesses.clear();
 }, 10_000);
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 
@@ -83,14 +93,21 @@ process.on("SIGTERM", stop);
 `;
 
 const STUB_HOST = `
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 const socketPath = process.env.LLV_RUNTIME_HOST_SOCKET;
 const fencePath = process.env.LLV_RUNTIME_HOST_FENCE;
 mkdirSync(path.dirname(socketPath), { recursive: true });
 rmSync(socketPath, { force: true });
-const server = net.createServer((socket) => socket.end());
+const server = net.createServer((socket) => {
+  socket.on("error", () => {});
+  socket.on("data", frame => {
+    const request = JSON.parse(String(frame));
+    const startIdentity = readFileSync("/proc/" + process.pid + "/stat", "utf8").split(") ")[1].split(" ")[19];
+    socket.end(JSON.stringify({ id: request.id, ok: true, result: { pid: process.pid, startIdentity, hostEpoch: 1 } }) + "\\n");
+  });
+});
 server.listen(socketPath, () => writeFileSync(fencePath, JSON.stringify({
   pid: process.pid,
   startIdentity: process.pid + ":fixture",
@@ -226,7 +243,11 @@ async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20
 }
 
 function readRecord(state: string): LauncherRecord {
-  return JSON.parse(readFileSync(recordFile(state), "utf8")) as LauncherRecord;
+  const record = JSON.parse(readFileSync(recordFile(state), "utf8"));
+  for (const role of [record.launcher, record.web, record.runtimeHost]) {
+    if (role.pid && role.startIdentity) fixtureProcesses.set(role.pid, role.startIdentity);
+  }
+  return record as LauncherRecord;
 }
 
 async function served(port: number): Promise<string> {
@@ -1280,6 +1301,73 @@ test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions
 // A first upgrade can roll back to a launcher that predates this protocol.
 // The optional local source fixture is the exact base checkout, never a live install.
 const legacySource = process.env.LLV_REHEARSAL_LEGACY;
+for (const shape of ["checkout", "package"] as const) for (const form of ["posix", "powershell"] as const)
+for (const failure of ["host", "web", "import"] as const) (legacySource ? test : test.skip)(`legacy terminal no-intent ${shape}/${form} restores prior after ${failure}`, async () => {
+  const { installAction } = await import("../src/lib/selfUpdate/actions");
+  const { isAlive } = await import("../src/lib/selfUpdate/pid");
+  const fixture = install();
+  for (const name of readdirSync(path.join(fixture.checkout, "bin"))) {
+    const source = path.join(legacySource!, "bin", name); if (existsSync(source)) copyFileSync(source, path.join(fixture.checkout, "bin", name));
+  }
+  if (shape === "checkout") {
+    git(fixture.checkout, "add", "-f", "."); git(fixture.checkout, "commit", "-m", "legacy terminal fixture"); fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  } else {
+    writeFileSync(path.join(fixture.checkout, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.0" }));
+    mkdirSync(path.join(fixture.checkout, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(fixture.checkout, "dist", "standalone", "server.js"), STUB_NEXT(false));
+    renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
+  }
+  const newer = install(); const candidate = release(newer, "terminal-candidate", { brokenHost: failure === "host" });
+  if (shape === "package") {
+    writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
+    mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false));
+  } else git(fixture.checkout, "fetch", candidate.dir, candidate.sha);
+  const running = await start(fixture);
+  let record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  writeFileSync(record.releasePointer, JSON.stringify(shape === "checkout" ? { ...candidate, checkoutHead: fixture.first }
+    : { ...candidate, kind: "package", version: "0.0.1", baseVersion: "0.0.0" }));
+  if (shape === "checkout") {
+    request(record, "web", "old-web-only");
+    record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.web.revision === candidate.sha.slice(0, 7) ? r : null; });
+  } else {
+    // The packaged old CLI has no pointer protocol. A recovery Viewer runs B
+    // beside its old host; retain the genuine old launcher's custody record.
+    process.kill(record.launcher.pid, "SIGSTOP");
+    process.kill(record.web.pid!, "SIGTERM"); await until(() => !isAlive(record.web.pid!));
+    const recovery = spawn(process.execPath, ["--bun", path.join(candidate.dir, "dist", "standalone", "server.js")], {
+      cwd: path.join(candidate.dir, "dist", "standalone"), env: { ...fixture.env, PORT: String(running.port) }, stdio: "ignore" }); children.add(recovery);
+    await until(() => recovery.pid && isAlive(recovery.pid) ? true : null);
+  }
+  if (failure === "import") writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), 'throw new Error("terminal candidate import failed");\n' + readFileSync(path.join(candidate.dir, "bin", "cli.mjs"), "utf8").replace(/^#![^\n]*\n/, ""));
+  if (failure === "web") writeFileSync(path.join(candidate.dir, shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next"), STUB_NEXT(true));
+  expect(existsSync(path.join(path.dirname(record.requestFile), "apply.json"))).toBe(false);
+  const action = await installAction({ mode: shape, reason: null, record: { ...record, installRoot: fixture.checkout, port: running.port } as never },
+    { cgroup: () => "", ready: () => true, argv: () => [], env: fixture.env, platform: form === "posix" ? "linux" : "win32" });
+  expect(action?.id).toBe("restart-terminal");
+  const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM");
+  if (shape === "package") process.kill(record.launcher.pid, "SIGCONT");
+  await Promise.race([closed, Bun.sleep(2000)]);
+  if (running.child.exitCode === null && running.child.signalCode === null) { running.child.kill("SIGKILL"); await closed; }
+  if (record.runtimeHost.pid && isAlive(record.runtimeHost.pid)) { process.kill(record.runtimeHost.pid, "SIGTERM"); await until(() => !isAlive(record.runtimeHost.pid!)); }
+  for (const child of children) if (child !== running.child && child.exitCode === null && child.signalCode === null) {
+    const done = new Promise(resolve => child.once("exit", resolve)); child.kill("SIGTERM"); await done;
+  }
+  // Execute both displayed forms; the PowerShell form is interpreted only
+  // by PowerShell itself, including its encoded-script and exit semantics.
+  const child = spawn(form === "posix" ? "sh" : process.env.LLV_TEST_PWSH ?? "pwsh", form === "posix" ? ["-c", action!.command!]
+    : ["-NoProfile", "-Command", action!.command!], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+  let output = ""; child.stderr?.on("data", value => { output += value; });
+  const exit = await Promise.race([new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); }), Bun.sleep(8000).then(() => null)]);
+  expect(exit).toBe(1); expect(output).toContain("prior release");
+  const after = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  try {
+    expect(existsSync(record.releasePointer)).toBe(false); expect(await socketAnswers(after.socket)).toBe(true);
+    expect(await served(running.port)).toBe(fixture.checkout + (shape === "package" ? "/dist/standalone" : ""));
+    expect(after.web.revision).toBe(after.runtimeHost.revision);
+    const environment = readFileSync(`/proc/${after.web.pid}/environ`, "utf8").split("\0");
+    expect(environment).toContain(`HOME=${fixture.env.HOME}`); expect(environment).toContain(`LLV_STATE_DIR=${fixture.state}`); expect(environment).toContain(`XDG_CONFIG_HOME=${fixture.env.XDG_CONFIG_HOME}`);
+  } finally { if (isAlive(after.launcher.pid)) process.kill(after.launcher.pid, "SIGTERM"); await until(() => !isAlive(after.launcher.pid)); }
+}, 90_000);
+
 for (const failure of ["host", "web", "import"] as const) (legacySource ? test : test.skip)(`a legacy ready pointer without an apply intent restores prior custody after ${failure} failure`, async () => {
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
   const { readRevision } = await import("../src/lib/selfUpdate/git");
@@ -1518,6 +1606,52 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   mkdirSync(env.HOME, { recursive: true });
   return env;
 }
+
+test.each(["consumed", "pending"] as const)("cold recovery retains the real apply across request consumption during load preflight: %s", async boundary => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { activeDrain } = await import("../src/lib/selfUpdate/drain");
+  const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  const { idleUpdate } = await import("../src/lib/selfUpdate/types");
+  const fixture = install(); const running = await start(fixture);
+  const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const candidate = release(fixture, "crash-preflight");
+  const marker = path.join(candidate.dir, "preflight-entered");
+  const entry = path.join(candidate.dir, "bin", "cli.mjs");
+  writeFileSync(entry, `if (process.argv.includes("--version")) { (await import("node:fs")).writeFileSync(${JSON.stringify(marker)}, String(process.pid)); await Bun.sleep(2000); }\n` + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
+  const directory = path.dirname(before.requestFile); const apply = new ApplyController(directory);
+  apply.begin(before as never, candidate.sha, "operator");
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  if (boundary === "pending") process.kill(before.launcher.pid, "SIGSTOP");
+  apply.send(before as never);
+  if (boundary === "consumed") await until(() => existsSync(marker) && !existsSync(before.requestFile));
+  else expect(existsSync(before.requestFile)).toBe(true);
+  const killed = new Promise(resolve => running.child.once("exit", resolve));
+  process.kill(before.launcher.pid, "SIGKILL"); await killed;
+  // A crashed launcher leaves its recorded children. Stop only these fixture
+  // PIDs; cold startup then exercises the durable handoff on the same install.
+  for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");
+  await until(() => !isAlive(before.web.pid!) && !isAlive(before.runtimeHost.pid!));
+  await Bun.sleep(2200);
+  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(running.port)], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" }); children.add(child);
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  expect(await socketAnswers(after.socket)).toBe(true); expect(await served(running.port)).toBe(fixture.checkout);
+  const service = new SelfUpdateService({
+    now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
+    mode: async () => ({ mode: "checkout", reason: null, record: after as never }), check: async () => ({ ok: false, error: "fixture", installed: null }),
+    describe: async (_repo, sha) => ({ sha, short: sha.slice(0, 7), version: "", date: "" }), createRunner: () => ({ state: idleUpdate(), restore() {}, logPath: () => "" }) as never,
+    requestRestart: () => "unused", processAlive: (pid, identity) => isAlive(pid) && readStartIdentity(pid) === identity,
+    hostHealth: async () => await socketAnswers(after.socket) ? { pid: after.runtimeHost.pid!, startIdentity: readStartIdentity(after.runtimeHost.pid!)!, hostEpoch: 1 } : null,
+    requestDeployment: async () => { throw new Error("unused"); }, readDeployment: async () => null, findDeploymentByIdempotencyKey: async () => null,
+    releaseTarget: () => null, prepareCheckRepo: async () => { throw new Error("unused"); }, buildEnv: () => ({}), web: { pid: after.web.pid!, port: running.port, startedAt: "" },
+  });
+  try {
+    const snapshot = await service.snapshot();
+    expect(snapshot.busy).toBeNull(); expect(new ApplyController(directory).current).toMatchObject({ requestId: apply.current!.requestId, state: "failed", rolledBack: true });
+    expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
+    expect(existsSync(before.releasePointer)).toBe(false);
+  } finally { service.stop(); }
+}, 60_000);
 
 test.each(["restart-terminal", "start-launcher"] as const)("the actual %s command carries state and config from a clean shell", async actionId => {
   const { installAction } = await import("../src/lib/selfUpdate/actions");
