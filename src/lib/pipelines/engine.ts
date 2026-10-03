@@ -2759,17 +2759,48 @@ function passSuccessor(
   const source = activation?.edge === "fail" && activation.budgetSpent
     ? pipeline.stages.find((candidate) => candidate.id === activation.stageId) ?? null
     : null;
-  if (!source || !activation) {
-    // A terminal continuation owns the return path even when the fix's
-    // configured pass edge would leave this reviewer (or complete the lane).
-    const continued = activation?.edge === "fail" && (pipeline.reviewGrants ?? []).some(grant =>
-      grant.stageId === activation.stageId && grant.terminalAttempt !== undefined && activation.attempt >= grant.terminalAttempt);
-    if (continued) return { next: activation.stageId, handoff: null };
-    return { next: stage.next, handoff: null };
-  }
-  const sourceAttempt = pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null;
-  const recheck = source.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance";
+  const sourceAttempt = source && activation
+    ? pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null
+    : null;
+  const recheck = Boolean(source?.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance");
+  /* A spent edge's terminal re-check remains authoritative. The lineage return
+     applies between granted rounds and after nested repairs before exhaustion. */
+  const terminalGrant = !recheck && attempt ? terminalReviewGrantForFix(pipeline, stage, attempt) : null;
+  if (terminalGrant) return { next: terminalGrant.stageId, handoff: null };
+
+  if (!source || !activation) return { next: stage.next, handoff: null };
   return { next: recheck ? source.id : source.next, handoff: { source, attempt: sourceAttempt }, recheck: !!recheck };
+}
+
+/** A terminal continuation owns one return to its reviewer after the complete
+    granted fix. Trace durable attempt activations so repair stages inside that
+    fix cannot consume the return obligation or complete the lane themselves. */
+function terminalReviewGrantForFix(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+): PipelineReviewGrant | null {
+  for (const grant of pipeline.reviewGrants ?? []) {
+    if (grant.terminalAttempt === undefined) continue;
+    const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
+    if (review?.onFail?.to !== stage.id) continue;
+
+    let current: PipelineStageAttempt | undefined = attempt;
+    const visited = new Set<string>();
+    while (current) {
+      const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+      if (!activation) break;
+      if (activation.edge === "fail" && activation.stageId === grant.stageId
+        && activation.attempt === grant.terminalAttempt) return grant;
+
+      const key = `${activation.stageId}:${activation.attempt}`;
+      if (visited.has(key)) break;
+      visited.add(key);
+      current = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
+        .find((candidate) => candidate.n === activation.attempt && !candidate.historical);
+    }
+  }
+  return null;
 }
 
 /** Stop a lane whose spent review budget left an unreviewed head (#1938). The

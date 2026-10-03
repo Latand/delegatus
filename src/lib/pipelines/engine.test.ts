@@ -18778,6 +18778,42 @@ test("terminal review continuation returns each fix to review even when the fix 
   expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
 });
 
+test("terminal review continuation survives a nested fix failure and repair within its granted rounds", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, id: "critique", role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: "fix" },
+  ] as never);
+  const parked = (await driveWithController(h, (stageId) => stageId === "critique")).pipeline;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
+
+  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
+  const grant = await patchPipeline(parked.id, {
+    action: "continue-review", clientRequestId: "nested-repair-grant", addRounds: 2,
+    expectedRevision: pipelineRevision(parked),
+  }, h.ports, actor);
+  expect(grant.error).toBeUndefined();
+
+  const continued = (await driveWithController(h, (stageId, attempt) =>
+    stageId === "critique" || stageId === "fix" && attempt === 2)).pipeline;
+  const fixes = continued.runs.find((run) => run.stageId === "fix")!.attempts;
+  const repairs = continued.runs.find((run) => run.stageId === "repair")!.attempts;
+  const reviews = continued.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(fixes[1]!.state).toBe("failed");
+  expect(repairs[0]!.state).toBe("passed");
+  expect(fixes[2]!.state).toBe("passed");
+  expect(reviews).toHaveLength(4);
+  expect(reviews[2]!.activatedBy).toMatchObject({ stageId: "fix", attempt: fixes[2]!.n, edge: "pass" });
+  expect(reviews[2]!.input).toBe(fixes[2]!.output);
+  expect(reviews.slice(2).every((attempt) => attempt.state === "failed")).toBe(true);
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.reviewGrants).toMatchObject([{ rounds: 2 }]);
+});
+
 
 test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
   const h = movingHeadHarness();
