@@ -372,7 +372,7 @@ describe("update available and what changes", () => {
     expect(text(section(el, "header"))).toContain("Available1.2.3 · a1b2c3d");
     const update = section(el, "update")!;
     expect(text(update.querySelector("h2"))).toBe("Update to a1b2c3d (1.2.3)");
-    expect(text(update)).toContain("This builds the new version. Nothing restarts until you choose to.");
+    expect(text(update)).toContain("After you confirm, Delegatus builds and applies the update");
     expect([...update.querySelectorAll("[data-step]")].map(text)).toEqual(["Fetch a1b2c3d", "Check out a1b2c3d", "Install dependencies", "Build", "Ready"]);
     const changes = section(el, "changes")!;
     expect(text(changes.querySelector("[data-summary]"))).toBe("5 commits · 2 changelog entries (1 Added, 1 Fixed)");
@@ -811,6 +811,19 @@ test.each(["en", "uk"] as const)("every install prerequisite is actionable and l
     flushSync(() => root!.unmount()); root = null; host?.remove();
   }
 });
+
+for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
+  `confirmed update instructions describe immediate apply in ${mode}/${locale}, auto=%s`, enabled => {
+    setLocale(locale);
+    const s = snapshot({ mode, available: rev(NEW, "1.0.1"), check: { ...idleCheck(), state: "update-available" } });
+    s.auto = { ...s.auto!, enabled };
+    const copy = text(render(s).querySelector('[data-section="update"]'));
+    expect(copy).toContain(locale === "en" ? "After you confirm" : "Після підтвердження");
+    expect(copy).toContain(locale === "en" ? "launcher, web and runtime host" : "лаунчер, веб і runtime host");
+    expect(copy).not.toContain(locale === "en" ? "Nothing restarts" : "Нічого не перезапускається");
+    expect(copy).not.toContain(locale === "en" ? "next quiet moment" : "найближчої тихої миті");
+  },
+);
 
 for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
   `apply failure copy preserves serving facts in ${mode}/${locale}, rollback=%s`, rolledBack => {

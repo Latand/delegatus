@@ -5667,6 +5667,8 @@ async function selfUpdateAutoMain(): Promise<void> {
   states["install-package"] = { ...states["install-available"]!, mode: "package",
     installed: revision(old), available: { ...revision(next), version: "1.6.2" },
     update: idleUpdate(["fetch", "install", "ready"]), auto: { ...idleAuto, availability: "packaged" } };
+  states["install-available-auto"] = { ...states["install-available"]!, auto: { ...idleAuto, enabled: true } };
+  states["install-package-auto"] = { ...states["install-package"]!, auto: { ...idleAuto, enabled: true, availability: "packaged" } };
   // Commands contain invented install context and exercise wrapping at phone width.
   const command = "env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open";
   for (const id of ["restart-terminal", "start-launcher", "start-service", "update-first", "docker-deployments"] as const) {
@@ -5773,6 +5775,10 @@ async function selfUpdateAutoMain(): Promise<void> {
           const instruction = messages[lang][key];
           if (typeof instruction !== "string" || !installation.text?.includes(instruction)) report.failures.push(`${tag}: missing localized prerequisite instruction`);
           if (snapshot.action.command && !installation.text?.includes(snapshot.action.command)) report.failures.push(`${tag}: incomplete terminal command`);
+        }
+        if (name === "install-available" || name === "install-available-auto" || name === "install-package" || name === "install-package-auto") {
+          if (!installation.text?.includes(messages[lang]["selfUpdate.update.noteApply"])
+            || /Nothing restarts|next quiet moment|Нічого не перезапускається|найближчу тиху хвилину/.test(installation.text ?? "")) report.failures.push(`${tag}: confirmed update copy contradicts immediate apply`);
         }
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
       }

@@ -302,7 +302,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             <Button action="update" tone="primary" label={t("selfUpdate.update.button")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} />
           </div>
         </div>
-        <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.auto?.enabled ? "selfUpdate.update.noteAuto" : "selfUpdate.update.note")}</p>
+        <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.action ? "selfUpdate.update.note" : "selfUpdate.update.noteApply")}</p>
         {steps(target.short, update.steps.map((step) => ({ ...step, state: "pending", tail: [], durationMs: null, startedAt: null })))}
       </section>
     );
