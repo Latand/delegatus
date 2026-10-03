@@ -1745,7 +1745,8 @@ test.each(["off", "dual-write", "read", "sqlite"] as const)(
       mirrorCheckpointMs: 60_000,
     });
     for (let index = 0; index < 650; index += 1) {
-      beginTestSpawn(registry, `/metric-${index}`);
+      // Exercise durable writes without growing the registry on each sample.
+      registry.setEngineRouting("codex", "metrics-account");
       clock += 100;
     }
 
@@ -1756,8 +1757,7 @@ test.each(["off", "dual-write", "read", "sqlite"] as const)(
       transactionP95Ms: expect.any(Number),
     });
   },
-  // All 650 durable mutations must run; slower disks need more than 30 seconds.
-  60_000,
+  30_000,
 );
 
 test("SQLite adoption keeps structured-host writer epochs fenced across restarts", () => {

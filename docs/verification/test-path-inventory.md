@@ -152,7 +152,7 @@ Require a successful build and browser installation before the last command. Its
 
 Aggregation: exit 0 with at least one passing case is P, nonzero is F, 124/137 is T. Explicit opt-in files and zero-pass/all-skip successful processes are G; inspect their skip guards before distinguishing a Linux exclusion from an unmet prerequisite. In this inventory every such skip is a prerequisite. Partial skips with exit 0 remain P. Python exit 0 is P even without Bun counts. Causes require reading the corresponding log; a failed build/browser prerequisite must not be reported as a passing browser check.
 
-The historical result order was `baseline`, `fixed`, `fixed2`, `fixed3`, `fixed4`, `fixed5`, `quoted`, `final`, `final2`, `final3`, followed by this review's C54 rerun. `quoted` enabled `INVENTORY_NODE_QUOTING=1` for the resource/extraction shell-path regressions. For a fresh reproduction, use `baseline`, `rerun`, then `browser`. Fold in that explicit order, replacing only existing baseline keys; an absent rerun retains its baseline result. Never sum process counts across phases. This copyable fold prints the exact per-path table and totals:
+The historical result order was `baseline`, `fixed`, `fixed2`, `fixed3`, `fixed4`, `fixed5`, `quoted`, `final`, `final2`, `final3`, followed by this review's C54 rerun and the `bounded-diagnostics` fix-round rerun below. `quoted` enabled `INVENTORY_NODE_QUOTING=1` for the resource/extraction shell-path regressions. For a fresh reproduction, use `baseline`, `rerun`, then `browser`. Fold in that explicit order, replacing only existing baseline keys; an absent rerun retains its baseline result. Never sum process counts across phases. This copyable fold prints the exact per-path table and totals:
 
 ```bash
 python3 - baseline rerun browser <<'PY'
@@ -176,6 +176,8 @@ PY
 ```
 
 Recipe verification used the copied runner under the documented lock/scope: `AccountBadge.render.test.tsx` passed 4 cases; the old C54 selector failed at the unchanged geometry assertion (114px versus -1), then the corrected file passed the full light/dark test (first card bottom 276px). `kanbanBoard.browser.test.tsx` was gated before launch; `pipelineStageHostAccess.integration.test.ts` exited 0 with one prerequisite skip. Folding these actual records produced two P and two G with one repaired failure. Both changed executable files passed lint, and the full fingerprint-aware, commit-aware local privacy gate passed. Committed captures and fenced files remain unchanged.
+
+The diagnostics fix-round rerun copied the same runner and invoked only `src/lib/agent/registry.sqlite.test.ts`, with `INVENTORY_PHASE=bounded-diagnostics` and `INVENTORY_TIMEOUT=300s` under the documented flock and 8 GiB scope. The whole file exited 0: **68 pass, 0 fail, 369 assertions, 30.63s process time**. The prior growing-spawn fixture exceeded its 60s test-case deadline in independent full-file runs (64.4–85.0s). Replacing it with 650 real `setEngineRouting` writes keeps the registry size bounded while preserving all four backend modes, the injected clock and every metric assertion. Diagnostics now pass in 0.80s (`off`), 1.64s (`dual-write`), 0.56s (`read`) and 0.56s (`sqlite`), with the original **30s** test-case deadline restored. This fixes the test fixture; production storage code is unchanged. The file's latest P result is now confirmed by this full-file run; inventory totals remain unchanged.
 
 ## Ownership
 
@@ -280,7 +282,7 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | C71 | L | Interprocess account fixture seeds/readbacks legacy JSON while SQLite state persists, causing missing controller update; reset both storage backends. | — |
 | C72 | M | CLI presence expectation assumes machine default executable availability; active identity guard work owns exact fixture. | O16 |
 | C73 | S | New spawn admission requires title; legacy launchProfile fixture omits it. | — |
-| C74 | S | Bounded delivery-operation owner evidence is intentionally retained for recipient acknowledgement; obsolete payload-free assertion fails before baseline timeout. | — |
+| C74 | S | Retained recipient evidence contradicts the old payload-free assertion; the growing 650-spawn diagnostics fixture also exceeded 60s. Use 650 bounded durable routing writes with unchanged metrics and restored 30s deadline; full-file rerun passes 68/0 in 30.63s. | — |
 | C75 | M | Pipeline admission now requires a signed-in account; fixture relied on machine credentials instead of isolated fake auth evidence. | — |
 | C76 | S | Child JSON result channel is contaminated by state-recovery diagnostics; redirect fixture diagnostics to stderr. | — |
 | C77 | M | CPU budget exceeded twice (1000 calls: 2335/3230 ms >2000 ms); warmed heap rerun passes; file exceeds both 120s and 300s caps. Budget/profiling decision remains. | — |
@@ -1136,7 +1138,7 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | `src/lib/agent/registry.migrationBinding.test.ts` | P | P | — |
 | `src/lib/agent/registry.projectOwnership.test.ts` | P | P | — |
 | `src/lib/agent/registry.reseat.test.ts` | P | P | — |
-| `src/lib/agent/registry.sqlite.test.ts` | T | P | C74 |
+| `src/lib/agent/registry.sqlite.test.ts` | T | P | C74; full-file 68 pass / 0 fail (30.63s) |
 | `src/lib/agent/registry.sqliteOnly.test.ts` | P | P | — |
 | `src/lib/agent/registry.test.ts` | P | P | — |
 | `src/lib/agent/registryBackendIdentity.test.ts` | P | P | — |
