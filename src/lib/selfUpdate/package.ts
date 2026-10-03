@@ -6,6 +6,19 @@ import type { LauncherRecord } from "./launcher";
 import type { RunnerPort } from "./service";
 import { idleUpdate, type Revision, type UpdateState } from "./types";
 
+/** A standalone server carries a copy of package.json. Its launcher
+    belongs to the install above it, where bin/cli.mjs actually exists. */
+export function manualInstallRoot(cwd = process.cwd()): string | null {
+  let directory = cwd;
+  for (;;) {
+    try {
+      if (existsSync(join(directory, "bin", "cli.mjs"))
+        && JSON.parse(readFileSync(join(directory, "package.json"), "utf8")).name === "delegatus-cli") return directory;
+    } catch { /* Keep searching the install's ancestors. */ }
+    const parent = dirname(directory); if (parent === directory) return null; directory = parent;
+  }
+}
+
 export function packageRoot(record: LauncherRecord): string {
   if (record.installRoot) return record.installRoot;
   let directory = process.cwd();

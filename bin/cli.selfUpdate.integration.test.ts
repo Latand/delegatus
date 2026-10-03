@@ -1225,6 +1225,27 @@ test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions
   record = await until(() => { const r = readHealthy(); return r && r.web.pid !== orphanPid && !existsSync(`/proc/${orphanPid}`) ? r : null; }, 120_000);
   expect(record.launcher.pid).toBe(supervisor); expect(record.web.revision).toBe(target.slice(0, 7));
   await health(record);
+
+  // A first-party manual launch has no launcher record or inherited socket.
+  // Opening its Update dialog must publish custody before Start launcher.
+  const exited = new Promise(resolve => running.child.once("exit", resolve));
+  running.child.kill("SIGTERM"); await exited;
+  const manual = spawn(process.execPath, ["--bun", path.join(nextDir, "node_modules", "next", "dist", "bin", "next"), "start", "--hostname", "127.0.0.1", "--port", String(running.port)], {
+    cwd: nextDir, env: { ...env, PORT: String(running.port), HOSTNAME: "127.0.0.1", LLV_STATE_OWNER: "viewer" }, stdio: "ignore",
+  }); children.add(manual);
+  const manualDeadline = Date.now() + 60_000;
+  while (Date.now() < manualDeadline) {
+    try { if ((await fetch(`http://127.0.0.1:${running.port}/api/self-update`, { headers: { authorization: `Bearer ${token}` } })).status === 200) break; } catch { /* manual boot */ }
+    await Bun.sleep(100);
+  }
+  const { cliRuntimeHostConfig } = await import("./server-runtime.mjs");
+  const manualConfig = cliRuntimeHostConfig(nextDir, { env });
+  expect(JSON.parse(readFileSync(path.join(state, "self-update", `adopt-${manualConfig.installId}.json`), "utf8"))).toMatchObject({ pid: manual.pid, installRoot: nextDir });
+  const restarted = spawn(process.execPath, ["--bun", path.join(nextDir, "bin", "cli.mjs"), "--no-open", "--port", String(running.port)], { cwd: nextDir, env, stdio: "ignore" }); children.add(restarted);
+  await until(() => !existsSync(`/proc/${manual.pid}`), 30_000);
+  record = await until(readHealthy, 120_000);
+  expect(record.web.pid).not.toBe(manual.pid);
+  await health(record);
 }, 480_000);
 
 

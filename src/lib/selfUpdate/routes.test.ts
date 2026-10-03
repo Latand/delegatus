@@ -1031,3 +1031,21 @@ for (const operation of ["update", "retry"] as const) {
     } finally { await Bun.sleep(10); registry.mockRestore(); service.stop(); }
   });
 }
+
+
+test("a fresh manual Viewer writes adoption before its launcher prerequisite", async () => {
+  const dir = mkdtempSync(join(root, "fresh-manual-"));
+  const service = new SelfUpdateService(baseDeps(join(dir, "self-update"), {
+    mode: async () => ({ mode: "unsupported", reason: "no-runtime-host", record: null, installRoot: checkout }),
+    env: { LLV_STATE_OWNER: "viewer", PORT: "34567" },
+    web: { pid: process.pid, port: 34567, startedAt: new Date().toISOString() },
+  }));
+  try {
+    await service.decide();
+    const { cliRuntimeHostConfig } = await import("../../../bin/server-runtime.mjs");
+    const config = cliRuntimeHostConfig(checkout, { env: { LLV_STATE_DIR: dir } });
+    const adopt = join(dir, "self-update", `adopt-${config.installId}.json`);
+    expect(existsSync(adopt)).toBe(true);
+    expect(JSON.parse(readFileSync(adopt, "utf8"))).toMatchObject({ pid: process.pid, startIdentity: readStartIdentity(process.pid), port: 34567, socket: config.socketPath, installRoot: checkout });
+  } finally { service.stop(); }
+});

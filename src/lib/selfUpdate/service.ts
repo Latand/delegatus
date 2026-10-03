@@ -1,3 +1,4 @@
+import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
 /* The self-update service (#2007): one per web process, behind the Update
    surface's routes. It holds the update check, and either the checkout
    install's step runner or the managed install's deployment record, and it
@@ -45,7 +46,7 @@ import {
 } from "./managed";
 import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
 import { runGit } from "./git";
-import { PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
+import { manualInstallRoot, PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
 import { installAction, runInstallAction, userUnit } from "./actions";
 import { ApplyController, writeAtomic } from "./apply";
 import { readStartIdentity } from "./pid";
@@ -1048,12 +1049,15 @@ export class SelfUpdateService {
     if (value.mode === "package" && value.record && !value.record.installRoot) {
       value.record = { ...value.record, installRoot: packageRoot(value.record) };
     }
-    if (!value.record && this.deps.env.LLV_RUNTIME_HOST_SOCKET && this.deps.web.port) {
-      const socket = this.deps.env.LLV_RUNTIME_HOST_SOCKET;
-      const id = /runtime-host-([a-f0-9]+)\.sock$/.exec(socket)?.[1];
+    if (!value.record && value.mode === "unsupported" && value.reason !== "docker-deployments" && this.deps.web.port) {
+      const root = value.installRoot ?? manualInstallRoot();
+      if (root) value.installRoot = root;
+      const config = root ? cliRuntimeHostConfig(root, { env: { ...this.deps.env, LLV_STATE_DIR: dirname(this.deps.dir) } }) : null;
+      const socket = this.deps.env.LLV_RUNTIME_HOST_SOCKET ?? config?.socketPath;
+      const id = socket ? /runtime-host-([a-f0-9]+)\.sock$/.exec(socket)?.[1] ?? config?.installId : null;
       const identity = readStartIdentity(this.deps.web.pid);
-      if (id && identity) writeAtomic(join(dirname(socket), "self-update", `adopt-${id}.json`),
-        { pid: this.deps.web.pid, startIdentity: identity, port: this.deps.web.port, socket });
+      if (id && socket && identity) writeAtomic(join(this.deps.dir, `adopt-${id}.json`),
+        { pid: this.deps.web.pid, startIdentity: identity, port: this.deps.web.port, socket, ...(root ? { installRoot: root } : {}) });
     }
     if (value.supervision === "adopted" && value.record) {
       const identity = readStartIdentity(this.deps.web.pid);

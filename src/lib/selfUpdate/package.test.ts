@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PackageRunner, registryRevision } from "./package";
+import { manualInstallRoot, PackageRunner, registryRevision } from "./package";
 import { realPorts } from "./steps";
 import type { LauncherRecord } from "./launcher";
 const root = mkdtempSync("/var/tmp/package-update-");
@@ -31,4 +31,14 @@ for (const broken of [false, true]) test(`package install verifies runtime artif
   expect(calls).toEqual([["bun", "add", "--exact", "delegatus-cli@1.0.1"]]);
   expect(runner.state.state).toBe(broken ? "failed" : "done");
   if (!broken) expect(JSON.parse(readFileSync(pointer, "utf8"))).toMatchObject({ kind: "package", version: "1.0.1", baseVersion: "1.0.0" });
+});
+
+
+test("manual standalone launch resolves the install carrying its launcher", () => {
+  const install = join(root, "manual"); const standalone = join(install, "dist", "standalone");
+  mkdirSync(standalone, { recursive: true }); mkdirSync(join(install, "bin"));
+  for (const directory of [install, standalone]) writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "delegatus-cli" }));
+  writeFileSync(join(install, "bin", "cli.mjs"), "");
+  expect(manualInstallRoot(standalone)).toBe(install);
+  expect(manualInstallRoot(join(root, "unrelated"))).toBeNull();
 });
