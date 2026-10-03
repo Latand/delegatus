@@ -30,7 +30,7 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {
+export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: Partial<NodeJS.ProcessEnv>; platform?: NodeJS.Platform } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): Promise<InstallAction | null> {
