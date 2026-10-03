@@ -30,7 +30,7 @@ import type { RuntimeHostHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 import { applyCheck, initialCheck, type CheckSlice } from "./checkState";
-import { CheckError, targetOnCurrentBranch, type CheckInput, type CheckOutcome } from "./git";
+import { CheckError, ensureCommit, targetOnCurrentBranch, type CheckInput, type CheckOutcome } from "./git";
 import { launcherControlFile, type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
 import {
   DeploymentBusyError,
@@ -1196,7 +1196,8 @@ export class SelfUpdateService {
     if (snapshot.busy) return busy(snapshot.busy);
     if (this.apply.current?.state === "ready") return refuse(409, "cannot-update", "Restart the launcher using the install action before another update");
     let available = this.slice.available;
-    const rebuild = !available && decision.mode === "checkout" && decision.record && this.handManagedCheckout(decision.record)
+    const rebuild = !available && (decision.mode === "checkout" || decision.mode === "package") && decision.record
+      && ((decision.mode === "checkout" && this.handManagedCheckout(decision.record)) || snapshot.action?.id === "update-first")
       && this.slice.check.relation === "equal" && !!snapshot.installed.sha;
     if (rebuild) available = snapshot.installed;
     if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
@@ -1240,9 +1241,17 @@ export class SelfUpdateService {
   private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult | null> {
     if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? null
       : refuse(409, "deployment-refused", "The selected revision is not green", "unknown");
-    const repo = record.checkout ?? await this.deps.prepareCheckRepo();
-    const green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
+    const green = await this.installRevisionGreen(record, target);
     return green.state === "green" ? null : refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+  }
+
+  private async installRevisionGreen(record: LauncherRecord, target: string): Promise<GreenVerdict> {
+    const repo = record.checkout ?? await this.deps.prepareCheckRepo();
+    if (!record.checkout) {
+      try { await ensureCommit(repo, this.deps.remote, this.deps.branch, target); }
+      catch (error) { return { state: "unknown", detail: error instanceof Error ? error.message : String(error) }; }
+    }
+    return this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
   }
 
   private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): void {
@@ -1306,7 +1315,7 @@ export class SelfUpdateService {
         const release = new ReleasePointer(record.releasePointer, record.checkout ?? packageRoot(record)).current();
         if (!/^[a-f0-9]{40}$/.test(release.sha)) return refuse(409, "cannot-restart", "Build the launcher upgrade first");
         if (githubRepositoryOfRemote(this.deps.remote)) {
-          const green = await this.greenReader.read(this.deps.remote, this.deps.branch, release.sha, record.checkout ?? await this.deps.prepareCheckRepo());
+          const green = await this.installRevisionGreen(record, release.sha);
           if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
         }
         if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
@@ -1374,7 +1383,7 @@ export class SelfUpdateService {
         revision = await registryRevision();
         if (revision.sha !== target) throw new Error("The requested revision has no published package; deploy its published revision");
       }
-      const green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, record.checkout ?? await this.deps.prepareCheckRepo());
+      const green = await this.installRevisionGreen(record, target);
       if (green.state !== "green") throw new Error(`The requested revision is not green (${green.state})`);
       const health = await this.deps.hostHealth().catch(() => null);
       const current = await this.decide();
