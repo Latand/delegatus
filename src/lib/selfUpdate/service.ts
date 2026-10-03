@@ -1205,6 +1205,7 @@ export class SelfUpdateService {
   }
 
   private failApply(error: unknown): void {
+    if (this.apply.current) releaseDrain(this.drainFile, this.apply.current.requestId);
     this.apply.patch({ state: "failed", detail: error instanceof Error ? error.message : String(error) });
     this.changes.emit();
   }
@@ -1255,7 +1256,8 @@ export class SelfUpdateService {
       writeAtomic(record.requestFile.replace(/request-([^/]+)\.json$/, "trial-$1.json"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
       });
-      this.apply.patch({ state: "switching", externalRestart: true });
+      writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+      this.apply.patch({ state: "switching", externalRestart: true, switchedAt: new Date(this.deps.now()).toISOString() });
     }
     try { runInstallAction(action); } catch (error) { this.failApply(error); return refuse(503, "cannot-restart", "The user service manager did not accept the action"); }
     return { ok: true };
@@ -1489,7 +1491,8 @@ export class SelfUpdateService {
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
-    const settled = this.apply.observe(record, !!health && health.pid === record.runtimeHost.pid && health.startIdentity === record.runtimeHost.startIdentity);
+    const settled = this.apply.observe(record, !!health && health.pid === record.runtimeHost.pid && health.startIdentity === record.runtimeHost.startIdentity
+      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity));
     if (settled) {
       const intent = this.apply.current!;
       appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
