@@ -716,6 +716,20 @@ export type PipelineDeliveryTarget = {
   rejectedHead?: string;
 };
 
+export type PipelinePublicationFailure = {
+  step: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  outputTail: string;
+};
+
+export type PipelinePublicationResult = (
+  | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
+  | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
+  | { ok: false; error: string }
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" };
+
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;
   disposition: "owner" | "comparison";
@@ -731,11 +745,14 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
+    /** This reservation continues the committing pass, rather than an unrelated park. */
+    passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;
     state: "pending" | "running" | "settled";
-    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
-    result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
+    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      result?: PipelinePublicationResult };
+    result?: PipelinePublicationResult;
   };
   journal: Array<{ at: string; kind: "claim" | "comparison" | "release" | "takeover" | "denied" | "recovery"; ownerId: string; epoch: number; conversationId: string | null; reason: string }>;
 };

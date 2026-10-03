@@ -8,9 +8,10 @@ import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
 import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import type { Pipeline } from "./types";
+import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
@@ -1090,10 +1091,12 @@ export async function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: 
   return { ok: true, sha: remote.sha };
 }
 
-export type PipelinePublishResult =
-  | { ok: true; sha: string; remote: "published" | "unavailable" }
-  | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
-  | { ok: false; error: string };
+export type PipelinePublishResult = PipelinePublicationResult;
+
+function publicationFailureDetail(failure: PipelinePublicationFailure): string {
+  const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
+  return `${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`;
+}
 
 const REMOTE_READ_TIMEOUT = "5s";
 
@@ -1292,7 +1295,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         return { error };
       }
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey } : {}), state: "running",
+        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1311,6 +1314,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         detail: "publication superseded after a remote write began; reconcile its outcome" }
       : { ok: false, error: "publication superseded before a remote write" };
     watch = setInterval(revalidate, 50);
+    let failureEvidence: PipelinePublicationFailure | undefined;
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
     // lock stays held until that child is gone; takeover must prove it is free.
@@ -1319,7 +1323,17 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       fs.futimesSync(descriptor, new Date(), new Date());
       if (command === "git" && args[0] === "push") writeStarted = true;
-      return await exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor });
+      const started = performance.now();
+      const executed = await exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor });
+      if (executed.code !== 0 && command === "git" && args[0] === "push") {
+        // Redact the whole output before taking its tail; clipping first can
+        // remove the prefix that identifies a secret to the shared redactor.
+        const output = redactMonitorText(`${executed.stdout}\n${executed.stderr}`).trim();
+        failureEvidence = { step: "publishing the pipeline branch",
+          code: executed.code, signal: executed.signal ?? null,
+          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail: output.slice(-4000) };
+      }
+      return executed;
     };
     let result: PipelinePublishResult;
     try { result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
@@ -1329,7 +1343,25 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
     revalidate();
     if (abort.signal.aborted) result = superseded();
+    if (!result.ok) result = { ...result, error: redactBounded(result.error, 4500) };
+    else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(result.detail, 4500) };
+    if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
+      const detail = publicationFailureDetail(failureEvidence);
+      result = result.ok ? { ...result, failure: failureEvidence, detail }
+        : { ...result, failure: failureEvidence, error: detail };
+    }
     clearInterval(watch); watch = undefined;
+    // Retain the actual child outcome before trying the kernel fence again.
+    // Another inherited holder can delay settlement without erasing evidence.
+    await withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      if (current?.delivery?.operation?.id === reservation.operationId
+        && current.delivery.epoch === reservation.pipeline.delivery!.epoch && current.delivery.operation.executor) {
+        current.delivery.operation.executor.result = result;
+        current.delivery.operation.executor.finished = true;
+        tx.put(current);
+      }
+    });
     releasePublicationFileLock(descriptor);
     descriptorOpen = false;
     // Reacquisition proves that no orphan child retained the inherited lock.
@@ -1346,7 +1378,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         tx.put(current); return result;
       }
       delivery.operation = { ...delivery.operation, state: "settled", result };
-      if (current.stateDetail === "publication accepted; remote verification pending") current.stateDetail = result.ok
+      const awaitingPass = delivery.operation.passedStage && current.cursor?.state === "committing"
+        && current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.verdict?.status === "pass";
+      if (matches(current) && (current.stateDetail === "publication accepted; remote verification pending" || awaitingPass)) current.stateDetail = result.ok
         ? result.remote === "published" ? null : "publication checked; remote is unavailable"
         : result.error;
       deliveryJournal(current, "recovery", result.ok ? `publication verified: ${result.remote}` : `publication refused: ${result.error}`);
@@ -1393,9 +1427,17 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
         || current.delivery.operation.state !== "running") return "publication changed while reconciling";
       const result: PipelinePublishResult = remote.sha === operation.sha
         ? { ok: true, sha: operation.sha, remote: "published" }
-        : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
+        : operation.executor?.result
+          ? { ok: false, error: operation.executor.result.failure ? publicationFailureDetail(operation.executor.result.failure)
+            : operation.executor.result.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
+              : operation.executor.result.error,
+            ...(operation.executor.result.failure ? { failure: operation.executor.result.failure } : {}) }
+          : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
+      if (!result.ok && (!operation.executor?.result || (operation.executor.result.ok && operation.executor.result.uncertain))) result.outcome = "not-landed";
       current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
       if (result.ok) current.publishedCommit = operation.sha;
+      else if ((current.state === "needs_decision" || current.state === "running") && current.cursor?.state === "committing"
+        && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
       deliveryJournal(current, "recovery", "publisher quiescent; remote reconciled", conversationId);
       tx.put(current);
       return null;
