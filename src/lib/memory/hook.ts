@@ -9,13 +9,16 @@ export function memoryHookOutput(block: string, _engine: string) {
 
 /** Self-contained because engines run on the host, outside the Viewer image. */
 async function runHook(endpoint: string, token: string | null, queue: string | null) {
-  const timer = setTimeout(() => process.exit(0), 1900);
+  const deadline = performance.now() + 1500;
+  const abort = new AbortController();
+  const timer = setTimeout(() => { abort.abort(); process.exit(0); }, 1500);
   try {
     let raw = "";
     for await (const chunk of process.stdin) {
       raw += chunk;
-      if (raw.length > 128000) return;
+      if (raw.length > 128000 || performance.now() >= deadline) return;
     }
+    if (performance.now() >= deadline) return;
     const input = JSON.parse(raw);
     if (input.hook_event_name !== "UserPromptSubmit" || typeof input.prompt !== "string") return;
     if (queue) {
@@ -32,16 +35,17 @@ async function runHook(endpoint: string, token: string | null, queue: string | n
       input.delegatus_delivery_id = entry.id;
     }
     const capability = process.env.LLV_SPAWN_CAPABILITY;
-    if (!capability) return;
-    const response = await fetch(endpoint + "/api/memory/inject", { method: "POST", signal: AbortSignal.timeout(1800),
+    if (!capability || performance.now() >= deadline) return;
+    const response = await fetch(endpoint + "/api/memory/inject", { method: "POST", signal: abort.signal,
       headers: { "Content-Type": "application/json", "x-llv-spawn-capability": capability, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(input) });
-    if (!response.ok) return;
+    if (!response.ok || performance.now() >= deadline) return;
     const body = await response.json();
     if (typeof body.block === "string" && body.block && body.block.length <= 10000) {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: body.block } }));
+      const output = JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: body.block } });
+      if (performance.now() < deadline) process.stdout.write(output);
     }
   } catch { /* fail open, with no prompt or credential in diagnostics */ }
-  finally { clearTimeout(timer); }
+  finally { clearTimeout(timer); abort.abort(); }
 }
 export function memoryHookSource(endpoint: string, token: string | null = null, queue: string | null = null) { return `(${runHook.toString()})(${JSON.stringify(endpoint)}, ${JSON.stringify(token)}, ${JSON.stringify(queue)}).catch(() => {}).finally(() => { process.exitCode = 0; });\n`; }
 const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";

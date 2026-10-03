@@ -49,6 +49,76 @@ test("the standalone hook exits zero on invalid input and unavailable service", 
   }
 });
 
+for (const mode of ["delayed endpoint", "hung endpoint", "delayed response body", "delayed input"] as const) {
+  test(`the standalone hook shares a 1500ms fail-open deadline across ${mode}`, async () => {
+    let calls = 0;
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch() {
+      calls++;
+      if (mode === "hung endpoint") return await new Promise<Response>(() => {});
+      if (mode === "delayed response body") {
+        return new Response(new ReadableStream({ async start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"block":"'));
+          await Bun.sleep(1650);
+          controller.enqueue(new TextEncoder().encode('Late synthetic context"}'));
+          controller.close();
+        } }));
+      }
+      await Bun.sleep(mode === "delayed input" ? 750 : 1650);
+      return Response.json({ block: "Late synthetic context" });
+    } });
+    const started = performance.now();
+    const proc = Bun.spawn(["bun", "-e", memoryHookSource(`http://127.0.0.1:${server.port}`)], {
+      stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" },
+    });
+    try {
+      if (mode === "delayed input") await Bun.sleep(900);
+      proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "Synthetic prompt" })); proc.stdin.end();
+      expect(await proc.exited).toBe(0);
+      const elapsed = performance.now() - started;
+      expect(await new Response(proc.stdout).text()).toBe("");
+      expect(await new Response(proc.stderr).text()).toBe("");
+      expect(calls).toBe(1);
+      // Allow interpreter startup/scheduling while rejecting the old 1800ms timeout.
+      expect(elapsed).toBeLessThan(1700);
+    } finally { proc.kill(); await proc.exited; server.stop(true); }
+  });
+}
+
+test("the standalone hook exits zero with empty output when input never ends", async () => {
+  const started = performance.now();
+  const proc = Bun.spawn(["bun", "-e", memoryHookSource("http://127.0.0.1:1")], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" },
+  });
+  try {
+    proc.stdin.write('{"hook_event_name":');
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toBe("");
+    expect(await new Response(proc.stderr).text()).toBe("");
+    expect(performance.now() - started).toBeLessThan(1700);
+  } finally { proc.stdin.end(); proc.kill(); await proc.exited; }
+});
+
+test("the standalone hook discards a block when response parsing finishes after expiry before the timer runs", async () => {
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { return Response.json({ block: "Late parsed context" }); } });
+  // Keep the timer queued while the parser holds the subprocess event loop.
+  const slowParser = `const parse = Response.prototype.json;
+    Response.prototype.json = async function() {
+      const body = await parse.call(this);
+      const until = performance.now() + 1550;
+      while (performance.now() < until) {}
+      return body;
+    };`;
+  const proc = Bun.spawn(["bun", "-e", slowParser + memoryHookSource(`http://127.0.0.1:${server.port}`)], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" },
+  });
+  try {
+    proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "Synthetic prompt" })); proc.stdin.end();
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toBe("");
+    expect(await new Response(proc.stderr).text()).toBe("");
+  } finally { proc.kill(); await proc.exited; server.stop(true); }
+});
+
 test("Next production compilation preserves the standalone Claude receipt hook", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-webpack-"));
   const require = createRequire(import.meta.url);
