@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
-import { CONTROLLER_ARTIFACT_DIRECTORY } from "./controllerArtifacts";
+import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { realExec } from "@/lib/workflows/provision";
 import { renderStagePrompt } from "./prompts";
 import { composeStageInput } from "./stageInput";
 import { buildPipeline } from "./store";
@@ -34,27 +35,27 @@ function repository(name: string, unborn = false) {
   return { repo, git };
 }
 
-function compose(kind: "structured" | "pipeline", cwd: string) {
+async function compose(kind: "structured" | "pipeline", cwd: string) {
   const text = "PRIVATE_INPUT_SENTINEL\n" + "Full context 🙂\n".repeat(3_000);
   if (kind === "structured") {
-    return { text, delivered: composeStructuredFirstMessage(text, cwd) };
+    return { text, delivered: (await composeStructuredFirstMessage(text, cwd)) };
   }
   const stage: PipelineStage = { id: "build", kind: "run", prompt: "{{task}}".repeat(100), next: null,
     effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: "Complete builder instructions" } };
   const pipeline = buildPipeline({ id: "private-index", task: "t".repeat(500), spec: "AC", project: "fixture", repoDir: cwd,
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = cwd;
-  return { text: renderStagePrompt(pipeline, stage, stage.effectiveRole, text), delivered: composeStageInput(pipeline, stage, stage.effectiveRole, text) };
+  return { text: renderStagePrompt(pipeline, stage, stage.effectiveRole, text), delivered: (await composeStageInput(pipeline, stage, stage.effectiveRole, text)) };
 }
 
-function composeSmall(kind: "structured" | "pipeline", cwd: string) {
-  if (kind === "structured") return composeStructuredFirstMessage("small message", cwd);
+async function composeSmall(kind: "structured" | "pipeline", cwd: string) {
+  if (kind === "structured") return (await composeStructuredFirstMessage("small message", cwd));
   const stage: PipelineStage = { id: "build", kind: "run", prompt: "Build", next: null,
     effectiveRole: { roleId: null, engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: null } };
   const pipeline = buildPipeline({ id: "small-index", task: "Small task", project: "fixture", repoDir: cwd,
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = cwd;
-  const delivered = composeStageInput(pipeline, stage, stage.effectiveRole, "");
+  const delivered = (await composeStageInput(pipeline, stage, stage.effectiveRole, ""));
   expect(delivered).toBe(renderStagePrompt(pipeline, stage, stage.effectiveRole, ""));
   return delivered;
 }
@@ -66,7 +67,7 @@ test.each([
   { kind: "pipeline", nested: true, unborn: false },
   { kind: "structured", nested: false, unborn: true },
   { kind: "pipeline", nested: false, unborn: true },
-] as const)("$kind composition protects pre-staged handoffs from ordinary worker commits (nested=$nested, unborn=$unborn)", ({ kind, nested, unborn }) => {
+] as const)("$kind composition protects pre-staged handoffs from ordinary worker commits (nested=$nested, unborn=$unborn)", async ({ kind, nested, unborn }) => {
   const { repo, git } = repository(`staged-${kind}-${nested}-${unborn}`, unborn);
   const cwd = nested ? path.join(repo, "package[worker]") : repo;
   const directory = path.join(cwd, CONTROLLER_ARTIFACT_DIRECTORY);
@@ -79,7 +80,7 @@ test.each([
   fs.writeFileSync(path.join(repo, "source.txt"), "unstaged source\n");
   expect(git("diff", "--cached", "--name-only")).toContain("old-private-input.md");
 
-  const { text, delivered } = compose(kind, cwd);
+  const { text, delivered } = (await compose(kind, cwd));
   expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
   const file = delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
   expect(file).toBeDefined();
@@ -95,7 +96,7 @@ test.each([
   expect(git("show", "--format=", "HEAD")).not.toContain("PRIVATE_INPUT_SENTINEL");
 });
 
-test("a tracked controller ignore file remains tracked while private staged inputs are removed", () => {
+test("a tracked controller ignore file remains tracked while private staged inputs are removed", async () => {
   const { repo, git } = repository("tracked-ignore");
   const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
   fs.mkdirSync(directory, { recursive: true });
@@ -104,7 +105,7 @@ test("a tracked controller ignore file remains tracked while private staged inpu
   git("commit", "-m", "controller ignore");
   fs.writeFileSync(path.join(directory, "old.md"), "PRIVATE_STAGED_SENTINEL\n");
   git("add", "-A");
-  compose("structured", repo);
+  (await compose("structured", repo));
   expect(git("diff", "--cached", "--name-only")).toBe("");
   fs.writeFileSync(path.join(repo, "source.txt"), "worker result\n");
   git("add", "-A");
@@ -117,7 +118,7 @@ test.each([
   { kind: "structured", layout: "root" }, { kind: "pipeline", layout: "root" },
   { kind: "structured", layout: "nested" }, { kind: "pipeline", layout: "nested" },
   { kind: "structured", layout: "linked" }, { kind: "pipeline", layout: "linked" },
-] as const)("$kind handoffs stay private after restoring the tracked ignore before worker commit (layout=$layout)", ({ kind, layout }) => {
+] as const)("$kind handoffs stay private after restoring the tracked ignore before worker commit (layout=$layout)", async ({ kind, layout }) => {
   const base = repository(`restore-ignore-${kind}-${layout}`);
   let repo = base.repo;
   let git = base.git;
@@ -144,7 +145,7 @@ test.each([
   fs.writeFileSync(legacy, legacyText);
   git("add", "-A");
 
-  const { text, delivered } = compose(kind, cwd);
+  const { text, delivered } = (await compose(kind, cwd));
   const file = delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
   expect(file).toBeDefined();
   expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
@@ -168,7 +169,7 @@ test.each([
   { kind: "structured", link: "directory symlink" }, { kind: "pipeline", link: "directory symlink" },
   { kind: "structured", link: "ignore symlink" }, { kind: "pipeline", link: "ignore symlink" },
   { kind: "structured", link: "ignore hardlink" }, { kind: "pipeline", link: "ignore hardlink" },
-] as const)("$kind composition refuses a private $link without modifying external JSON", ({ kind, link }) => {
+] as const)("$kind composition refuses a private $link without modifying external JSON", async ({ kind, link }) => {
   const { repo, git } = repository(`private-link-${kind}-${link.replaceAll(" ", "-")}`);
   const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY, "private");
   const external = path.join(root, `external-${kind}-${link.replaceAll(" ", "-")}`);
@@ -185,7 +186,7 @@ test.each([
   }
   fs.writeFileSync(path.join(repo, "source.txt"), "staged source\n");
   git("add", "source.txt");
-  expect(() => compose(kind, repo)).toThrow(/pipeline controller artifact (?:path|ignore file) must be/);
+  await expect((async () => (await compose(kind, repo)))()).rejects.toThrow(/pipeline controller artifact (?:path|ignore file) must be/);
   expect(fs.readFileSync(target, "utf8")).toBe(original);
   expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual({ enabled: true });
   expect(fs.readdirSync(external)).toEqual([".gitignore"]);
@@ -193,7 +194,7 @@ test.each([
   expect(git("show", ":source.txt")).toBe("staged source");
 });
 
-test("separate output and specification handoffs stay private after restoring the tracked ignore", () => {
+test("separate output and specification handoffs stay private after restoring the tracked ignore", async () => {
   const { repo, git } = repository("restore-part-ignores");
   const ignore = `${CONTROLLER_ARTIFACT_DIRECTORY}/.gitignore`;
   fs.mkdirSync(path.dirname(path.join(repo, ignore)), { recursive: true });
@@ -208,7 +209,7 @@ test("separate output and specification handoffs stay private after restoring th
   const pipeline = buildPipeline({ id: "part-ignores", task: "Build", spec, project: "fixture", repoDir: repo,
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = repo;
-  const delivered = composeStageInput(pipeline, stage, stage.effectiveRole, output);
+  const delivered = (await composeStageInput(pipeline, stage, stage.effectiveRole, output));
   const outputFile = delivered.match(/Full previous output file: (.+)\n/)?.[1];
   const specFile = delivered.match(/Full specification file: (.+)\n/)?.[1];
   expect(Buffer.byteLength(delivered)).toBeLessThanOrEqual(32_000);
@@ -232,7 +233,7 @@ test.each([
   { kind: "structured", guard: "!*.md\n", safe: false }, { kind: "pipeline", guard: "!*.md\n", safe: false },
   { kind: "structured", guard: "/pipeline-stage-inputs/\n!/pipeline-stage-inputs/\n", safe: false },
   { kind: "pipeline", guard: "/pipeline-stage-inputs/\n!/pipeline-stage-inputs/\n", safe: false },
-] as const)("$kind legacy protection validates tracked ancestor exclusion before composition (safe=$safe, guard=$guard)", ({ kind, guard, safe }) => {
+] as const)("$kind legacy protection validates tracked ancestor exclusion before composition (safe=$safe, guard=$guard)", async ({ kind, guard, safe }) => {
   const { repo, git } = repository(`tracked-ancestor-${kind}-${safe}-${Buffer.from(guard).toString("hex")}`);
   const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
   fs.mkdirSync(directory, { recursive: true });
@@ -249,7 +250,7 @@ test.each([
   fs.writeFileSync(path.join(repo, "source.txt"), "staged source\n");
   git("add", "source.txt");
   if (safe) {
-    const { delivered, text } = compose(kind, repo);
+    const { delivered, text } = (await compose(kind, repo));
     const file = delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
     expect(fs.readFileSync(file!, "utf8")).toBe(text);
     git("restore", "--", ancestor, leaf);
@@ -259,7 +260,7 @@ test.each([
     expect(git("show", "--format=", "HEAD")).not.toContain("PRIVATE_LEGACY_SENTINEL");
     expect(fs.readFileSync(file!, "utf8")).toBe(text);
   } else {
-    expect(() => compose(kind, repo)).toThrow(/tracked ancestor ignore prevents safe legacy/);
+    await expect((async () => (await compose(kind, repo)))()).rejects.toThrow(/tracked ancestor ignore prevents safe legacy/);
     expect(fs.readdirSync(directory).sort()).toEqual([".gitignore", "old.md"]);
     expect(git("diff", "--cached", "--name-only")).toBe("source.txt");
   }
@@ -270,7 +271,7 @@ test.each([
 test.each([
   { kind: "structured", link: "symlink" }, { kind: "pipeline", link: "symlink" },
   { kind: "structured", link: "hardlink" }, { kind: "pipeline", link: "hardlink" },
-] as const)("$kind legacy protection refuses a $link ancestor ignore without external writes", ({ kind, link }) => {
+] as const)("$kind legacy protection refuses a $link ancestor ignore without external writes", async ({ kind, link }) => {
   const { repo, git } = repository(`linked-ancestor-${kind}-${link}`);
   const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
   fs.mkdirSync(directory, { recursive: true });
@@ -282,14 +283,14 @@ test.each([
   const guard = path.join(repo, ".artifacts", ".gitignore");
   if (link === "symlink") fs.symlinkSync(external, guard);
   else fs.linkSync(external, guard);
-  expect(() => compose(kind, repo)).toThrow(/pipeline controller artifact ignore file must be a regular file with one link/);
+  await expect((async () => (await compose(kind, repo)))()).rejects.toThrow(/pipeline controller artifact ignore file must be a regular file with one link/);
   expect(fs.readFileSync(external, "utf8")).toBe(original);
   expect(JSON.parse(fs.readFileSync(external, "utf8"))).toEqual({ enabled: true });
   expect(fs.readFileSync(legacy, "utf8")).toBe("PRIVATE_LEGACY_SENTINEL\n");
   expect(git("rev-list", "--count", "HEAD")).toBe("1");
 });
 
-test("composition refuses a committed input namespace before creating private files or changing its ignore file", () => {
+test("composition refuses a committed input namespace before creating private files or changing its ignore file", async () => {
   const { repo, git } = repository("tracked-input");
   const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
   fs.mkdirSync(directory, { recursive: true });
@@ -297,7 +298,7 @@ test("composition refuses a committed input namespace before creating private fi
   fs.writeFileSync(path.join(directory, "tracked.md"), "repository content\n");
   git("add", "-A");
   git("commit", "-m", "tracked namespace");
-  expect(() => compose("structured", repo)).toThrow(/committed files in the private controller artifact directory/);
+  await expect((async () => (await compose("structured", repo)))()).rejects.toThrow(/committed files in the private controller artifact directory/);
   expect(fs.readdirSync(directory).sort()).toEqual([".gitignore", "tracked.md"]);
   expect(fs.readFileSync(path.join(directory, ".gitignore"), "utf8")).toBe("!*.md\n");
   expect(git("status", "--porcelain")).toBe("");
@@ -307,14 +308,14 @@ test.each([
   { kind: "structured", ignore: "missing" }, { kind: "pipeline", ignore: "missing" },
   { kind: "structured", ignore: "reinclude" }, { kind: "pipeline", ignore: "reinclude" },
   { kind: "structured", ignore: "catchall" }, { kind: "pipeline", ignore: "catchall" },
-] as const)("a small $kind launch clears old private staging before an ordinary worker commit (ignore=$ignore)", ({ kind, ignore }) => {
+] as const)("a small $kind launch clears old private staging before an ordinary worker commit (ignore=$ignore)", async ({ kind, ignore }) => {
   const { repo, git } = repository(`small-${kind}-${ignore}`);
   const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
   fs.mkdirSync(directory, { recursive: true });
   if (ignore !== "missing") fs.writeFileSync(path.join(directory, ".gitignore"), ignore === "reinclude" ? "!*.md\n" : "*\n");
   fs.writeFileSync(path.join(directory, "old.md"), "PRIVATE_STAGED_SENTINEL\n");
   git("add", "-f", `${CONTROLLER_ARTIFACT_DIRECTORY}/old.md`);
-  composeSmall(kind, repo);
+  (await composeSmall(kind, repo));
   expect(git("diff", "--cached", "--name-only")).toBe("");
   fs.writeFileSync(path.join(repo, "source.txt"), "worker result\n");
   git("add", "-A");
@@ -328,20 +329,20 @@ test.each([
   { kind: "structured", small: false, inherited: "root" }, { kind: "pipeline", small: false, inherited: "root" },
   { kind: "structured", small: true, inherited: "sibling" }, { kind: "pipeline", small: true, inherited: "sibling" },
   { kind: "structured", small: false, inherited: "sibling" }, { kind: "pipeline", small: false, inherited: "sibling" },
-] as const)("nested $kind launch protects inherited $inherited handoffs before ordinary worker commits (small=$small)", ({ kind, small, inherited }) => {
+] as const)("nested $kind launch protects inherited $inherited handoffs before ordinary worker commits (small=$small)", async ({ kind, small, inherited }) => {
   const { repo, git } = repository(`inherited-${kind}-${small}-${inherited}`);
   const cwd = path.join(repo, "worker");
   const priorCwd = inherited === "root" ? repo : path.join(repo, "sibling");
   fs.mkdirSync(cwd);
   fs.mkdirSync(priorCwd, { recursive: true });
-  const prior = compose(kind, priorCwd);
+  const prior = (await compose(kind, priorCwd));
   const file = prior.delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
   git("add", "-f", path.relative(repo, file!));
   fs.writeFileSync(path.join(repo, "source.txt"), "staged source\n");
   git("add", "source.txt");
   fs.writeFileSync(path.join(repo, "source.txt"), "unstaged source\n");
-  if (small) composeSmall(kind, cwd);
-  else compose(kind, cwd);
+  if (small) (await composeSmall(kind, cwd));
+  else (await compose(kind, cwd));
   expect(git("diff", "--cached", "--name-only")).toBe("source.txt");
   expect(git("show", ":source.txt")).toBe("staged source");
   expect(fs.readFileSync(file!, "utf8")).toBe(prior.text);
@@ -350,7 +351,7 @@ test.each([
   expect(git("ls-tree", "-r", "--name-only", "HEAD")).toBe("source.txt");
 });
 
-test.each(["structured", "pipeline"] as const)("%s composition protects the real Git index when its cwd is a directory alias", (kind) => {
+test.each(["structured", "pipeline"] as const)("%s composition protects the real Git index when its cwd is a directory alias", async (kind) => {
   const { repo, git } = repository(`alias-${kind}`);
   const alias = path.join(root, `cwd-alias-${kind}`);
   fs.symlinkSync(repo, alias, "dir");
@@ -358,7 +359,7 @@ test.each(["structured", "pipeline"] as const)("%s composition protects the real
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "old.md"), "PRIVATE_STAGED_SENTINEL\n");
   git("add", "-A");
-  const { delivered, text } = compose(kind, alias);
+  const { delivered, text } = (await compose(kind, alias));
   const file = delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
   expect(fs.readFileSync(file!, "utf8")).toBe(text);
   expect(git("diff", "--cached", "--name-only")).toBe("");
@@ -368,14 +369,14 @@ test.each(["structured", "pipeline"] as const)("%s composition protects the real
   expect(git("ls-tree", "-r", "--name-only", "HEAD")).toBe("source.txt");
 });
 
-test.each(["structured", "pipeline"] as const)("a nested %s launch repairs an exposed untracked parent handoff", (kind) => {
+test.each(["structured", "pipeline"] as const)("a nested %s launch repairs an exposed untracked parent handoff", async (kind) => {
   const { repo, git } = repository(`untracked-parent-${kind}`);
-  const prior = compose(kind, repo);
+  const prior = (await compose(kind, repo));
   const file = prior.delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
   fs.unlinkSync(path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY, ".gitignore"));
   const cwd = path.join(repo, "worker");
   fs.mkdirSync(cwd);
-  composeSmall(kind, cwd);
+  (await composeSmall(kind, cwd));
   fs.writeFileSync(path.join(repo, "source.txt"), "worker result\n");
   git("add", "-A");
   git("commit", "-m", "worker result");
@@ -383,11 +384,11 @@ test.each(["structured", "pipeline"] as const)("a nested %s launch repairs an ex
   expect(fs.readFileSync(file!, "utf8")).toBe(prior.text);
 });
 
-test.each(["structured", "pipeline"] as const)("a small %s launch repairs an inherited private child ignore before tracked-ignore restore", (kind) => {
+test.each(["structured", "pipeline"] as const)("a small %s launch repairs an inherited private child ignore before tracked-ignore restore", async (kind) => {
   const { repo, git } = repository(`inherited-child-ignore-${kind}`);
   const sibling = path.join(repo, "sibling");
   fs.mkdirSync(sibling);
-  const prior = compose(kind, sibling);
+  const prior = (await compose(kind, sibling));
   const file = prior.delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
   const ignore = path.relative(repo, path.join(sibling, CONTROLLER_ARTIFACT_DIRECTORY, ".gitignore"));
   fs.writeFileSync(path.join(repo, ignore), "!*.md\n");
@@ -398,7 +399,7 @@ test.each(["structured", "pipeline"] as const)("a small %s launch repairs an inh
   git("add", "-f", path.relative(repo, file!));
   const cwd = path.join(repo, "worker");
   fs.mkdirSync(cwd);
-  composeSmall(kind, cwd);
+  (await composeSmall(kind, cwd));
   expect(git("diff", "--cached", "--name-only")).toBe("");
   git("restore", "--", ignore);
   fs.writeFileSync(path.join(repo, "source.txt"), "worker result\n");
@@ -414,7 +415,7 @@ test.each([
   { kind: "structured", small: false, inherited: "root" }, { kind: "pipeline", small: false, inherited: "root" },
   { kind: "structured", small: true, inherited: "sibling" }, { kind: "pipeline", small: true, inherited: "sibling" },
   { kind: "structured", small: false, inherited: "sibling" }, { kind: "pipeline", small: false, inherited: "sibling" },
-] as const)("nested $kind launch protects temporarily ignored legacy $inherited handoffs (small=$small)", ({ kind, small, inherited }) => {
+] as const)("nested $kind launch protects temporarily ignored legacy $inherited handoffs (small=$small)", async ({ kind, small, inherited }) => {
   const { repo, git } = repository(`ignored-legacy-${kind}-${small}-${inherited}`);
   const rootIgnore = "!*/\n!*.md\n";
   fs.writeFileSync(path.join(repo, ".gitignore"), rootIgnore);
@@ -432,8 +433,8 @@ test.each([
   fs.writeFileSync(path.join(repo, "source.txt"), "worker result\n");
   const cwd = path.join(repo, "worker");
   fs.mkdirSync(cwd);
-  if (small) composeSmall(kind, cwd);
-  else compose(kind, cwd);
+  if (small) (await composeSmall(kind, cwd));
+  else (await compose(kind, cwd));
   expect(git("diff", "--cached", "--name-only")).toBe("source.txt");
   expect(git("show", ":source.txt")).toBe("staged source");
   expect(fs.readFileSync(path.join(repo, "source.txt"), "utf8")).toBe("worker result\n");
@@ -445,7 +446,7 @@ test.each([
   expect(fs.readFileSync(legacy, "utf8")).toBe(legacyText);
 });
 
-test("inherited namespace discovery refuses a symlinked ancestor before repairing an external ignore file", () => {
+test("inherited namespace discovery refuses a symlinked ancestor before repairing an external ignore file", async () => {
   const { repo, git } = repository("external-ancestor");
   const external = path.join(root, "external-namespace");
   const directory = path.join(external, CONTROLLER_ARTIFACT_DIRECTORY);
@@ -457,7 +458,7 @@ test("inherited namespace discovery refuses a symlinked ancestor before repairin
   // is a symlink. Git discovery must not authorize writes through that alias.
   const blob = git("hash-object", "-w", path.join(repo, "source.txt"));
   git("update-index", "--add", "--cacheinfo", `100644,${blob},alias/${CONTROLLER_ARTIFACT_DIRECTORY}/old.md`);
-  expect(() => compose("structured", repo)).toThrow(/pipeline controller artifact path must be a real directory/);
+  await expect((async () => (await compose("structured", repo)))()).rejects.toThrow(/pipeline controller artifact path must be a real directory/);
   expect(fs.readFileSync(path.join(directory, ".gitignore"), "utf8")).toBe(original);
   expect(JSON.parse(fs.readFileSync(path.join(directory, ".gitignore"), "utf8"))).toEqual({ enabled: true });
   expect(fs.readdirSync(directory)).toEqual([".gitignore"]);
@@ -466,7 +467,7 @@ test("inherited namespace discovery refuses a symlinked ancestor before repairin
 test.each([
   { kind: "structured", small: true }, { kind: "pipeline", small: true },
   { kind: "structured", small: false }, { kind: "pipeline", small: false },
-] as const)("$kind composition refuses non-round-tripping Git paths without losing staged work (small=$small)", ({ kind, small }) => {
+] as const)("$kind composition refuses non-round-tripping Git paths without losing staged work (small=$small)", async ({ kind, small }) => {
   const { repo, git } = repository(`invalid-git-path-${kind}-${small}`);
   const directory = Buffer.concat([Buffer.from(`${repo}/sibling-`), Buffer.from([0xff]), Buffer.from(`/${CONTROLLER_ARTIFACT_DIRECTORY}`)]);
   fs.mkdirSync(directory, { recursive: true });
@@ -480,8 +481,7 @@ test.each([
   fs.writeFileSync(path.join(repo, "source.txt"), "unstaged source\n");
   const cwd = path.join(repo, "worker");
   fs.mkdirSync(cwd);
-  expect(() => { if (small) composeSmall(kind, cwd); else compose(kind, cwd); })
-    .toThrow(/cannot safely decode controller artifact Git paths/);
+  await expect((async () => { if (small) (await composeSmall(kind, cwd)); else (await compose(kind, cwd)); })()).rejects.toThrow(/cannot safely decode controller artifact Git paths/);
   expect(git("diff", "--cached", "--name-only")).toBe(staged);
   expect(git("show", ":source.txt")).toBe("staged source");
   expect(fs.readFileSync(path.join(repo, "source.txt"), "utf8")).toBe("unstaged source\n");
@@ -493,7 +493,7 @@ test.each([
 test.each([
   { kind: "structured", small: true }, { kind: "pipeline", small: true },
   { kind: "structured", small: false }, { kind: "pipeline", small: false },
-] as const)("$kind composition preserves ordinary non-UTF-8 source paths (small=$small)", ({ kind, small }) => {
+] as const)("$kind composition preserves ordinary non-UTF-8 source paths (small=$small)", async ({ kind, small }) => {
   const { repo, git } = repository(`ordinary-byte-path-${kind}-${small}`);
   const tracked = Buffer.concat([Buffer.from(`${repo}/source-`), Buffer.from([0xff])]);
   const untracked = Buffer.concat([Buffer.from(`${repo}/source-`), Buffer.from([0xfe])]);
@@ -502,7 +502,7 @@ test.each([
   git("commit", "-m", "ordinary source with byte filename");
   fs.writeFileSync(untracked, "new source\n");
   fs.writeFileSync(path.join(repo, "source.txt"), "worker source\n");
-  const result = small ? composeSmall(kind, repo) : compose(kind, repo);
+  const result = small ? (await composeSmall(kind, repo)) : (await compose(kind, repo));
   git("add", "-A");
   git("commit", "-m", "ordinary worker source");
   expect(git("ls-tree", "-r", "--name-only", "HEAD")).not.toContain(CONTROLLER_ARTIFACT_DIRECTORY);
@@ -514,4 +514,40 @@ test.each([
     const file = result.delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
     expect(fs.readFileSync(file!, "utf8")).toBe(result.text);
   }
+});
+
+
+test.each([
+  { boundary: "legacy ignore", unborn: false },
+  { boundary: "unstage", unborn: false },
+  { boundary: "unstage", unborn: true },
+])("async artifact repair rechecks ancestors after $boundary (unborn=$unborn)", async ({ boundary, unborn }) => {
+  const { repo, git } = repository(`async-ancestor-${boundary.replaceAll(" ", "-")}-${unborn}`, unborn);
+  const artifactRoot = path.join(repo, ".artifacts");
+  const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "old.md"), "private staged handoff\n");
+  git("add", "-A");
+  const external = path.join(root, `async-external-${boundary.replaceAll(" ", "-")}-${unborn}`);
+  fs.mkdirSync(external);
+  const original = "preserve\n";
+  fs.writeFileSync(path.join(external, ".gitignore"), original);
+  if (boundary === "legacy ignore") fs.mkdirSync(path.join(external, "pipeline-stage-inputs"));
+  let swapped = false;
+  await expect(prepareControllerArtifactDirectory(repo, async (command, args, ...rest) => {
+    const result = await realExec(command, args, ...rest);
+    const atBoundary = boundary === "legacy ignore"
+      ? args[0] === "ls-files" && args.at(-1) === ".artifacts/.gitignore"
+      : args[0] === (unborn ? "rm" : "reset");
+    if (!swapped && atBoundary) {
+      swapped = true;
+      const replaced = boundary === "legacy ignore" ? artifactRoot : directory;
+      fs.renameSync(replaced, `${replaced}-retained`);
+      fs.symlinkSync(external, replaced, "dir");
+    }
+    return result;
+  })).rejects.toThrow(/pipeline controller artifact path must be a real directory/);
+  expect(swapped).toBe(true);
+  expect(fs.readFileSync(path.join(external, ".gitignore"), "utf8")).toBe(original);
+  expect(fs.readdirSync(external).sort()).toEqual(boundary === "legacy ignore" ? [".gitignore", "pipeline-stage-inputs"] : [".gitignore"]);
 });

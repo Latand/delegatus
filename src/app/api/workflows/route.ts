@@ -39,7 +39,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; w
   if (!stat.isDirectory()) return NextResponse.json({ error: `not a directory: ${repoDir}` }, { status: 400 });
 
   try {
-    const result = createWorkflowFromRequest({ ...body, repoDir });
+    const result = (await createWorkflowFromRequest({ ...body, repoDir }));
     if (!result.workflow) {
       return NextResponse.json({ error: result.error ?? "could not create workflow" }, { status: result.status ?? 400 });
     }
