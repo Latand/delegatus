@@ -126,6 +126,8 @@ test("a legacy stream without timestamps remembers its complete canonical echo",
   expect(state.pending).toEqual([]);
   state = projectAssistantHandoff(state, { ...legacy, text: "The answer" }, [], new Set(["answer"]), "unknown");
   expect(state.pending).toEqual([]);
+  state = projectAssistantHandoff(state, { turnId: "legacy-next", text: "The answer" }, [], claims, "running");
+  expect(state.pending.map(entry => entry.live.text)).toEqual(["The answer"]);
 });
 
 test("idless echoes own a single occurrence even when a later answer repeats the text", () => {
