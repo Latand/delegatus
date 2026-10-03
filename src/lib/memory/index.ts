@@ -85,6 +85,13 @@ export class MemoryIndex {
         at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
         PRIMARY KEY (memory_id, request_id)
       );
+      CREATE TABLE IF NOT EXISTS memory_injection_names (
+        memory_id TEXT NOT NULL, request_id TEXT NOT NULL, title TEXT NOT NULL,
+        PRIMARY KEY (memory_id, request_id)
+      );
+      INSERT OR IGNORE INTO memory_injection_names
+        SELECT o.memory_id, o.request_id, e.title FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id
+        WHERE o.channel = 'inject';
       CREATE TABLE IF NOT EXISTS memory_terminal_deliveries (
         id TEXT PRIMARY KEY, conversation TEXT, digest TEXT, origin TEXT, request TEXT, transcript TEXT, offset INTEGER
       );
@@ -339,13 +346,18 @@ export class MemoryIndex {
 
   recordInjection(entries: Array<Candidate & { score: number }>, requestId: string, conversation: string) {
     this.hookDatabase(db => db.transaction(() => {
-      for (const entry of entries) db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, new Date().toISOString(), entry.score);
+      for (const entry of entries) {
+        db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, new Date().toISOString(), entry.score);
+        // A historical offer keeps its name when the derivative is refreshed.
+        db.query("INSERT OR IGNORE INTO memory_injection_names VALUES (?, ?, ?)").run(entry.id, requestId, entry.title);
+      }
     })());
   }
 
   turnOffers(conversation: string) {
-    return this.database().query<{ id: string; title: string; requestId: string; score: number }, [string]>(`SELECT e.id, e.title, o.request_id AS requestId, o.score
-      FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'
+    return this.database().query<{ id: string; title: string; requestId: string; score: number }, [string]>(`SELECT o.memory_id AS id, COALESCE(n.title, e.title, o.memory_id) AS title, o.request_id AS requestId, o.score
+      FROM memory_offers o LEFT JOIN memory_injection_names n ON n.memory_id = o.memory_id AND n.request_id = o.request_id
+      LEFT JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'
       ORDER BY o.at DESC, o.request_id DESC, o.memory_id DESC LIMIT 1000`).all(conversation).reverse();
   }
 

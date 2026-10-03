@@ -70,11 +70,11 @@ test("injection candidates exclude native near matches and foreign projects; ope
     expect(index.offers(candidates[0].id)).toMatchObject([{ channel: "inject", score: .8 }]);
     expect(index.injectionCandidates("widget", "project-a", "codex", "conversation-fixture")).toEqual([]);
     index.open(candidates[0].id, "open-fixture", "conversation-fixture");
-    expect(index.offers(candidates[0].id)[0].outcome).toBe("opened");
+    expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("opened");
     index.recordCitations("conversation-fixture", `The identifier ${candidates[0].id} is available.`);
-    expect(index.offers(candidates[0].id)[0].outcome).toBe("opened");
+    expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("opened");
     index.recordCitations("conversation-fixture", "<oai-mem-citation>\n<citation_entries>\ncross.md:7-8|note=[cache rule]\n</citation_entries>\n</oai-mem-citation>");
-    expect(index.offers(candidates[0].id)[0].outcome).toBe("cited");
+    expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("cited");
     expect(index.turnOffers("conversation-fixture")).toMatchObject([{ requestId: "turn-fixture", title: "Widget cache" }]);
   } finally { index.close(); }
 });
@@ -352,4 +352,24 @@ test("an unobserved terminal delivery cannot suppress a later identical typed oc
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("injected names remain the offered names after source edits, removal and reload", async () => {
+  const index = new MemoryIndex();
+  const source = { path: fixture("historical.md", "---\nname: Widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n"), engine: "claude" as const, sourceKind: "claude_memory" as const, project: "project-a" };
+  try {
+    await index.refresh([source]);
+    const candidates = index.injectionCandidates("widget parser", "project-a", "codex", "historical-conversation");
+    expect(candidates).toHaveLength(1);
+    index.recordInjection(candidates.map(entry => ({ ...entry, score: .8 })), "historical-turn", "historical-conversation");
+    fs.writeFileSync(source.path, "---\nname: Renamed widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nChanged parser reference.\n");
+    await index.refresh([source]);
+    index.close();
+    expect(index.turnOffers("historical-conversation")).toMatchObject([{ title: "Widget parser", score: .8 }]);
+    await index.refresh([], { complete: true });
+    index.close();
+    expect(index.turnOffers("historical-conversation")).toMatchObject([{ title: "Widget parser", score: .8 }]);
+    expect(index.offers(candidates[0].id)).toHaveLength(1);
+  } finally { index.close(); }
 });
