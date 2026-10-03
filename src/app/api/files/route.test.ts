@@ -31,6 +31,7 @@ import {
   fileScanCacheStatus,
   resetFilesRouteCacheForTests,
   setFileScanRunnerForTests,
+  setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
 import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
@@ -97,6 +98,7 @@ beforeEach(() => {
   pipelinesStore = () => [];
   pipelineVisibility = () => [];
   setFileScanRunnerForTests(filesRouteScanRunner);
+  setFileCatalogMembershipProbeForTests(async () => null);
   setFilesResponseDependenciesForTests({
     loadFlows: () => flowsStore() as never,
     loadPipelinesForProjection: () => pipelinesStore() as never,
@@ -115,6 +117,7 @@ afterEach(() => {
   setStateFreeBytesProbeForTests(null);
   noteStateCommit();
   setFileScanRunnerForTests(null);
+  setFileCatalogMembershipProbeForTests(null);
   setFilesResponseDependenciesForTests(null);
   setAgentRegistryForTests(null);
   resetPresenceForTest();
@@ -1231,9 +1234,8 @@ test("concurrent fresh callers share one pending generation through failure and 
     return scan;
   });
 
-  // The scan coordinator starts the merged generation one microtask after the
-  // callers enqueue (#287); both retries still share exactly one scan.
-  await Promise.resolve();
+  // The membership probe precedes the coordinator; wait for it to enqueue.
+  for (let attempt = 0; attempt < 20 && scans === scansAfterFailure; attempt += 1) await Promise.resolve();
   expect(scans).toBe(scansAfterFailure + 1);
   expect(firstRetrySettled).toBeFalse();
   expect(secondRetrySettled).toBeFalse();
@@ -1316,9 +1318,7 @@ test("a fresh resource snapshot fences a pre-kill refresh before host election",
   });
 
   expect(filesFresh).toBeTrue();
-  // The scan coordinator starts the fresh generation one microtask after the
-  // resource reader enqueues it (#287).
-  await Promise.resolve();
+  for (let attempt = 0; attempt < 20 && scans < 2; attempt += 1) await Promise.resolve();
   expect(scans).toBe(2);
   const payload = await payloadPromise;
   expect(resourceSettled).toBeTrue();
@@ -2088,6 +2088,7 @@ test("unique pinned snapshots use bounded LRU retention while recent pins stay w
   scanPinOverlayResults = [[pins[0]!]];
   const evicted = await cachedFileScan(undefined, pins[0], now);
   expect(evicted.snapshot.files.map((entry) => entry.path)).toEqual([global.path]);
+  for (let attempt = 0; attempt < 20 && scans < 11; attempt += 1) await Promise.resolve();
   expect(scans).toBe(11);
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
@@ -2258,6 +2259,7 @@ test("an arbitrary client revision cannot suppress a later refresh beyond the co
   const stale = await cachedFileScan(undefined, undefined, Number.MAX_SAFE_INTEGER, 7);
 
   expect(stale.snapshot.files.map((entry) => entry.path)).toEqual(["/sessions/untrusted-watermark.jsonl"]);
+  for (let attempt = 0; attempt < 20 && scans < 2; attempt += 1) await Promise.resolve();
   expect(scans).toBe(2);
 
   const completed = await currentFileScan();

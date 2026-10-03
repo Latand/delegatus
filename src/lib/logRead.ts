@@ -4,6 +4,19 @@ import { MAX_CHUNK, pathAllowed } from "@/lib/scanner/roots";
 import type { LogChunk } from "@/lib/types";
 
 const NEWLINE = 0x0a;
+
+/** The most bytes one older-history read may return. A client asks for more
+    than a tail window (`MAX_CHUNK`) so a transcript full of screenshots comes
+    back in a handful of reads instead of dozens; the server owns the cap. */
+export const HISTORY_MAX_BYTES = 4 * 1024 * 1024;
+
+/** The size of an older-history read: the caller's `bytes` held between one
+    tail window and `HISTORY_MAX_BYTES`, a tail window when it names none. */
+export function historyReadBytes(requested: string | null): number {
+  const asked = requested === null ? MAX_CHUNK : Math.floor(Number(requested));
+  if (!Number.isFinite(asked)) return MAX_CHUNK;
+  return Math.min(HISTORY_MAX_BYTES, Math.max(MAX_CHUNK, asked));
+}
 const SCAN_PIECE = 64 * 1024;
 
 /* The absolute index of the first newline in [from, to), or null. Reads in

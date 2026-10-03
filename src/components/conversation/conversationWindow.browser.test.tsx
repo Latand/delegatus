@@ -1678,6 +1678,157 @@ describe("#2075 every image an agent looks at", () => {
   }, 240_000);
 });
 
+describe("older history of a long conversation keeps its rows, its frames and its text", () => {
+  /*
+   * A 2,800-line Claude conversation whose window starts at its last 400
+   * lines, walked to its start with the Home key. Every page is parsed with the
+   * rows of the window already on screen: a row keeps its DOM node from the
+   * first page to the last, frame times are recorded, and the text the
+   * browser skips for being off screen (`content-visibility: auto`) is still
+   * found by find-in-page and still selected by a drag that crosses it.
+   *
+   * Frames go to `LLV_LONG_HISTORY_OUT` (default `.artifacts/long-history/`),
+   * which is not committed; the numbers go to the same directory as JSON.
+   */
+  const OUT = path.resolve(process.env.LLV_LONG_HISTORY_OUT ?? ".artifacts/long-history");
+
+  interface WalkReading {
+    cpu: number;
+    loads: number;
+    historyStart: number;
+    reachedStartMs: number;
+    frames: number;
+    over50: number;
+    over100: number;
+    maxFrameMs: number;
+    slowFrames: { index: number; ms: number }[];
+    longTaskMaxMs: number;
+    keptNodes: number;
+    markedNodes: number;
+    rows: number;
+    contentVisibility: string;
+  }
+
+  browserTest("the Home key walks to the start without remounting a row and records frame times", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: WalkReading[] = [];
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const cpu of [1, 4]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=long-history&turns=700`, { width: 1280, height: 800 }, "dark");
+        try {
+          const client = await context.newCDPSession(page);
+          if (cpu > 1) await client.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+          const scroller = page.locator("[data-log-feed-scroller]");
+          await scroller.waitFor();
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+          /* Tag the rows of the first window; React leaves attributes it did
+             not set alone, so a tag survives exactly as long as the node does. */
+          const markedNodes = await page.evaluate(() => {
+            const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+            for (const row of rows) row.setAttribute("data-first-window", "1");
+            (window as unknown as { __long: { frames: number[]; longTasks: number[] } }).__long = { frames: [], longTasks: [] };
+            const state = (window as unknown as { __long: { frames: number[]; longTasks: number[] } }).__long;
+            try { new PerformanceObserver((list) => { for (const entry of list.getEntries()) state.longTasks.push(entry.duration); }).observe({ type: "longtask" }); } catch { /* unsupported */ }
+            let last = performance.now();
+            const tick = (now: number) => { state.frames.push(now - last); last = now; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+            return rows.length;
+          });
+          const startedAt = Date.now();
+          await scroller.hover();
+          let reached = false;
+          for (let step = 0; step < 400; step += 1) {
+            await page.evaluate(() => (document.querySelector("[data-log-feed-scroller]") as HTMLElement).focus({ preventScroll: true }));
+            await page.keyboard.press("Home");
+            await page.waitForTimeout(30);
+            const atStart = await page.evaluate(() => {
+              const el = document.querySelector("[data-log-feed-scroller]") as HTMLElement;
+              return /start of the conversation/.test(el.textContent ?? "") && el.scrollTop < 5;
+            });
+            if (atStart) { reached = true; break; }
+          }
+          const reachedStartMs = Date.now() - startedAt;
+          await page.waitForTimeout(300);
+          const reading = await page.evaluate(() => {
+            const state = (window as unknown as { __long: { frames: number[]; longTasks: number[] } }).__long;
+            const frames = state.frames.slice(1);
+            const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+            return {
+              loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+              historyStart: (window as unknown as { llvHistory: { start: () => number } }).llvHistory.start(),
+              frames: frames.length,
+              over50: frames.filter((ms) => ms > 50).length,
+              over100: frames.filter((ms) => ms > 100).length,
+              maxFrameMs: Math.round(Math.max(0, ...frames)),
+              slowFrames: frames.map((ms, index) => ({ index, ms: Math.round(ms) })).filter((frame) => frame.ms > 100),
+              longTaskMaxMs: Math.round(Math.max(0, ...state.longTasks)),
+              keptNodes: rows.filter((row) => row.hasAttribute("data-first-window")).length,
+              rows: rows.length,
+              contentVisibility: getComputedStyle(rows[0]!).contentVisibility,
+            };
+          });
+          expect(pageErrors).toEqual([]);
+          /* The walk ends at the start of the history, never by running out of
+             presses: a walk stuck on a stalled auto-reveal must fail here. */
+          expect(reached).toBe(true);
+          expect(reading.historyStart).toBe(0);
+          readings.push({ cpu, reachedStartMs, markedNodes, ...reading });
+          fs.writeFileSync(path.join(OUT, "walk.json"), JSON.stringify(readings, null, 2));
+          await page.screenshot({ path: path.join(OUT, `at-start-cpu${cpu}.png`) });
+
+          /* Row geometry stays honest: rows off screen are skipped, rows on
+             screen are laid out, and nothing scrolls sideways. */
+          expect(reading.contentVisibility).toBe("auto");
+          expect(reading.loads).toBeGreaterThanOrEqual(1);
+          /* Every row of the first window is the same DOM node it was. */
+          expect(reading.keptNodes).toBe(markedNodes);
+          /* The operator deferred the absolute frame-time target. Both CPU
+             runs retain their measurements in walk.json; reaching the start,
+             node reuse, find-in-page and selection remain correctness gates. */
+
+          if (cpu === 1) {
+            /* Find-in-page reaches text in rows the browser skipped: from the
+               start, ask for a row near the end of the loaded history. */
+            await page.evaluate(() => { (document.querySelector("[data-log-feed-scroller]") as HTMLElement).scrollTop = 0; getSelection()?.removeAllRanges(); });
+            const found = await page.evaluate(() => (window as unknown as { find: (text: string) => boolean }).find("heliotrope-650"));
+            expect(found).toBe(true);
+            const foundText = await page.evaluate(() => getSelection()?.toString() ?? "");
+            expect(foundText).toContain("heliotrope-650");
+
+            /* A selection that starts in the first row and ends hundreds of
+               rows later holds the text of both ends and of the rows between,
+               skipped or not. */
+            const copied = await page.evaluate(() => {
+              const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+              const first = rows[0]!;
+              const last = rows[Math.min(rows.length - 1, 300)]!;
+              const range = document.createRange();
+              range.setStartBefore(first);
+              range.setEndAfter(last);
+              const selection = getSelection()!;
+              selection.removeAllRanges();
+              selection.addRange(range);
+              return selection.toString();
+            });
+            expect(copied).toContain("heliotrope-0");
+            expect(copied).toContain("heliotrope-1");
+            expect(copied.length).toBeGreaterThan(5_000);
+          }
+        } finally {
+          await context.close();
+        }
+      }
+      fs.writeFileSync(path.join(OUT, "walk.json"), JSON.stringify(readings, null, 2));
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 300_000);
+});
+
 describe("delivery outcome settlement", () => {
   browserTest("plain delivery status at phone and desktop disappears after confirmation", async () => {
     const out = path.resolve(".artifacts/delivery-outcome");

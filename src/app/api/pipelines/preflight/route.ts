@@ -21,7 +21,7 @@ type PreflightFailure = ApiError & {
   detail?: string;
 };
 
-type Dependencies = { preflight: typeof preflightPipelineRepo };
+type Dependencies = { preflight: (repoDir: string, ports?: Parameters<typeof preflightPipelineRepo>[1], options?: Parameters<typeof preflightPipelineRepo>[2]) => PipelineRepoPreflight | Promise<PipelineRepoPreflight> };
 
 async function postPreflight(
   req: NextRequest,
@@ -47,7 +47,7 @@ async function postPreflight(
 
   // The picker's validation warms the short-TTL success cache so the follow-up
   // creation request reuses this probe instead of re-running git (#353 AC2).
-  const result = dependencies.preflight(repoDir, undefined, { cache: true });
+  const result = await dependencies.preflight(repoDir, undefined, { cache: true });
   if (result.ok) return NextResponse.json(result);
   return NextResponse.json(
     {
