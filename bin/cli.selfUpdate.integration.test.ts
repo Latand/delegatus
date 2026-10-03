@@ -107,21 +107,16 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean;
   git(checkout, "add", "-f", ".");
   git(checkout, "commit", "-m", "first");
   const first = git(checkout, "rev-parse", "HEAD");
-  return {
-    root,
-    checkout,
-    first,
-    state,
-    env: {
-      ...process.env,
-      HOME: home,
-      XDG_CONFIG_HOME: path.join(home, ".config"),
-      XDG_CACHE_HOME: cache,
-      LLV_STATE_DIR: state,
-      TMPDIR: path.join(root, "tmp"),
-      LLV_BUN_EXECUTABLE: process.execPath,
-    },
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+    XDG_CACHE_HOME: cache,
+    LLV_STATE_DIR: state,
+    TMPDIR: path.join(root, "tmp"),
+    LLV_BUN_EXECUTABLE: process.execPath,
   };
+  return { root, checkout, first, state, env };
 }
 
 /** A built release of a new commit, as the Viewer's step runner leaves it. */
