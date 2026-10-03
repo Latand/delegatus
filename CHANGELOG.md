@@ -23,6 +23,11 @@ guarantees for the 1.x series.
   the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
 
 ### Fixed
+- **Legacy launcher upgrades restore the prior serving release.** If an older
+  launcher already published a candidate and switched only the web process,
+  the one-time bootstrap captures rollback from the verified serving host.
+  A failed host or web start restores both processes on that release; an entry
+  that cannot load is refused before restart ([#2495]).
 - **The host deploy command authenticates on team installations.**
   `scripts/rebuild.sh` uses the existing controller credential for admission
   and status polling. The client connects only to a validated loopback address,
@@ -34,6 +39,10 @@ guarantees for the 1.x series.
   are covered automatically ([#2495]).
 
 ### Maintainer notes
+- The installed `braces` dependency carries the runtime mitigation from upstream
+  tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
+  parent-cycle regressions in the release gates. The locally fixed advisory
+  metadata expires on 2026-10-10; [#2496] tracks removal after an upstream release.
 - Release-pointer reads and update admission retain main's asynchronous Git
   checks together with durable drain custody. This version prepares the npm
   release; tagging and publication are separate release steps.
@@ -1934,3 +1943,4 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2388]: https://github.com/Latand/delegatus/pull/2388
 [#2430]: https://github.com/Latand/delegatus/pull/2430
 [#2495]: https://github.com/Latand/delegatus/pull/2495
+[#2496]: https://github.com/Latand/delegatus/issues/2496
