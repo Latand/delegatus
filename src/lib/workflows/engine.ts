@@ -311,9 +311,29 @@ async function ensureStageAgent(
   return "ready";
 }
 
+/** A control change cancels every child and supersedes this exact phase's result. */
+function workflowGitFence(wf: Workflow, ports: WorkflowPorts) {
+  const fingerprint = JSON.stringify(wf), abort = new AbortController();
+  const revalidate = () => {
+    if (JSON.stringify(loadWorkflows().find((item) => item.id === wf.id)) !== fingerprint) abort.abort();
+    return !abort.signal.aborted;
+  };
+  const watch = setInterval(revalidate, 50);
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    if (!revalidate()) return { code: null, stdout: "", stderr: "workflow operation superseded" };
+    return await ports.exec(command, args, cwd, env, { ...options,
+      signal: options?.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal,
+      timeoutMs: options?.timeoutMs ?? 60_000 });
+  };
+  return { exec, current: revalidate, release: () => clearInterval(watch) };
+}
+
 async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
   if (!wf.baseRef) {
-    const res = provisionWorktree(wf, ports.exec);
+    const fence = workflowGitFence(wf, ports);
+    let res: Awaited<ReturnType<typeof provisionWorktree>>;
+    try { res = await provisionWorktree(wf, fence.exec); if (!fence.current()) return; }
+    finally { fence.release(); }
     if (!res.ok) {
       park(wf, res.error);
       return;
@@ -457,9 +477,25 @@ async function tickReviewing(
   else if (flow.state === "closed") park(wf, "the embedded review flow was closed");
 }
 
-function tickFinishing(wf: Workflow, ports: WorkflowPorts): void {
+async function tickFinishing(wf: Workflow, ports: WorkflowPorts): Promise<void> {
   const flow = wf.flowId ? ports.getFlow(wf.flowId) : null;
-  const res = runFinish(wf, prBody(wf, flow?.rounds ?? []), ports.exec);
+  const fence = workflowGitFence(wf, ports);
+  let res: Awaited<ReturnType<typeof runFinish>>;
+  try {
+    res = await runFinish(wf, prBody(wf, flow?.rounds ?? []), fence.exec, ports.exec);
+    if (!fence.current()) {
+      if (!res.ok && res.recoveryRequired) {
+        const current = loadWorkflows();
+        const paused = current.find((item) => item.id === wf.id);
+        if (paused && (paused.state === "paused" || paused.state === "closed")) {
+          paused.stateDetail = res.error;
+          saveWorkflows(current);
+        }
+      }
+      return;
+    }
+  }
+  finally { fence.release(); }
   if (!res.ok) {
     park(wf, res.error);
     return;
@@ -481,7 +517,7 @@ async function tickWorkflow(
   if (wf.state === "provisioning") await tickProvisioning(wf, ports, persistCheckpoint);
   else if (wf.state === "implementing") await tickImplementing(wf, entries, entriesByPath, ports, persistCheckpoint);
   else if (wf.state === "reviewing") await tickReviewing(wf, entries, ports, persistCheckpoint);
-  else if (wf.state === "finishing") tickFinishing(wf, ports);
+  else if (wf.state === "finishing") (await tickFinishing(wf, ports));
   return JSON.stringify(wf) !== before;
 }
 
@@ -539,11 +575,13 @@ export async function patchWorkflow(
     if (wf.state !== "paused" && !TERMINAL_STATES.has(wf.state)) {
       if (wf.state !== "needs_decision") wf.pausedState = wf.state;
       wf.state = "paused";
+      wf.controlGeneration = crypto.randomUUID();
       wf.stateDetail = pauseResumeDetail("paused", actor);
     }
   } else if (req.action === "resume") {
     if (wf.state === "paused" || wf.state === "needs_decision") {
       wf.state = wf.pausedState && !PARKED_STATES.has(wf.pausedState) ? wf.pausedState : "provisioning";
+      wf.controlGeneration = crypto.randomUUID();
       wf.pausedState = null;
       wf.stateDetail = pauseResumeDetail("resumed", actor);
     }
@@ -577,6 +615,7 @@ export async function patchWorkflow(
     }
     wf.pausedState = null;
     wf.stateDetail = null;
+    wf.controlGeneration = crypto.randomUUID();
   } else if (req.action === "retry-stage") {
     const phase = phaseOf(wf);
     if (TERMINAL_STATES.has(wf.state)) return { error: "workflow is finished", status: 409 };
@@ -602,6 +641,7 @@ export async function patchWorkflow(
       }
     }
     wf.state = phase;
+    wf.controlGeneration = crypto.randomUUID();
     wf.pausedState = null;
     wf.stateDetail = null;
   } else if (req.action === "close") {
@@ -612,6 +652,7 @@ export async function patchWorkflow(
     }
     /* Panes and the worktree stay for inspection (W10); removal is manual. */
     wf.state = "closed";
+    wf.controlGeneration = crypto.randomUUID();
     wf.pausedState = null;
     wf.stateDetail = null;
     wf.closedAt = ports.now();
@@ -621,15 +662,15 @@ export async function patchWorkflow(
   return { workflow: wf };
 }
 
-export function createWorkflowFromRequest(
+export async function createWorkflowFromRequest(
   req: CreateWorkflowRequest,
   ports: WorkflowPorts = defaultPorts(),
-): { workflow?: Workflow; error?: string; status?: number } {
+): Promise<{ workflow?: Workflow; error?: string; status?: number }> {
   const task = typeof req.task === "string" ? req.task.trim() : "";
   if (!task) return { error: "task brief is required", status: 400 };
   const repoDir = typeof req.repoDir === "string" ? req.repoDir.trim() : "";
   if (!repoDir) return { error: "repoDir is required", status: 400 };
-  const gitCheck = ports.exec("git", ["rev-parse", "--git-dir"], repoDir);
+  const gitCheck = (await ports.exec("git", ["rev-parse", "--git-dir"], repoDir));
   if (gitCheck.code !== 0) return { error: `not a git repository: ${repoDir}`, status: 400 };
 
   let template: WorkflowTemplate;

@@ -14,10 +14,10 @@ export function userUnit(cgroup: string): string | null {
   return match?.[1] ?? null;
 }
 function read(file: string): string { try { return readFileSync(file, "utf8"); } catch { return ""; } }
-function ready(pointer: string, root: string): boolean {
+async function ready(pointer: string, root: string): Promise<boolean> {
   try {
     const value = JSON.parse(read(pointer));
-    const release = new ReleasePointer(pointer, root).current();
+    const release = await new ReleasePointer(pointer, root).current();
     if (release.sha !== value.sha || release.dir !== value.dir) return false;
     return read(join(value.dir, "bin", "launcher-relaunch.mjs")).includes("delegatus-launcher-relaunch-v1");
   } catch { return false; }
@@ -30,10 +30,10 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean; argv?(pid: number): string[]; env?: { PORT?: string; HOSTNAME?: string }; platform?: NodeJS.Platform } = {
+export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: { PORT?: string; HOSTNAME?: string }; platform?: NodeJS.Platform } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
-}, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): InstallAction | null {
+}, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): Promise<InstallAction | null> {
   if (decision.mode === "managed" || decision.record?.launcher.relaunch === 1) return null;
   if (decision.reason === "docker-deployments") return { id: "docker-deployments", button: false,
     command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" };
@@ -55,9 +55,9 @@ export function installAction(decision: ModeDecision, ports: { cgroup(pid: numbe
   let command = (windows ? "& " : "") + [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"]
     .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
   if (decision.record) {
-    if (!ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
+    if (!await ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
     if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
-      const next = new ReleasePointer(decision.record.releasePointer, root).current();
+      const next = await new ReleasePointer(decision.record.releasePointer, root).current();
       if (next.dir !== root) {
         let requestId: string | undefined;
         try {

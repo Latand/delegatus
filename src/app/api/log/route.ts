@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { readTailChunk } from "@/lib/logRead";
+import { historyReadBytes, readTailChunk } from "@/lib/logRead";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { ownerTranscriptMayExist, transcriptDeletionBlocker, type DeletionSafetyDependencies } from "@/lib/scanner/deleteSafety";
 import { removeTranscriptFromDisk } from "@/lib/scanner/deleteTranscript";
-import { MAX_CHUNK, pathAllowed } from "@/lib/scanner/roots";
+import { pathAllowed } from "@/lib/scanner/roots";
 import { claudeSubagentOwnerPath, transcriptProcessMayBeRunning } from "@/lib/scanner/transcripts";
 import type { ApiError, LogChunk } from "@/lib/types";
 
@@ -26,7 +26,8 @@ const deletionSafetyDependencies: DeletionSafetyDependencies = {
  *  - tail (default): `offset` continues a forward poll; the very first read
  *    of a large file jumps to the last MAX_CHUNK bytes;
  *  - history: `before` returns the chunk of bytes ENDING at that offset, so
- *    the client can walk backwards page by page to the file start.
+ *    the client can walk backwards page by page to the file start. `bytes`
+ *    asks for a larger page than a tail window; the server caps it.
  */
 export async function GET(
   req: NextRequest,
@@ -48,7 +49,7 @@ export async function GET(
     let before = Number(beforeParam);
     if (!Number.isFinite(before) || before < 0) before = 0;
     if (before > size) before = size;
-    const start = Math.max(0, before - MAX_CHUNK);
+    const start = Math.max(0, before - historyReadBytes(req.nextUrl.searchParams.get("bytes")));
     const fh = await fs.open(path, "r");
     try {
       const buf = Buffer.alloc(before - start);

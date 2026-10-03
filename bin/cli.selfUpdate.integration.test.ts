@@ -1340,7 +1340,7 @@ for (const broken of [false, true]) (legacySource ? test : test.skip)(`actual le
   writeFileSync(before.releasePointer, JSON.stringify({ kind: "package", version: "0.0.1", baseVersion: "0.0.0", dir: candidate.dir, sha: candidate.sha }));
   writeFileSync(before.requestFile.replace("request-", "trial-"), JSON.stringify({ requestId: controller.current!.requestId, target: candidate.sha,
     rollbackPointer: null, previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "starting", at: controller.current!.startedAt }));
-  const action = installAction({ mode: "package", reason: null, record }, { cgroup: () => "", ready: () => true, argv: () => [] });
+  const action = await installAction({ mode: "package", reason: null, record }, { cgroup: () => "", ready: () => true, argv: () => [] });
   const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
   const child = spawn("sh", ["-c", action!.command!], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" }); children.add(child);
   const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy"

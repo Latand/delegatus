@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
+import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
   expect(parseReviewedPrs("12@abcdef1, 13@1234567")).toEqual([
@@ -74,6 +74,40 @@ test("real squash accepts context drift, preserves reviewed patch and defers eve
   expect(git(state.work, ["show", `${state.tip}:story.txt`])).toStartWith("first\nsecond changed\nthird\nnew fourth");
   expect(git(f.repo, ["symbolic-ref", "--short", "HEAD"])).toBe("main");
   expect(git(state.work, ["rev-list", "--count", `${state.base}..HEAD`])).toBe("1");
+});
+
+test("merger ESLint uses the batch base and retains selected paths through its runner", async () => {
+  const f = fixture(); f.seed("example.ts", "export const value = 1;\n");
+  const head = f.addPr(12, "example.ts", "export const value = 2;\n");
+  const calls: string[][] = [];
+  const runner: CommandRunner = async (_cwd, args) => { calls.push(args); return { code: 0, output: "" }; };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  const state = await batch.build(`12@${head}`);
+  const lint = localGateCommands(state.work, state.base).find(gate => gate.id === "eslint")!;
+  expect(lint.args).toEqual(["bun", "scripts/eslint-changes.ts", "--base", state.base, "example.ts"]);
+  await batch.gate();
+  expect(calls.some(args => args.some(arg => arg.endsWith("/eslint-changes.ts")) && args.slice(-3).join(" ") === `--base ${state.base} example.ts`)).toBeTrue();
+});
+
+test("merger lints baseline commits without the helper and upgrades persisted old ESLint commands", async () => {
+  const f = fixture();
+  f.seed("eslint.config.mjs", 'export default [{ rules: { "no-unused-vars": "error" } }];\n');
+  f.seed("example.js", "function example() { const old = 1; } example();\n");
+  const head = f.addPr(12, "example.js", "\nfunction example() { const old = 1; } example();\n");
+  const runner: CommandRunner = async (cwd, args, env) => args[2]?.endsWith("eslint-changes.ts")
+    ? commandRunner(cwd, args.slice(1), env) : { code: 0, output: "" };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  const state = await batch.build(`12@${head}`);
+  const lint = localGateCommands(state.work, state.base).find(gate => gate.id === "eslint")!;
+  expect((await batch.bisectSubject(lint)).code).toBe(0);
+  git(state.work, ["checkout", "--detach", state.base]);
+  try {
+    const result = await batch.bisectSubject(lint);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("1 errors already on the base");
+    const legacy = await batch.bisectSubject({ id: "eslint", args: ["bunx", "eslint", "--", "example.js"] });
+    expect(legacy.code).toBe(0); expect(legacy.output).toContain("1 errors already on the base");
+  } finally { git(state.work, ["checkout", state.branch]); }
 });
 
 test("a clean squash with a partial overlap is deferred because the reviewed patch changed", async () => {

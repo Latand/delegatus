@@ -226,6 +226,7 @@ import {
   newestDeploymentsFirst,
   pipelineAcknowledgement,
   pipelineActionAcknowledgement,
+  pipelineCheckFields,
   pipelineStageRead,
   stageReportAcknowledgement,
   type AccountLimitsInput,
@@ -283,6 +284,7 @@ export interface ViewerControlDependencies {
 }
 
 const CONTROL_ATTEMPT_TIMEOUT_MS = 5_000;
+const CONTROL_READ_RECOVERY_BUDGET_MS = 12_000;
 const CONTROL_RECOVERY_BUDGET_MS = 8_000;
 const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
@@ -356,7 +358,7 @@ async function requestViewerControl(
   const callerBudget = deadlineAt === undefined
     ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(0, deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, callerBudget);
+  const expiresAt = now + Math.min(CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
   while (Date.now() < expiresAt) {
@@ -4566,6 +4568,7 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     return redactPayload({
       pipelineId,
       ...pipelineCompactRow(pipeline),
+      ...pipelineCheckFields(pipeline),
       revision: recordRevision(pipeline),
       taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
@@ -4732,7 +4735,7 @@ async function listPipelines(
     if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
     if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
     const { stages, ...status } = pipelineCompactRow(pipeline);
-    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
+    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...pipelineCheckFields(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
@@ -5761,6 +5764,8 @@ async function requestAttention(
   if (intent !== "show" && intent !== "open") throw new Error("intent must be show or open");
   const zoom = text(args.zoom) as ZoomIntent | "";
   if (zoom && zoom !== "inspect" && zoom !== "situate") throw new Error("zoom must be inspect or situate");
+  const waitFor = args.waitFor ?? "arrived";
+  if (waitFor !== "accepted" && waitFor !== "arrived") throw new Error("waitFor must be accepted or arrived");
   const reason = required(args, "reason");
   const contextLabel = text(args.contextLabel);
   /* Canonical, as every seat is: a target named by a key that has since moved
@@ -5868,6 +5873,15 @@ async function requestAttention(
        one, and this run reports it rather than counting a creation. */
     if (created.adopted) created = null;
   }
+
+  if (waitFor === "accepted") return redactPayload({
+    attentionId: request.id, request, accepted: true,
+    arrival: request.state === "following" || (request.state === "returned" && request.returnPoints.length > 0)
+      ? "arrived" : ["expired", "dismissed", "returned"].includes(request.state) ? "failed" : "pending",
+    handoff: null, recovered: created === null,
+    superseded: created?.superseded ?? [], dropped: created?.dropped ?? [],
+    ...mutationReceipt(operationKey),
+  });
 
   /* Inside the caller's own transport deadline, so the bounded failure is OURS
      to report rather than a timeout the caller reads as silence. */
@@ -6530,7 +6544,7 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedBeforeMutation(() => createPipeline(args, context, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {

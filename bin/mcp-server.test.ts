@@ -73,10 +73,8 @@ function installedPackage(serverSource = `
   sandboxes.push(root);
   fs.mkdirSync(path.join(root, "bin"), { recursive: true });
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
-  fs.copyFileSync(path.join(import.meta.dir, "mcp-server.mjs"), path.join(root, "bin", "mcp-server.mjs"));
-  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"]) {
-    fs.copyFileSync(path.join(import.meta.dir, name), path.join(root, "bin", name));
-  }
+  // Use the published bin module set so transitive launcher imports stay present.
+  fs.cpSync(import.meta.dir, path.join(root, "bin"), { recursive: true });
   fs.writeFileSync(path.join(root, "dist", "mcp-server.mjs"), serverSource, "utf8");
   return { root, launcher: path.join(root, "bin", "mcp-server.mjs") };
 }
