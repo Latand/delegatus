@@ -61,6 +61,7 @@ let service: SelfUpdateService | null = null;
 let releaseTarget: { revision: string } | null = { revision: RELEASE };
 let heldAutoAnswer: { applied(): void; release: Promise<void>; used: boolean } | null = null;
 let heldSnapshotHealth: { entered(): void; release: Promise<void>; used: boolean; skip: number } | null = null;
+let rollbackHealth: Awaited<ReturnType<ServiceDeps["hostHealth"]>> = null;
 let deploymentAnswer: ViewerDeploymentStatus | null = null;
 const saved: Record<string, string | undefined> = {};
 
@@ -116,6 +117,7 @@ beforeEach(() => {
   heldAutoAnswer = null;
   heldSnapshotHealth = null;
   deploymentAnswer = null;
+  rollbackHealth = null;
 });
 
 afterEach(() => {
@@ -130,6 +132,7 @@ afterEach(() => {
   heldAutoAnswer = null;
   heldSnapshotHealth = null;
   deploymentAnswer = null;
+  rollbackHealth = null;
 });
 
 function serviceDeps(dir: string): ServiceDeps {
@@ -157,7 +160,7 @@ function serviceDeps(dir: string): ServiceDeps {
         heldSnapshotHealth.entered();
         await heldSnapshotHealth.release;
       }
-      return null;
+      return rollbackHealth;
     },
     requestDeployment: async () => { throw new Error("no deployment in this fixture"); },
     readDeployment: async () => deploymentAnswer,
@@ -247,7 +250,8 @@ async function dialogSwitch(body: Record<string, unknown>): Promise<number> {
 }
 
 const autoFile = () => path.join(sandbox, "self-update", "auto.json");
-function seedTerminalRollback(): void {
+function seedTerminalRollback(healthy = true): void {
+  rollbackHealth = healthy ? { pid: 102, generation: { revision: RELEASE } } as Awaited<ReturnType<ServiceDeps["hostHealth"]>> : null;
   const clientKey = "rollback-case";
   const deploymentId = "rollback-deployment";
   const idempotencyKey = `self-update-${RELEASE.slice(0, 12)}-${clientKey}`;
@@ -329,6 +333,24 @@ test("an ordinary MCP read returns the rollback state refreshed by that same rea
     enabled: false, off: { reason: "candidate health failed" }, managedPending: null,
   });
   expect((await dialog()).auto).toMatchObject({ enabled: false, off: { reason: "candidate health failed" }, phase: "idle" });
+});
+
+test("an MCP rollback read keeps accepted custody until host health becomes available", async () => {
+  seedTerminalRollback(false);
+  const result = await once(WORKER, { clientRequestId: "rollback-health-unavailable" });
+  expect(result.failed).toBe(false);
+  expect(result.payload).toMatchObject({ enabled: false, off: { reason: "candidate health failed" } });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8")).managedPending).toMatchObject({ target: { sha: RELEASE } });
+  // Recover a new Viewer from the same durable custody before health returns.
+  service!.stop();
+  service = new SelfUpdateService(serviceDeps(path.join(sandbox, "self-update")));
+  setSelfUpdateServiceForTests(service);
+  await once(WORKER, { clientRequestId: "rollback-cold-health-unavailable" });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8")).managedPending).not.toBeNull();
+  rollbackHealth = { pid: 102, generation: { revision: RELEASE } } as Awaited<ReturnType<ServiceDeps["hostHealth"]>>;
+  const settled = await once(WORKER, { clientRequestId: "rollback-health-restored" });
+  expect(settled.payload).toMatchObject({ enabled: false, phase: "idle" });
+  expect(JSON.parse(fs.readFileSync(autoFile(), "utf8")).managedPending).toBeNull();
 });
 
 test("the operator's own session writes, recorded as the operator", async () => {

@@ -76,14 +76,9 @@ export class ApplyController {
     const trialFile = launcherControlFile(record.requestFile, "trial");
     let trial: { requestId?: string; target?: string; rollbackPointer?: string | null; state?: string; detail?: string; previousEntry?: string } | null = null;
     try { trial = JSON.parse(readFileSync(trialFile, "utf8")); } catch { /* no readable trial */ }
-    // A first upgrade may return to a launcher predating the trial protocol.
-    // Its healthy record carries no request ID; the owned trial, restored raw
-    // pointer and independently checked serving processes establish rollback.
-    if (intent.externalRestart && trial?.requestId === intent.requestId && trial.target === intent.target
-      && trial.state === "rolled-back" && trial.rollbackPointer === intent.rollbackPointer && hostHealthy
-      && (!record.launcher.state || record.launcher.state === "healthy")
-      && (record.launcher.requestId == null || record.launcher.requestId === intent.requestId)
-      && record.web.state === "healthy" && record.runtimeHost.state === "healthy") {
+    const coherentRollback = (): boolean => {
+      if (!hostHealthy || (record.launcher.state && record.launcher.state !== "healthy")
+        || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy") return false;
       let rollbackRevision: string | null = null;
       try { rollbackRevision = JSON.parse(intent.rollbackPointer ?? "null")?.sha?.slice(0, 7) ?? null; } catch { /* An unpublished release uses captured serving revisions. */ }
       const webRevision = rollbackRevision ?? intent.rollbackWebRevision;
@@ -92,13 +87,24 @@ export class ApplyController {
         : existsSync(record.releasePointer) && readFileSync(record.releasePointer, "utf8") === intent.rollbackPointer;
       let packageRestored = false;
       if (!record.checkout && intent.rollbackPointer === null && intent.rollbackPackage
-        && trial.previousEntry === join(intent.rollbackPackage.root, "bin", "cli.mjs")
+        && (sameLauncher && record.installRoot === intent.rollbackPackage.root
+          || trial?.previousEntry === join(intent.rollbackPackage.root, "bin", "cli.mjs"))
         && (!record.installRoot || record.installRoot === intent.rollbackPackage.root)
         && intent.rollbackWebRevision === null && intent.rollbackHostRevision === null) {
         try { packageRestored = JSON.parse(readFileSync(join(intent.rollbackPackage.root, "package.json"), "utf8")).version === intent.rollbackPackage.version; } catch { /* Missing or changed package cannot settle. */ }
       }
-      if (pointerRestored && (packageRestored || webRevision && hostRevision)
-        && record.web.revision === webRevision && record.runtimeHost.revision === hostRevision) {
+      return pointerRestored && webRevision === hostRevision && !!(packageRestored || webRevision && hostRevision)
+        && record.web.revision === webRevision && record.runtimeHost.revision === hostRevision;
+    };
+    // A first upgrade may return to a launcher predating the trial protocol.
+    // Its healthy record carries no request ID; the owned trial, restored raw
+    // pointer and independently checked serving processes establish rollback.
+    if (intent.externalRestart && trial?.requestId === intent.requestId && trial.target === intent.target
+      && trial.state === "rolled-back" && trial.rollbackPointer === intent.rollbackPointer && hostHealthy
+      && (!record.launcher.state || record.launcher.state === "healthy")
+      && (record.launcher.requestId == null || record.launcher.requestId === intent.requestId)
+      && record.web.state === "healthy" && record.runtimeHost.state === "healthy") {
+      if (coherentRollback()) {
         this.patch({ state: "failed", rolledBack: true, detail: trial.detail ?? "The replacement rolled back to the previous release" });
         releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); rmSync(trialFile, { force: true }); return "failed";
       }
@@ -115,6 +121,7 @@ export class ApplyController {
     if ((result?.requestId === intent.requestId && result.state === "rejected") || untaken || externalUntaken) {
       // Restore only the pointer owned by this untaken transaction.
       this.restoreUntaken(record);
+      if (!coherentRollback()) return null;
       if (externalUntaken && trial?.requestId === intent.requestId) rmSync(trialFile, { force: true });
       this.patch({ state: "failed", admissionRefused: true, detail: result?.detail ?? "The launcher did not take the durable update request" });
       releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
@@ -126,11 +133,13 @@ export class ApplyController {
     if (!bootstrap && (record.launcher.requestId !== intent.requestId || (!sameLauncher && !successor))) return null;
     const error = record.launcher.error;
     if (error?.kind === "fell-back") {
+      if (!coherentRollback()) return null;
       this.patch({ state: "failed", rolledBack: true, detail: error.detail });
       releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
     }
     if (error && record.launcher.state === "healthy") {
       this.restoreUntaken(record);
+      if (!coherentRollback()) return null;
       const detail = error.kind === "message" ? error.text : "The launcher refused the replacement";
       this.patch({ state: "failed", detail });
       releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";

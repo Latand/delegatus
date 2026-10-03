@@ -30,7 +30,7 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: { PORT?: string; HOSTNAME?: string }; platform?: NodeJS.Platform } = {
+export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): Promise<InstallAction | null> {
@@ -52,8 +52,22 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   }
   if (env.HOSTNAME?.trim() && !args.some(arg => ["--hostname", "-H"].includes(arg) || arg.startsWith("--hostname="))) args.push("--hostname", env.HOSTNAME);
   const windows = (ports.platform ?? process.platform) === "win32";
-  let command = (windows ? "& " : "") + [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"]
+  const shellQuote = (value: string) => windows ? `'${value.replaceAll("'", "''")}'` : quote(value);
+  // State custody and config belong to the install even in a clean terminal.
+  // Explicit allowlisting keeps credentials out of the displayed command.
+  const context = Object.fromEntries(["LLV_STATE_DIR", "XDG_CONFIG_HOME"].flatMap(name => {
+    const value = env[name as keyof typeof env];
+    return value ? [[name, value]] : [];
+  }));
+  const withContext = (invocation: string, environment: Record<string, string> = context): string => {
+    if (!Object.keys(environment).length) return invocation;
+    return windows
+      ? Object.entries(environment).map(([name, value]) => `$env:${name}=${shellQuote(value)}; `).join("") + invocation
+      : "env " + Object.entries(environment).map(([name, value]) => `${name}=${shellQuote(value)}`).join(" ") + " " + invocation;
+  };
+  const fallbackCommand = (windows ? "& " : "") + [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"]
     .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
+  let command = withContext(fallbackCommand);
   if (decision.record) {
     if (!await ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
     if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
@@ -66,10 +80,10 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
         } catch { /* An already built pointer can predate apply custody. */ }
         const invocation = [process.execPath, join(next.dir, "bin", "cli.mjs"), ...args, "--no-open"]
           .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
-        const environment = { LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: root, ...(requestId ? { LLV_LAUNCHER_TRIAL: requestId } : {}) };
+        const environment = { ...context, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: root, ...(requestId ? { LLV_LAUNCHER_TRIAL: requestId } : {}) };
         if (windows) {
           const script = Object.entries(environment).map(([name, value]) => `$env:${name}='${value.replaceAll("'", "''")}'`).join("; ")
-            + `; & ${invocation}; if($LASTEXITCODE -eq 75){ & ${command.slice(2)} }`;
+            + `; & ${invocation}; if($LASTEXITCODE -eq 75){ & ${fallbackCommand.slice(2)} }`;
           command = `& powershell.exe -NoProfile -EncodedCommand '${Buffer.from(script, "utf16le").toString("base64")}'`;
         } else command = "env " + Object.entries(environment).map(([name, value]) => `${name}=${quote(value)}`).join(" ") + " " + invocation;
       }

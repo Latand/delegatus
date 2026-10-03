@@ -1419,12 +1419,145 @@ for (const broken of [false, true]) (legacySource ? test : test.skip)(`actual le
   writeFileSync(before.releasePointer, JSON.stringify({ kind: "package", version: "0.0.1", baseVersion: "0.0.0", dir: candidate.dir, sha: candidate.sha }));
   writeFileSync(before.requestFile.replace("request-", "trial-"), JSON.stringify({ requestId: controller.current!.requestId, target: candidate.sha,
     rollbackPointer: null, previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "starting", at: controller.current!.startedAt }));
-  const action = await installAction({ mode: "package", reason: null, record }, { cgroup: () => "", ready: () => true, argv: () => [] });
+  const action = await installAction({ mode: "package", reason: null, record }, { cgroup: () => "", ready: () => true, argv: () => [], env: fixture.env });
   const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
-  const child = spawn("sh", ["-c", action!.command!], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" }); children.add(child);
+  const child = spawn("sh", ["-c", `exec ${action!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: "ignore" }); children.add(child);
   const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy"
     && (broken ? !existsSync(before.releasePointer) : r.launcher.requestId === controller.current!.requestId) ? r : null; }, 60_000);
   expect(await served(running.port)).toBe((broken ? fixture.checkout : candidate.dir) + "/dist/standalone");
   const cold = new ApplyController(path.dirname(before.requestFile)); expect(cold.observe(after as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, await socketAnswers(after.socket))).toBe(broken ? "failed" : "done");
   expect(cold.current).toMatchObject({ state: broken ? "failed" : "done", rolledBack: broken });
 }, 90_000);
+
+for (const trigger of ["operator", "auto"] as const) test(`same-PID rollback keeps ${trigger} custody until a cold snapshot proves coherent serving`, async () => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
+  const { readStartIdentity, isAlive } = await import("../src/lib/selfUpdate/pid");
+  const { activeDrain } = await import("../src/lib/selfUpdate/drain");
+  const { initialAuto, writeAuto } = await import("../src/lib/selfUpdate/auto");
+  const { idleUpdate } = await import("../src/lib/selfUpdate/types");
+  const fixture = install();
+  const running = await start(fixture);
+  let record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const candidate = release(fixture, "broken-web", { broken: true });
+  const directory = path.join(fixture.state, "self-update");
+  const apply = new ApplyController(directory);
+  apply.begin(record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, candidate.sha, trigger);
+  writeFileSync(record.releasePointer, JSON.stringify({ sha: candidate.sha, dir: candidate.dir, checkoutHead: fixture.first }));
+  apply.send(record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord);
+  record = await until(() => { const r = readRecord(fixture.state); return r.launcher.requestId === apply.current!.requestId && r.launcher.error?.kind === "fell-back" && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; }, 60_000);
+  expect(record.launcher.pid).toBe(apply.current!.launcherPid);
+  if (trigger === "auto") writeAuto(path.join(directory, "auto.json"), { ...initialAuto(), enabled: true,
+    drain: { id: apply.current!.requestId, target: { sha: candidate.sha, short: candidate.sha.slice(0, 7), version: "", date: "" }, since: apply.current!.startedAt, overranAt: null, blockers: null, admitted: true } });
+  const coherent = structuredClone(record) as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;
+  let observed = coherent;
+  const snapshot = async () => {
+    const service = new SelfUpdateService({
+      now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
+      mode: async () => ({ mode: "checkout", reason: null, record: observed }),
+      check: async () => ({ ok: false, error: "fixture", installed: null }),
+      describe: async (_repo, sha) => ({ sha, short: sha.slice(0, 7), version: "", date: "" }),
+      createRunner: () => ({ state: idleUpdate(), restore() {}, logPath: () => "" }) as never,
+      requestRestart: () => "unused", processAlive: (pid, identity) => isAlive(pid) && readStartIdentity(pid) === identity,
+      hostHealth: async () => ({ pid: coherent.runtimeHost.pid!, startIdentity: readStartIdentity(coherent.runtimeHost.pid!)!, hostEpoch: 1 }),
+      requestDeployment: async () => { throw new Error("unused"); }, readDeployment: async () => null, findDeploymentByIdempotencyKey: async () => null,
+      releaseTarget: () => null, prepareCheckRepo: async () => { throw new Error("unused"); }, buildEnv: () => ({}),
+      web: { pid: coherent.web.pid!, port: running.port, startedAt: "" },
+    });
+    try { return await service.snapshot(); } finally { service.stop(); }
+  };
+  // A stopped launcher cannot race the deliberately degraded observations.
+  process.kill(record.launcher.pid, "SIGSTOP");
+  try {
+    for (const role of ["web", "runtimeHost"] as const) for (const fault of ["identity", "mixed", "failed"] as const) {
+      observed = structuredClone(coherent);
+      if (fault === "identity") observed[role].startIdentity = "wrong-identity";
+      if (fault === "mixed") observed[role].revision = candidate.sha.slice(0, 7);
+      if (fault === "failed") observed[role].state = "failed";
+      await snapshot();
+      expect(new ApplyController(directory).current?.state).toBe("switching");
+      expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
+    }
+    observed = coherent;
+    // Rejection also needs healthy prior serving evidence.
+    writeFileSync(`${record.requestFile}.result.json`, JSON.stringify({ requestId: apply.current!.requestId, state: "rejected" }));
+    process.kill(record.runtimeHost.pid!, "SIGTERM");
+    await until(() => !isAlive(record.runtimeHost.pid!) ? true : null);
+    await snapshot();
+    expect(new ApplyController(directory).current?.state).toBe("switching");
+    expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
+    rmSync(`${record.requestFile}.result.json`);
+    await snapshot();
+    expect(new ApplyController(directory).current?.state).toBe("switching");
+    expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
+  } finally { process.kill(record.launcher.pid, "SIGCONT"); }
+  record = await until(() => { const r = readRecord(fixture.state); return r.runtimeHost.state === "healthy" && r.runtimeHost.pid !== coherent.runtimeHost.pid ? r : null; });
+  observed = record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;
+  coherent.runtimeHost = observed.runtimeHost;
+  process.kill(record.launcher.pid, "SIGSTOP");
+  try {
+    process.kill(record.web.pid!, "SIGTERM");
+    await until(() => !isAlive(record.web.pid!) ? true : null);
+    await snapshot();
+    expect(new ApplyController(directory).current?.state).toBe("switching");
+    expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
+  } finally { process.kill(record.launcher.pid, "SIGCONT"); }
+  record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.web.pid !== coherent.web.pid ? r : null; });
+  observed = record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;
+  coherent.web = observed.web;
+  await snapshot();
+  expect(new ApplyController(directory).current).toMatchObject({ state: "failed", rolledBack: true });
+  expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
+}, 90_000);
+
+function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEnv {
+  const env = { ...fixture.env };
+  delete env.LLV_STATE_DIR;
+  delete env.XDG_CONFIG_HOME;
+  return env;
+}
+
+test.each(["restart-terminal", "start-launcher"] as const)("the actual %s command carries state and config from a clean shell", async actionId => {
+  const { installAction } = await import("../src/lib/selfUpdate/actions");
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const fixture = install();
+  // Quotes, spaces and shell expansion characters must remain literal paths.
+  fixture.state = path.join(fixture.root, "state ' with $(literal) spaces");
+  fixture.env.LLV_STATE_DIR = fixture.state;
+  fixture.env.XDG_CONFIG_HOME = path.join(fixture.root, "config ' with $(literal) spaces");
+  mkdirSync(fixture.state, { recursive: true });
+  const running = await start(fixture);
+  const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const candidate = release(fixture, "terminal-context");
+  const record = before as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;
+  const apply = new ApplyController(path.dirname(before.requestFile));
+  apply.begin(record, candidate.sha, "operator"); apply.patch({ state: "ready", externalRestart: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ sha: candidate.sha, dir: candidate.dir, checkoutHead: fixture.first }));
+  const decision = actionId === "restart-terminal"
+    ? { mode: "checkout" as const, reason: null, record: { ...record, launcher: { ...record.launcher, relaunch: undefined } } }
+    : { mode: "unsupported" as const, reason: "no-launcher" as const, record: null, installRoot: fixture.checkout };
+  const action = await installAction(decision, { cgroup: () => "", ready: () => true, argv: () => [], env: { ...fixture.env, PORT: String(running.port), HOSTNAME: "127.0.0.1" } });
+  expect(action?.id).toBe(actionId);
+  const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
+  let adopted: ReturnType<typeof spawn> | null = null;
+  if (actionId === "start-launcher") {
+    const { readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+    adopted = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "node_modules", ".bin", "next")], {
+      cwd: fixture.checkout, env: { ...fixture.env, PORT: String(running.port), LLV_RUNTIME_HOST_SOCKET: before.socket }, stdio: "ignore",
+    });
+    children.add(adopted);
+    await until(() => { try { return readStartIdentity(adopted!.pid!) && true; } catch { return false; } });
+    await until(() => { try { return existsSync(`/proc/${adopted!.pid}/environ`); } catch { return false; } });
+    await Bun.sleep(150);
+    writeFileSync(before.requestFile.replace("request-", "adopt-"), JSON.stringify({ pid: adopted.pid, startIdentity: readStartIdentity(adopted.pid!), port: running.port, socket: before.socket }));
+  }
+  const child = spawn("sh", ["-c", `exec ${action!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: "ignore" }); children.add(child);
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  expect(await served(running.port)).toBe(candidate.dir);
+  expect(after.releasePointer).toBe(before.releasePointer);
+  if (adopted) expect(adopted.exitCode !== null || adopted.signalCode !== null).toBe(true);
+  expect(new ApplyController(path.dirname(before.requestFile)).current?.requestId).toBe(apply.current!.requestId);
+  const webEnvironment = readFileSync(`/proc/${after.web.pid}/environ`, "utf8").split("\0");
+  expect(webEnvironment).toContain(`XDG_CONFIG_HOME=${fixture.env.XDG_CONFIG_HOME}`);
+  expect(webEnvironment).toContain(`LLV_STATE_DIR=${fixture.state}`);
+}, 45_000);

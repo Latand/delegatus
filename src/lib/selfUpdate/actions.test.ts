@@ -46,7 +46,7 @@ test("manual no-record launch preserves the Viewer's custom listener", async () 
 
 test("Windows prerequisite uses PowerShell invocation and quote escaping", async () => {
   const action = await installAction({ mode: "checkout", record } as never,
-    { cgroup: () => "", ready: () => true, platform: "win32", argv: () => [] }, "/srv/fixture's install");
+    { cgroup: () => "", ready: () => true, platform: "win32", argv: () => [], env: {} }, "/srv/fixture's install");
   expect(action?.command).toStartWith("& '");
   expect(action?.command).toContain("fixture''s install");
   expect(action?.command).not.toContain("'\\''");
@@ -78,4 +78,18 @@ test.each(["darwin", "win32"] as const)("legacy bootstrap retains Viewer bind wh
     { cgroup: () => "", ready: () => true, platform, argv: () => [], env: { HOSTNAME: "0.0.0.0" } });
   expect(action?.command).toContain("'--port' '45678'");
   expect(action?.command).toContain("'--hostname' '0.0.0.0'");
+});
+
+test.each(["linux", "win32"] as const)("terminal context escapes state/config and excludes credentials: %s", async platform => {
+  const state = "/srv/state ' $(literal); spaced";
+  const config = "/srv/config ' $(literal); spaced";
+  const action = await installAction({ mode: "checkout", record } as never, {
+    cgroup: () => "", ready: () => true, platform, env: { LLV_STATE_DIR: state, XDG_CONFIG_HOME: config, LLV_TOKEN: "synthetic-secret" } as never,
+  });
+  expect(action?.command).toContain("LLV_STATE_DIR");
+  expect(action?.command).toContain("XDG_CONFIG_HOME");
+  expect(action?.command).not.toContain("synthetic-secret");
+  expect(action?.command).not.toContain("LLV_TOKEN");
+  const escaped = platform === "win32" ? state.replaceAll("'", "''") : state.replaceAll("'", "'\\''");
+  expect(action?.command).toContain(escaped);
 });
