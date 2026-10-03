@@ -9,7 +9,7 @@ import { isMemberColor, type MessageSender } from "@/lib/team/contract";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate, type MatchedDeliveryProvenance } from "./deliveredOccurrences";
-import { rawUserTextFor, type FeedEntry, type Item } from "./parse";
+import { nativeUserRefFor, rawUserTextFor, type FeedEntry, type Item } from "./parse";
 import { BoundedLru } from "./scrollMemory";
 import { useStructuredUserProvenance } from "./structuredUserProvenance";
 
@@ -301,7 +301,7 @@ function wantedEvidence(items: readonly FeedEntry[], pending: readonly string[])
   for (const { item, submissionDedup } of items) {
     const candidate = occurrenceCandidate(item);
     if (candidate) candidates.push(item);
-    const memoryKey = item.structuredUserRef ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
+    const memoryKey = item.structuredUserRef ?? nativeUserRefFor(item) ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
     if (memoryKey) memory.set(memoryKey, candidate?.tsMs ?? Number.NaN);
     const token = candidate ? candidateDigests(candidate)[0].slice(0, 16) : "";
     if (item.kind === "sysmsg" && item.deliveredMessage) {
@@ -388,7 +388,7 @@ function lookupFor(
   return {
     forItem,
     memoryFor: item => {
-      const key = item.structuredUserRef ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
+      const key = item.structuredUserRef ?? nativeUserRefFor(item) ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
       return key ? data.memoryOffers?.[key] ?? [] : [];
     },
     submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),

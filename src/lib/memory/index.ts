@@ -5,10 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import type { Database as BunDatabase } from "bun:sqlite";
 
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { parseMemory, type MemoryKind, type MemorySource } from "./parsers";
+import { nativeHookCursor, nativeOccurrenceAfter } from "./native";
 import { nativeMatch, queryFor, type Candidate } from "./selection";
 
 interface MemoryItem {
@@ -82,6 +84,14 @@ export class MemoryIndex {
         memory_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT,
         at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
         PRIMARY KEY (memory_id, request_id)
+      );
+      CREATE TABLE IF NOT EXISTS memory_terminal_deliveries (
+        id TEXT PRIMARY KEY, conversation TEXT, digest TEXT, origin TEXT, request TEXT, transcript TEXT, offset INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest);
+      CREATE TABLE IF NOT EXISTS memory_native_turns (
+        conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
+        PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
       );
       CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
     `);
@@ -270,6 +280,52 @@ export class MemoryIndex {
     db.exec("PRAGMA busy_timeout = 0");
     try { return run(db); }
     finally { db.exec("PRAGMA busy_timeout = 5000"); }
+  }
+
+  recordTerminalDelivery(id: string, conversation: string, prompt: string, origin: string, transcript?: string | null) {
+    let offset: number | null = null;
+    try { if (transcript) offset = fsSync.statSync(transcript).size; } catch { /* A launch can precede its journal. */ }
+    this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_terminal_deliveries VALUES (?, ?, ?, ?, NULL, ?, ?)")
+      .run(id, conversation, messageTextDigest(prompt), origin, transcript ?? null, offset));
+  }
+
+  forgetTerminalDelivery(id: string) {
+    this.hookDatabase(db => db.query("DELETE FROM memory_terminal_deliveries WHERE id = ? AND request IS NULL").run(id));
+  }
+
+  terminalOrigin(conversation: string, request: string, prompt: string, transcript?: string, engine?: "claude" | "codex"): string | null {
+    return this.hookDatabase(db => db.transaction(() => {
+      const existing = db.query<{ origin: string }, [string, string]>("SELECT origin FROM memory_terminal_deliveries WHERE conversation = ? AND request = ?").get(conversation, request);
+      if (existing) return existing.origin;
+      const deliveries = db.query<{ id: string; origin: string; transcript: string | null; offset: number | null }, [string, string]>("SELECT id, origin, transcript, offset FROM memory_terminal_deliveries WHERE conversation = ? AND request IS NULL AND digest = ? ORDER BY rowid LIMIT 256").all(conversation, messageTextDigest(prompt));
+      const cursor = transcript && engine ? nativeHookCursor(transcript, engine, request.slice("native:".length)) : null;
+      for (const delivery of deliveries) {
+        const journal = delivery.transcript ?? (delivery.id.startsWith("spawn:") ? transcript : undefined);
+        if (journal && engine) {
+          const journaled = nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0);
+          if (journaled && journaled.key !== cursor?.key) continue;
+        }
+        db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(request, delivery.id);
+        return delivery.origin;
+      }
+      return null;
+    })());
+  }
+
+  recordNativeTurn(conversation: string, request: string, transcript: string, offset: number, prompt: string) {
+    this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_native_turns VALUES (?, ?, ?, ?, ?, NULL)")
+      .run(conversation, request, transcript, offset, messageTextDigest(prompt)));
+  }
+
+  nativeTurns(conversation: string, transcript: string) {
+    return this.database().query<{ request: string; offset: number; digest: string; occurrence: string | null }, [string, string]>(
+      "SELECT request, offset, digest, occurrence FROM memory_native_turns WHERE conversation = ? AND transcript = ? ORDER BY rowid"
+    ).all(conversation, transcript);
+  }
+
+  bindNativeTurn(conversation: string, request: string, occurrence: string) {
+    return this.hookDatabase(db => db.query("UPDATE OR IGNORE memory_native_turns SET occurrence = ? WHERE conversation = ? AND request = ? AND occurrence IS NULL")
+      .run(occurrence, conversation, request).changes > 0);
   }
 
   claimHook(conversation: string, request: string) {

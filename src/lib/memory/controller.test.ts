@@ -13,6 +13,13 @@ import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { readOperatorAsks } from "@/lib/asks/store";
+import { deliverConversationMessage } from "@/lib/delivery";
+import { offeredMemoryForTranscript } from "./offers";
+import { createFeedSession } from "@/components/feed/parse";
+import { provenanceLookupFor } from "@/components/feed/messageProvenance";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import type { FileEntry } from "@/lib/types";
 import type { groundedRequest } from "./selection";
 
 const previous = { ...process.env };
@@ -209,4 +216,69 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   expect(calls).toBe(1);
   expect(memoryIndex().turnOffers(receipt.conversationId)).toMatchObject([{ score: .8 }]);
   expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
+});
+
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) test(`${engine} native tmux ${mode} deliveries abstain while identical typed operator occurrences receive memory`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
+  process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
+  const begun = registry.beginSpawnRequest({ engine, cwd: root, transport: "tmux", launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic terminal conversation" }) });
+  if (begun.kind !== "created") throw new Error("Synthetic terminal launch refused");
+  const receipt = begun.receipt;
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const project = projectInfoFromCwd(root)!.project; setSharedMemoryEnabled(project, true);
+  const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+  const prompt = "Update widget parser";
+  fs.writeFileSync(transcript, JSON.stringify(engine === "claude"
+    ? { type: "user", message: { role: "user", content: "Earlier synthetic task" } }
+    : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Earlier synthetic task" }] } }) + "\n");
+  registry.settleSpawn(receipt.launchId, { key: { engine, sessionId: session }, artifactPath: transcript, cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const source = path.join(root, "cross.md");
+  fs.writeFileSync(source, engine === "claude"
+    ? "v1\n## User preferences\n- Widget parser uses escaped delimiters.\n"
+    : "---\nname: Widget parser\ndescription: Widget parser uses escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n");
+  await memoryIndex().refresh([{ path: source, engine: engine === "claude" ? "codex" : "claude",
+    sourceKind: engine === "claude" ? "codex_summary" : "claude_memory", project }]);
+  let calls = 0;
+  globalThis.fetch = (async (_url, init) => {
+    calls++; const body = JSON.parse(String(init?.body));
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
+  }) as typeof fetch;
+  const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+  let wire = "";
+  const child = path.join(root, "synthetic-child.jsonl");
+  if (mode === "relay") { fs.writeFileSync(child, ""); registry.ensureConversation(engine, child, "default"); }
+  const entry = { path: transcript, root, engine, title: "Synthetic terminal" } as FileEntry;
+  const childEntry = { ...entry, path: child, parent: transcript };
+  const result = await deliverConversationMessage({ path: mode === "relay" ? child : transcript, pid: process.pid, text: prompt, images: [],
+    origin: { kind: mode === "relay" ? "operator" : "agent" } }, { recover: async () => null, targetForKnownPid: async () => "%synthetic",
+    pathAllowed: () => true, listFiles: async () => mode === "relay" ? [entry, childEntry] : [entry],
+    resumeSpecFor: (_root, pathname) => mode === "relay" && pathname === child ? null : ({ command: "synthetic", engine, cwd: root, transcript, windowName: "synthetic", launchProfile: emptyLaunchProfile({ cwd: root }) }),
+    deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } });
+  expect(result.ok).toBe(true);
+  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+    prompt_id: "synthetic-machine", turn_id: "synthetic-machine", prompt: wire };
+  expect(await offerForHook(request, input)).toBe("");
+  expect(calls).toBe(0);
+  expect(memoryIndex().turnOffers(receipt.conversationId)).toEqual([]);
+  expect(await offerForHook(request, { ...input, prompt: wire, prompt_id: "synthetic-typed", turn_id: "synthetic-typed" })).toContain("Delegatus shared memory");
+  expect(calls).toBe(1);
+  const userLine = (ts: string) => JSON.stringify(engine === "claude"
+    ? { type: "user", uuid: crypto.randomUUID(), timestamp: ts, message: { role: "user", content: wire } }
+    : { type: "response_item", timestamp: ts, payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } });
+  const offeredLine = userLine("2026-10-02T12:00:01.000Z"), repeatedLine = userLine("2026-10-02T12:00:03.000Z");
+  fs.appendFileSync(transcript, offeredLine + "\n" + repeatedLine + "\n");
+  memoryIndex().close(); // Reload every persisted join, as the conversation does.
+  const offers = offeredMemoryForTranscript(transcript);
+  const offeredKey = `native:${messageTextDigest(offeredLine)}`;
+  expect(offers[offeredKey]?.length).toBe(1);
+  const sessionFeed = createFeedSession({ engine, fmt: engine, showSvc: false, lineFilter: "" });
+  const entries = sessionFeed.feed([offeredLine, repeatedLine], 0, false).items;
+  const lookup = provenanceLookupFor({ memoryOffers: offers }, entries.map(entry => entry.item));
+  const users = entries.filter(entry => entry.item.kind === "user");
+  expect(lookup.memoryFor!(users[0].item)).toEqual(offers[offeredKey]);
+  expect(lookup.memoryFor!(users[1].item)).toEqual([]);
 });

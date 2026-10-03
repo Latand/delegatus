@@ -1,3 +1,4 @@
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { agentRegistry } from "@/lib/agent/registry";
 import { readAsksYouSettings, readOpenRouterApiKey } from "@/lib/asks/settings";
@@ -7,6 +8,7 @@ import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUser
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerInstrumentation";
+import { nativeHookCursor } from "./native";
 import { memoryTurnContext } from "./context";
 import { decideMemories, injectMemory } from "./injection";
 import { memoryIndex } from "./service";
@@ -45,9 +47,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     const cwd = generation?.launchProfile.cwd || receipt?.cwd;
     if (!cwd || input.cwd !== cwd) return "";
     const project = conversation?.projectOwnership?.project || projectInfoFromCwd(cwd)?.project;
-    if (!project || !sharedMemoryEnabled(project)) return "";
-    const key = readOpenRouterApiKey();
-    if (!key) return "";
+    if (!project) return "";
     const index = memoryIndex();
     let prompt = input.prompt, origin = "unknown", requestId = "";
     if (engine === "codex") {
@@ -67,16 +67,24 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     }
     const transcript = generation?.path;
     if (!requestId) {
-      // Unmarked terminal input is admitted only on an already bound native session.
-      if (receipt?.transport !== "tmux" || !transcript || !transcript.includes(input.session_id)) return "";
-      const priorTurns = memoryTurnContext(transcript, engine, prompt);
-      if (!priorTurns.length && !(receipt?.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt)) return "";
-      origin = "operator";
+      if (receipt?.transport !== "tmux") return "";
       const nativeId = engine === "claude" ? input.prompt_id : input.turn_id;
       if (typeof nativeId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(nativeId)) return "";
       requestId = `native:${nativeId}`;
+      // Consume launch authorship even before its transcript is materialized.
+      // A retry of this native id keeps the same receipt; repeated words on a
+      // later id do not consume it again.
+      origin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine) ?? "operator";
+      if (origin !== "operator" || !transcript || !transcript.includes(input.session_id)) return "";
+      const priorTurns = memoryTurnContext(transcript, engine, prompt);
+      if (!priorTurns.length && !(receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt)) return "";
+      const cursor = nativeHookCursor(transcript, engine, nativeId);
+      if (cursor.digest && cursor.digest !== messageTextDigest(prompt)) return "";
+      index.recordNativeTurn(conversationId, requestId, transcript, cursor.offset, prompt);
     }
-    if (origin !== "operator") return "";
+    if (origin !== "operator" || !sharedMemoryEnabled(project)) return "";
+    const key = readOpenRouterApiKey();
+    if (!key) return "";
     if (performance.now() >= deadline || !index.claimHook(conversationId, requestId)) return "";
     const context = transcript ? memoryTurnContext(transcript, engine as "claude" | "codex", prompt) : [];
     // Recall terms follow the research order within the bounded transcript view.

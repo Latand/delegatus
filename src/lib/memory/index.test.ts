@@ -332,3 +332,21 @@ test("a previously indexed source that becomes oversized stops returning stale c
     expect(index.search({ query: "widget" }).items).toHaveLength(0);
   } finally { index.close(); }
 });
+
+test("an unobserved terminal delivery cannot suppress a later identical typed occurrence once its transcript row exists", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-cursor-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const index = new MemoryIndex();
+  try {
+    const transcript = path.join(root, "synthetic.jsonl");
+    fs.writeFileSync(transcript, "");
+    index.recordTerminalDelivery("synthetic-delivery", "synthetic-conversation", "Repeat synthetic input", "agent", transcript);
+    fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Repeat synthetic input" } }) + "\n");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBeNull();
+  } finally {
+    index.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
