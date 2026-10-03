@@ -378,3 +378,64 @@ test.each([true, false])("timestamp-free legacy echo preserves canonical source 
   state = projectAssistantHandoff(state, null, feed, claims);
   expect(rows([...feed], state).map(row => "text" in row.item ? row.item.text : "")).toEqual(["Observed answer", "Next request"]);
 });
+
+
+test("bounded structured review text still claims its full streamed occurrence", () => {
+  const text = "VERDICT: APPROVE\n\n" + "The full review explains the verified behavior and tests. ".repeat(550);
+  expect(text.length).toBeGreaterThan(24000);
+  const stream = appendRuntimeLiveTurnDelta(null, "long-review-turn", text, "2026-10-02T10:00:00Z")!;
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  const response = JSON.stringify({ type: "response_item", timestamp: "2026-10-02T10:00:01Z", payload: { type: "message", id: "long-review-answer", role: "assistant", content: [{ type: "output_text", text }] } });
+  const feed = session.feed([response], 0, false).items;
+  expect(feed[0].item.kind).toBe("review");
+  expect((feed[0].item as { raw: string }).raw.length).toBeLessThan(text.length);
+  let state = projectAssistantHandoff(null, stream, [], claims);
+  const original = state.pending[0].key;
+  state = projectAssistantHandoff(state, null, feed, new Set(["long-review-answer"]));
+  expect(state.pending).toEqual([]);
+  expect(rows([...feed], state).map(row => row.key)).toEqual([original]);
+  const mirrored = session.feed([response, JSON.stringify({ type: "event_msg", timestamp: "2026-10-02T10:00:01.500Z", payload: { type: "agent_message", message: text } })], 0, false).items;
+  const eventFirst = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" }).feed([JSON.stringify({ type: "event_msg", timestamp: "2026-10-02T10:00:01Z", payload: { type: "agent_message", message: text } }), response], 0, false).items;
+  expect(projectAssistantHandoff(null, stream, mirrored, claims).pending).toEqual([]);
+  expect(projectAssistantHandoff(null, stream, eventFirst, claims).pending).toEqual([]);
+});
+
+test("folded identical replies preserve new keys and exclude canonical ownership from the omitted total", () => {
+  const timestamp = "2026-10-02T10:00:00Z";
+  let live = projectRuntimeLiveTurnItem(null, "folded-repeat-turn", { type: "agentMessage", text: "Repeated answer" }, "completed", timestamp)!;
+  const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+  const canonical = session.feed([JSON.stringify({ type: "assistant", timestamp, message: { content: [{ type: "text", text: "Repeated answer" }] } })], 0, false).items;
+  let state = projectAssistantHandoff(null, live, canonical, claims);
+  expect(state.pending).toEqual([]);
+  for (let index = 1; index < 550; index++) {
+    live = projectRuntimeLiveTurnItem(live, "folded-repeat-turn", { type: "agentMessage", text: "Repeated answer" }, "completed", timestamp)!;
+    state = projectAssistantHandoff(state, live, [], claims);
+  }
+  expect(state.pending).toHaveLength(549);
+  expect(state.sequence).toBe(550);
+  const retained = retainedAssistantItems(state, live, runtimeLiveTurnItems(live).filter(item => item.tool || !item.text.trim()))
+    .sort((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
+  const tail = liveTurnTail(retained);
+  expect(tail.rows).toHaveLength(8);
+  expect(tail.earlier).toBe(541);
+});
+
+
+test("an empty budgeted wire body cannot claim another answer's canonical record", () => {
+  const first = projectRuntimeLiveTurnItem(null, "empty-budget-turn", { type: "agentMessage", text: "Earlier answer" }, "completed", "2026-10-02T10:00:00Z")!;
+  let state = projectAssistantHandoff(null, first, [], claims);
+  const original = state.pending[0].key;
+  const laterBody = "b".repeat(65536);
+  const second = projectRuntimeLiveTurnItem(first, "empty-budget-turn", { type: "agentMessage", id: "later-answer", text: laterBody }, "completed", "2026-10-02T10:00:01Z")!;
+  expect(runtimeLiveTurnItems(second)[0].text).toBe("");
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  const record = (id: string, text: string, timestamp: string) => JSON.stringify({ type: "response_item", timestamp, payload: { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] } });
+  const following = session.feed([record("later-answer", laterBody, "2026-10-02T10:00:01Z")], 0, false).items;
+  state = projectAssistantHandoff(state, second, following, new Set(["later-answer"]));
+  expect(state.pending.map(answer => answer.live.text)).toEqual(["Earlier answer"]);
+  expect(state.pending[0].key).toBe(original);
+  const both = session.feed([record("later-answer", laterBody, "2026-10-02T10:00:01Z"), record("earlier-answer", "Earlier answer", "2026-10-02T10:00:00Z")], 0, false).items;
+  state = projectAssistantHandoff(state, second, both, new Set(["later-answer", "earlier-answer"]));
+  expect(state.pending).toEqual([]);
+  expect(state.bindings.get(both.at(-1)!.key)?.key).toBe(original);
+});

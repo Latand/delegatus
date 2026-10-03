@@ -318,6 +318,14 @@ export type Item = (
 /* The wire text can begin with marker-shaped literal content. Keep it outside
    the public Item shape so legacy parsed rows retain their exact contracts. */
 const rawUserTexts = new WeakMap<Item, string>();
+// Correlation uses complete structured segments while cards keep display caps.
+const assistantEchoTexts = new WeakMap<Item, string>();
+export function assistantEchoText(item: Item): string | null {
+  if (item.kind === "prose" || item.kind === "blob") return item.text;
+  if (item.kind === "review" || item.kind === "mem-citation") return assistantEchoTexts.get(item) ?? item.raw;
+  return null;
+}
+
 export function rawUserTextFor(item: Item): string | undefined {
   return rawUserTexts.get(item);
 }
@@ -1760,15 +1768,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     emit: (item: Item) => void = push,
     sourceId?: string,
   ): boolean => {
-    const emitOwned = (item: ReviewCardItem | MemCitationItem) =>
-      emit(sourceId ? { ...item, sourceId } : item);
+    const emitOwned = (item: ReviewCardItem | MemCitationItem, fullText: string) => {
+      const owned = sourceId ? { ...item, sourceId } : item;
+      if (owned.raw !== fullText) assistantEchoTexts.set(owned, fullText);
+      emit(owned);
+    };
     MEM_CITATION_RE.lastIndex = 0;
     const hasCitation = MEM_CITATION_RE.test(text);
     MEM_CITATION_RE.lastIndex = 0;
     if (!hasCitation) {
       const review = parseReview(text.trim(), ts);
       if (!review) return false;
-      emitOwned(review);
+      emitOwned(review, text.trim());
       return true;
     }
     let handled = false;
@@ -1778,7 +1789,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (!trimmed) return;
       const review = parseReview(trimmed, ts);
       if (review) {
-        emitOwned(review);
+        emitOwned(review, trimmed);
         handled = true;
       } else {
         fallback(trimmed);
@@ -1788,7 +1799,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const whole = match[0];
       const index = match.index ?? 0;
       pushTextPart(text.slice(last, index));
-      emitOwned(parseMemCitation(whole, match[1] ?? "", match[2] ?? ""));
+      emitOwned(parseMemCitation(whole, match[1] ?? "", match[2] ?? ""), whole);
       handled = true;
       last = index + whole.length;
     }
@@ -1871,6 +1882,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
                 ? { ...item, ...(sourceId ? { sourceId } : {}) }
                 : item,
         };
+        const fullText = assistantEchoTexts.get(item);
+        if (fullText !== undefined) assistantEchoTexts.set(entries[idx].item, fullText);
       }
       /* Current envelopes can finish with the visible answer while the adjacent
          response mirror appends a structured citation block under the same id.

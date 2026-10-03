@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { FeedEntry, Item } from "../feed/parse";
+import { assistantEchoText, type FeedEntry, type Item } from "../feed/parse";
 import type { RuntimeTurnAxis } from "@/lib/runtime/contracts";
 import { newestTranscriptInstant, transcriptInstant } from "../feed/transcriptOrder";
 import { LIVE_TURN_ITEM_LIMIT, LIVE_TURN_OVERFLOW_LIMIT, runtimeLiveTurnItems, type RuntimeLiveTurn, type RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
@@ -23,14 +23,15 @@ const at = (live: RuntimeLiveTurnItem) => {
   return Number.isFinite(value) ? value : null;
 };
 const textKey = (text: string) => text.trim().replace(/\s+/g, " ");
-const projectedText = (item: Item): string | null => item.kind === "prose" || item.kind === "blob" ? item.text
-  : item.kind === "review" || item.kind === "mem-citation" ? item.raw : null;
 const echoTextMatches = (text: string, live: RuntimeLiveTurnItem): boolean => {
   const canonical = textKey(text), streamed = textKey(live.text);
+  if (!streamed) return false;
   return canonical === streamed || live.phase === "streaming" && canonical.startsWith(streamed)
     // The producer keeps the suffix when the bounded text buffer fills.
     || Boolean(live.omittedChars) && (live.phase === "streaming" ? canonical.includes(streamed) : canonical.endsWith(streamed));
 };
+const pendingEchoMatches = (text: string, entry: PendingAnswer) =>
+  echoTextMatches(text, entry.wire) || echoTextMatches(text, entry.live);
 // Keep rendered observations separate from the bounded transport descriptor.
 // Missing intermediate deltas leave an explicit gap between known text spans.
 const retainedBody = (entry: PendingAnswer, live: RuntimeLiveTurnItem): RuntimeLiveTurnItem => {
@@ -49,8 +50,6 @@ const retainedBody = (entry: PendingAnswer, live: RuntimeLiveTurnItem): RuntimeL
   }
   return live;
 };
-// Equal text and timestamps still describe separate occurrences in the wire.
-const occurrenceKey = (live: RuntimeLiveTurnItem) => JSON.stringify([live.startedAt, textKey(live.text)]);
 const source = (item: Item) => "sourceId" in item ? item.sourceId : undefined;
 // Parser sequence keys restart on a new filter or locale. Bind the original
 // transcript projection, so a reused sequence key cannot adopt another row.
@@ -76,11 +75,12 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   const current = runtimeLiveTurnItems(liveTurn);
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
   const usedPending = new Set<number>();
-  const occurrences = new Map<string, number>();
+  let sourcePosition = 0;
   for (const [order, live] of current.entries()) {
-    const baseStream = occurrenceKey(live);
-    const occurrence = occurrences.get(baseStream) ?? 0;
-    occurrences.set(baseStream, occurrence + 1);
+    // Folded prefixes retain their logical item count. Positions therefore
+    // survive descriptor rotation, including identical legacy replies.
+    const occurrence = sourcePosition;
+    sourcePosition += live.omittedItems || 1;
     if (live.tool || live.omittedItems || !live.itemId && retiredAnswers.some(answer =>
       answer.wire.startedAt === live.startedAt && (live.startedAt !== null || answer.turnId === liveTurn!.turnId)
       && answer.occurrence === occurrence && (answer.wire.text === live.text || echoTextMatches(answer.text, live)))) continue;
@@ -88,6 +88,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       live.itemId && entry.wire.itemId === live.itemId
       || !entry.wire.itemId && entry.wire.startedAt === live.startedAt
         && (live.startedAt !== null || entry.turnId === liveTurn!.turnId)
+        && entry.occurrence === occurrence
         && (entry.wire.text === live.text || entry.wire.phase === "streaming"
           || Boolean(live.omittedChars) && entry.wire.text.endsWith(live.text))));
     if (index >= 0) {
@@ -111,18 +112,18 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   // One assistant record can project into prose, review and citation cards.
   // Reassemble only its own projections; identical later records stay separate.
   const groups = new Map<string, FeedEntry[]>();
-  for (const row of feed) if (projectedText(row.item) !== null) {
+  for (const row of feed) if (assistantEchoText(row.item) !== null) {
     const identity = source(row.item) ? `source:${source(row.item)}`
       : row.anchorKey ? `record:${row.anchorKey.replace(/:\d+$/, "")}` : `row:${row.key}`;
     groups.set(identity, [...(groups.get(identity) ?? []), row]);
   }
   const echoes = [...groups.values()].map(rows => ({ rows,
-    text: rows.map(row => projectedText(row.item)).join("\n\n"),
+    text: rows.map(row => assistantEchoText(row.item)).join("\n\n"),
     at: rows.map(row => transcriptInstant(row.item)).find(value => value !== null) ?? null,
   }));
   for (let entry of pending) {
     const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
-      && echoTextMatches(echo.text, entry.wire)
+      && pendingEchoMatches(echo.text, entry)
       && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
     const matches = entry.live.itemId ? feed.filter(({ item, key }) => !claimedRows.has(key)
       && (source(item) === entry.live.itemId || item.kind === "think" && item.members?.some(member => member.sourceId === entry.live.itemId))) : echo?.rows ?? [];
@@ -133,7 +134,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       const completedAt = Date.parse(entry.live.completedAt ?? "");
       const mirror = echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key) && !source(row.item))
         && echo.rows.some(({ item }) => item.kind === "prose" && item.engine === "codex" || item.kind === "review")
-        && echoTextMatches(echo.text, entry.wire) && Number.isFinite(completedAt)
+        && pendingEchoMatches(echo.text, entry) && Number.isFinite(completedAt)
         && echo.at !== null && Math.abs(echo.at - completedAt) <= 1000);
       if (mirror) {
         // The canonical event may contain a prefix the transport never sent.
@@ -189,27 +190,19 @@ export function retainedAssistantItems(handoff: AssistantHandoff, liveTurn: Runt
   const aggregate = descriptors.length === LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT ? descriptors[0] : null;
   const aggregateStart = Date.parse(aggregate?.startedAt ?? "");
   const aggregateEnd = Date.parse(aggregate?.completedAt ?? "");
-  // An idle snapshot can reset the client's transport window. Older cached
-  // replies outside this aggregate's interval remain independent occurrences.
-  const available = new Map<string, number>();
-  for (const item of descriptors) if (!item.omittedItems) {
-    const key = replyKey(item);
-    available.set(key, (available.get(key) ?? 0) + 1);
-  }
-  let foldedButRetained = 0;
-  for (const answer of handoff.pending) {
-    const instant = at(answer.live);
-    if (!aggregate || instant === null || instant < aggregateStart || instant > aggregateEnd) continue;
-    const key = replyKey(answer.wire), count = available.get(key) ?? 0;
-    if (count) available.set(key, count - 1);
-    else foldedButRetained++;
-  }
+  // A fresh window's older cached replies lie outside this prefix interval.
+  // Retired canonical occurrences are already owned as well as cached ones.
+  const foldedButOwned = [...handoff.pending, ...handoff.retiredAnswers].filter(answer => {
+    const instant = at("live" in answer ? answer.live : answer.wire);
+    return aggregate && instant !== null && instant >= aggregateStart && instant <= aggregateEnd
+      && answer.occurrence < (aggregate.omittedItems ?? 0);
+  }).length;
   return [...pending, ...visible.flatMap(item => {
     if (!item.tool && !item.omittedItems && handoff.pending.some(answer => replyKey(answer.wire) === replyKey(item))) return [];
     if (item.omittedItems && !item.itemId && aggregate && !aggregate.itemId
       && item.startedAt === aggregate.startedAt && item.completedAt === aggregate.completedAt
       && item.omittedItems === aggregate.omittedItems) {
-      const omittedItems = Math.max(0, item.omittedItems - foldedButRetained);
+      const omittedItems = Math.max(0, item.omittedItems - foldedButOwned);
       return omittedItems ? [{ ...item, omittedItems }] : [];
     }
     return [item];
