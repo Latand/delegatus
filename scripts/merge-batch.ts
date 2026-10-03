@@ -180,7 +180,7 @@ export function localGateCommands(cwd: string, base: string): Gate[] {
   return [
     { id: "dependencies", args: ["bun", "install", "--frozen-lockfile"] },
     { id: "tsc", args: ["bunx", "tsc", "--noEmit"] },
-    ...(lint.length ? [{ id: "eslint", args: ["bunx", "eslint", "--", ...lint] }] : []),
+    ...(lint.length ? [{ id: "eslint", args: ["bun", "scripts/eslint-changes.ts", "--base", base, ...lint] }] : []),
     ...(tests.length ? [{ id: "tests", args: ["bun", "test", ...tests.map((path) => `./${path}`)] }] : []),
     { id: "privacy", args: ["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--check-commits"] },
   ];
@@ -349,8 +349,15 @@ export class MergeBatch {
       return this.trustedPrivacy(state, ["--check-commits", "--require-known-values"], cwd, base);
     }
     let args = gate.args;
+    // Stored runs may still have the former bunx command. Upgrade it without
+    // dropping its first path. Use the driver's helper during bisect too:
+    // the baseline commit may predate eslint-changes.ts entirely.
+    if (gate.id === "eslint") {
+      const modern = args[1] === "scripts/eslint-changes.ts";
+      args = ["bun", join(import.meta.dir, "eslint-changes.ts"), "--base", modern ? args[3]! : this.read().base, ...args.slice(modern ? 4 : 3)];
+    }
     if (gate.id === "tests" || gate.id === "eslint") {
-      const prefix = gate.id === "tests" ? 2 : 3;
+      const prefix = gate.id === "tests" ? 2 : 4;
       let files = args.slice(prefix).filter((path) => existsSync(join(cwd, path)) && statSync(join(cwd, path)).isFile());
       const corpus = gate.id === "tests" && useStableTestCorpus ? this.read().testCorpus : undefined;
       if (corpus) files = Object.keys(corpus).map((path) => `./${path}`);

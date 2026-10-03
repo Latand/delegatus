@@ -81,7 +81,7 @@ function makeRepo(): string {
   return repoDir;
 }
 
-function makeIdentityIsolatedRepo() {
+async function makeIdentityIsolatedRepo() {
   const root = fs.mkdtempSync(path.join(SANDBOX, "identity-"));
   const home = path.join(root, "home");
   const xdg = path.join(root, "xdg");
@@ -96,25 +96,25 @@ function makeIdentityIsolatedRepo() {
     const result = spawnSync(command, args, { cwd, env: { ...env, ...overrides }, encoding: "utf8" });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
   };
-  const run = (...args: string[]) => {
-    const result = exec("git", args, repo);
+  const run = async (...args: string[]) => {
+    const result = (await exec("git", args, repo));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
-  run("init", "--initial-branch=main");
+  (await run("init", "--initial-branch=main"));
   fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
-  run("add", "base.txt");
-  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "base");
+  (await run("add", "base.txt"));
+  (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "base"));
   const wf = makeWorkflow(repo, { baseBranch: "main" });
-  run("switch", "-c", wf.branch);
+  (await run("switch", "-c", wf.branch));
   fs.writeFileSync(path.join(repo, "feature.txt"), "feature\n");
-  run("add", "feature.txt");
-  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "feature");
-  run("switch", "main");
+  (await run("add", "feature.txt"));
+  (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "feature"));
+  (await run("switch", "main"));
   return { repo, env, exec, run, wf };
 }
 
-test("provisionWorktree composes worktree add and captures base branch/ref", () => {
+test("provisionWorktree composes worktree add and captures base branch/ref", async () => {
   const wf = makeWorkflow("/repo");
   const { exec, calls } = fakeExec((call) => {
     if (call.args[0] === "rev-parse" && call.args[1] === "--abbrev-ref") return ok("main\n");
@@ -122,7 +122,7 @@ test("provisionWorktree composes worktree add and captures base branch/ref", () 
     if (call.args[0] === "rev-parse") return ok("abc123\n");
     return fail("unexpected");
   });
-  const res = provisionWorktree(wf, exec);
+  const res = (await provisionWorktree(wf, exec));
   if (!res.ok) throw new Error(res.error);
   expect(res.baseBranch).toBe("main");
   expect(res.baseRef).toBe("abc123");
@@ -134,43 +134,43 @@ test("provisionWorktree composes worktree add and captures base branch/ref", () 
   expect(calls[2]?.cwd).toBe(wf.worktreeDir);
 });
 
-test("provisionWorktree maps a detached checkout to an error", () => {
+test("provisionWorktree maps a detached checkout to an error", async () => {
   const wf = makeWorkflow("/repo");
   const { exec } = fakeExec(() => ok("HEAD\n"));
-  const res = provisionWorktree(wf, exec);
+  const res = (await provisionWorktree(wf, exec));
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toContain("detached");
 });
 
-test("provisionWorktree adopts an already-created worktree on retry", () => {
+test("provisionWorktree adopts an already-created worktree on retry", async () => {
   const wf = makeWorkflow("/repo");
   const { exec } = fakeExec((call) => {
     if (call.args[0] === "worktree") return fail(`fatal: '${wf.worktreeDir}' already exists`);
     if (call.args[1] === "--abbrev-ref") return ok(call.cwd === wf.worktreeDir ? wf.branch + "\n" : "main\n");
     return ok("abc123\n");
   });
-  const res = provisionWorktree(wf, exec);
+  const res = (await provisionWorktree(wf, exec));
   expect(res.ok).toBe(true);
 });
 
-test("provisionWorktree surfaces the add error when nothing usable exists", () => {
+test("provisionWorktree surfaces the add error when nothing usable exists", async () => {
   const wf = makeWorkflow("/repo");
   const { exec } = fakeExec((call) => {
     if (call.args[0] === "worktree") return fail("fatal: disk exploded");
     if (call.cwd === wf.worktreeDir) return fail("not a git repo");
     return ok("main\n");
   });
-  const res = provisionWorktree(wf, exec);
+  const res = (await provisionWorktree(wf, exec));
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toContain("disk exploded");
 });
 
-test("finishPr pushes the branch then opens the PR against the base branch", () => {
+test("finishPr pushes the branch then opens the PR against the base branch", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec, calls } = fakeExec((call) =>
     call.command === "gh" ? ok("https://github.com/o/r/pull/7\n") : ok(),
   );
-  const res = finishPr(wf, "PR BODY", exec);
+  const res = (await finishPr(wf, "PR BODY", exec));
   if (!res.ok) throw new Error(res.error);
   expect(res.prUrl).toBe("https://github.com/o/r/pull/7");
   expect(calls[0]).toEqual({ command: "git", args: ["push", "-u", "origin", wf.branch], cwd: wf.worktreeDir });
@@ -181,32 +181,32 @@ test("finishPr pushes the branch then opens the PR against the base branch", () 
   });
 });
 
-test("finishPr recovers the URL of a PR that already exists", () => {
+test("finishPr recovers the URL of a PR that already exists", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec } = fakeExec((call) => {
     if (call.command === "gh" && call.args[1] === "create") return fail("a pull request already exists");
     if (call.command === "gh" && call.args[1] === "view") return ok("https://github.com/o/r/pull/7\n");
     return ok();
   });
-  const res = finishPr(wf, "body", exec);
+  const res = (await finishPr(wf, "body", exec));
   expect(res.ok && res.prUrl).toBe("https://github.com/o/r/pull/7");
 });
 
-test("finishPr maps a rejected push to an error", () => {
+test("finishPr maps a rejected push to an error", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec } = fakeExec((call) => (call.args[0] === "push" ? fail("rejected: no upstream") : ok()));
-  const res = finishPr(wf, "body", exec);
+  const res = (await finishPr(wf, "body", exec));
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toContain("rejected");
 });
 
-test("runFinish refuses a dirty worktree before any push, gh or merge runs", () => {
+test("runFinish refuses a dirty worktree before any push, gh or merge runs", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec, calls } = fakeExec((call) => {
     if (call.args[0] === "status") return ok(" M src/app.ts\n?? notes.txt\n M a.ts\n M b.ts\n");
     return ok();
   });
-  const res = runFinish(wf, "body", exec);
+  const res = (await runFinish(wf, "body", exec));
   expect(res.ok).toBe(false);
   if (!res.ok) {
     expect(res.error).toContain("uncommitted changes");
@@ -218,77 +218,119 @@ test("runFinish refuses a dirty worktree before any push, gh or merge runs", () 
   expect(calls[0]).toEqual({ command: "git", args: ["status", "--porcelain"], cwd: wf.worktreeDir });
 });
 
-test("runFinish delegates to the finish action once the worktree is clean", () => {
+test("runFinish delegates to the finish action once the worktree is clean", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec, calls } = fakeExec((call) =>
     call.command === "gh" ? ok("https://github.com/o/r/pull/7\n") : ok(),
   );
-  const res = runFinish(wf, "body", exec);
+  const res = (await runFinish(wf, "body", exec));
   expect(res.ok && res.prUrl).toBe("https://github.com/o/r/pull/7");
   expect(calls[0]?.args).toEqual(["status", "--porcelain"]);
   expect(calls[1]?.args[0]).toBe("push");
 });
 
-test("finishMerge refuses when the repo checkout left the base branch", () => {
+test("finishMerge refuses when the repo checkout left the base branch", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec } = fakeExec(() => ok("feature/elsewhere\n"));
-  const res = finishMerge(wf, exec);
+  const res = (await finishMerge(wf, exec));
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toContain("feature/elsewhere");
 });
 
-test("finishMerge aborts and surfaces a merge conflict", () => {
+test("finishMerge leaves failed merge state for explicit recovery", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
+  const originalHead = "a".repeat(40);
+  const targetHead = "b".repeat(40);
+  const expectedTree = "c".repeat(40);
+  let mergeHeadChecks = 0;
   const { exec, calls } = fakeExec((call) => {
     if (call.args[1] === "--abbrev-ref") return ok("main\n");
+    if (call.args[0] === "rev-parse" && call.args[1] === "HEAD") return ok(`${originalHead}\n`);
+    if (call.args[0] === "rev-parse" && call.args[1] === `${wf.branch}^{commit}`) return ok(`${targetHead}\n`);
+    if (call.args[1] === "--verify" && call.args[2] === "-q" && call.args[3] === "MERGE_HEAD") {
+      mergeHeadChecks += 1;
+      return mergeHeadChecks === 1 ? fail("no merge in progress") : ok("target\n");
+    }
+    if (call.args[0] === "merge-tree") return ok(`${expectedTree}\n`);
     if (call.args[0] === "merge" && call.args[1] === "--no-ff") return fail("CONFLICT (content): README.md");
     return ok();
   });
-  const res = finishMerge(wf, exec);
+  const res = (await finishMerge(wf, exec));
   expect(res.ok).toBe(false);
-  if (!res.ok) expect(res.error).toContain("CONFLICT");
-  expect(calls.at(-1)?.args).toEqual(["merge", "--abort"]);
+  if (!res.ok) {
+    expect(res.error).toContain("repository changes or merge state");
+    expect(res.recoveryRequired).toBe(true);
+  }
+  expect(calls.some((call) => call.args[0] === "merge" && call.args[1] === "--abort")).toBe(false);
 });
 
-test("finishMerge supplies a controller identity when Git has none", () => {
-  const box = makeIdentityIsolatedRepo();
-  expect(box.exec("git", ["var", "GIT_AUTHOR_IDENT"], box.repo).code).not.toBe(0);
-  expect(box.exec("git", ["var", "GIT_COMMITTER_IDENT"], box.repo).code).not.toBe(0);
+test("finishMerge preserves staged operator changes made after merge failure", async () => {
+  const box = await makeIdentityIsolatedRepo();
+  const hook = path.join(box.repo, ".git", "hooks", "prepare-commit-msg");
+  fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const originalHead = await box.run("rev-parse", "HEAD");
+  let stagedAfterOwnershipProbe = false;
+  const cleanupExec: ExecPort = async (command, args, cwd, env, options) => {
+    const result = await realExec(command, args, cwd, env, options);
+    if (args[0] === "status" && args[1] === "--porcelain" && !stagedAfterOwnershipProbe) {
+      fs.writeFileSync(path.join(box.repo, "base.txt"), "operator edit\n");
+      const add = await realExec("git", ["add", "base.txt"], box.repo);
+      if (add.code !== 0) throw new Error(add.stderr || "staging operator edit failed");
+      stagedAfterOwnershipProbe = true;
+    }
+    return result;
+  };
 
-  expect(finishMerge(box.wf, box.exec).ok).toBe(true);
+  const result = await finishMerge(box.wf, box.exec, cleanupExec);
+
+  expect(stagedAfterOwnershipProbe).toBe(true);
+  expect(result.ok).toBe(false);
+  expect(await box.run("rev-parse", "HEAD")).toBe(originalHead);
+  expect(await box.run("show", ":base.txt")).toBe("operator edit");
+  expect(await box.run("diff", "--cached", "--", "base.txt")).toContain("operator edit");
+  expect((await box.exec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], box.repo)).code).toBe(0);
+  if (!result.ok) expect(result.recoveryRequired).toBe(true);
+});
+
+test("finishMerge supplies a controller identity when Git has none", async () => {
+  const box = (await makeIdentityIsolatedRepo());
+  expect((await box.exec("git", ["var", "GIT_AUTHOR_IDENT"], box.repo)).code).not.toBe(0);
+  expect((await box.exec("git", ["var", "GIT_COMMITTER_IDENT"], box.repo)).code).not.toBe(0);
+
+  expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
   const fallbackEmail = ["noreply", "delegatus.invalid"].join("@");
-  expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+  expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
     ["Delegatus", fallbackEmail, "Delegatus", fallbackEmail].join("\n"),
   );
-  expect(box.exec("git", ["config", "--local", "--get", "user.name"], box.repo).code).not.toBe(0);
-  expect(box.exec("git", ["config", "--local", "--get", "user.email"], box.repo).code).not.toBe(0);
+  expect((await box.exec("git", ["config", "--local", "--get", "user.name"], box.repo)).code).not.toBe(0);
+  expect((await box.exec("git", ["config", "--local", "--get", "user.email"], box.repo)).code).not.toBe(0);
 });
 
-test("finishMerge uses the controller identity despite configured and inherited identities", () => {
-  const box = makeIdentityIsolatedRepo();
+test("finishMerge uses the controller identity despite configured and inherited identities", async () => {
+  const box = (await makeIdentityIsolatedRepo());
   const email = ["configured", "example.invalid"].join("@");
-  box.run("config", "--local", "user.name", "Configured Test");
-  box.run("config", "--local", "user.email", email);
+  (await box.run("config", "--local", "user.name", "Configured Test"));
+  (await box.run("config", "--local", "user.email", email));
   Object.assign(box.env, {
     GIT_AUTHOR_NAME: "Environment Author", GIT_AUTHOR_EMAIL: ["author", "example.invalid"].join("@"),
     GIT_COMMITTER_NAME: "Environment Committer", GIT_COMMITTER_EMAIL: ["committer", "example.invalid"].join("@"),
   });
-  const agentHead = box.run("rev-parse", box.wf.branch);
+  const agentHead = (await box.run("rev-parse", box.wf.branch));
 
-  expect(finishMerge(box.wf, box.exec).ok).toBe(true);
+  expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
   const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
-  expect(box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce")).toBe(
+  expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
     ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
   );
-  expect(box.run("rev-parse", "HEAD^2")).toBe(agentHead);
-  expect(box.run("config", "--local", "--get", "user.email")).toBe(email);
-  expect(box.run("config", "--local", "--get", "user.name")).toBe("Configured Test");
+  expect((await box.run("rev-parse", "HEAD^2"))).toBe(agentHead);
+  expect((await box.run("config", "--local", "--get", "user.email"))).toBe(email);
+  expect((await box.run("config", "--local", "--get", "user.name"))).toBe("Configured Test");
 });
 
 test("integration: provision + commit + local merge against a throwaway repo", async () => {
   const repoDir = makeRepo();
   let wf = makeWorkflow(repoDir, { template: { ...TEMPLATE, finish: "merge" as const } });
-  const res = provisionWorktree(wf, realExec);
+  const res = (await provisionWorktree(wf, realExec));
   if (!res.ok) throw new Error(res.error);
   wf = { ...wf, baseBranch: res.baseBranch, baseRef: res.baseRef };
   expect(res.baseBranch).toBe("main");
@@ -307,18 +349,18 @@ test("integration: provision + commit + local merge against a throwaway repo", a
 
   /* Uncommitted work blocks the finish: the review approved more than the
      branch carries. */
-  const blocked = runFinish(wf, "body", realExec);
+  const blocked = (await runFinish(wf, "body", realExec));
   expect(blocked.ok).toBe(false);
   if (!blocked.ok) expect(blocked.error).toContain("greeting.txt");
 
   git(wf.worktreeDir, "add", ".");
   git(wf.worktreeDir, "commit", "-m", "add greeting");
 
-  const merged = runFinish(wf, "body", realExec);
+  const merged = (await runFinish(wf, "body", realExec));
   if (!merged.ok) throw new Error(merged.error);
   expect(fs.existsSync(path.join(repoDir, "greeting.txt"))).toBe(true);
   const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
-  expect(realExec("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], repoDir).stdout.trim()).toBe(
+  expect((await realExec("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], repoDir)).stdout.trim()).toBe(
     ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
   );
 });
@@ -328,7 +370,7 @@ test("integration: a failing setup reports the exit code and stderr tail", async
   const failing = normalizeTemplate({ ...TEMPLATE, setup: "echo boom >&2; exit 3" })!;
   let wf = { ...makeWorkflow(repoDir), id: "wfid9999", template: failing };
   wf = { ...wf, worktreeDir: path.join(path.dirname(repoDir), path.basename(repoDir) + "-wf-" + wf.id) };
-  const res = provisionWorktree(wf, realExec);
+  const res = (await provisionWorktree(wf, realExec));
   if (!res.ok) throw new Error(res.error);
   wf = { ...wf, setupPid: startSetup(wf).pid };
   for (let i = 0; i < 100 && setupStatus(wf).status === "running"; i++) {

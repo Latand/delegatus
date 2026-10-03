@@ -109,11 +109,11 @@ export function decisionOwner(flow: Flow, caller: string | null): boolean {
 export type DecisionPorts = {
   turn: typeof flowTurn;
   pipelines: () => readonly Pipeline[];
-  head: typeof decisionHead;
+  head: (cwd: string, decision: FlowDecisionRequest["decision"]) => string | null | Promise<string | null>;
 };
-export function decisionHead(cwd: string, decision: FlowDecisionRequest["decision"]): string | null {
-  if (decision === "submit-review" || decision === "completed") return resolveCleanFlowHead(cwd);
-  const result = resolveBaseRef(cwd, "head");
+export async function decisionHead(cwd: string, decision: FlowDecisionRequest["decision"]): Promise<string | null> {
+  if (decision === "submit-review" || decision === "completed") return (await resolveCleanFlowHead(cwd));
+  const result = (await resolveBaseRef(cwd, "head"));
   return result.ok ? result.sha : null;
 }
 const ports: DecisionPorts = { turn: flowTurn, pipelines: loadPipelines, head: decisionHead };
@@ -122,7 +122,7 @@ export async function flowDecisionContext(flow: Flow) {
   const turn = await flowTurn(flow);
   const stages = loadPipelines().flatMap((pipeline) => pipeline.runs.flatMap((run) =>
     run.attempts.filter((attempt) => attempt.flowId === flow.id).map((attempt) => ({ pipelineId: pipeline.id, stageId: run.stageId, attempt: attempt.n }))));
-  return { expectedRevision: flow.revision ?? 0, expectedHead: decisionHead(flow.cwd, "continue-fixing"), round: flow.rounds.length,
+  return { expectedRevision: flow.revision ?? 0, expectedHead: (await decisionHead(flow.cwd, "continue-fixing")), round: flow.rounds.length,
     turnId: turn?.turnId ?? null, ...(stages.length === 1 ? { stage: stages[0] } : {}) };
 }
 
@@ -141,6 +141,7 @@ export async function submitFlowDecision(request: FlowDecisionRequest, caller: s
     return { flowId: snapshot.id, decision: existing, replayed: true };
   }
   const turn = await dependencies.turn(snapshot);
+  const observedHead = await dependencies.head(snapshot.cwd, request.decision);
   let accepted: FlowAgentDecision | undefined;
   patchFlowRows([request.flowId], ([flow]) => {
     if (!flow || !decisionOwner(flow, caller)) throw new Error("flow decision owner changed");
@@ -158,7 +159,7 @@ export async function submitFlowDecision(request: FlowDecisionRequest, caller: s
     if (request.round !== flow.rounds.length) throw new Error("stale flow decision round");
     if (!turn?.turnId || turn.turnId !== request.turnId || turn.state === "unknown") throw new Error("flow decision turn is unavailable or stale");
     if (!decisionStageMatches(flow, request.stage, dependencies.pipelines())) throw new Error("flow decision stage attempt is stale or unavailable");
-    if (!/^[0-9a-f]{40}$/.test(request.expectedHead) || dependencies.head(flow.cwd, request.decision) !== request.expectedHead) throw new Error("flow decision HEAD is unavailable, changed or not clean for review/completion");
+    if (!/^[0-9a-f]{40}$/.test(request.expectedHead) || observedHead !== request.expectedHead) throw new Error("flow decision HEAD is unavailable, changed or not clean for review/completion");
     if (request.decision === "submit-review" && flow.roundLimit > 0 && flow.rounds.length >= flow.roundLimit) throw new Error("flow review round limit reached");
     if (flow.agentDecisions?.some((item) => item.disposition === "accepted" || (item.turnId === request.turnId && item.transcriptPath === flow.implementerPath))) throw new Error("this flow turn already has a decision");
     if ((flow.agentDecisions?.length ?? 0) >= 512) throw new Error("flow decision receipt capacity reached");
