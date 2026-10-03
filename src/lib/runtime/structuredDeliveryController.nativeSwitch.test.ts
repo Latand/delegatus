@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { expect, test } from "bun:test";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
@@ -11,7 +12,7 @@ import { messageRowModel } from "@/components/conversation/messageRow";
 import { outboxStateForReceiptStatus } from "@/components/conversation/outbox";
 import { translate } from "@/lib/i18n";
 
-async function switchingFixture(layout = "successor thread", publish = true, failure: "failed" | "cancelled" | null = null, accountSwitch = true) {
+async function switchingFixture(layout = "successor thread", publish = true, failure: "failed" | "cancelled" | "provider" | null = null, accountSwitch = true) {
   const f = migrationDeliveryFixture();
   let active = true;
   let successorStatus: HostState["status"] = "idle";
@@ -50,7 +51,8 @@ async function switchingFixture(layout = "successor thread", publish = true, fai
   const source = nativeHost(f.key.sessionId, true);
   f.client.nativeQueueRead = async id => f.journal.nativeQueueRead(id);
   f.client.nativeQueueTransition = async (id, change) => f.journal.nativeQueueTransition(id, change);
-  const successorId = layout === "same thread" || !accountSwitch ? f.key.sessionId : "successor-thread";
+  let migrationCount = 0;
+  let successorId = layout === "same thread" || !accountSwitch ? f.key.sessionId : "successor-thread";
   const publishSuccessor = () => publishStructuredDeliveryHost({ key: { engine: "codex", sessionId: successorId }, host: nativeHost(successorId) });
   await bindStructuredDeliveryQueue([{ key: f.key, host: source }], { registry: f.registry, client: f.client,
     reconfigure: {
@@ -61,10 +63,15 @@ async function switchingFixture(layout = "successor thread", publish = true, fai
         return { target: null, path: f.conversation.generations.at(-1)!.path, conversationId: f.conversation.id, spawned: true };
       },
       migrate: async (id, _target, registry, ownsOperation, reconfigureOperationId) => {
+        migrationCount++;
+        if (migrationCount > 1 && layout !== "same thread") successorId = `successor-thread-${migrationCount}`;
         const migrated = await advanceConversationMigration(id, registry, {
-          create: async input => ({ operationId: input.operationId, nativeId: successorId,
-            path: path.join(f.root, "successor.jsonl"), continuityPaths: [], historyHash: "fixture",
-            host: { kind: "codex-app-server", identity: "fixture-successor", epoch: 1, verifiedAt: new Date().toISOString() } }),
+          create: async input => {
+            if (failure === "provider") throw new Error("successor provider failed a recoverable preflight");
+            return { operationId: input.operationId, nativeId: successorId,
+              path: path.join(f.root, `successor-${migrationCount}.jsonl`), continuityPaths: [], historyHash: "fixture",
+              host: { kind: "codex-app-server" as const, identity: "fixture-successor", epoch: 1, verifiedAt: new Date().toISOString() } };
+          },
           verify: async () => {},
         }, { ownsOperation, reconfigureOperationId });
         if (publish) await publishSuccessor();
@@ -73,7 +80,7 @@ async function switchingFixture(layout = "successor thread", publish = true, fai
       },
     },
   });
-  return { ...f, writes, successorId, publishSuccessor, finishTurn: () => { active = false; },
+  return { ...f, writes, get successorId() { return successorId; }, publishSuccessor, finishTurn: () => { active = false; },
     successorStatus: (status: HostState["status"]) => { successorStatus = status; },
     unreadableSuccessor: (value: boolean) => { unreadableSuccessor = value; },
     unreadableAfterPublication: () => { unreadableAfterPublication = true; },
@@ -225,6 +232,91 @@ test("a cancelled claimed succession gives the unsubmitted native entry a termin
     f.registry.cancelConversationSwitch(f.conversation.id, pending.migration!.revision);
     await kickStructuredDeliveryQueue();
     expect(f.journal.operationResult("switch")?.receipt).toMatchObject({ status: "failed", reason: "cancelled" });
+    expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "failed", reason: "runtime switch cancelled" });
+    expect(f.writes).toEqual([]);
+  } finally { await f.cleanup(); }
+});
+
+test.each(["cancelled", "provider"] as const)("later native add delivers on the unchanged runtime after a %s switch", async failure => {
+  const f = await switchingFixture("successor thread", true, failure === "provider" ? failure : null);
+  try {
+    f.admit();
+    if (failure === "cancelled") {
+      const effect = f.journal.effectBatch(100).find(effect => effect.kind === "runtime.reconfigure")!;
+      f.registry.claimConversationReconfigure(f.conversation.id, { operationId: "switch", revision: effect.eventSeq,
+        profile: { model: "gpt-6.1-sol", effort: "high", fast: false }, accountId: "account-b" });
+      const pending = f.registry.requestConversationReseat(f.conversation.id, "account-b", { operationId: "switch", revision: effect.eventSeq });
+      f.registry.cancelConversationSwitch(f.conversation.id, pending.migration!.revision);
+    }
+    f.finishTurn();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe("failed");
+    expect(f.journal.operationResult("queued-add")?.receipt.status).toBe("failed");
+    expect(f.registry.conversation(f.conversation.id)?.migration?.phase).toBe(failure === "cancelled" ? "rolled-back" : "failed-recoverable");
+    if (failure === "provider") f.registry.releaseSwitchHold(f.conversation.id);
+    f.journal.executeOperation({ kind: "native-queue", operationId: "later-add", idempotencyKey: "later-add",
+      conversationId: f.conversation.id, action: "add", text: "words after recovery",
+      binding: { threadId: f.key.sessionId, accountId: "account-a" } });
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("later-add")?.receipt).toMatchObject({ status: "applied", reason: null });
+    expect(f.journal.nativeQueueRead(f.conversation.id).find(entry => entry.entryId === "later-add")).toMatchObject({ state: "queued",
+      binding: { threadId: f.key.sessionId, accountId: "account-a" } });
+    expect(f.writes).toEqual([{ threadId: f.key.sessionId, input: [{ type: "text", text: "words after recovery" }] }]);
+  } finally { await f.cleanup(); }
+});
+
+test.each(["idle", "unpublished", "dead", "attention"] as const)("an unsubmitted native message follows two switches to the current successor (%s)", async availability => {
+  const f = await switchingFixture("successor thread", false);
+  try {
+    f.admit("send");
+    f.finishTurn();
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe("applied");
+    expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "queued", reason: null });
+    const intermediate = f.registry.conversation(f.conversation.id)!.generations.at(-1)!;
+    fs.writeFileSync(intermediate.path, JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }) + "\n");
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "switch-2", idempotencyKey: "switch-2",
+      conversationId: f.conversation.id, model: "gpt-6.1-sol", effort: "high", fast: false, accountId: "account-c" });
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch-2")?.receipt.status).toBe("applied");
+    expect(f.registry.conversation(f.conversation.id)?.generations.map(generation => generation.accountId)).toEqual(["account-a", "account-b", "account-c"]);
+    expect(f.successorId).toBe("successor-thread-2");
+    f.successorStatus(availability === "unpublished" ? "idle" : availability);
+    if (availability !== "unpublished") await f.publishSuccessor();
+    await kickStructuredDeliveryQueue();
+    if (availability !== "idle") {
+      expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "queued", reason: null });
+      expect(f.writes).toEqual([]);
+      f.successorStatus("idle");
+      await f.publishSuccessor();
+    }
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "queued", reason: null });
+    expect(f.journal.nativeQueueRead(f.conversation.id)[0]).toMatchObject({ state: "queued",
+      binding: { threadId: f.successorId, accountId: "account-c" } });
+    expect(f.writes).toEqual([{ threadId: f.successorId, input: [{ type: "text", text: "preserve queued words" }] }]);
+  } finally { await f.cleanup(); }
+});
+
+test("cancelling a second claimed switch terminally refuses the entry held on the first predecessor", async () => {
+  const f = await switchingFixture("successor thread", false);
+  try {
+    f.admit("send");
+    f.finishTurn();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch")?.receipt.status).toBe("applied");
+    f.journal.executeOperation({ kind: "reconfigure", operationId: "switch-2", idempotencyKey: "switch-2",
+      conversationId: f.conversation.id, model: "gpt-6.1-sol", effort: "high", fast: false, accountId: "account-c" });
+    const effect = f.journal.effectBatch(100).find(effect => effect.kind === "runtime.reconfigure")!;
+    f.registry.claimConversationReconfigure(f.conversation.id, { operationId: "switch-2", revision: effect.eventSeq,
+      profile: { model: "gpt-6.1-sol", effort: "high", fast: false }, accountId: "account-c" });
+    const pending = f.registry.requestConversationReseat(f.conversation.id, "account-c", { operationId: "switch-2", revision: effect.eventSeq });
+    f.registry.cancelConversationSwitch(f.conversation.id, pending.migration!.revision);
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("switch-2")?.receipt).toMatchObject({ status: "failed", reason: "cancelled" });
     expect(f.journal.operationResult("queued-add")?.receipt).toMatchObject({ status: "failed", reason: "runtime switch cancelled" });
     expect(f.writes).toEqual([]);
   } finally { await f.cleanup(); }

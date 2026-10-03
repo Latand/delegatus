@@ -17,8 +17,8 @@ export interface NativeQueueExecutorPort {
   client: RuntimeHostClient;
   resolveHost(conversationId: string): EngineHost | null;
   binding(conversationId: string): NativeQueueBinding | null;
-  /** Registry evidence of a succession from this exact predecessor. */
-  succession?(conversationId: string, binding: NativeQueueBinding):
+  /** Registry evidence of a succession from this predecessor's generation chain. */
+  succession?(conversationId: string, binding: NativeQueueBinding, admissionEventSeq?: number):
     | { status: "pending" }
     | { status: "committed"; binding: NativeQueueBinding }
     | { status: "refused"; reason: string }
@@ -31,7 +31,7 @@ export class NativeQueueExecutor {
   constructor(private readonly port: NativeQueueExecutorPort) {}
 
   /** false leaves the original operation queued for the controller's next wake. */
-  async execute(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void | false> {
+  async execute(command: NativeQueueCommand & { operationId: string; eventSeq?: number }, refusalReason?: string): Promise<void | false> {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) throw new Error("native queue journal is unavailable");
     const transition = (change: Parameters<NonNullable<RuntimeHostClient["nativeQueueTransition"]>>[1]) => client.nativeQueueTransition!(command.operationId, change);
@@ -45,7 +45,7 @@ export class NativeQueueExecutor {
     if (entryTargeted && (!entry || entry.mutationOperationId !== command.operationId)) throw new Error("native queue mutation identity is unavailable");
     const version = entry?.versions.find(v => v.revision === entry.revision);
     let binding = command.action === "add" && entry ? entry.binding : command.binding;
-    const succession = this.port.succession?.(command.conversationId, binding);
+    const succession = this.port.succession?.(command.conversationId, binding, command.eventSeq);
     if (succession?.status === "refused") {
       await transition({ phase: "refused", reason: succession.reason });
       return;
