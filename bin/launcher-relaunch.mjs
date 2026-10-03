@@ -39,7 +39,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   if (plan.rollbackPointer === undefined || typeof prior !== "string" || !existsSync(join(prior, "bin", "cli.mjs"))) {
     throw new Error("The prior release cannot be verified; no launcher was started.");
   }
-  const priorEntry = join(plan.root, "bin", "cli.mjs");
+  const priorEntry = join(prior, "bin", "cli.mjs");
   if (plan.checkout) {
     const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: prior, encoding: "utf8", timeout: 2000 });
     if (head.status !== 0 || head.stdout.trim().slice(0, 7) !== plan.priorRevision) throw new Error("The prior release identity changed; no launcher was started.");

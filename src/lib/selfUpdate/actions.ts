@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { launcherControlFile } from "./launcher";
 import { headOf, ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
+import { sameProcess } from "./pid";
 
 const quote = (text: string) => `\u0027${text.replaceAll("\u0027", "\u0027\\\u0027\u0027")}\u0027`;
 export function userUnit(cgroup: string): string | null {
@@ -82,10 +83,14 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
           const head = await headOf(root);
           if (head?.slice(0, 7) === record.runtimeHost.revision) rollbackPointer = null;
           else if (record.runtimeHost.revision) {
-            for (const name of readdirSync(record.releasesDir)) {
-              const dir = join(record.releasesDir, name); const sha = await headOf(dir);
-              if (sha?.slice(0, 7) === record.runtimeHost.revision && (await new ReleasePointer(record.releasePointer, dir).current()).sha === sha
-                && read(join(dir, ".next", "BUILD_ID"))) rollbackPointer = JSON.stringify({ sha, dir, checkoutHead: head }) + "\n";
+            const candidates: string[] = [];
+            if (record.runtimeHost.pid && record.runtimeHost.startIdentity && sameProcess({ pid: record.runtimeHost.pid, startIdentity: record.runtimeHost.startIdentity })) {
+              try { candidates.push(readlinkSync(`/proc/${record.runtimeHost.pid}/cwd`)); } catch { /* Use the install's release cache on other platforms. */ }
+            }
+            try { candidates.push(...readdirSync(record.releasesDir).map(name => join(record.releasesDir, name))); } catch { /* An unverified prior release yields a refusing command. */ }
+            for (const dir of candidates) {
+              const sha = await headOf(dir);
+              if (sha?.slice(0, 7) === record.runtimeHost.revision && read(join(dir, ".next", "BUILD_ID"))) rollbackPointer = JSON.stringify({ sha, dir, checkoutHead: head }) + "\n";
             }
           }
         } else if (record.runtimeHost.revision === null) rollbackPointer = null;
@@ -103,8 +108,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
         .map(shellQuote).join(" ");
       command = withContext(invocation);
       if (windows) command += "; exit $LASTEXITCODE";
-    } else
-    if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
+    } else if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
       if (next.dir !== root) {
         let requestId: string | undefined;
         try {

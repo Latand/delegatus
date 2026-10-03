@@ -5670,7 +5670,11 @@ async function selfUpdateAutoMain(): Promise<void> {
   states["install-available-auto"] = { ...states["install-available"]!, auto: { ...idleAuto, enabled: true } };
   states["install-package-auto"] = { ...states["install-package"]!, auto: { ...idleAuto, enabled: true, availability: "packaged" } };
   // Commands contain invented install context and exercise wrapping at phone width.
-  const command = "env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open";
+  const terminalPlan = Buffer.from(JSON.stringify({ target: next, root: "$HOME/Projects/example install",
+    requestFile: "$HOME/.local/state/example install/self-update/request-example.json",
+    releasePointer: "$HOME/.local/state/example install/self-update/release-example.json",
+    rollbackPointer: null, priorRevision: old.slice(0, 7), priorVersion: null, checkout: true })).toString("base64");
+  const command = `env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal '${terminalPlan}' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open`;
   for (const id of ["restart-terminal", "start-launcher", "start-service", "update-first", "docker-deployments"] as const) {
     const unsupported = ["start-launcher", "start-service", "docker-deployments"].includes(id);
     states[`install-${id}`] = { ...base, mode: unsupported ? "unsupported" : "checkout", unsupportedReason: id === "docker-deployments" ? "docker-deployments" : unsupported ? "no-launcher" : null,
@@ -5777,7 +5781,8 @@ async function selfUpdateAutoMain(): Promise<void> {
           if (snapshot.action.command && !installation.text?.includes(snapshot.action.command)) report.failures.push(`${tag}: incomplete terminal command`);
         }
         if (name === "install-available" || name === "install-available-auto" || name === "install-package" || name === "install-package-auto") {
-          if (!installation.text?.includes(messages[lang]["selfUpdate.update.noteApply"])
+          const instruction = messages[lang]["selfUpdate.update.noteApply"];
+          if (typeof instruction !== "string" || !installation.text?.includes(instruction)
             || /Nothing restarts|next quiet moment|Нічого не перезапускається|найближчу тиху хвилину/.test(installation.text ?? "")) report.failures.push(`${tag}: confirmed update copy contradicts immediate apply`);
         }
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);

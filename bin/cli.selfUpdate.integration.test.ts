@@ -1301,7 +1301,7 @@ test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions
 // A first upgrade can roll back to a launcher that predates this protocol.
 // The optional local source fixture is the exact base checkout, never a live install.
 const legacySource = process.env.LLV_REHEARSAL_LEGACY;
-for (const shape of ["checkout", "package"] as const) for (const form of ["posix", "powershell"] as const)
+for (const shape of ["checkout", "checkout-published", "package"] as const) for (const form of ["posix", "powershell"] as const)
 for (const failure of ["host", "web", "import"] as const) (legacySource ? test : test.skip)(`legacy terminal no-intent ${shape}/${form} restores prior after ${failure}`, async () => {
   const { installAction } = await import("../src/lib/selfUpdate/actions");
   const { isAlive } = await import("../src/lib/selfUpdate/pid");
@@ -1309,13 +1309,15 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   for (const name of readdirSync(path.join(fixture.checkout, "bin"))) {
     const source = path.join(legacySource!, "bin", name); if (existsSync(source)) copyFileSync(source, path.join(fixture.checkout, "bin", name));
   }
-  if (shape === "checkout") {
+  if (shape !== "package") {
     git(fixture.checkout, "add", "-f", "."); git(fixture.checkout, "commit", "-m", "legacy terminal fixture"); fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
   } else {
     writeFileSync(path.join(fixture.checkout, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.0" }));
     mkdirSync(path.join(fixture.checkout, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(fixture.checkout, "dist", "standalone", "server.js"), STUB_NEXT(false));
     renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
   }
+  const priorRelease = shape === "checkout-published" ? release(fixture, "legacy-prior") : null;
+  if (priorRelease) writeFileSync(pointerFile(fixture), JSON.stringify({ ...priorRelease, checkoutHead: fixture.first }));
   const newer = install(); const candidate = release(newer, "terminal-candidate", { brokenHost: failure === "host" });
   if (shape === "package") {
     writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
@@ -1323,9 +1325,9 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   } else git(fixture.checkout, "fetch", candidate.dir, candidate.sha);
   const running = await start(fixture);
   let record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
-  writeFileSync(record.releasePointer, JSON.stringify(shape === "checkout" ? { ...candidate, checkoutHead: fixture.first }
+  writeFileSync(record.releasePointer, JSON.stringify(shape !== "package" ? { ...candidate, checkoutHead: fixture.first }
     : { ...candidate, kind: "package", version: "0.0.1", baseVersion: "0.0.0" }));
-  if (shape === "checkout") {
+  if (shape !== "package") {
     request(record, "web", "old-web-only");
     record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.web.revision === candidate.sha.slice(0, 7) ? r : null; });
   } else {
@@ -1339,8 +1341,11 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   }
   if (failure === "import") writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), 'throw new Error("terminal candidate import failed");\n' + readFileSync(path.join(candidate.dir, "bin", "cli.mjs"), "utf8").replace(/^#![^\n]*\n/, ""));
   if (failure === "web") writeFileSync(path.join(candidate.dir, shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next"), STUB_NEXT(true));
+  const failedAttempts = path.join(candidate.dir, "failed-attempts");
+  const failingEntry = path.join(candidate.dir, failure === "host" ? "dist/runtime-host.mjs" : failure === "import" ? "bin/cli.mjs" : shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next");
+  writeFileSync(failingEntry, `(await import("node:fs")).appendFileSync(${JSON.stringify(failedAttempts)}, "attempt\\n");\n` + readFileSync(failingEntry, "utf8").replace(/^#![^\n]*\n/, ""));
   expect(existsSync(path.join(path.dirname(record.requestFile), "apply.json"))).toBe(false);
-  const action = await installAction({ mode: shape, reason: null, record: { ...record, installRoot: fixture.checkout, port: running.port } as never },
+  const action = await installAction({ mode: shape === "package" ? "package" : "checkout", reason: null, record: { ...record, installRoot: fixture.checkout, port: running.port } as never },
     { cgroup: () => "", ready: () => true, argv: () => [], env: fixture.env, platform: form === "posix" ? "linux" : "win32" });
   expect(action?.id).toBe("restart-terminal");
   const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM");
@@ -1360,8 +1365,11 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   expect(exit).toBe(1); expect(output).toContain("prior release");
   const after = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   try {
-    expect(existsSync(record.releasePointer)).toBe(false); expect(await socketAnswers(after.socket)).toBe(true);
-    expect(await served(running.port)).toBe(fixture.checkout + (shape === "package" ? "/dist/standalone" : ""));
+    if (priorRelease) expect(JSON.parse(readFileSync(record.releasePointer, "utf8")).sha).toBe(priorRelease.sha);
+    else expect(existsSync(record.releasePointer)).toBe(false);
+    expect(readFileSync(failedAttempts, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(await socketAnswers(after.socket)).toBe(true);
+    expect(await served(running.port)).toBe((priorRelease?.dir ?? fixture.checkout) + (shape === "package" ? "/dist/standalone" : ""));
     expect(after.web.revision).toBe(after.runtimeHost.revision);
     const environment = readFileSync(`/proc/${after.web.pid}/environ`, "utf8").split("\0");
     expect(environment).toContain(`HOME=${fixture.env.HOME}`); expect(environment).toContain(`LLV_STATE_DIR=${fixture.state}`); expect(environment).toContain(`XDG_CONFIG_HOME=${fixture.env.XDG_CONFIG_HOME}`);
