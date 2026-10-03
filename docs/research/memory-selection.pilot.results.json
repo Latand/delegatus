@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "collectedAt": "2026-10-02T16:52:16.212Z",
+  "counts": {
+    "messages": 4349,
+    "conversations": 1017,
+    "duplicate": 1,
+    "machine": 1003,
+    "continuation": 5,
+    "attachment": 1,
+    "eligible": 7,
+    "sampled": 7,
+    "memoryEntries": 7673
+  },
+  "protocol": {
+    "seed": "memory-selection-v1",
+    "threshold": 0.7,
+    "capUsd": 2,
+    "candidates": 8,
+    "slots": 3,
+    "model": "typesafe/jev-1.13"
+  },
+  "strictNonempty": 0,
+  "fts": {
+    "prompts": 7,
+    "offered": 21,
+    "helpful": 5,
+    "available": 6,
+    "precisionAt3": 0.23809523809523808,
+    "precisionWhenOffered": 0.23809523809523808,
+    "recall": 0.8333333333333334,
+    "promptCoverage": 1,
+    "latencyMs": {
+      "median": 2.315829999999991,
+      "p99": 5.678327999999993
+    }
+  },
+  "none": {
+    "prompts": 7,
+    "offered": 0,
+    "helpful": 0,
+    "available": 6,
+    "precisionAt3": 0,
+    "precisionWhenOffered": null,
+    "recall": 0,
+    "promptCoverage": 0,
+    "latencyMs": {
+      "median": 0.00005499999999969418,
+      "p99": 0.00021699999999924557
+    }
+  },
+  "jev": {
+    "prompts": 7,
+    "offered": 8,
+    "helpful": 2,
+    "available": 6,
+    "precisionAt3": 0.09523809523809523,
+    "precisionWhenOffered": 0.25,
+    "recall": 0.3333333333333333,
+    "promptCoverage": 0.7142857142857143,
+    "latencyMs": {
+      "median": 267.745596,
+      "p99": 456.26050599999996
+    }
+  },
+  "spendUsd": 0.000558516,
+  "calls": [
+    {
+      "id": "probe",
+      "status": "complete",
+      "reservedUsd": 0.01,
+      "costUsd": 0.000015414,
+      "latencyMs": 416.417496,
+      "inputTokens": 367
+    },
+    {
+      "id": "p01",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000085302,
+      "inputTokens": 2031,
+      "scores": {
+        "c1": 0.48,
+        "c2": 0.18,
+        "c3": 0.77,
+        "c4": 0.58,
+        "c5": 0.29,
+        "c6": 0.12,
+        "c7": 0.18,
+        "c8": 0.05
+      },
+      "latencyMs": 453.94467599999996
+    },
+    {
+      "id": "p02",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.00008211,
+      "inputTokens": 1955,
+      "scores": {
+        "c1": 0.46,
+        "c2": 0.11,
+        "c3": 0.67,
+        "c4": 0.67,
+        "c5": 0.05,
+        "c6": 0.07,
+        "c7": 0.33,
+        "c8": 0.12
+      },
+      "latencyMs": 411.32342
+    },
+    {
+      "id": "p03",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000078666,
+      "inputTokens": 1873,
+      "scores": {
+        "c1": 0.34,
+        "c2": 0.78,
+        "c3": 0.3,
+        "c4": 0.1,
+        "c5": 0.35,
+        "c6": 0.22,
+        "c7": 0.29,
+        "c8": 0.09
+      },
+      "latencyMs": 251.42521499999998
+    },
+    {
+      "id": "p04",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000077952,
+      "inputTokens": 1856,
+      "scores": {
+        "c1": 0.65,
+        "c2": 0.7,
+        "c3": 0.57,
+        "c4": 0.58,
+        "c5": 0.69,
+        "c6": 0.62,
+        "c7": 0.43,
+        "c8": 0.71
+      },
+      "latencyMs": 267.07507899999996
+    },
+    {
+      "id": "p05",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000095886,
+      "inputTokens": 2283,
+      "scores": {
+        "c1": 0.68,
+        "c2": 0.87,
+        "c3": 0.91,
+        "c4": 0.43,
+        "c5": 0.59,
+        "c6": 0.54,
+        "c7": 0.1,
+        "c8": 0.28
+      },
+      "latencyMs": 269.9731439999998
+    },
+    {
+      "id": "p06",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000086142,
+      "inputTokens": 2051,
+      "scores": {
+        "c1": 0.41,
+        "c2": 0.67,
+        "c3": 0.79,
+        "c4": 0.63,
+        "c5": 0.29,
+        "c6": 0.61,
+        "c7": 0.28,
+        "c8": 0.71
+      },
+      "latencyMs": 231.73178800000005
+    },
+    {
+      "id": "p07",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000037044,
+      "inputTokens": 882,
+      "scores": {
+        "c1": 0.57,
+        "c2": 0.44,
+        "c3": 0.44
+      },
+      "latencyMs": 244.26796600000011
+    }
+  ],
+  "cases": [
+    {
+      "id": "p01",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 2.315829999999991,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c3"
+      ]
+    },
+    {
+      "id": "p02",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 4.717646000000002,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": []
+    },
+    {
+      "id": "p03",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 2.075390999999996,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c2"
+      ]
+    },
+    {
+      "id": "p04",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 0.6705169999999896,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c8",
+        "c2"
+      ]
+    },
+    {
+      "id": "p05",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 4.364208000000005,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c3",
+        "c2"
+      ]
+    },
+    {
+      "id": "p06",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 5.678327999999993,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c3",
+        "c8"
+      ]
+    },
+    {
+      "id": "p07",
+      "engine": "claude",
+      "candidates": 3,
+      "strictCount": 0,
+      "retrievalMs": 0.37771900000001324,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": []
+    }
+  ]
+}

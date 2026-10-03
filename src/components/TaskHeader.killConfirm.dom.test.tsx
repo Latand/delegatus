@@ -66,7 +66,9 @@ function openConfirm(file: FileEntry): HTMLElement {
   document.body.append(host);
   const root = createRoot(host);
   flushSync(() => { root.render(<ProcessStatusControls file={file} compact />); });
-  const kill = [...host.querySelectorAll("button")].find((node) => node.textContent === en["task.kill"]);
+  /* A background shell task is stopped; only a conversation has a host to stop. */
+  const stopLabel = file.engine === "shell" ? en["task.stopTask"] : en["task.kill"];
+  const kill = [...host.querySelectorAll("button")].find((node) => node.textContent === stopLabel);
   expect(kill).toBeTruthy();
   flushSync(() => { kill!.click(); });
   return host as unknown as HTMLElement;

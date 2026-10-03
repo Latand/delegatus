@@ -113,7 +113,8 @@ type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: 
       than a lane that completed. */
   attemptState?: string;
   /** What the lane parked on, for the cases that read it (#1799). */
-  stateDetail?: string | null };
+  stateDetail?: string | null;
+  attemptConversationId?: string };
 
 function pipelineRecord(entry: PipelineFixture) {
   return {
@@ -129,8 +130,8 @@ function pipelineRecord(entry: PipelineFixture) {
     baseRef: "main",
     lastPassedCommit: "",
     stages: [],
-    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt }] }] : [],
-    cursor: null,
+    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt, ...(entry.attemptConversationId ? { conversationId: entry.attemptConversationId } : {}) }] }] : [],
+    cursor: entry.attemptConversationId ? { stageId: "build", state: entry.attemptState ?? "running" } : null,
     state: entry.state,
     pausedState: null,
     stateDetail: entry.stateDetail ?? null,
@@ -6874,4 +6875,60 @@ test("maintenance settles before gather and launches after the wake; scratch che
   rig.deps.maintenance = { reconcile: async () => { order.push("settle"); return "maintenance: fixture settled"; }, launchIfDue: async () => { order.push("launch"); return "maintenance: fixture launched"; } };
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(order).toEqual(["settle", "wake", "launch"]); expect(record?.detail).toContain("maintenance: fixture settled"); expect(record?.detail).toContain("maintenance: fixture launched");
+});
+
+
+test("restart wakes a confirmed lane stall despite a missing MCP heartbeat, once per unchanged stall", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-stall-")), "seat-tick.json");
+  const options = { pipelines: [{ id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION }], state: OVERDUE, stateFile };
+  const before = harness(options);
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane", stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  before.deps.sources!.liveness = liveness;
+  before.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
+  await runSeatTickCheck(PROJECT, before.deps);
+  expect(before.sent).toHaveLength(0);
+  // A new controller reads the first observation from the isolated disk store.
+  const restarted = harness({ ...options, state: undefined });
+  restarted.deps.sources!.liveness = liveness;
+  restarted.deps.mcpHealth = before.deps.mcpHealth;
+  const record = await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(record?.delivery?.outcome).toBe("delivered");
+  expect(restarted.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(restarted.sent).toHaveLength(1);
+});
+
+test("seat clock checks immediately after restart before its first interval", async () => {
+  let checks = 0;
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-clock-")), "seat-tick.json");
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, stateFile });
+  const ports = { policy: DEFAULT_SEAT_TICK_POLICY, handoffHeld: () => false,
+    recordSuccessions: () => [], scheduleInterval: () => ({ unref() {} }) as never,
+    sweep: async () => { checks += 1; await runSeatTickCheck(PROJECT, rig.deps); } };
+  startSeatTick(ports);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(checks).toBe(1);
+  stopSeatTick();
+  startSeatTick(ports);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(checks).toBe(2);
+});
+
+test("a second interruption parking an announced running stall wakes its seat despite unchanged movement", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-park-wake-")), "seat-tick.json");
+  const lane = { id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION };
+  const first = harness({ pipelines: [lane], state: OVERDUE, stateFile });
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: lane.id, stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  first.deps.sources!.liveness = liveness;
+  first.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
+  await runSeatTickCheck(PROJECT, first.deps);
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent).toHaveLength(1);
+  const parked = harness({ pipelines: [{ ...lane, state: "needs_decision", attemptState: "needs_decision" }], stateFile, now: NOW + 61 * MINUTE });
+  parked.deps.sources!.liveness = liveness;
+  parked.deps.mcpHealth = first.deps.mcpHealth;
+  expect((await runSeatTickCheck(PROJECT, parked.deps))?.delivery?.outcome).toBe("delivered");
+  expect(parked.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, parked.deps);
+  expect(parked.sent).toHaveLength(1);
 });
