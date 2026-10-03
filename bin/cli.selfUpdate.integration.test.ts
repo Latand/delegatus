@@ -435,20 +435,22 @@ test("rollback retains the cold-restart readiness budget for the previous releas
   expect(child.exitCode).toBeNull();
 }, 30_000);
 
-for (const shape of ["socket", "manual-port", "manual-no-port", "foreign-port"] as const) for (const matchingIdentity of [true, false]) {
+for (const shape of ["socket", "manual-port", "manual-no-port", "manual-standalone", "foreign-port"] as const) for (const matchingIdentity of [true, false]) {
 test(`a recovery Viewer takeover requires its start identity, shape=${shape}, matching=${matchingIdentity}`, async () => {
   const fixture = install();
   const port = await availablePort();
   const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
   const socket = path.join(fixture.state, `runtime-host-${installId}.sock`);
+  const orphanCwd = shape === "foreign-port" ? fixture.root : shape === "manual-standalone" ? path.join(fixture.checkout, "dist", "standalone") : fixture.checkout;
+  mkdirSync(orphanCwd, { recursive: true });
   const orphan = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "node_modules", ".bin", "next"), "--port", String(port)], {
-    cwd: shape === "foreign-port" ? fixture.root : fixture.checkout,
-    env: { ...fixture.env, PORT: shape === "manual-no-port" ? undefined : String(port), ...(shape === "socket" ? { LLV_RUNTIME_HOST_SOCKET: socket } : { LLV_STATE_OWNER: "viewer" }) }, stdio: "ignore",
+    cwd: orphanCwd,
+    env: { ...fixture.env, PORT: ["manual-no-port", "manual-standalone"].includes(shape) ? undefined : String(port), ...(shape === "socket" ? { LLV_RUNTIME_HOST_SOCKET: socket } : { LLV_STATE_OWNER: "viewer" }) }, stdio: "ignore",
   });
   children.add(orphan);
   await until(() => orphan.pid && existsSync(`/proc/${orphan.pid}/stat`));
   await Bun.sleep(200);
-  expect(await served(port)).toBe(shape === "foreign-port" ? fixture.root : fixture.checkout);
+  expect(await served(port)).toBe(orphanCwd);
   const stat = readFileSync(`/proc/${orphan.pid}/stat`, "utf8");
   const startIdentity = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
   const base = path.join(fixture.state, "self-update");
@@ -462,7 +464,7 @@ test(`a recovery Viewer takeover requires its start identity, shape=${shape}, ma
     await until(() => child.exitCode !== null);
     expect(child.exitCode).toBe(1);
     expect(orphan.exitCode).toBeNull();
-    expect(await served(port)).toBe(shape === "foreign-port" ? fixture.root : fixture.checkout);
+    expect(await served(port)).toBe(orphanCwd);
     return;
   }
   const record = await until(() => {

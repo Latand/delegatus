@@ -1017,10 +1017,10 @@ test.each(["manual-upgrade", "missing-artifact", "valid"] as const)("package sna
   writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: { version: "1.0.1", sha: tipSha, short: tipSha.slice(0, 7), date: "" } } }));
   const expectedVersion = shape === "valid" ? "1.0.1" : rootVersion;
   const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
-  const registry = spyOn(globalThis, "fetch").mockImplementation(async input => {
+  const registry = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
     const version = String(input).split("/").pop();
     return Response.json({ version: version === "latest" ? "1.0.3" : version, gitHead: version === "1.0.1" ? tipSha : "c".repeat(40) });
-  });
+  }) as typeof fetch);
   try {
     const before = await service.snapshot();
     expect(before.installed.version).toBe(expectedVersion);

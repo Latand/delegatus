@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import net from "node:net";
+import { join } from "node:path";
 import { installedRelease, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -54,7 +55,10 @@ function matchingProcess(candidate, socket, port = null, installRoot = null, rel
       ? spawnSync("lsof", ["-a", "-p", String(candidate.pid), "-d", "cwd", "-Fn"], { encoding: "utf8", timeout: 2_000 }).stdout.split("\n").find(line => line.startsWith("n"))?.slice(1)
       : readlinkSync(`/proc/${candidate.pid}/cwd`);
     const release = releasePointer ? installedRelease(releasePointer, installRoot).dir : installRoot;
-    return !!cwd && [installRoot, release].some(root => realpathSync(root) === cwd);
+    return !!cwd && [installRoot, release].some(root =>
+      [root, join(root, "dist", "standalone"), join(root, ".next", "standalone")].some(directory => {
+        try { return realpathSync(directory) === cwd; } catch { return false; }
+      }));
   } catch { return false; }
 }
 async function stopRecorded(candidate, socket, port = null, installRoot = null, releasePointer = null) {
