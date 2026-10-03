@@ -118,7 +118,9 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   }
   const echoes = [...groups.values()].map(rows => ({ rows,
     text: rows.map(row => assistantEchoText(row.item)).join("\n\n"),
-    displayText: rows.map(row => row.item.kind === "blob" ? row.item.text : assistantEchoText(row.item)).join("\n\n"),
+    // Display hydration uses only public redacted/capped projections.
+    displayText: rows.map(({ item }) => item.kind === "prose" || item.kind === "blob" ? item.text
+      : item.kind === "review" || item.kind === "mem-citation" ? item.raw : "").join("\n\n"),
     at: rows.map(row => transcriptInstant(row.item)).find(value => value !== null) ?? null,
   }));
   for (let entry of pending) {

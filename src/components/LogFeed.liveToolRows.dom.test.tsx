@@ -684,3 +684,35 @@ test("an observed reply survives later tool calls and reconnect until its own ec
   expect(host.querySelector('[data-feed-source-id="observed-before-tools"]')).toBe(original);
   expect(host.querySelectorAll('[data-feed-source-id="observed-before-tools"]')).toHaveLength(1);
 });
+
+
+test("an event-first review hydrates from redacted capped display text", () => {
+  file.engine = "codex"; file.fmt = "codex";
+  try {
+    const privateValue = "fixture-private-value";
+    const text = "VERDICT: APPROVE\n\ncredential line with token=" + privateValue + " and "
+      + "Details of the review remain readable. ".repeat(2200);
+    const live = projectRuntimeLiveTurnItem(null, "display-review", { type: "agentMessage", id: "display-review-answer", text }, "completed", AT(1))!;
+    expect(live.items![0].text).not.toContain(privateValue);
+    sessionState.session = { ...session, liveTurn: live };
+    const { host, paint } = render();
+    const original = host.querySelector("[data-live-turn]");
+    expect(host.textContent).not.toContain(privateValue);
+    const event = JSON.stringify({ type: "event_msg", timestamp: AT(1), payload: { type: "agent_message", message: text } });
+    tailState.lines = [event];
+    paint();
+    expect(host.querySelector("[data-live-turn]")).toBe(original);
+    expect(original?.textContent).not.toContain(privateValue);
+    expect(original?.textContent?.length).toBeLessThan(25_000);
+    sessionState.session = { ...sessionState.session, liveTurn: null, turn: "unknown" };
+    paint();
+    expect(host.querySelector("[data-live-turn]")).toBe(original);
+    expect(host.textContent).not.toContain(privateValue);
+    tailState.lines = [event, JSON.stringify({ type: "response_item", timestamp: AT(1),
+      payload: { type: "message", id: "display-review-answer", role: "assistant", content: [{ type: "output_text", text }] } })];
+    paint();
+    expect(host.querySelector('[data-feed-source-id="display-review-answer"]')).toBe(original);
+    expect(host.querySelectorAll('[data-feed-kind="review"]')).toHaveLength(1);
+    expect(host.textContent).not.toContain(privateValue);
+  } finally { file.engine = "claude"; file.fmt = "claude"; }
+});
