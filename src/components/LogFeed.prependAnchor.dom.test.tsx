@@ -190,6 +190,22 @@ test("a load that settles with the reader already at the top reveals its rows wi
   expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThan(settled);
 });
 
+for (const top of [80, 500]) {
+  test(`a zero-progress older load at ${top}px waits for an explicit retry`, async () => {
+    const scroller = await mount();
+    scroller.scrollTop = top;
+    request();
+    tail = { ...tail, loadingOlder: true }; render();
+    finish(0); await wait();
+    tail = { ...tail, loadingOlder: false }; render();
+    await wait(); render();
+    expect(calls).toBe(1);
+    request();
+    expect(calls).toBe(2);
+    finish(0); await wait();
+  });
+}
+
 test("an unmounted pending load cannot change the replacement pane", async () => {
   await mount(); request(); const oldFinish = finish;
   flushSync(() => root!.unmount()); root = undefined; host.remove(); restoreGeometry();

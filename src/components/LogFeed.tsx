@@ -937,13 +937,18 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      and the scroll handler (which skipped the reveal while the load was in
      flight) never runs again. Look again when the load settles. */
   const wasLoadingOlderRef = useRef(false);
+  const olderLoadStartRef = useRef(tail.linesStart);
   useEffect(() => {
+    if (tail.loadingOlder && !wasLoadingOlderRef.current) olderLoadStartRef.current = tail.linesStart;
     const settled = wasLoadingOlderRef.current && !tail.loadingOlder;
     wasLoadingOlderRef.current = tail.loadingOlder;
     const el = scroller.current;
     if (!settled || tail.loading || !el) return;
-    if (el.scrollTop < 120 && canRevealOlder) revealOlder();
-    else if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
+    /* A failed or zero-progress read leaves the history boundary unchanged.
+       Reveal rows already here, but fetch again automatically only after a
+       successful prepend; scroll and button handlers still permit a retry. */
+    if (el.scrollTop < 120 && hiddenLocal > 0) revealOlder();
+    else if (tail.linesStart < olderLoadStartRef.current && el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
   });
 
   const lastItem = feed.items.at(-1)?.item;
