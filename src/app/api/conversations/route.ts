@@ -2,6 +2,7 @@ import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogR
 import { indexConversationCatalog, pruneConversationSearchCache } from "@/lib/scanner/conversationSearchIndex";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { refreshConversationCatalog } from "@/lib/scanner/discover";
+import { refreshFileCatalogMembership } from "@/lib/scanner/scanCache";
 import { overlayConversationLineage } from "@/lib/agent/lineageMarkers";
 import { deputyConversationRefs } from "@/lib/orchestrator/deputies";
 import { overlaySessionProjects, overlaySessionTitles, overlaySessionTitlesYielding, sessionProjectProjection } from "@/lib/session/titleProjection";
@@ -19,6 +20,9 @@ function pageLimit(value: string | null): number | undefined {
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (!conversationCatalogReady()) await refreshConversationCatalog();
+  // Cursor pages keep their frozen ordering. New reads reconcile membership
+  // before selecting a page, without paying a full scan for transcript appends.
+  if (!url.searchParams.get("cursor")) await refreshFileCatalogMembership();
   const query = url.searchParams.get("q")?.trim() || undefined;
   /* The orchestrator's parallel selves leave nothing in the conversation lists
      (docs/design/ghost-seat.md §5): each is a fork of the seat in the seat's

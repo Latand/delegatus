@@ -229,6 +229,8 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  /** Version credited only by delivery of this visible item. */
+  itemVersion?: string;
   outcomeId?: string;
   /** Every owed outcome this ONE line stands for (#1783). A child's outcome
       identity is a turn of a ledger generation, so a worker the seat spawned
@@ -479,8 +481,8 @@ export interface SeatTickPipelineInput {
   /**
    * Who paused the lane, read off its pause record (#2063); absent when it is
    * not paused. `seat` is the seat this check is about: a lane it paused, for a
-   * deploy or anything else, is owed work until it is resumed, so every wake
-   * lists it. `operator` is excluded from the seat's work altogether: the
+   * deploy or anything else, is owed work until it is resumed. Its first wake
+   * and each later deploy settlement list it. `operator` is excluded from the seat's work altogether: the
    * operator stopped it, and only the operator's resume starts it again.
    * `other` is anyone else, a predecessor seat among them, and is read as any
    * parked lane is.
@@ -828,6 +830,12 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  /** Versions of agenda items carried by this frozen delivery plan. */
+  itemsShown?: string[];
+  /** Complete redacted bullets used to verify visibility in the frozen text. */
+  itemLines?: { version: string; line: string }[];
+  /** Each settlement credit is bound to the complete frozen bullet that earns it. */
+  acknowledgmentLines?: { key: string; line: string }[];
   /** A proposal wake, which advances the 24-hour slot as well as the stamp. */
   proposal: boolean;
   reasons: SeatTickWakeReasonKind[];
@@ -1048,6 +1056,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  /** Latest delivered versions, bounded to 2000 recent agenda items. */
+  itemsShown?: string[];
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;

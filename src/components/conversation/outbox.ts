@@ -39,6 +39,11 @@ export interface OutboxEntry {
   /** Idempotency key of this submission — also the bubble's stable identity. */
   id: string;
   text: string;
+  /** An idle parallel ask keeps its original draft until normal admission. */
+  idleParallelDraft?: string;
+  idleParallelTextSettled?: boolean;
+  idleParallelImageIds?: string[];
+  idleParallelChips?: { project: string; snapshot: { id: string; revision: string }[] };
   /** How many images rode with this submission (previews stay local). */
   images: number;
   /** How many non-image attachments rode with it (#1224). Counted apart from

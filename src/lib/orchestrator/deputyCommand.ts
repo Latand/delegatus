@@ -59,6 +59,7 @@ export type AskInParallelResult =
 
 export interface AskInParallelInput {
   project: string;
+  seatConversationId?: string;
   text: string;
   images?: RuntimeImageUpload[];
   clientRequestId: string;
@@ -168,6 +169,9 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
   const replay = store.read().find((deputy) => deputy.clientRequestId === clientRequestId) ?? null;
   const seat = ports.activeSeat(project);
   if (!seat?.conversationId) return refusal("seat_not_found", `no orchestrator seat is active for ${project}`, 404);
+  if (input.seatConversationId && input.seatConversationId !== seat.conversationId) {
+    return refusal("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
+  }
   const generation = ports.seatGeneration(seat.conversationId);
   if (!generation || generation.engine !== "claude") {
     return refusal("seat_not_claude", "asking in parallel works for a Claude seat only in this version", 409);
@@ -177,7 +181,12 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
   if (replay) {
     deputy = replay;
   } else {
-    if (!(await ports.seatBusy(project))) {
+    const busy = await ports.seatBusy(project);
+    const currentSeat = ports.activeSeat(project);
+    if (currentSeat?.conversationId !== seat.conversationId || currentSeat.seatEpoch !== seat.seatEpoch) {
+      return refusal("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
+    }
+    if (!busy) {
       return refusal("seat_not_busy", "the orchestrator is not working on anything now; send the message to it directly", 409);
     }
     /* Step 2. */

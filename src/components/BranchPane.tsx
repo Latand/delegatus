@@ -183,9 +183,13 @@ interface Props {
       replaces the pane's card frame. Everything below the header — banners,
       feed, control strip and composer — stays the pane's own. */
   chrome?: { header: React.ReactNode; className: string; attributes?: Record<string, string> };
+  /** The phone's conversation screen: the related-task strip, its launch
+      placeholder and the background-task rows leave the column — they are rows
+      of the screen's `⋯` menu — so the feed starts directly under the bar. */
+  chromeInMenu?: boolean;
 }
 
-export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome }: Props) {
+export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, chromeInMenu }: Props) {
   const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -456,10 +460,10 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
             the dead-host banner via surface classification and swaps recovery
             for navigation to the live successor plus the explicit fork. */}
         {superseded ? <SupersededBanner file={file} /> : null}
-        {relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
+        {chromeInMenu ? null : relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
         {/* A launch's task arrives a poll after its pane: the strip's row is held, so the feed does not move when it lands. */}
-        {!relatedTasks?.length && onOpenTask && isLaunchedConversation(file) ? <div aria-hidden data-task-relations-slot className="min-h-9 shrink-0 pointer-coarse:min-h-[53px]" /> : null}
-        {tasks.length ? (
+        {!chromeInMenu && !relatedTasks?.length && onOpenTask && isLaunchedConversation(file) ? <div aria-hidden data-task-relations-slot className="min-h-9 shrink-0 pointer-coarse:min-h-[53px]" /> : null}
+        {tasks.length && !chromeInMenu ? (
           <FlipRow className="shrink-0 border-b border-border bg-sunken" enter="fade">
             {tasks.map((task) => (
               <div key={task.path} data-flip-key={task.path}>
