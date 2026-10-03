@@ -1346,7 +1346,7 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   if (failure === "web") writeFileSync(path.join(candidate.dir, shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next"), STUB_NEXT(true));
   const failedAttempts = path.join(candidate.dir, "failed-attempts");
   const failingEntry = path.join(candidate.dir, failure === "host" ? "dist/runtime-host.mjs" : failure === "import" ? "bin/cli.mjs" : shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next");
-  writeFileSync(failingEntry, `(await import("node:fs")).appendFileSync(${JSON.stringify(failedAttempts)}, "attempt\n");\n` + readFileSync(failingEntry, "utf8").replace(/^#![^\n]*\n/, ""));
+  writeFileSync(failingEntry, `(await import("node:fs")).appendFileSync(${JSON.stringify(failedAttempts)}, "attempt" + String.fromCharCode(10));\n` + readFileSync(failingEntry, "utf8").replace(/^#![^\n]*\n/, ""));
   expect(existsSync(path.join(path.dirname(record.requestFile), "apply.json"))).toBe(false);
   const action = await installAction({ mode: shape === "package" ? "package" : "checkout", reason: null, record: { ...record, installRoot: fixture.checkout, port: running.port } as never },
     { cgroup: () => "", ready: () => true, argv: () => [], env: fixture.env, platform: form === "posix" ? "linux" : "win32" });
