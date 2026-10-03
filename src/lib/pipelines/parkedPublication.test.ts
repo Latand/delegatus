@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
+import type { Flow } from "@/lib/flows/types";
 
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
@@ -344,6 +345,114 @@ test("skip-stage refuses admission when the serving controller has no remoteActi
   } finally { restore = registerPipelineTick(async () => {}); h.cleanup(); }
 });
 
+async function legacyPublication(h: ReturnType<typeof fixture>) {
+  const { pipelineArtifactsDir } = await import("./store");
+  terminalReview(h);
+  h.git("reset", "--hard", h.passed);
+  h.lane.runs[1]!.attempts[0]!.state = "needs_decision";
+  h.lane.stateDetail = "publishing the passed stage: publishing the pipeline branch: no output";
+  const lock = path.join(pipelineArtifactsDir(h.lane.id), "publication.lock");
+  fs.mkdirSync(path.dirname(lock), { recursive: true }); fs.writeFileSync(lock, "");
+  const stat = fs.statSync(lock);
+  h.lane.delivery!.operation = { id: "legacy-publication", epoch: 1, sha: h.passed, state: "running",
+    executor: { pid: process.pid, identity: "legacy-executor", lock, lockIdentity: `${stat.dev}:${stat.ino}`, finished: true } };
+  savePipelines([h.lane]);
+}
+
+for (const action of ["publish", "retry-stage"] as const) for (const alreadyRemote of [false, true]) test(`marker-less legacy reconciliation preserves the original passed review for ${action} (already remote: ${alreadyRemote})`, async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    await legacyPublication(h);
+    if (alreadyRemote) h.git("push", "-q", "origin", `${h.passed}:refs/heads/${h.lane.branch}`);
+    const flow = { id: "approved-flow", state: "approved", stateDetail: null, targetSha: h.passed,
+      createdAt: new Date().toISOString(), closedAt: null,
+      rounds: [{ n: 1, reviewHeadSha: h.passed, verdict: "APPROVE" }] } as Flow;
+    const effects: string[] = [];
+    const ports = { ...h.ports, remoteActionSupported: () => false, getFlow: () => flow,
+      patchFlow: () => { effects.push("patch"); return {}; }, closeFlow: async () => { effects.push("close"); } };
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().delivery!.operation).toMatchObject({ state: "settled", passedStage: true, sha: h.passed, epoch: 1 });
+    expect(h.current().runs[1]!.attempts[0]!.state).toBe("passed");
+    expect((await patchPipeline(h.lane.id, { action }, ports)).error).toBeUndefined();
+    expect(h.current().remoteAction).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.passed, publishedCommit: h.passed,
+      delivery: { epoch: 1, ownerId: h.lane.id } });
+    expect(h.current().runs[1]!.attempts).toHaveLength(1);
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ n: 1, flowId: "approved-flow", reviewHeadSha: h.passed,
+      expectedReviewHeadSha: h.passed, verdict: { status: "pass" } });
+    expect(h.pushes()).toBe(alreadyRemote ? 0 : 1);
+    expect(flow.state).toBe("approved"); expect(effects).toEqual([]);
+  } finally { h.cleanup(); }
+});
+
+for (const condition of ["unrelated detail", "no pass", "different passed SHA", "foreign owner", "comparison"] as const) test(`legacy reconciliation refuses passed-stage promotion with ${condition}`, async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    await legacyPublication(h);
+    if (condition === "unrelated detail") h.lane.stateDetail = "a different operator decision";
+    if (condition === "no pass") h.lane.runs[1]!.attempts[0]!.verdict = null;
+    if (condition === "different passed SHA") h.lane.lastPassedCommit = h.head;
+    if (condition === "foreign owner") { h.lane.delivery!.ownerId = "another-owner"; h.lane.delivery!.active = false; }
+    if (condition === "comparison") { h.lane.delivery!.disposition = "comparison"; h.lane.delivery!.publish = "disabled"; h.lane.delivery!.active = false; }
+    savePipelines([h.lane]);
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().delivery!.operation!.passedStage).toBeUndefined();
+    expect(h.current().runs[1]!.attempts[0]!.state).toBe("needs_decision");
+    expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
+for (const changed of ["id", "epoch", "sha"] as const) test(`reconciliation leaves a publication whose ${changed} changes during its remote read untouched`, async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    await legacyPublication(h);
+    const exec = async (...args: Parameters<typeof realExec>) => {
+      const result = await realExec(...args);
+      if (args[1].includes("ls-remote")) {
+        const current = h.current();
+        const operation = current.delivery!.operation!;
+        if (changed === "id") operation.id = "replacement-operation";
+        if (changed === "epoch") { operation.epoch = 2; current.delivery!.epoch = 2; }
+        if (changed === "sha") operation.sha = h.head;
+        savePipelines([current]);
+      }
+      return result;
+    };
+    expect(await reconcilePipelinePublication(h.lane.id, 1, exec, null)).toContain("publication changed");
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    expect(h.current().delivery!.operation!.passedStage).toBeUndefined();
+    expect(h.current().runs[1]!.attempts[0]!.state).toBe("needs_decision");
+  } finally { h.cleanup(); }
+});
+
+test("reconciliation retains a child outcome persisted during its remote read", async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    await legacyPublication(h);
+    const failure = { step: "publishing the pipeline branch", code: 7, signal: null,
+      durationMs: 12, outputTail: "pre-push: types\npre-push: touched-tests failed" };
+    const exec = async (...args: Parameters<typeof realExec>) => {
+      const result = await realExec(...args);
+      if (args[1].includes("ls-remote")) {
+        const current = h.current();
+        current.delivery!.operation!.executor!.result = { ok: false, error: "hook failed", failure };
+        savePipelines([current]);
+      }
+      return result;
+    };
+    expect(await reconcilePipelinePublication(h.lane.id, 1, exec, null)).toBeNull();
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, failure });
+    expect(h.current().stateDetail).toContain("exit 7");
+    expect(h.current().stateDetail).toContain("pre-push: touched-tests failed");
+    expect(h.current().stateDetail).not.toContain("interrupted publication");
+  } finally { h.cleanup(); }
+});
+
 test.each(["dirty", "different SHA"])("moved-head admission refuses %s and keeps the pass", async (condition) => {
   const h = fixture();
   try {
@@ -400,7 +509,7 @@ test("publisher evidence stays redacted and bounded through lock reacquisition a
   } finally { if (holder?.exitCode === null && holder.signalCode === null) holder.kill("SIGTERM"); await closed; h.cleanup(); }
 });
 
-for (const held of [false, true]) for (const split of ["none", "forward", "reverse"]) test(`incomplete private-key hook output is redacted before retention and reconciliation (held lock: ${held}, split streams: ${split})`, async () => {
+for (const held of [false, true]) for (const split of ["none", "forward", "reverse", "forward-complete", "reverse-complete"]) test(`private-key hook output is redacted before retention and reconciliation (held lock: ${held}, split streams: ${split})`, async () => {
   const h = fixture();
   const { publishPipelineBranch, reconcilePipelinePublication } = await import("./git");
   let holder: ChildProcess | undefined;
@@ -411,8 +520,9 @@ for (const held of [false, true]) for (const split of ["none", "forward", "rever
     const truncated = pem.slice(0, pem.indexOf("-----END"));
     const keyBytes = truncated.split("\n").slice(1).join("").trim();
     const [header, ...body] = truncated.split("\n");
-    const output = split === "reverse" ? `echo pre-push: types >&2\necho pre-push: eslint >&2\necho '${header}' >&2\ncat <<'KEY'\n${body.join("\n")}KEY\n`
-      : split === "forward" ? `echo pre-push: types\necho pre-push: eslint\necho '${header}'\ncat <<'KEY' >&2\n${body.join("\n")}KEY\n`
+    const footer = pem.trim().split("\n").at(-1)!;
+    const output = split.startsWith("reverse") ? `echo pre-push: types >&2\necho pre-push: eslint >&2\necho '${header}' >&2\ncat <<'KEY'\n${body.join("\n")}KEY\n${split.endsWith("complete") ? `echo '${footer}' >&2\n` : ""}`
+      : split.startsWith("forward") ? `echo pre-push: types\necho pre-push: eslint\necho '${header}'\ncat <<'KEY' >&2\n${body.join("\n")}KEY\n${split.endsWith("complete") ? `echo '${footer}'\n` : ""}`
         : `echo pre-push: types >&2\necho pre-push: eslint >&2\ncat <<'KEY' >&2\n${truncated}KEY\n`;
     fs.writeFileSync(h.hook, `#!/bin/sh\n${output}exit 7\n`, { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
@@ -424,7 +534,8 @@ for (const held of [false, true]) for (const split of ["none", "forward", "rever
       }
       return realExec(...args);
     };
-    await publishPipelineBranch(h.current(), exec, { acceptedSha: h.head });
+    const publication = await publishPipelineBranch(h.current(), exec, { acceptedSha: h.head });
+    expect(JSON.stringify(publication).includes(keyBytes)).toBe(false);
     const before = h.current().delivery!.operation!;
     // Never print generated private material even when this regression is red.
     expect(JSON.stringify(before.executor!.result).includes(keyBytes)).toBe(false);

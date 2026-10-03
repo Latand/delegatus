@@ -1126,25 +1126,19 @@ export type PipelinePublishResult = PipelinePublicationResult;
 
 /** A captured stream can end before PEM's footer. Consume an opened block
     through EOF before the shared redactor and before any output bounding. */
-function redactPublicationStream(text: string): { text: string; incompleteKey: boolean } {
-  let incompleteKey = false;
-  const safe = text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, (block) => {
-    if (!/-----END [A-Z ]*PRIVATE KEY-----$/.test(block)) incompleteKey = true;
-    return "[redacted-private-key]";
-  });
-  return { text: redactMonitorText(safe), incompleteKey };
-}
-
 function redactPublicationText(text: string): string {
-  return redactPublicationStream(text).text;
+  return redactMonitorText(text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+    "[redacted-private-key]"));
 }
 
 function redactPublicationOutput(stdout: string, stderr: string): string {
-  const out = redactPublicationStream(stdout), err = redactPublicationStream(stderr);
-  // Captured streams have no shared ordering. With an unterminated key, the
-  // other stream may hold its body, even before the opener in concatenated
-  // output. Keep only the independently proven prefixes before open blocks.
-  if (out.incompleteKey || err.incompleteKey) return [out.incompleteKey ? out.text : "", err.incompleteKey ? err.text : ""].join("\n").trim();
+  const streams = [stdout, stderr];
+  const openers = streams.map((stream) => stream.search(/-----BEGIN [A-Z ]*PRIVATE KEY-----/));
+  // Captured streams have no shared ordering. Even a complete armor block
+  // can have its body on the other stream. Once a key opens, only its own
+  // prefix is proven safe; the footer cannot prove the other bytes safe.
+  if (openers.some((index) => index !== -1)) return streams.map((stream, i) => openers[i] === -1 ? ""
+    : redactPublicationText(`${stream.slice(0, openers[i])}[redacted-private-key]`)).join("\n").trim();
   return redactPublicationText(`${stdout}\n${stderr}`).trim();
 }
 
@@ -1494,27 +1488,36 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
     return withDeliveryMutationAsync((tx) => {
       const current = tx.get(id);
       if (!current?.delivery || current.delivery.epoch !== expectedEpoch || current.delivery.operation?.id !== operation.id
-        || current.delivery.operation.state !== "running") return "publication changed while reconciling";
-      const retained = operation.executor?.result;
+        || current.delivery.operation.state !== "running" || current.delivery.operation.epoch !== expectedEpoch
+        || current.delivery.operation.sha !== operation.sha) return "publication changed while reconciling";
+      // The publisher can persist its outcome between the initial record read
+      // and quiescence. Use the fenced transaction's latest durable evidence.
+      const retained = current.delivery.operation.executor?.result;
       const failure = retained?.failure ? { ...retained.failure,
         outputTail: redactPublicationText(retained.failure.outputTail).slice(-4000) } : undefined;
       const result: PipelinePublishResult = remote.sha === operation.sha
         ? { ok: true, sha: operation.sha, remote: "published" }
-        : operation.executor?.result
+        : retained
           ? { ok: false, error: failure ? publicationFailureDetail(failure)
-            : operation.executor.result.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
-              : redactBounded(redactPublicationText(operation.executor.result.error), 4500),
+            : retained.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
+              : redactBounded(redactPublicationText(retained.error), 4500),
             ...(failure ? { failure } : {}) }
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
-      if (!result.ok && (!operation.executor?.result || (operation.executor.result.ok && operation.executor.result.uncertain))) result.outcome = "not-landed";
-      current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
+      if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
       const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
       // Older engines parked the accepted attempt itself. Preserve its pass
-      // from this publication's durable identity before replacing the display
-      // prefix that older retry admission used to recognize that pass.
+      // before replacing the legacy display prefix, and upgrade the operation
+      // so subsequent recovery uses durable identity rather than diagnostics.
       if (current.state === "needs_decision" && current.cursor?.state === "committing"
-        && current.lastPassedCommit === operation.sha && operation.passedStage
-        && attempt?.state === "needs_decision" && attempt.verdict?.status === "pass") attempt.state = "passed";
+        && current.lastPassedCommit === operation.sha && current.delivery.ownerId === id
+        && !deliveryOwnerError(current, tx.pipelineLookup({ ...current.delivery.target, active: true }))
+        && (current.delivery.operation.passedStage === true || (current.delivery.operation.passedStage === undefined
+          && current.stateDetail?.startsWith("publishing the passed stage:") === true))
+        && (attempt?.state === "needs_decision" || attempt?.state === "passed") && attempt.verdict?.status === "pass") {
+        attempt.state = "passed";
+        current.delivery.operation.passedStage = true;
+      }
+      current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
       if (result.ok) current.publishedCommit = operation.sha;
       else if ((current.state === "needs_decision" || current.state === "running") && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
