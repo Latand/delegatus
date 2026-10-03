@@ -700,6 +700,39 @@ Verification before the PR:
 | Transport choice with reasons | Decision 1 |
 | Fake transport, no network in tests; renders; tsc; build isolated; no real token | Implementation plan |
 
+## Replies to bridge reports
+
+An ordinary Telegram reply to a bridge report in the project's currently
+chosen report chat reaches its designated orchestrator. The directive says
+it came from Telegram and ends with the report's original `[bridge ref=<seq>]`
+trailer. Text and captions are delivered; unsupported media produces a short
+notice without downloading it. Forum replies must match the chosen topic.
+
+The operator is the **active installation owner** in the existing team record,
+using that owner's linked Telegram user id. An ordinary member, a bot, an
+anonymous sender, a forwarded message or an edit cannot send directives. Solo
+installations and owners without a linked Telegram account route nothing.
+The owner can link their account in the existing team settings. No Telegram
+identity is inferred from group membership, usernames or the personal reader.
+
+The bot's committed send receipt binds a report to its actual chat and message,
+including the interval before that receipt is mirrored into the report log.
+Eligible replies are persisted in `bot.sqlite` before advancing the polling
+offset. Their message identity survives update replay and restart; completed
+rows retain a dedup tombstone with the instruction text cleared. Busy seats and
+pending rotations wait in this inbox. Dispatch uses the existing durable seat
+delivery path, with a frozen recipient, payload and key. A queued attempt can
+move to a successor only after the existing delivery fence proves it was
+withdrawn or never delivered; uncertainty preserves the original attempt.
+
+The operator status payload exposes `reportReplies`: `ready`,
+`operator_unlinked` or `receiving_unavailable`, without disclosing the owner's
+Telegram id. The existing panel line for `webhook_elsewhere` explains that
+Delegatus cannot read. A foreign webhook leaves intake and delivery inert:
+this feature never calls `deleteWebhook` or `setWebhook`. There is no Telegram
+confirmation post. Pending replies shorten the existing poll to five seconds
+so an idle successor can receive them without another Telegram message.
+
 ## Deferred — not currently justified
 
 - **Daily Report delivery into a bot chat.** The quote's example ("so reports
@@ -722,8 +755,8 @@ Verification before the PR:
 - **Reacting, editing or deleting sent messages; inline keyboards; commands
   the bot answers by itself.** Each is a separate agent capability that no one
   has asked for.
-- **Surfacing incoming bot messages as wakes for an agent or orchestrator.**
-  Reading is pull-only through `telegram_bot_messages`; a push path belongs in
-  its own design.
+- **Routing other incoming bot messages to an agent or orchestrator.** Only
+  the authenticated report replies above enter seat delivery; other messages
+  remain available through `telegram_bot_messages`.
 - **A keyring store for either Telegram credential.** Both stay on the one
   fenced file pattern; moving them together would be its own change.

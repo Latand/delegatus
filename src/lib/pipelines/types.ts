@@ -268,6 +268,9 @@ export type PipelineGraphEdit = {
     else. A field the server could not read is `null`, which states what the
     read found and says nothing about the work itself. */
 export type PipelineStageProvenance = {
+  /** Absent on older records. Pending reads survive a Viewer restart. */
+  state?: "pending" | "complete" | "unknown";
+  pullRequestState?: "pending" | "observed" | "absent" | "unknown";
   /** The worktree's checked-out commit, dirty tree included. */
   head: string | null;
   branch: string;
@@ -279,7 +282,7 @@ export type PipelineStageProvenance = {
   pullRequest: { url: string; number: number; state: string } | null;
   /** The stage's declared outputs, and whether the server found each in the
       worktree. Empty when the stage declares none. */
-  outputs: Array<{ path: string; present: boolean }>;
+  outputs: Array<{ path: string; present: boolean | null }>;
 };
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
@@ -295,6 +298,8 @@ export type PipelineStageReport = {
   verdict: StageVerdict;
   summary: string | null;
   provenance: PipelineStageProvenance;
+  /** Exact admitted lane authority for the deferred observation. */
+  provenanceFence?: string;
   /** Accepted calls this attempt has made, replacements included. */
   calls: number;
 };
@@ -312,6 +317,8 @@ export type PipelineStageReportEntry = {
   findings: number;
   /** The `seq` of the report this call replaced before settlement, or null. */
   replaces: number | null;
+  provenanceState?: "pending" | "complete" | "unknown";
+  provenanceAt?: string;
   summary: string | null;
 };
 
@@ -351,6 +358,8 @@ export type PipelineStageAttempt = {
     fence: string;
     owner?: import("@/lib/processIdentity").ProcessIdentity;
     replay?: boolean;
+    /** The reserved prompt still needs asynchronous artifact preparation. */
+    prepareInput?: boolean;
     closeRequested?: boolean;
     cancelRequested?: boolean;
   };
@@ -722,6 +731,8 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
+    /** Admission snapshot, checked before an asynchronous publisher starts. */
+    fence?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
     result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
@@ -803,6 +814,19 @@ export function pipelineActivitySettled(
   return true;
 }
 
+export type PipelineRemoteAction = {
+  id: string;
+  action: "retry-stage" | "takeover" | "skip-stage";
+  state: "pending" | "settled";
+  fence: string;
+  at: string;
+  settledAt?: string;
+  error?: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
+  takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
+};
+
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
@@ -810,6 +834,9 @@ export type Pipeline = {
   activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
   delivery?: PipelineDelivery;
+  remoteAction?: PipelineRemoteAction;
+  /** Legacy lanes observe their repository identity before claiming delivery. */
+  publicationAdmission?: { id: string; sha: string; fence: string; state: "pending" | "settled"; error?: string };
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
@@ -852,6 +879,8 @@ export type Pipeline = {
       after a resume be a genuinely new event instead of a replay of the first. */
   pausedAt?: string | null;
   resumedAt?: string | null;
+  /** Durable control token: even same-clock pause/resume cancels old work. */
+  controlGeneration?: string;
   stateDetail: string | null;
   /** The bounded backoff a lane in `provisioning` is waiting out after a
       transient Git or network failure (#2115, #2176, #2220). Cleared when

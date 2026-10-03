@@ -4,20 +4,21 @@ import path from "node:path";
 
 import { MAX_STRUCTURED_TEXT_BYTES } from "./structuredContent";
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "@/lib/pipelines/controllerArtifacts";
+import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 const EXCERPT_BYTES = 512;
 
 /** Keep an oversized first message complete and readable while bounding the
  * structured envelope. Call after every scaffold and caller brief are composed,
  * and before spawn admission or durable payload identity is calculated. */
-export function composeStructuredFirstMessage(text: string, worktreeDir: string): string {
+export async function composeStructuredFirstMessage(text: string, worktreeDir: string, exec: ExecPort = realExec): Promise<string> {
   if (Buffer.byteLength(text, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
-    protectExistingControllerArtifacts(worktreeDir);
+    await protectExistingControllerArtifacts(worktreeDir, exec);
     return text;
   }
 
   const digest = crypto.createHash("sha256").update(text).digest("hex");
-  const directory = prepareControllerArtifactDirectory(worktreeDir);
+  const directory = await prepareControllerArtifactDirectory(worktreeDir, exec);
   const file = path.join(directory, `structured-first-message-${digest}.md`);
   let matches = false;
   try {

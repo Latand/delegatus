@@ -62,6 +62,32 @@ test("durable implementer identity creates a flow without scanner or live-host e
   });
 });
 
+test("concurrent flow creation admits one active flow for a durable implementer", async () => {
+  saveFlows([]);
+  const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
+  const implementer = registry.ensureConversation("codex", transcript, null);
+  const request = {
+    implementerPath: transcript,
+    implementerConversationId: implementer.id,
+    deliverKickoff: false,
+    roles: {
+      implementer: { engine: "codex" as const, model: "gpt-5.6-sol", effort: "high" },
+      reviewer: { engine: "codex" as const, model: "gpt-5.6-sol", effort: "high" },
+    },
+    baseRef: "12ad73656844d3583d44ae718d003c7f2f2c6ace",
+    baseMode: "head" as const,
+    mode: "auto" as const,
+    reviewerMode: "headless" as const,
+  };
+  const results = await Promise.all([
+    createFlowFromRequest(request, []),
+    createFlowFromRequest(request, []),
+  ]);
+  expect(results.filter((result) => result.flow)).toHaveLength(1);
+  expect(results.find((result) => result.error)).toMatchObject({ status: 409, error: "implementer already has an active flow" });
+  expect(loadFlows().filter((flow) => flow.closedAt === null && flow.state !== "closed")).toHaveLength(1);
+});
+
 test("flow creation returns the catalog error before persisting an unknown reviewer model", async () => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
