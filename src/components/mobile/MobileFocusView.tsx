@@ -1,7 +1,5 @@
 "use client";
 
-import { SpeakButton } from "../feed/SpeakButton";
-
 import { ScrollText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -53,6 +51,7 @@ import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 
 import { MobileBarTitle, MobileShell, ReachLine, useMobileShellChrome, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { RoleFrameMark } from "../RoleFrameMark";
+import { MobileBackgroundSheet, MobilePinnedSheet } from "./MobileChromeSheets";
 import { MobileConversationMenu } from "./MobileConversationMenu";
 import { MobileOrchestratorSheet } from "./MobileOrchestratorSheet";
 import { MobileSwitchSheet, switchList, swipeTarget, type SwitchCandidate, type SwitchEntry } from "./MobileSwitchSheet";
@@ -83,6 +82,7 @@ export const SWIPE_ZONE = "[data-mobile2-bar], [data-mobile2-dock]";
 /** How long the title cell's end-of-list bump runs (§5). */
 export const BUMP_MS = 200;
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
+const EMPTY_TASKS: readonly FileEntry[] = [];
 
 /** True when a touch that landed on `target` belongs to the swipe zone. */
 export function inSwipeZone(target: EventTarget | null): boolean {
@@ -355,6 +355,20 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   /* A task the conversation belongs to opens on the task screen, pushed
      above this one (#2072 slice 5). */
   const openPipelineTask = useCallback((task: BoardTask) => onOpenTask?.(task), [onOpenTask]);
+  /* What the two strips under the old pane header carried, now rows of the
+     `⋯` menu: the pinned message is a related board task (it needs a card to
+     open), the background tasks are the shell processes this conversation owns. */
+  const pinnedRelations = useMemo(
+    () => (onOpenTask && activeFile ? relatedTasksByPath.get(activeFile.path) ?? [] : []),
+    [onOpenTask, activeFile, relatedTasksByPath],
+  );
+  const backgroundTasks = activeNode?.tasks ?? EMPTY_TASKS;
+  /* A sheet whose contents are gone — the last task finished, the pinned task
+     was closed, the swipe moved to a conversation with neither — leaves with them. */
+  const orphanSheet = (navState.sheet === "pinned" && pinnedRelations.length === 0) || (navState.sheet === "background" && backgroundTasks.length === 0);
+  useEffect(() => {
+    if (orphanSheet) nav.closeSheet();
+  }, [orphanSheet, nav]);
 
   /* Pin a pane the layout already holds, as the phone's OPEN gesture (#1244).
      A switcher row and a map/attention pick are the same deliberate act as
@@ -446,7 +460,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
      (#1681). It REPLACES the seat sheet rather than stacking over it, and its
      close puts the seat sheet back. */
   const [tickSheetOpen, setTickSheetOpen] = useState(false);
-  const [speechMenuRequest, setSpeechMenuRequest] = useState<{ scope: string; nonce: number } | null>(null);
   const [reportsSheetOpen, setReportsSheetOpen] = useState(false);
   const [seatHandoff, setSeatHandoff] = useState(false);
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
@@ -582,7 +595,10 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       return (
         <MobileConversationMenu
           file={activeFile}
-          onSpeechSettings={() => setSpeechMenuRequest((value) => ({ scope: activeFile.path, nonce: (value?.nonce ?? 0) + 1 }))}
+          hasPinned={pinnedRelations.length > 0}
+          backgroundCount={backgroundTasks.length}
+          onOpenPinned={() => nav.openSheet("pinned")}
+          onOpenBackground={() => nav.openSheet("background")}
           attentionCount={host?.attentionCount ?? 0}
           onAttention={(host?.attentionCount ?? 0) > 0 || host?.noticeDot ? () => nav.openSheet("attention") : undefined}
           onReports={holdsSeat ? () => nav.push({ kind: "reports" }) : undefined}
@@ -616,6 +632,12 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         />
       );
     }
+    if (name === "pinned" && pinnedRelations.length > 0) {
+      return <MobilePinnedSheet relations={pinnedRelations} onOpenTask={openPipelineTask} onClose={close} />;
+    }
+    if (name === "background" && backgroundTasks.length > 0) {
+      return <MobileBackgroundSheet tasks={backgroundTasks} onClose={close} />;
+    }
     return boardSheet?.(name, close) ?? null;
   };
 
@@ -628,6 +650,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         tasks={activeNode.tasks}
         isRoot={activeNode.isRoot}
         showFavorite
+        chromeInMenu
         onClose={() => onClose(activeNode.file.path)}
         relatedTasks={relatedTasksByPath.get(activeNode.file.path)}
         onOpenTask={openPipelineTask}
@@ -704,8 +727,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         back={canLeave}
         host={host}
         onOpenSearch={activeEntry ? undefined : onOpenSearch}
-        barAction={activeFile ? <SpeakButton scope={activeFile.path} header menuRequest={speechMenuRequest?.scope === activeFile.path ? speechMenuRequest.nonce : 0} /> : undefined}
-        secondaryBarAction={activeEntry && holdsSeat ? (
+        barAction={activeEntry && holdsSeat ? (
           /* The seat's own conversation opens its report log (#2146). */
           <button
             type="button"
