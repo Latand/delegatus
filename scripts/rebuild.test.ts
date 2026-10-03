@@ -50,7 +50,7 @@ exec "$LLV_TEST_BUN" "$@"
 `, { mode: 0o755 });
   const responses = { admissionStatus: 202, admissionBody: { state: "accepted", deploymentId: "deploy_test" } as unknown,
     phase: "succeeded", redirect: false, statusRedirect: false, admitted: 0, polls: 0, credentialed: 0,
-    keys: new Set<string>(), phases: [] as string[] };
+    keys: new Set<string>(), phases: [] as string[], rawAdmission: null as string | null };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request): Promise<Response> {
     fs.appendFileSync(args, request.url + "\n");
     if (options.team) {
@@ -68,6 +68,7 @@ exec "$LLV_TEST_BUN" "$@"
       responses.keys.add(JSON.parse(body).idempotencyKey);
       responses.admitted++;
       if (responses.redirect) return Response.redirect(`http://127.0.0.1:${server.port}/credential-sink`, 307);
+      if (responses.rawAdmission) return new Response(responses.rawAdmission, { status: responses.admissionStatus });
       return Response.json(responses.admissionBody, { status: responses.admissionStatus });
     }
     responses.polls++;
@@ -421,6 +422,19 @@ test("a server echo cannot copy a control credential into output or later proces
   const result = await runRebuild("echo-refused", setup, MAIN_TIP, {
     admissionStatus: 400, admissionBody: { error: `${CONTROL_KEY} ${BEARER_KEY} controller.${tag}` },
   });
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("credential withheld");
+  for (const secret of [CONTROL_KEY, BEARER_KEY, tag]) {
+    expect(fs.readFileSync(setup.args, "utf8") + result.stdout + result.stderr).not.toContain(secret);
+  }
+});
+
+test("JSON-escaped credential echoes are scrubbed before the shell parses receipts", async () => {
+  const setup = fixture({ team: true });
+  const tag = internalServiceTagFor(CONTROL_KEY, "controller");
+  const encode = (text: string) => [...text].map(char => "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+  setup.responses.rawAdmission = `{"error":"${encode(CONTROL_KEY)} ${encode(BEARER_KEY)} ${encode(tag)}"}`;
+  const result = await runRebuild("escaped-echo", setup, MAIN_TIP, { admissionStatus: 400 });
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("credential withheld");
   for (const secret of [CONTROL_KEY, BEARER_KEY, tag]) {

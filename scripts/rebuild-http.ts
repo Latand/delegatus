@@ -3,7 +3,7 @@ import "@/lib/state/owner/tool";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { request } from "node:http";
-import { existingInternalServiceHeaders } from "@/lib/agent/callerClaims";
+import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { currentOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { viewerBootGateKey } from "../bin/viewerGateKey.mjs";
 
@@ -44,8 +44,20 @@ async function main(): Promise<void> {
   const control = currentOperatorSpawnCapability();
   const bearer = viewerBootGateKey(process.env);
   if (bearer) headers.authorization = `Bearer ${bearer}`;
-  const secrets = [control, bearer, ...Object.values(headers)].filter((value): value is string => !!value);
-  const scrub = (text: string) => secrets.reduce((result, secret) => result.replaceAll(secret, "[credential withheld]"), text);
+  const tag = headers[INTERNAL_SERVICE_HEADER]?.slice("controller.".length);
+  const secrets = [control, bearer, tag, ...Object.values(headers)].filter((value): value is string => !!value);
+  const hide = (text: string) => secrets.reduce((result, secret) => result.replaceAll(secret, "[credential withheld]"), text);
+  const scrubValue = (value: unknown): unknown => {
+    if (typeof value === "string") return hide(value);
+    if (Array.isArray(value)) return value.map(scrubValue);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [hide(key), scrubValue(entry)]));
+    return value;
+  };
+  const scrub = (text: string) => {
+    // Decode JSON escapes before the shell parses and prints receipt fields.
+    try { return JSON.stringify(scrubValue(JSON.parse(text))); }
+    catch { return hide(text); }
+  };
   let response: { status: number; body: string };
   try {
     const body = kind === "request" ? await Bun.stdin.text() : undefined;
