@@ -4,10 +4,11 @@
     "width": 1440,
     "retainedNode": true,
     "answerRows": 1,
+    "retainedAfterNineTools": true,
     "echoShift": 0,
     "position": {
       "x": 795,
-      "y": 666.15625,
+      "y": 657.15625,
       "width": 498,
       "height": 68.84375
     }
@@ -25,6 +26,7 @@
     "width": 390,
     "retainedNode": true,
     "answerRows": 1,
+    "retainedAfterNineTools": true,
     "echoShift": 0,
     "position": {
       "x": 13,
@@ -46,10 +48,11 @@
     "width": 1440,
     "retainedNode": true,
     "answerRows": 1,
+    "retainedAfterNineTools": true,
     "echoShift": 0,
     "position": {
       "x": 795,
-      "y": 666.15625,
+      "y": 657.15625,
       "width": 498,
       "height": 68.84375
     }
@@ -67,6 +70,7 @@
     "width": 390,
     "retainedNode": true,
     "answerRows": 1,
+    "retainedAfterNineTools": true,
     "echoShift": 0,
     "position": {
       "x": 13,

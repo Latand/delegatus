@@ -1,98 +1,103 @@
 # Conversation feed continuity
 
 Initial reproduction base: `1d0eda9302bfa5c1df7e392f6002091ab0c7c7e9`.
-Continuation base: `28a9cd01ee0d3f747a7e59c42fbc47912b9235e0` (fetched main).
+Refreshed reproduction and review base: `bda1137afa4c4e0c889f042fe47ec8670fb1abf0`.
 All probes use invented transcripts and explicit isolated `LLV_STATE_DIR`.
 
 | Symptom | Base observation | Repair |
 | --- | --- | --- |
-| #682: completed answer vanishes before its own echo | Completed live item at T, later tool at T+5, no matching source id: zero live rows for running, idle and reconnecting turns. The DOM row disappears on completion. | Keep pane-owned answers through missing runtime snapshots; splice them into the common keyed row list at their original instant. Their own canonical echoes take the same node and position. Identity claims and idless stream retirement prevent resurrection after eviction. |
-| #675: processing failure reads as malformed JSON | Valid tool-use record fails under a window-only DOM. A forced tool-card exception produces `malformed_record` with no diagnostic. | Separate JSON parsing from record processing; retain a bounded, redacted diagnostic with record type and source line. Show an en/uk alert in the conversation. Guard optional DOM locale globals. |
-| #641: compacted/reseeded launch consumes its delayed echo twice | Tombstone claims the launch echo while its recreated queue entry remains visible. Main already preserves delivered state and its TTL; the indefinitely-delivering part is already repaired. | One submission id owns one occurrence across tombstone and queue. Canonical text upgrades and distinct same-text successors retain their own semantics. |
+| #682: completed answer disappears before its own echo | Its mounted DOM row disappears on completion; a later tool or reconnect does not prove the reply was recorded. | Keep pane-owned replies at their original instant. Their canonical projections adopt the original keyed node. |
+| #675: processing failure appears as malformed JSON | A valid tool-use record fails with only a window global; forced processing exceptions become malformed records without diagnostics. | Separate JSON parsing from processing failures, redact and bound diagnostics, and show an attributed en/uk alert. Optional locale DOM globals are guarded. |
+| #641: compacted/reseeded launch consumes its delayed echo twice | The tombstone claims an echo while the same submission's recreated queue entry remains visible. | Join representations by submission id and propagate one occurrence claim to both. Distinct same-text successors keep their own ownership. |
 
-The continuation regressions on the fetched base return 120 pass / 4 fail
-across outbox, handoff and processing-error files, plus the dedicated DOM
-continuity regression fails because its live node disappears. The #641 failure
-is the missing retirement assertion. Processing tests fail on the DOM-only case
-and swallowed error. Handoff fails on absent reply. No symptom was dropped
-except the already-repaired delivered-TTL part of #641.
+The refreshed base returns **113 pass / 3 fail** across the outbox and
+processing-error files. The dedicated completion/reconnect DOM regression
+returns **0 pass / 1 fail**, because the live reply's node disappears.
+The delivered-state TTL part of #641 already works on main and is dropped with
+that evidence; the reproduced delayed-echo ownership defect remains in scope.
 
-Head verification uses exact paths. The six unit suites cover outbox,
-assistant-row projection, live handoff, processing errors, parser and transcript
-ordering. The DOM live-tool suite covers tool/prose interleaving, same-node
-completion/reconnect/echo, composer follow-up ordering and omission labels.
-Additional regressions prove single-occurrence matching of idless replies,
-retirement after eviction, source order for multi-row canonical echoes, the
-shared eight-row live bound, incremental markdown, and seat speaker continuity
-after a deputy on both desktop and phone.
+Additional failing-first regressions cover Codex event-first and response-first
+mirrors, timestamp/source-line upgrades, deputy boundaries, source ordering,
+parser resets, consumed stream replay across turns, and distinct legacy turns
+with identical replies. Real producer/parser regressions also cover a missed
+completion whose answer splits into prose/review/citation projections, and
+64 KiB clipping that keeps the live buffer's suffix, preserving already observed
+completed prefixes, and separate ownership for timestamp-free legacy turns.
+Growing clipped deltas retain observed Unicode prefixes and one occurrence,
+including restored legacy streams; full event-first echoes hydrate the retained
+node. Claude assistant source ids follow the runtime producer precedence. The
+five added legacy/clipping checks returned 0 pass / 5 fail before repair.
+Same-instant legacy records retain separate echo claims. Reconnect gaps retain
+read text and explicitly show unseen characters; a mounted completion proves
+the observed opening stays on its node. Completed occurrence retirement
+survives 550 subsequent deltas, and undated legacy echoes adopt canonical
+chronology and source order. These probes also failed before their fixes.
+Transport summary compensation preserves per-message tool omission counts. Each was observed failing
+before its repair; split-projection and mounted split-echo probes each returned
+0 pass / 2 fail before the fix. No production history-loading behavior changes.
+
+A further mounted probe showed that eight later tool calls could evict a read
+reply before its own echo: the two regressions returned 23 pass / 2 fail, then
+25 pass after prose was retained in the shared scroller independently of the
+eight-row transient tool bound. Idle snapshots now settle the caret without
+claiming observed text. Full canonical blob correlation is private, preserving
+the public redacted 200,000-character cap. The idle and capped/redacted blob
+checks returned 31 pass / 3 fail before repair, then 34 pass; the mounted idle
+case likewise failed before repair and now retains its node through echo.
+
+The final product-source verification and exact scratch-merge revisions are in
+`compatibility.json`. The focused branch run passes **587 tests across 18 exact
+paths**; the combined feed/history run passes **595 tests across 20 exact
+paths**. Four pre-existing prepend-anchor cases remain skipped in each run.
+Every path runs in a separate isolated process, avoiding DOM mock leakage.
 
 Rendered evidence uses the existing `kanbanBoard.browser.test.tsx` driver and
-`issue1695Evidence.fixture.tsx`, cases `conversation feed delayed launch echo`
-and `conversation feed continuity and errors`. The JSON records cover English
-and Ukrainian at 1440 and 390 px. Frames are written beneath
-`.artifacts/conversation-feed/` for visual inspection. Failure evidence exercises
-the real parser, turn-error card and failed-delivery row; a fixture-only throwing
-tool argument drives the processing exception without changing production code.
+`issue1695Evidence.fixture.tsx`, cases `conversation feed continuity and errors`
+and `conversation feed delayed launch echo`. Both branch and composed scratch
+runs pass **2 tests / 72 assertions**, in English and Ukrainian at 1440 and
+390 px. The reply retains its node with zero echo displacement, and processing,
+turn and delivery failures are readable without horizontal overflow. Actual
+answer, error and delayed-echo frames are visually inspected; the committed
+JSON records retain their measurements. No new capture driver is introduced.
 
-No history-loading behavior changes. Compatibility with the current #2448 head
-is rehearsed separately in a scratch merge; its results are recorded in
-`compatibility.json` and the pull request description.
+The current history head is `5c8c46522b87b80140af9cecd6815e4bb346322f`;
+the composition keeps both PRs' source and test blocks. Their overlapping
+hunks and mechanical resolutions are recorded in `compatibility.json` and the
+PR description.
 
-Focused verification (also repeated after the main merge): 529 passing tests across 17 exact paths. The mounted
-LogFeed suite contributes 15 tests, including completion, reconnect, delayed
-echo, source ordering, markdown and deputy boundaries. A fresh independent
-review of the full diff reported no findings and passed 197 checks.
+Fresh independent review of the full product diff reports no findings and
+494 passing checks across ten exact paths. Current source and composed scratch
+TypeScript checks pass. The production
+Viewer build and real Viewer runtime probe pass under Bun 1.4.0: **23/23 server
+modules load and GET / returns 200**. The earlier main build failure is repaired
+by upstream #2488, already included in this branch. The local publication
+privacy gate uses `--require-known-values --check-commits` before push.
+Hosted CI is not awaited.
 
-Before the latest main merge, local checks passed the production Viewer build, its 23 server
-modules and real HTTP root, MCP size budgets, runtime-host succession and
-negative controls. Native Codex checks pass 1,075 tests for each of 0.154.0 and
-0.159.0 after separating the pre-existing failing delivery fixture suite below.
-The publication privacy gate is run with `--require-known-values` and
-`--check-commits` before push. Hosted CI is not awaited.
+## Existing check failures
 
-## Existing check failures, reproduced independently of this change
+- Changed-file ESLint reports the same seven ref-access errors and eleven
+  warnings on base and head; normalized diagnostics match. New helper and
+  regression files pass their focused lint check.
+- Historical history head `189a7c09` exceeded its 120 ms desktop frame budget
+  in scratch and on the history PR alone. Those failed readings remain pinned
+  as historical evidence. Current history head `5c8c4652` explicitly defers
+  absolute frame-time targets and records both CPU runs; its unmodified driver
+  passes node reuse, reaching the start, find-in-page and selection gates.
+  The composed phone driver passes real touch and node-preservation assertions.
+  Recorded frame times are measurements, without a claim of smooth scrolling.
+- `LogFeed.deliveryUncertainty.dom.test.tsx` has a missing `sessionKey` in its
+  runtime fixture and fails on base and head. Its bounded run does not finish;
+  it is excluded from the focused pass count.
+- `structuredDelivery.integration.test.ts` returns 40 pass / 2 fail on base
+  and head because its retry-cancellation and failed-kill cases have invalid
+  owned-process fixtures. The native Codex matrices were checked separately:
+  1,075 passing tests for each of 0.154.0 and 0.159.0.
+- The unchanged `liveTurnStallPath.dom.test.tsx` fails before handoff processing
+  because its projected runtime list is empty on both base and head. The
+  `issue626Lifecycle.test.ts` idle-journal refresh assertion likewise fails on
+  both base and head (5 pass / 1 fail), outside this change's producer code.
 
-- ESLint reports the same seven ref-access errors and eleven warnings on base
-  and head. Diagnostics match after removing file locations and shifted line
-  numbers. The new helper and regression files introduce no lint errors.
-- `LogFeed.deliveryUncertainty.dom.test.tsx` uses a runtime session without
-  `sessionKey`; polling reaches `retainedSettledTurnId` and fails on both base
-  and head. The complete old suite does not finish within the isolated runner's
-  bound. It is excluded from the 529-pass count.
-- `structuredDelivery.integration.test.ts` returns 40 pass / 2 fail on both
-  base and head: the automatic delivery retry cancellation and failed kill
-  projection cases have invalid owned-process fixtures. This entire file was
-  checked separately from the two native-version matrices, without changing
-  product code or weakening its ownership guard.
-- The independent review also confirmed the unchanged
-  `liveTurnStallPath.dom.test.tsx` fails before handoff processing because its
-  projected runtime list is empty on both base and head.
-
-The documented hook escape is used for these reproduced baseline failures;
-privacy, type checking, rendered checks and the remaining local gates are run
-explicitly, with the later main-merge results separated below. These are not reported as a fully green aggregate pre-push hook.
-
-## Main-merge recheck and outstanding scope decision
-
-After merging main `27e3583a9`, the 529 focused tests and both feed browser
-cases still pass. The scratch merge with #2448 still passes 440 unit and 76 DOM
-tests. The only main-merge conflict was the fixture's `STRUCTURED` initializer;
-both `STREAMING` and `FEED_CONTINUITY` flags are retained.
-
-The production build and TypeScript check now stop at
-`src/lib/pipelines/engine.ts:3158`: upstream omitted the required fifth `persist`
-argument to `commitPassedStage`. Fetched main `afe93fa58` still has that omission.
-A scratch-only one-line repair passes TypeScript and 38 fixer-path tests. It has
-not been applied to this branch because pipeline-engine source is outside the
-authorized conversation-feed scope. Full current-head acceptance is incomplete.
-
-A repeated unmodified desktop history driver records a 200 ms frame against its
-120 ms limit. The earlier passing run remains recorded against its original
-source and scratch heads; the new run is not counted as passing.
-
-The same unmodified desktop history test on #2448 alone also fails its frame
-limit (167 ms; 86 ms longest task), retaining all 300 marked nodes and all 2,800
-rows. The merged phone history and both feed browser cases pass. These browser
-reruns used the scratch-only engine repair; their fixture bundle does not import
-the pipeline engine. The missing-argument repair already has a separate PR,
-#2488, so the feed branch records the dependency without duplicating that change.
+The documented hook escape is used for confirmed baseline failures. Privacy,
+types, focused tests, rendered acceptance and Viewer checks are run explicitly;
+this evidence does not claim a fully green aggregate pre-push hook.
