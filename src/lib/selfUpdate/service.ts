@@ -1384,7 +1384,7 @@ export class SelfUpdateService {
         try {
           mkdirSync(join(scratch, "tmp"));
           const environment: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])),
-            PATH: process.env.PATH, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"),
+            PATH: process.env.PATH, NODE_ENV: "test", HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"),
             TMPDIR: join(scratch, "tmp"), LLV_STATE_DIR: join(scratch, "state"), LLV_LAUNCHER_REEXEC: "1",
             LLV_LAUNCHER_INSTALL_ROOT: record.checkout ?? packageRoot(record) };
           loads = (await realExec(this.deps.bun, ["--bun", join(release.dir, "bin", "cli.mjs"), "--version"], release.dir, environment,
