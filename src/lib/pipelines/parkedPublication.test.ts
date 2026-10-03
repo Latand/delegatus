@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
@@ -52,6 +53,7 @@ function fixture() {
   git("add", "."); git("commit", "-q", "-m", "main hook repair"); git("checkout", "-q", lane.branch);
   git("merge", "-q", "--no-ff", "main", "-m", "merge main"); const head = git("rev-parse", "HEAD");
   git("remote", "add", "origin", remote);
+  git("push", "-q", "origin", "main"); git("fetch", "-q", "origin", "main");
   const checkout = `${repo}-pipeline-${lane.id}`;
   git("checkout", "-q", "main"); git("worktree", "add", "-q", checkout, lane.branch); workingRepo = checkout;
   lane.repoDir = repo; lane.worktreeDir = checkout; lane.baseRef = base; lane.baseBranch = "main";
@@ -90,6 +92,85 @@ for (const alreadyRemote of [false, true]) test(`parked publication accepts a cl
   } finally { h.cleanup(); }
 });
 
+function terminalReview(h: ReturnType<typeof fixture>) {
+  const builder = h.lane.stages[0]!;
+  builder.next = "review";
+  h.lane.stages.push(pipelineCorpus(2, 1)[1]!.stages[1]!);
+  const attempt = structuredClone(h.lane.runs[0]!.attempts[0]!);
+  attempt.effectiveRole = h.lane.stages[1]!.effectiveRole!;
+  attempt.flowId = "approved-flow";
+  attempt.reviewHeadSha = h.passed; attempt.expectedReviewHeadSha = h.passed;
+  h.lane.runs.push({ ...h.lane.runs[0]!, stageId: "review", attempts: [attempt] });
+  h.lane.cursor = { stageId: "review", state: "committing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } };
+  savePipelines([h.lane]);
+}
+
+for (const kind of ["linear work", "extra merge content", "foreign side branch"] as const) test(`terminal review refuses moved-head publication with unreviewed ${kind}`, async () => {
+  const h = fixture();
+  try {
+    terminalReview(h);
+    if (kind === "foreign side branch") {
+      h.git("checkout", "-q", "-b", "unreviewed-side");
+      fs.writeFileSync(path.join(h.repo, "application.txt"), "unreviewed work\n");
+      h.git("add", "."); h.git("commit", "-q", "-m", "additional application work");
+      h.git("checkout", "-q", h.lane.branch); h.git("merge", "-q", "--no-ff", "unreviewed-side", "-m", "merge unreviewed work");
+    } else {
+      fs.writeFileSync(path.join(h.repo, "application.txt"), "unreviewed work\n"); h.git("add", ".");
+      h.git("commit", "-q", ...(kind === "extra merge content" ? ["--amend", "--no-edit"] : ["-m", "additional application work"]));
+    }
+    const accepted = h.git("rev-parse", "HEAD");
+    const result = await patchPipeline(h.lane.id, { action: "publish", acceptedSha: accepted }, h.ports);
+    expect(result.status).toBe(409); expect(result.error).toContain("fresh review");
+    await h.tick();
+    expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.passed, publishedCommit: null });
+    expect(h.current().runs[1]!.attempts).toHaveLength(1);
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ reviewHeadSha: h.passed, expectedReviewHeadSha: h.passed, verdict: { status: "pass" } });
+    expect(h.current().delivery!.operation).toBeUndefined(); expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
+for (const alreadyRemote of [false, true]) test(`terminal review accepts only clean main integration and retains reviewed provenance (already remote: ${alreadyRemote})`, async () => {
+  const h = fixture();
+  try {
+    terminalReview(h);
+    if (alreadyRemote) h.git("push", "-q", "origin", `${h.head}:refs/heads/${h.lane.branch}`);
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.head, publishedCommit: h.head });
+    expect(h.current().runs[1]!.attempts).toHaveLength(1);
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ reviewHeadSha: h.passed, expectedReviewHeadSha: h.passed,
+      publicationIntegration: { passedSha: h.passed, acceptedSha: h.head, mainSha: h.git("rev-parse", "origin/main") }, verdict: { status: "pass" } });
+    expect(h.pushes()).toBe(alreadyRemote ? 0 : 1);
+  } finally { h.cleanup(); }
+});
+
+test("moved-head admission refuses a review envelope synchronized during its off-lease proof", async () => {
+  const h = fixture();
+  const { reconcileEmbeddedReviewFlows } = await import("./engine");
+  try {
+    terminalReview(h);
+    let synchronized = false;
+    const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
+      const result = await h.ports.exec(...args);
+      if (!synchronized && args[0] === "git" && args[1][0] === "rev-list") {
+        synchronized = true;
+        const lane = h.current();
+        const flow = { id: "approved-flow", state: "approved", stateDetail: null, createdAt: new Date().toISOString(), closedAt: null,
+          targetSha: h.passed, rounds: [{ n: 1, reviewHeadSha: h.head, verdict: "APPROVE" }] } as unknown as Parameters<typeof reconcileEmbeddedReviewFlows>[1][number];
+        expect(reconcileEmbeddedReviewFlows([lane], [flow])).toBe(true);
+        savePipelines([lane]);
+      }
+      return result;
+    } };
+    const result = await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports);
+    expect(synchronized).toBe(true); expect(result.status).toBe(409); expect(result.error).toContain("changed");
+    expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.passed, publishedCommit: null });
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ state: "passed", reviewHeadSha: h.head, expectedReviewHeadSha: h.head, verdict: { status: "pass" } });
+    expect(h.current().runs[1]!.attempts[0]!.publicationIntegration).toBeUndefined();
+    expect(h.current().delivery!.operation).toBeUndefined(); expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
 test("parked publication refuses a non-descendant head at admission", async () => {
   const h = fixture();
   try {
@@ -119,6 +200,7 @@ test("failed publication retains the hook tail, exit status and duration in lane
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   h.lane.stages[0]!.role = { roleId: "verifier" };
   h.lane.stages[0]!.effectiveRole = { ...h.lane.stages[0]!.effectiveRole!, roleId: "verifier", access: "read-only" };
+  h.lane.runs[0]!.attempts[0]!.effectiveRole = h.lane.stages[0]!.effectiveRole!;
   fs.mkdirSync(path.join(h.repo, "dependency"));
   fs.writeFileSync(path.join(h.repo, "dependency/package.json"), JSON.stringify({ name: "publication-fixture-dependency", version: "1.0.0" }));
   fs.writeFileSync(path.join(h.repo, "package.json"), JSON.stringify({ name: "publication-fixture", dependencies: { "publication-fixture-dependency": "file:./dependency" } }));
@@ -127,7 +209,10 @@ function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   expect(lock.status).toBe(0);
   fs.rmSync(path.join(h.repo, "node_modules"), { recursive: true, force: true });
   h.git("add", "."); h.git("commit", "-q", "-m", "read-only publication fixture");
-  return h.git("rev-parse", "HEAD");
+  // This fixture's dependency inputs are part of its passed stage.
+  h.lane.lastPassedCommit = h.git("rev-parse", "HEAD");
+  h.lane.state = "running"; h.lane.stateDetail = null;
+  return h.lane.lastPassedCommit;
 }
 
 for (const [privacyFails, partial] of [[false, false], [true, false], [false, true]]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails}, partial installation: ${partial})`, async () => {
@@ -216,6 +301,37 @@ for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${
   } finally { h.cleanup(); }
 });
 
+for (const action of ["publish", "retry-stage"] as const) for (const legacy of [false, true]) test(`terminal review ${action} retries a hook failure while preserving the approved flow and pass (legacy attempt: ${legacy})`, async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    terminalReview(h);
+    const ports = { ...h.ports, remoteActionSupported: () => false };
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho pre-push: types >&2\nexit 7\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.current().state).toBe("needs_decision"); expect(h.current().stateDetail).toContain("exit 1");
+    expect(h.current().delivery!.operation).toMatchObject({ state: "settled", passedStage: true, result: { ok: false } });
+    // A child outcome survived but settlement did not. Real reconciliation
+    // writes it directly, without the controller's old display prefix.
+    const reconciled = h.current();
+    const operation = reconciled.delivery!.operation!;
+    operation.state = "running"; delete operation.result;
+    if (legacy) reconciled.runs[1]!.attempts[0]!.state = "needs_decision";
+    savePipelines([reconciled]);
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().stateDetail).toStartWith("publishing the pipeline branch: exit 1");
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action }, ports)).error).toBeUndefined();
+    expect(h.current().remoteAction).toBeUndefined();
+    await h.tick();
+    expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.head, publishedCommit: h.head, delivery: { epoch: 1, ownerId: h.lane.id } });
+    expect(h.current().runs[1]!.attempts).toHaveLength(1);
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ flowId: "approved-flow", reviewHeadSha: h.passed, expectedReviewHeadSha: h.passed, verdict: { status: "pass" } });
+    expect(h.pushes()).toBe(2);
+  } finally { h.cleanup(); }
+});
+
 test("skip-stage refuses admission when the serving controller has no remoteAction handler", async () => {
   const h = fixture();
   try {
@@ -282,6 +398,97 @@ test("publisher evidence stays redacted and bounded through lock reacquisition a
     expect(h.current().stateDetail).toContain("pre-push: touched-tests failed");
     expect(h.current().stateDetail).not.toContain("interrupted publication");
   } finally { if (holder?.exitCode === null && holder.signalCode === null) holder.kill("SIGTERM"); await closed; h.cleanup(); }
+});
+
+for (const held of [false, true]) for (const split of ["none", "forward", "reverse"]) test(`incomplete private-key hook output is redacted before retention and reconciliation (held lock: ${held}, split streams: ${split})`, async () => {
+  const h = fixture();
+  const { publishPipelineBranch, reconcilePipelinePublication } = await import("./git");
+  let holder: ChildProcess | undefined;
+  let closed: Promise<void> | undefined;
+  try {
+    h.lane.lastPassedCommit = h.head; h.lane.state = "running"; h.lane.stateDetail = null; savePipelines([h.lane]);
+    const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const truncated = pem.slice(0, pem.indexOf("-----END"));
+    const keyBytes = truncated.split("\n").slice(1).join("").trim();
+    const [header, ...body] = truncated.split("\n");
+    const output = split === "reverse" ? `echo pre-push: types >&2\necho pre-push: eslint >&2\necho '${header}' >&2\ncat <<'KEY'\n${body.join("\n")}KEY\n`
+      : split === "forward" ? `echo pre-push: types\necho pre-push: eslint\necho '${header}'\ncat <<'KEY' >&2\n${body.join("\n")}KEY\n`
+        : `echo pre-push: types >&2\necho pre-push: eslint >&2\ncat <<'KEY' >&2\n${truncated}KEY\n`;
+    fs.writeFileSync(h.hook, `#!/bin/sh\n${output}exit 7\n`, { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    const exec = async (...args: Parameters<typeof realExec>) => {
+      if (held && args[0] === "git" && args[1][0] === "push") {
+        holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "ignore", "ignore", args[4]!.inheritFd!] });
+        closed = new Promise<void>((resolve) => holder!.once("close", () => resolve()));
+        await new Promise<void>((resolve, reject) => { holder!.once("spawn", resolve); holder!.once("error", reject); });
+      }
+      return realExec(...args);
+    };
+    await publishPipelineBranch(h.current(), exec, { acceptedSha: h.head });
+    const before = h.current().delivery!.operation!;
+    // Never print generated private material even when this regression is red.
+    expect(JSON.stringify(before.executor!.result).includes(keyBytes)).toBe(false);
+    if (held) {
+      expect(before.state).toBe("running");
+      const diagnostic = await reconcilePipelinePublication(h.lane.id, 1, realExec, null);
+      expect(diagnostic?.includes(keyBytes) ?? false).toBe(false); expect(diagnostic).toContain("still in flight");
+      holder!.kill("SIGTERM"); await closed;
+    }
+    const diagnostic = await reconcilePipelinePublication(h.lane.id, 1, realExec, null);
+    expect(diagnostic?.includes(keyBytes) ?? false).toBe(false);
+    const lane = h.current();
+    expect(JSON.stringify(lane).includes(keyBytes)).toBe(false);
+    expect(lane.delivery!.operation!.state).toBe("settled");
+    expect(lane.delivery!.operation!.result).toMatchObject({ failure: { code: 1, signal: null, durationMs: expect.any(Number) } });
+    expect(lane.stateDetail).toContain("exit 1"); expect(lane.stateDetail).toContain("pre-push: types");
+    expect(lane.stateDetail).toContain("pre-push: eslint"); expect(lane.stateDetail).not.toContain("interrupted publication");
+  } finally { if (holder?.exitCode === null && holder.signalCode === null) holder.kill("SIGTERM"); await closed; h.cleanup(); }
+});
+
+test("failed remote reconciliation redacts credentials and home paths in its returned diagnostic", async () => {
+  const h = fixture();
+  const { publishPipelineBranch, reconcilePipelinePublication } = await import("./git");
+  try {
+    h.lane.lastPassedCommit = h.head; h.lane.state = "running"; h.lane.stateDetail = null; savePipelines([h.lane]);
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    await publishPipelineBranch(h.current(), async (...args: Parameters<typeof realExec>) => args[0] === "git" && args[1][0] === "push"
+      ? { code: null, signal: "SIGTERM", stdout: "", stderr: "pre-push: types" } : realExec(...args), { acceptedSha: h.head });
+    const credential = "ghp_" + "x".repeat(30);
+    const diagnostic = await reconcilePipelinePublication(h.lane.id, 1, async (...args: Parameters<typeof realExec>) => args[1].includes("ls-remote")
+      ? { code: 1, stdout: "", stderr: `remote read failed ${credential} ${os.homedir()}/private/config` } : realExec(...args), null);
+    expect(diagnostic !== null).toBe(true);
+    expect(diagnostic!.includes(credential)).toBe(false); expect(diagnostic!.includes(os.homedir())).toBe(false);
+    expect(diagnostic).toContain("remote read failed"); expect(diagnostic!.length).toBeLessThanOrEqual(4500);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+  } finally { h.cleanup(); }
+});
+
+test("publisher settlement exceptions retain a redacted bounded reconciliation diagnostic", async () => {
+  const h = fixture();
+  const { publishPipelineBranch } = await import("./git");
+  const close = fs.closeSync;
+  try {
+    h.lane.lastPassedCommit = h.head; h.lane.state = "running"; h.lane.stateDetail = null; savePipelines([h.lane]);
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    const credential = "ghp_" + "x".repeat(30);
+    const result = await publishPipelineBranch(h.current(), async (...args: Parameters<typeof realExec>) => {
+      const executed = await realExec(...args);
+      if (args[0] === "git" && args[1][0] === "push") {
+        const descriptor = args[4]!.inheritFd!;
+        fs.closeSync = (fd) => {
+          if (fd !== descriptor) return close(fd);
+          fs.closeSync = close;
+          throw new Error(`settlement fixture ${credential} ${os.homedir()}/private/config ${"noise".repeat(1200)}`);
+        };
+      }
+      return executed;
+    }, { acceptedSha: h.head });
+    expect(result.ok && result.remote === "unreachable").toBe(true);
+    if (!result.ok || result.remote !== "unreachable") throw new Error("expected uncertain settlement");
+    expect(result.detail.includes(credential)).toBe(false); expect(result.detail.includes(os.homedir())).toBe(false);
+    expect(result.detail).toContain("settlement fixture"); expect(result.detail.length).toBeLessThanOrEqual(4500);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+  } finally { fs.closeSync = close; h.cleanup(); }
 });
 
 test("MCP capability admission reads the living serving controller's advertised actions", async () => {

@@ -407,6 +407,9 @@ export type PipelineStageAttempt = {
   expectedReviewHeadSha?: string | null;
   /** Exact clean SHA captured by the first launched reviewer round. */
   reviewHeadSha?: string | null;
+  /** Publication accepted only clean main integrations after this passed SHA.
+      The review's exact-head fields continue to name what was reviewed. */
+  publicationIntegration?: { passedSha: string; acceptedSha: string; mainSha: string };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */

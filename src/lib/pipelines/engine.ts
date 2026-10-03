@@ -71,7 +71,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -2907,6 +2907,12 @@ function resumablePassedPublication(pipeline: Pipeline): boolean {
     || passedStagePublicationPark(pipeline, currentAttempt(pipeline, pipeline.cursor!.stageId))
     || (operation?.sha === pipeline.lastPassedCommit && operation.epoch === pipeline.delivery?.epoch
       && (operation.passedStage === true || (operation.state === "settled" && operation.result?.ok === false))));
+}
+
+function passedPublicationEvidence(pipeline: Pipeline): string {
+  const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+  return JSON.stringify([attempt?.verdict, attempt?.reviewHeadSha, attempt?.expectedReviewHeadSha,
+    attempt?.publicationIntegration, attempt?.reviewFlowSync?.generation]);
 }
 
 function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
@@ -8850,6 +8856,8 @@ export async function patchPipeline(
     const accepted = req.acceptedSha ?? pipeline.lastPassedCommit;
     const moved = accepted !== pipeline.lastPassedCommit;
     const publicationFence = remoteActionFence(pipeline);
+    const publicationEvidence = passedPublicationEvidence(pipeline);
+    let integration: PipelineStageAttempt["publicationIntegration"];
     if (moved) {
       if (!awaitingPassedPublication(pipeline) || pipeline.state !== "needs_decision") {
         return { error: "accepting a moved head requires a parked passed stage in committing", status: 409 };
@@ -8862,12 +8870,24 @@ export async function patchPipeline(
       if (ancestor.code !== 0) return { error: ancestor.code === 1
         ? "the previously passed commit is not an ancestor of acceptedSha"
         : "could not verify the previously passed commit is an ancestor of acceptedSha", status: 409 };
+      const attempt = currentAttempt(pipeline, pipeline.cursor!.stageId)!;
+      const boundary = attempt.publicationIntegration?.acceptedSha === pipeline.lastPassedCommit
+        ? attempt.publicationIntegration.passedSha : pipeline.lastPassedCommit;
+      if (currentStage(pipeline)?.kind === "review-loop"
+        && (!attempt.reviewHeadSha || attempt.expectedReviewHeadSha !== attempt.reviewHeadSha || attempt.reviewHeadSha !== boundary)) {
+        return { error: "the approved review envelope does not match the passed head; a fresh review is required", status: 409 };
+      }
+      const verified = await verifyPassedHeadIntegration(pipeline, boundary, accepted, ports.exec);
+      if (!verified.ok) return { error: verified.error, status: 409 };
+      integration = { passedSha: verified.passedSha, acceptedSha: verified.acceptedSha, mainSha: verified.mainSha };
     }
     return withPipelineMutation((pipelines, persist) => {
       const current = pipelines.find((item) => item.id === id);
       if (!current || current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
       if (current.state === "closed" || current.closedAt || current.hiddenAt) return { error: "a closed lane cannot publish", status: 409 };
-      if (moved && remoteActionFence(current) !== publicationFence) return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
+      if (moved && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
+        return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
+      }
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
       const ownerError = current.delivery && deliveryOwnerError(current, pipelineDeliveryLookup({ ...current.delivery.target, active: true }));
       if (ownerError) return { error: ownerError, status: 409 };
@@ -8877,6 +8897,7 @@ export async function patchPipeline(
       }
       if (moved) {
         current.lastPassedCommit = accepted;
+        currentAttempt(current, current.cursor!.stageId)!.publicationIntegration = integration;
       }
       const resumesPass = moved || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha ?? current.lastPassedCommit;
@@ -9400,7 +9421,7 @@ export async function patchPipeline(
         && retryLaunchId !== null;
       // The accepted work is already committed. Retry its publication from
       // this cursor without claiming a new launch or closing its stage flow.
-      if (stage && attempt && passedStagePublicationPark(pipeline, attempt)) {
+      if (stage && attempt && (passedStagePublicationPark(pipeline, attempt) || resumablePassedPublication(pipeline))) {
         if (pipeline.delivery?.operation?.state === "settled" && !pipeline.delivery.operation.result?.ok) {
           delete pipeline.delivery.operation;
           pipeline.publishedCommit = null;

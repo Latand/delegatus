@@ -798,6 +798,37 @@ async function compareStageTrees(pipeline: Pipeline, head: string, accepted: str
   }
 }
 
+/** Transfer a pass only across clean main integrations. Ancestry alone also
+    admits new lane work. Reconstruct every non-main merge with controlled
+    attributes, so an amended merge or a custom driver cannot hide that work. */
+export async function verifyPassedHeadIntegration(pipeline: Pipeline, passed: string, accepted: string, exec: ExecPort): Promise<
+  { ok: true; passedSha: string; acceptedSha: string; mainSha: string } | { ok: false; error: string }
+> {
+  const refuse = (reason: string) => ({ ok: false as const, error: `${reason}; a fresh review is required before accepting this head` });
+  const baseBranch = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+  if (!validBaseBranch(baseBranch)) return refuse("could not verify the configured main branch");
+  const main = await exec("git", ["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`], pipeline.worktreeDir);
+  const mainSha = main.stdout.trim();
+  if (main.code !== 0 || !/^[0-9a-f]{40}$/i.test(mainSha)) return refuse(`could not verify origin/${baseBranch}`);
+  const introduced = await exec("git", ["rev-list", "--parents", accepted, `^${passed}`, `^${mainSha}`], pipeline.worktreeDir);
+  if (introduced.code !== 0) return refuse("could not enumerate changes after the passed head");
+  for (const line of introduced.stdout.trim().split("\n").filter(Boolean)) {
+    const [commit, firstParent, mainParent, ...extra] = line.split(" ");
+    if (extra.length || ![commit, firstParent, mainParent].every((sha) => typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))) {
+      return refuse("acceptedSha contains additional lane work beyond clean main merges");
+    }
+    const fromMain = await exec("git", ["merge-base", "--is-ancestor", mainParent, mainSha], pipeline.worktreeDir);
+    if (fromMain.code !== 0) return refuse("acceptedSha contains a merge from outside the configured main branch");
+    const automatic = await compareStageTrees(pipeline, firstParent, mainParent, exec);
+    if (automatic.code !== 0) return refuse("acceptedSha contains a merge that cannot be proven clean");
+    const tree = await exec("git", ["rev-parse", `${commit}^{tree}`], pipeline.worktreeDir);
+    if (tree.code !== 0 || tree.stdout.trim() !== automatic.stdout.split("\0")[0].trim()) {
+      return refuse("acceptedSha contains additional content or resolutions in a main merge");
+    }
+  }
+  return { ok: true, passedSha: passed, acceptedSha: accepted, mainSha };
+}
+
 /** `git cherry` strips whitespace before comparing patch IDs. Keep its fast
     history scan, then require the changed file paths, modes, hunk section and
     exact added / removed lines and context to agree before treating a
@@ -1093,9 +1124,33 @@ export async function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: 
 
 export type PipelinePublishResult = PipelinePublicationResult;
 
+/** A captured stream can end before PEM's footer. Consume an opened block
+    through EOF before the shared redactor and before any output bounding. */
+function redactPublicationStream(text: string): { text: string; incompleteKey: boolean } {
+  let incompleteKey = false;
+  const safe = text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, (block) => {
+    if (!/-----END [A-Z ]*PRIVATE KEY-----$/.test(block)) incompleteKey = true;
+    return "[redacted-private-key]";
+  });
+  return { text: redactMonitorText(safe), incompleteKey };
+}
+
+function redactPublicationText(text: string): string {
+  return redactPublicationStream(text).text;
+}
+
+function redactPublicationOutput(stdout: string, stderr: string): string {
+  const out = redactPublicationStream(stdout), err = redactPublicationStream(stderr);
+  // Captured streams have no shared ordering. With an unterminated key, the
+  // other stream may hold its body, even before the opener in concatenated
+  // output. Keep only the independently proven prefixes before open blocks.
+  if (out.incompleteKey || err.incompleteKey) return [out.incompleteKey ? out.text : "", err.incompleteKey ? err.text : ""].join("\n").trim();
+  return redactPublicationText(`${stdout}\n${stderr}`).trim();
+}
+
 function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
-  return `${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`;
+  return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
 const REMOTE_READ_TIMEOUT = "5s";
@@ -1338,7 +1393,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
-        const output = redactMonitorText(`${executed.stdout}\n${executed.stderr}`).trim();
+        const output = redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = output.slice(-4000);
         const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
@@ -1358,8 +1413,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
     revalidate();
     if (abort.signal.aborted) result = superseded();
-    if (!result.ok) result = { ...result, error: redactBounded(result.error, 4500) };
-    else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(result.detail, 4500) };
+    if (!result.ok) result = { ...result, error: redactBounded(redactPublicationText(result.error), 4500) };
+    else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(redactPublicationText(result.detail), 4500) };
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
       const detail = publicationFailureDetail(failureEvidence);
       result = result.ok ? { ...result, failure: failureEvidence, detail }
@@ -1417,7 +1472,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     // After reservation, even a store lease refusal cannot prove non-execution.
     if (!reserved) throw error;
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
-      detail: `publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}` };
+      detail: redactBounded(redactPublicationText(`publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}`), 4500) };
   } finally { if (watch) clearInterval(watch); if (descriptorOpen) releasePublicationFileLock(descriptor); }
 }
 
@@ -1435,21 +1490,31 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
   // even when a live Viewer could not persist its finished marker.
   const reconciled = await withPublicationFileLock(executor.lock, async () => {
     const remote = (await readRemotePipelineBranch(pipeline, exec, "reconciling the interrupted publisher"));
-    if (!remote.ok) return remote.error;
+    if (!remote.ok) return redactBounded(redactPublicationText(remote.error), 4500);
     return withDeliveryMutationAsync((tx) => {
       const current = tx.get(id);
       if (!current?.delivery || current.delivery.epoch !== expectedEpoch || current.delivery.operation?.id !== operation.id
         || current.delivery.operation.state !== "running") return "publication changed while reconciling";
+      const retained = operation.executor?.result;
+      const failure = retained?.failure ? { ...retained.failure,
+        outputTail: redactPublicationText(retained.failure.outputTail).slice(-4000) } : undefined;
       const result: PipelinePublishResult = remote.sha === operation.sha
         ? { ok: true, sha: operation.sha, remote: "published" }
         : operation.executor?.result
-          ? { ok: false, error: operation.executor.result.failure ? publicationFailureDetail(operation.executor.result.failure)
+          ? { ok: false, error: failure ? publicationFailureDetail(failure)
             : operation.executor.result.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
-              : operation.executor.result.error,
-            ...(operation.executor.result.failure ? { failure: operation.executor.result.failure } : {}) }
+              : redactBounded(redactPublicationText(operation.executor.result.error), 4500),
+            ...(failure ? { failure } : {}) }
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
       if (!result.ok && (!operation.executor?.result || (operation.executor.result.ok && operation.executor.result.uncertain))) result.outcome = "not-landed";
       current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
+      const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
+      // Older engines parked the accepted attempt itself. Preserve its pass
+      // from this publication's durable identity before replacing the display
+      // prefix that older retry admission used to recognize that pass.
+      if (current.state === "needs_decision" && current.cursor?.state === "committing"
+        && current.lastPassedCommit === operation.sha && operation.passedStage
+        && attempt?.state === "needs_decision" && attempt.verdict?.status === "pass") attempt.state = "passed";
       if (result.ok) current.publishedCommit = operation.sha;
       else if ((current.state === "needs_decision" || current.state === "running") && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
