@@ -1,0 +1,327 @@
+{
+  "readings": {
+    "desktop-1440-en": {
+      "closed": {
+        "wall": {
+          "height": 277,
+          "rows": 0,
+          "lines": 1,
+          "lineText": "+24 conversations outside this board · Open list",
+          "listed": 0,
+          "sectionOpen": false,
+          "head": "Past attempts · 9",
+          "attempts": [
+            "p-wall:fix:attempt:1",
+            "p-wall:verify:attempt:1",
+            "p-wall:fix:attempt:2",
+            "p-wall:build:attempt:1",
+            "p-wall:verify:attempt:2",
+            "p-wall:fix:attempt:3",
+            "p-wall:build:attempt:2",
+            "p-wall:verify:attempt:3",
+            "p-wall:build:attempt:3"
+          ],
+          "lineVisible": false
+        },
+        "only": {
+          "height": 139,
+          "rows": 0,
+          "lines": 1,
+          "lineText": "+12 conversations outside this board · Open list",
+          "listed": 0,
+          "sectionOpen": false,
+          "head": "Conversations outside this board · 12",
+          "attempts": [],
+          "lineVisible": false
+        }
+      },
+      "sectionOpen": {
+        "height": 720,
+        "rows": 0,
+        "lines": 1,
+        "lineText": "+24 conversations outside this board · Open list",
+        "listed": 0,
+        "sectionOpen": true,
+        "head": "Past attempts · 9",
+        "attempts": [
+          "p-wall:fix:attempt:1",
+          "p-wall:verify:attempt:1",
+          "p-wall:fix:attempt:2",
+          "p-wall:build:attempt:1",
+          "p-wall:verify:attempt:2",
+          "p-wall:fix:attempt:3",
+          "p-wall:build:attempt:2",
+          "p-wall:verify:attempt:3",
+          "p-wall:build:attempt:3"
+        ],
+        "lineVisible": true
+      },
+      "listOpen": {
+        "height": 884,
+        "rows": 0,
+        "lines": 1,
+        "lineText": "+24 conversations outside this board · Hide list",
+        "listed": 24,
+        "sectionOpen": true,
+        "head": "Past attempts · 9",
+        "attempts": [
+          "p-wall:fix:attempt:1",
+          "p-wall:verify:attempt:1",
+          "p-wall:fix:attempt:2",
+          "p-wall:build:attempt:1",
+          "p-wall:verify:attempt:2",
+          "p-wall:fix:attempt:3",
+          "p-wall:build:attempt:2",
+          "p-wall:verify:attempt:3",
+          "p-wall:build:attempt:3"
+        ],
+        "lineVisible": true
+      },
+      "hash": "#c=conversation_wall-5"
+    },
+    "phone-390-en": {
+      "t-wall": {
+        "closed": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Past attempts · 9",
+          "lines": 0,
+          "lineText": "",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "opened": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Past attempts · 9",
+          "lines": 1,
+          "lineText": "+24 conversations outside this board · Open list",
+          "attempts": [
+            "p-wall:fix:attempt:1",
+            "p-wall:verify:attempt:1",
+            "p-wall:fix:attempt:2",
+            "p-wall:build:attempt:1",
+            "p-wall:verify:attempt:2",
+            "p-wall:fix:attempt:3",
+            "p-wall:build:attempt:2",
+            "p-wall:verify:attempt:3",
+            "p-wall:build:attempt:3"
+          ],
+          "pageHeight": 844
+        },
+        "listed": {
+          "rows": 24,
+          "sectionPresent": true,
+          "head": "Past attempts · 9",
+          "lines": 1,
+          "lineText": "+24 conversations outside this board · Hide list",
+          "attempts": [
+            "p-wall:fix:attempt:1",
+            "p-wall:verify:attempt:1",
+            "p-wall:fix:attempt:2",
+            "p-wall:build:attempt:1",
+            "p-wall:verify:attempt:2",
+            "p-wall:fix:attempt:3",
+            "p-wall:build:attempt:2",
+            "p-wall:verify:attempt:3",
+            "p-wall:build:attempt:3"
+          ],
+          "pageHeight": 844
+        },
+        "hash": "#c=conversation_wall-5"
+      },
+      "t-wall-only": {
+        "closed": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Conversations outside this board · 12",
+          "lines": 0,
+          "lineText": "",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "opened": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Conversations outside this board · 12",
+          "lines": 1,
+          "lineText": "+12 conversations outside this board · Open list",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "listed": {
+          "rows": 12,
+          "sectionPresent": true,
+          "head": "Conversations outside this board · 12",
+          "lines": 1,
+          "lineText": "+12 conversations outside this board · Hide list",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "hash": null
+      }
+    },
+    "desktop-1440-uk": {
+      "closed": {
+        "wall": {
+          "height": 307,
+          "rows": 0,
+          "lines": 1,
+          "lineText": "+24 розмови поза дошкою · Відкрити список",
+          "listed": 0,
+          "sectionOpen": false,
+          "head": "Попередні спроби · 9",
+          "attempts": [
+            "p-wall:fix:attempt:1",
+            "p-wall:verify:attempt:1",
+            "p-wall:fix:attempt:2",
+            "p-wall:build:attempt:1",
+            "p-wall:verify:attempt:2",
+            "p-wall:fix:attempt:3",
+            "p-wall:build:attempt:2",
+            "p-wall:verify:attempt:3",
+            "p-wall:build:attempt:3"
+          ],
+          "lineVisible": false
+        },
+        "only": {
+          "height": 139,
+          "rows": 0,
+          "lines": 1,
+          "lineText": "+12 розмов поза дошкою · Відкрити список",
+          "listed": 0,
+          "sectionOpen": false,
+          "head": "Розмови поза цією дошкою · 12",
+          "attempts": [],
+          "lineVisible": false
+        }
+      },
+      "sectionOpen": {
+        "height": 750,
+        "rows": 0,
+        "lines": 1,
+        "lineText": "+24 розмови поза дошкою · Відкрити список",
+        "listed": 0,
+        "sectionOpen": true,
+        "head": "Попередні спроби · 9",
+        "attempts": [
+          "p-wall:fix:attempt:1",
+          "p-wall:verify:attempt:1",
+          "p-wall:fix:attempt:2",
+          "p-wall:build:attempt:1",
+          "p-wall:verify:attempt:2",
+          "p-wall:fix:attempt:3",
+          "p-wall:build:attempt:2",
+          "p-wall:verify:attempt:3",
+          "p-wall:build:attempt:3"
+        ],
+        "lineVisible": true
+      },
+      "listOpen": {
+        "height": 914,
+        "rows": 0,
+        "lines": 1,
+        "lineText": "+24 розмови поза дошкою · Сховати список",
+        "listed": 24,
+        "sectionOpen": true,
+        "head": "Попередні спроби · 9",
+        "attempts": [
+          "p-wall:fix:attempt:1",
+          "p-wall:verify:attempt:1",
+          "p-wall:fix:attempt:2",
+          "p-wall:build:attempt:1",
+          "p-wall:verify:attempt:2",
+          "p-wall:fix:attempt:3",
+          "p-wall:build:attempt:2",
+          "p-wall:verify:attempt:3",
+          "p-wall:build:attempt:3"
+        ],
+        "lineVisible": true
+      },
+      "hash": "#c=conversation_wall-5"
+    },
+    "phone-390-uk": {
+      "t-wall": {
+        "closed": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Попередні спроби · 9",
+          "lines": 0,
+          "lineText": "",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "opened": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Попередні спроби · 9",
+          "lines": 1,
+          "lineText": "+24 розмови поза дошкою · Відкрити список",
+          "attempts": [
+            "p-wall:fix:attempt:1",
+            "p-wall:verify:attempt:1",
+            "p-wall:fix:attempt:2",
+            "p-wall:build:attempt:1",
+            "p-wall:verify:attempt:2",
+            "p-wall:fix:attempt:3",
+            "p-wall:build:attempt:2",
+            "p-wall:verify:attempt:3",
+            "p-wall:build:attempt:3"
+          ],
+          "pageHeight": 844
+        },
+        "listed": {
+          "rows": 24,
+          "sectionPresent": true,
+          "head": "Попередні спроби · 9",
+          "lines": 1,
+          "lineText": "+24 розмови поза дошкою · Сховати список",
+          "attempts": [
+            "p-wall:fix:attempt:1",
+            "p-wall:verify:attempt:1",
+            "p-wall:fix:attempt:2",
+            "p-wall:build:attempt:1",
+            "p-wall:verify:attempt:2",
+            "p-wall:fix:attempt:3",
+            "p-wall:build:attempt:2",
+            "p-wall:verify:attempt:3",
+            "p-wall:build:attempt:3"
+          ],
+          "pageHeight": 844
+        },
+        "hash": "#c=conversation_wall-5"
+      },
+      "t-wall-only": {
+        "closed": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Розмови поза цією дошкою · 12",
+          "lines": 0,
+          "lineText": "",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "opened": {
+          "rows": 0,
+          "sectionPresent": true,
+          "head": "Розмови поза цією дошкою · 12",
+          "lines": 1,
+          "lineText": "+12 розмов поза дошкою · Відкрити список",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "listed": {
+          "rows": 12,
+          "sectionPresent": true,
+          "head": "Розмови поза цією дошкою · 12",
+          "lines": 1,
+          "lineText": "+12 розмов поза дошкою · Сховати список",
+          "attempts": [],
+          "pageHeight": 844
+        },
+        "hash": null
+      }
+    }
+  },
+  "failures": []
+}

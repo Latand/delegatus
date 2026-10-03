@@ -170,3 +170,12 @@ jobs:
           LLV_PRIVACY_OCR_LANGUAGES: eng+ukr
         working-directory: trusted
         run: bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
+
+      # Candidate code runs last, after all trusted inspection and cache writes.
+      # It receives no credentials and cannot alter a later trusted verdict.
+      - name: Verify candidate privacy gate behavior within budget
+        working-directory: candidate
+        timeout-minutes: 2
+        run: |
+          ln -sT ../trusted/node_modules node_modules
+          timeout --kill-after=5s 90s bun test scripts/privacy-*.test.ts
