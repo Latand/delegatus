@@ -21,7 +21,7 @@ Object.assign(process.env, {
 const sessions = path.join(process.env.LLV_CODEX_HOME!, "sessions");
 fs.mkdirSync(sessions, { recursive: true });
 const { cachedFileScan, completedFileScan, currentFileScan, resetFilesRouteCacheForTests, setFileScanRunnerForTests } = await import("./scanCache");
-const { runFileCatalogScan } = await import("./scanCoordinator");
+const { coordinatedFileScan, runFileCatalogScan } = await import("./scanCoordinator");
 const { GET: filesGet } = await import("@/app/api/files/route");
 const { GET: conversationsGet } = await import("@/app/api/conversations/route");
 const { collectSnapshot } = await import("@/lib/view/collect");
@@ -275,6 +275,131 @@ test("a transcript born during a scan is caught by the next catalog read", async
   const current = await completedFileScan();
   expect(current.snapshot.files.some(entry => entry.path === newAgent)).toBe(true);
 });
+
+test("a cold read trailing-scans membership missed by an adopted controller generation", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let listed!: () => void;
+  const ready = new Promise<void>(resolve => { listed = resolve; });
+  const controller = coordinatedFileScan({ persist: true }, async (intent, signal) => {
+    const snapshot = await runFileCatalogScan(intent, {}, signal);
+    listed();
+    await gate;
+    return snapshot;
+  });
+  await ready;
+  const newAgent = writeSession("adopted-controller-agent");
+  try {
+    const coldRead = completedFileScan();
+    await Bun.sleep(10);
+    release();
+    const completed = await coldRead;
+    await controller;
+    expect(completed.snapshot.files.some(entry => entry.path === newAgent)).toBe(true);
+    expect(scans).toBe(1);
+    clock += 10_000;
+    const nextRead = await completedFileScan();
+    expect(nextRead.snapshot.files.some(entry => entry.path === newAgent)).toBe(true);
+    expect(scans).toBe(1);
+  } finally {
+    release();
+  }
+});
+
+test("a completed read begun during an older refresh waits for one trailing membership scan", async () => {
+  writeSession("pending-refresh-seat");
+  await currentFileScan();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let listed!: () => void;
+  const ready = new Promise<void>(resolve => { listed = resolve; });
+  setFileScanRunnerForTests(async (...args) => {
+    scans += 1;
+    const snapshot = await runFileCatalogScan(...args);
+    listed();
+    await gate;
+    return snapshot;
+  });
+  const oldRefresh = currentFileScan({ fresh: true });
+  await ready;
+  const newAgent = writeSession("pending-refresh-agent");
+  try {
+    const read = completedFileScan();
+    await Bun.sleep(10);
+    release();
+    await oldRefresh;
+    const completed = await read;
+    expect(completed.snapshot.files.some(entry => entry.path === newAgent)).toBe(true);
+    expect(scans).toBe(3);
+  } finally {
+    release();
+  }
+});
+
+test("membership cooldown starts when a queued scan starts", async () => {
+  writeSession("queued-controller-seat");
+  await currentFileScan();
+  const starts: number[] = [];
+  setFileScanRunnerForTests(async (...args) => {
+    scans += 1;
+    starts.push(clock);
+    return runFileCatalogScan(...args);
+  });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let listed!: () => void;
+  const ready = new Promise<void>(resolve => { listed = resolve; });
+  const controller = coordinatedFileScan({ persist: true }, async (intent, signal) => {
+    const snapshot = await runFileCatalogScan(intent, {}, signal);
+    listed();
+    await gate;
+    return snapshot;
+  });
+  await ready;
+  writeSession("queued-membership-first");
+  try {
+    const firstRead = completedFileScan();
+    await Bun.sleep(10);
+    clock += 12_000;
+    release();
+    await Promise.all([firstRead, controller]);
+    expect(starts).toHaveLength(1);
+
+    clock += 100;
+    writeSession("queued-membership-second");
+    const originalSetTimeout = globalThis.setTimeout;
+    let scheduledDelay: number | undefined;
+    let fireTimer!: () => void;
+    let timerScheduled!: () => void;
+    const timerReady = new Promise<void>(resolve => { timerScheduled = resolve; });
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number) => {
+      scheduledDelay = delay ?? 0;
+      const handle = originalSetTimeout(() => {}, 2_147_483_647);
+      fireTimer = () => {
+        clearTimeout(handle);
+        (handler as () => void)();
+      };
+      timerScheduled();
+      return handle;
+    }) as unknown as typeof setTimeout;
+    const secondRead = completedFileScan();
+    void secondRead.catch(() => undefined);
+    try {
+      await timerReady;
+      expect(scheduledDelay).toBe(9_900);
+      expect(starts).toHaveLength(1);
+      clock += scheduledDelay!;
+      fireTimer();
+      await secondRead;
+      expect(starts).toHaveLength(2);
+      expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(10_000);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  } finally {
+    release();
+  }
+}, 20_000);
 
 test("an unreadable membership probe retains the completed catalog and retries after recovery", async () => {
   writeSession("unreadable-seat");

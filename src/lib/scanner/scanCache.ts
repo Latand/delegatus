@@ -70,7 +70,7 @@ type FileScanCacheSlot = {
   ordinaryRefreshRequestedAt?: number;
   membership?: string;
   membershipProbe?: Promise<string | null>;
-  membershipRefreshRequestedAt?: number;
+  membershipRefreshStartedAt?: number;
 };
 
 export type CachedFileScan = {
@@ -531,17 +531,29 @@ function fileScanRefreshPromise(
     // Capture before scanning: a transcript born during this pass must remain
     // detectable on the next read, even if this pass did not discover it.
     const membership = await probeFileCatalogMembership(slot);
-    const snapshot = await coordinatedFileScan({ fresh, join, signal }, (intent, generationSignal) => configuredFileScanRunner(intent, {
-      persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
-      ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
-    }, generationSignal));
+    let scanRunnerStarted = false;
+    const snapshot = await coordinatedFileScan({ fresh, join, signal }, (intent, generationSignal) => {
+      scanRunnerStarted = true;
+      if (reason === "membership") slot.membershipRefreshStartedAt = Date.now();
+      return configuredFileScanRunner(intent, {
+        persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
+        ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
+      }, generationSignal);
+    });
     if (!snapshot.complete) throw new Error("filesystem scan incomplete");
+    const membershipAfterScan = await probeFileCatalogMembership(slot);
     if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
     slot.completedAt = slot.refreshedAt;
-    if (membership !== null) slot.membership = membership;
+    /* A scan may have joined a generation whose directory listing finished
+       before the first membership probe. Only bless the membership version
+       both sides observed; otherwise the next completed reader schedules the
+       bounded trailing pass that captures the change. */
+    if (membership !== null && scanRunnerStarted && membershipAfterScan === membership) {
+      slot.membership = membership;
+    }
     if (fresh && slot.freshObservationGeneration !== undefined
       && generation >= slot.freshObservationGeneration) {
       slot.freshObservationGeneration = undefined;
@@ -813,8 +825,7 @@ async function membershipFileScanRefresh(slot: FileScanCacheSlot): Promise<FileS
   if (slot.refresh) return slot.refresh;
   const generation = nextGeneration(slot);
   const now = Date.now();
-  const delay = Math.max(0, FILE_SCAN_MEMBERSHIP_REFRESH_MS - (now - (slot.membershipRefreshRequestedAt ?? 0)));
-  slot.membershipRefreshRequestedAt = now + delay;
+  const delay = Math.max(0, FILE_SCAN_MEMBERSHIP_REFRESH_MS - (now - (slot.membershipRefreshStartedAt ?? 0)));
   const controller = new AbortController();
   const promise = new Promise<void>((resolve, reject) => {
     const onAbort = () => {
@@ -833,6 +844,20 @@ async function membershipFileScanRefresh(slot: FileScanCacheSlot): Promise<FileS
   return refresh;
 }
 
+async function waitForCatalogMembership(
+  slot: FileScanCacheSlot,
+  signal?: AbortSignal | null,
+): Promise<void> {
+  /* A read may first join work that started before a member appeared. Recheck
+     once after that generation and allow one coalesced trailing scan so this
+     read can return a catalog that covers its observed membership. */
+  for (let pass = 0; pass < 2; pass += 1) {
+    const refresh = await membershipFileScanRefresh(slot);
+    if (!refresh) return;
+    await waitForFileScanRefresh(refresh, signal);
+  }
+}
+
 /** The HTTP conversation catalog has the same discovery fence as files and
  * MCP snapshots. A test-injected catalog may deliberately have no filesystem
  * source; a null probe leaves it alone. */
@@ -842,8 +867,7 @@ export async function refreshFileCatalogMembership(): Promise<void> {
     if (await probeFileCatalogMembership(slot) !== null) await completedFileScan();
     return;
   }
-  const refresh = await membershipFileScanRefresh(slot);
-  if (refresh) await waitForFileScanRefresh(refresh);
+  await waitForCatalogMembership(slot);
 }
 
 export async function cachedFileScan(
@@ -986,11 +1010,7 @@ export async function completedFileScan(
   slot.requestCount = (slot.requestCount ?? 0) + 1;
   if (slot.snapshot) {
     if (revalidate) {
-      const membershipRefresh = await membershipFileScanRefresh(slot);
-      if (membershipRefresh) {
-        await waitForFileScanRefresh(membershipRefresh, signal);
-        return completedScan(slot, undefined, slot.snapshotGeneration);
-      }
+      await waitForCatalogMembership(slot, signal);
     }
     const now = Date.now();
     if (revalidate
@@ -1006,6 +1026,7 @@ export async function completedFileScan(
   const targetGeneration = slot.refresh?.generation ?? nextGeneration(slot);
   const refresh = slot.refresh ?? beginFileScanRefresh(slot, targetGeneration, "cold");
   await waitForFileScanRefresh(refresh, signal);
+  if (revalidate) await waitForCatalogMembership(slot, signal);
   return completedScan(slot, undefined, targetGeneration, "miss");
 }
 
