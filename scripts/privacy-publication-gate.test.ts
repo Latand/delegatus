@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -29,6 +29,8 @@ import {
   trustedVendorRootDigest,
   trustedVendorRootMatches,
 } from "./privacy-publication-gate";
+
+import { runPrivacyTestProcess } from "./privacy-test-process";
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
@@ -181,7 +183,8 @@ const unitLookingRealAddresses = [
   ["probe", "b.service.xn--j1amh.com"].join("@"),
 ];
 
-afterEach(() => {
+// Concurrent CLI tests retain their own fixtures until every child has exited.
+afterAll(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
@@ -389,8 +392,8 @@ function installTool(directory: string, name: string, body = "exit 0"): Record<s
   return { PATH: `${directory}:${process.env.PATH ?? ""}` };
 }
 
-function runGateArguments(arguments_: string[], environment: Record<string, string> = {}, cwd = join(import.meta.dir, "..")) {
-  return Bun.spawnSync({
+async function runGateArguments(arguments_: string[], environment: Record<string, string> = {}, cwd = join(import.meta.dir, "..")) {
+  return runPrivacyTestProcess({
     cmd: [process.execPath, gate, ...arguments_],
     cwd,
     env: { ...process.env, ...environment, NO_COLOR: "1" },
@@ -400,7 +403,7 @@ function runGateArguments(arguments_: string[], environment: Record<string, stri
 }
 
 
-function runGate(paths: string[], environment: Record<string, string> = {}) {
+async function runGate(paths: string[], environment: Record<string, string> = {}) {
   return runGateArguments(["--paths", ...paths], environment);
 }
 
@@ -482,7 +485,7 @@ function createVendorDigestFixture(): { manifest: string; readme: string; root: 
 }
 
 describe("privacy publication gate", () => {
-  test("the real gate reports fingerprint-only file findings with safe file and line attribution", () => {
+  test.concurrent("the real gate reports fingerprint-only file findings with safe file and line attribution", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-attribution-"));
     temporaryDirectories.push(directory);
     const findingValue = "known-test-fingerprint-private-value";
@@ -491,7 +494,7 @@ describe("privacy publication gate", () => {
     writeFileSync(join(directory, file), `export const sample = "${findingValue}";\n`);
     const catalog = join(directory, "fingerprints.json");
     writeFingerprintCatalog(catalog, findingValue);
-    const result = runGateArguments(["--repository", directory, "--paths", file], {
+    const result = await runGateArguments(["--repository", directory, "--paths", file], {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
       LLV_PRIVACY_KNOWN_VALUES: "",
     }, directory);
@@ -502,7 +505,7 @@ describe("privacy publication gate", () => {
     expect(output).not.toContain(findingValue);
   });
 
-  test("file attribution withholds fingerprint, email, and credential values embedded in filenames", () => {
+  test.concurrent("file attribution withholds fingerprint, email, and credential values embedded in filenames", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-filename-"));
     temporaryDirectories.push(directory);
     const email = [["fixture", "person"].join("-"), ["internal", "local"].join(".")].join("@");
@@ -519,7 +522,7 @@ describe("privacy publication gate", () => {
     for (const item of cases) {
       const body = item.finding === "credential" ? `${credentialKey}=${JSON.stringify(item.value)}\n` : `${item.value}\n`;
       writeFileSync(join(directory, item.path), body);
-      const result = runGateArguments(["--repository", directory, "--paths", item.path], {
+      const result = await runGateArguments(["--repository", directory, "--paths", item.path], {
         LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
         LLV_PRIVACY_KNOWN_VALUES: "",
       }, directory);
@@ -533,7 +536,7 @@ describe("privacy publication gate", () => {
     }
   });
 
-  test("publication children exclude unapproved ambient API keys", () => {
+  test.concurrent("publication children exclude unapproved ambient API keys", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-ambient-"));
     temporaryDirectories.push(directory);
     runGit(directory, ["init", "--quiet"]);
@@ -557,7 +560,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 `);
     chmodSync(git, 0o755);
 
-    const result = runGateArguments(["--base", "HEAD"], {
+    const result = await runGateArguments(["--base", "HEAD"], {
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       LLV_TEST_REAL_GIT: realGit,
       [credentialName]: credentialPlaceholder,
@@ -569,13 +572,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(0);
   });
 
-  test("blocks an unsafe live raster without provenance using redacted diagnostics", () => {
+  test.concurrent("blocks an unsafe live raster without provenance using redacted diagnostics", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
     writeFileSync(image, liveCapturePng());
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -591,13 +594,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   });
 
   for (const metadataType of ["zTXt", "iTXt"] as const) {
-    test(`detects live-source metadata inside compressed PNG ${metadataType}`, () => {
+    test.concurrent(`detects live-source metadata inside compressed PNG ${metadataType}`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const image = join(directory, "capture.png");
       writeFileSync(image, compressedLiveCapturePng(metadataType));
 
-      const result = runGate([image], installTool(directory, "tesseract"));
+      const result = await runGate([image], installTool(directory, "tesseract"));
       const output = result.stdout.toString();
 
       expect(result.exitCode).toBe(1);
@@ -613,7 +616,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  test("fails closed for animated PNG publication input", () => {
+  test.concurrent("fails closed for animated PNG publication input", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -621,7 +624,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFileSync(image, contents);
     writeValidProvenance(directory, "capture.png", contents);
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -630,21 +633,21 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects provenance that does not declare the published raster", () => {
+  test.concurrent("rejects provenance that does not declare the published raster", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
     writeFileSync(image, redactedPlaceholderPng());
     writeFileSync(join(directory, "privacy-manifest.json"), JSON.stringify({ schemaVersion: 1, assets: [] }));
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects output-only provenance without source and generator bindings", () => {
+  test.concurrent("rejects output-only provenance without source and generator bindings", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -663,7 +666,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -700,13 +703,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(manifest.assets?.[0]?.sourceDigests).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/)]);
   });
 
-  test("accepts media reproduced by the trusted source-bound generator", () => {
+  test.concurrent("accepts media reproduced by the trusted source-bound generator", async () => {
     const repositoryRoot = mkdtempSync(join(tmpdir(), "llv-privacy-candidate-"));
     temporaryDirectories.push(repositoryRoot);
     const image = join(repositoryRoot, "docs", "acceptance", "issue-290", "readiness-kanban.png");
     const generation = generatePrivacyPlaceholders(repositoryRoot);
 
-    const result = runGateArguments(
+    const result = await runGateArguments(
       ["--repository", repositoryRoot, "--paths", image],
       installTool(repositoryRoot, "tesseract"),
     );
@@ -718,7 +721,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects private text in raster pixels without echoing OCR content", () => {
+  test.concurrent("detects private text in raster pixels without echoing OCR content", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -727,7 +730,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeValidProvenance(directory, "capture.png", contents);
     const syntheticHome = ["", "home", "fixture-operator", "private"].join("/");
 
-    const result = runGate([image], installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`));
+    const result = await runGate([image], installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`));
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -737,7 +740,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("scans changed text for private paths, addresses, and credential shapes", () => {
+  test.concurrent("scans changed text for private paths, addresses, and credential shapes", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "release-notes.md");
@@ -746,7 +749,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const syntheticCredential = ["api", "token"].join("_") + "=synthetic-test-value-1234567890";
     writeFileSync(text, [syntheticHome, syntheticAddress, syntheticCredential].join("\n"));
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -764,7 +767,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("scans changed text for a quoted mailbox", () => {
+  test.concurrent("scans changed text for a quoted mailbox", async () => {
     /* `"fixture person"@host` is a mailbox RFC 5322 spells with quotes around
        the local part, and it reaches whoever the plain form would. */
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-quoted-"));
@@ -773,7 +776,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const quotedAddress = ['"fixture person"', "internal.local"].join("@");
     writeFileSync(text, `Reported by ${quotedAddress}.\n`);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -782,13 +785,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("systemd unit names pass text publication inspection", () => {
+  test.concurrent("systemd unit names pass text publication inspection", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-systemd-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "units.md");
     writeFileSync(text, systemdUnitSamples.join("\n"));
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
@@ -819,34 +822,34 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }
   });
 
-  test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD text blocked (%#)", (address) => {
+  test.concurrent.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD text blocked (%#)", async (address) => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-systemd-address-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "units.md");
     writeFileSync(text, address);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nemail_address: 1\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("scans several text files after one large source file", () => {
+  test.concurrent("scans several text files after one large source file", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-multi-text-"));
     temporaryDirectories.push(directory);
     const paths = ["large.ts", "second.ts", "third.ts", "fourth.ts"].map((name) => join(directory, name));
     writeFileSync(paths[0]!, "export const fixture = true;\n".repeat(12_000));
     for (const path of paths.slice(1)) writeFileSync(path, "export const fixture = true;\n");
 
-    const result = runGate(paths);
+    const result = await runGate(paths);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects quoted credential assignments containing punctuation", () => {
+  test.concurrent("detects quoted credential assignments containing punctuation", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
@@ -855,7 +858,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const credential = `${credentialKey}="${punctuation}syntheticfixture123456"`;
     writeFileSync(text, credential);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -941,14 +944,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }
   });
 
-  test("detects UUIDv7 session identifiers with class-only diagnostics", () => {
+  test.concurrent("detects UUIDv7 session identifiers with class-only diagnostics", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
     const sessionIdentifier = ["0190f47d", "1a2b", "7c3d", "8def", "123456789abc"].join("-");
     writeFileSync(text, `Synthetic session: ${sessionIdentifier}\n`);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -958,7 +961,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects resource identifiers split across visible Markdown link text", () => {
+  test.concurrent("detects resource identifiers split across visible Markdown link text", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
@@ -966,7 +969,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const publication = `${identifier.slice(0, 4)}[${identifier.slice(4, 8)}](https://example.invalid)${identifier.slice(8)}`;
     writeFileSync(text, `${publication}\n`);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -976,28 +979,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("keeps the all-zero UUID placeholder exempt", () => {
+  test.concurrent("keeps the all-zero UUID placeholder exempt", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
     const placeholder = ["00000000", "0000", "0000", "0000", "000000000000"].join("-");
     writeFileSync(text, `Synthetic placeholder: ${placeholder}\n`);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects a plain fine-grained GitHub PAT without exposing it", () => {
+  test.concurrent("detects a plain fine-grained GitHub PAT without exposing it", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
     const token = syntheticFineGrainedPat();
     writeFileSync(text, token);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -1007,7 +1010,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects a percent-encoded fine-grained GitHub PAT without exposing it", () => {
+  test.concurrent("detects a percent-encoded fine-grained GitHub PAT without exposing it", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
@@ -1017,7 +1020,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       .join("");
     writeFileSync(text, encodedToken);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -1028,7 +1031,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects a separator-split fine-grained GitHub PAT without exposing it", () => {
+  test.concurrent("detects a separator-split fine-grained GitHub PAT without exposing it", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
@@ -1036,7 +1039,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const splitToken = [...token].join(" ");
     writeFileSync(text, splitToken);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -1047,13 +1050,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("fails closed when required known-value fingerprints are unavailable", () => {
+  test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "release-notes.md");
     writeFileSync(text, "Synthetic release evidence.\n");
 
-    const result = runGateArguments(["--require-known-values", "--paths", text], {
+    const result = await runGateArguments(["--require-known-values", "--paths", text], {
       LLV_PRIVACY_KNOWN_VALUES: "",
       LLV_PRIVACY_KNOWN_VALUES_FILE: "",
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "",
@@ -1064,7 +1067,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("normalizes links, HTML forms, percent encoding, and split tokens", () => {
+  test.concurrent("normalizes links, HTML forms, percent encoding, and split tokens", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
@@ -1096,7 +1099,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       authenticatedUrl,
     ].join("\n"));
 
-    const result = runGate([text], {
+    const result = await runGate([text], {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints,
     });
     const output = result.stdout.toString();
@@ -1203,7 +1206,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   ];
 
   for (const fixture of canonicalizationFixtures) {
-    test(`canonicalizes ${fixture.name} with class-only diagnostics`, () => {
+    test.concurrent(`canonicalizes ${fixture.name} with class-only diagnostics`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const publication = fixture.publication();
@@ -1216,7 +1219,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = fingerprints;
       }
 
-      const result = runGate([text], environment);
+      const result = await runGate([text], environment);
       const output = result.stdout.toString();
 
       expect(result.exitCode).toBe(1);
@@ -1227,7 +1230,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  test("matches fingerprinted labels inside HTML attributes", () => {
+  test.concurrent("matches fingerprinted labels inside HTML attributes", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.html");
@@ -1244,7 +1247,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }));
     writeFileSync(text, `<div data-project="${knownLabel}">Synthetic evidence</div>\n`);
 
-    const result = runGate([text], {
+    const result = await runGate([text], {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints,
     });
     const output = result.stdout.toString();
@@ -1256,13 +1259,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("keeps malformed HTML entities inside class-only inspection", () => {
+  test.concurrent("keeps malformed HTML entities inside class-only inspection", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.html");
     writeFileSync(text, "Synthetic entity &#99999999; remains inert.\n");
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
@@ -1298,14 +1301,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   ];
 
   for (const fixture of encodedTextFixtures) {
-    test(`inspects ${fixture.name} with class-only diagnostics`, () => {
+    test.concurrent(`inspects ${fixture.name} with class-only diagnostics`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const text = join(directory, "publication.md");
       const contents = fixture.value();
       writeFileSync(text, contents);
 
-      const result = runGate([text]);
+      const result = await runGate([text]);
       const output = result.stdout.toString();
 
       expect(result.exitCode).toBe(1);
@@ -1315,13 +1318,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  test("fails closed for unsupported binary publication input", () => {
+  test.concurrent("fails closed for unsupported binary publication input", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const binary = join(directory, "publication.bin");
     writeFileSync(binary, Buffer.from([0x00, 0xff, 0x00, 0xfe, 0x01, 0x02]));
 
-    const result = runGate([binary]);
+    const result = await runGate([binary]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ninspection_error: 1\n");
@@ -1329,7 +1332,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("skips text inspection for signature-verified MP3 and WAV assets", () => {
+  test.concurrent("skips text inspection for signature-verified MP3 and WAV assets", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const mp3 = join(directory, "cue.mp3");
@@ -1346,34 +1349,34 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       Buffer.from([0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00]),
     ]));
 
-    const result = runGate([mp3, wav]);
+    const result = await runGate([mp3, wav]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("does not trust an audio extension without an audio signature", () => {
+  test.concurrent("does not trust an audio extension without an audio signature", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const fakeAudio = join(directory, "cue.mp3");
     const credentialKey = ["pass", "word"].join("");
     writeFileSync(fakeAudio, `${credentialKey}="synthetic-fixture-value-123456"\n`);
 
-    const result = runGate([fakeAudio]);
+    const result = await runGate([fakeAudio]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("fails closed for binary content renamed with a text extension", () => {
+  test.concurrent("fails closed for binary content renamed with a text extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const binary = join(directory, "publication.md");
     writeFileSync(binary, Buffer.from([0x00, 0xff, 0x00, 0xfe, 0x01, 0x02]));
 
-    const result = runGate([binary]);
+    const result = await runGate([binary]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ninspection_error: 1\n");
@@ -1381,7 +1384,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("fails closed for UTF-32LE text under a Markdown extension", () => {
+  test.concurrent("fails closed for UTF-32LE text under a Markdown extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "publication.md");
@@ -1392,7 +1395,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     codePoints.forEach((codePoint, index) => contents.writeUInt32LE(codePoint, 4 + index * 4));
     writeFileSync(text, contents);
 
-    const result = runGate([text]);
+    const result = await runGate([text]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2087,7 +2090,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }
       return environment;
     }
-    test("tagged constructors and default exports fail the real CLI with the committed catalog", () => {
+    test.concurrent("tagged constructors and default exports fail the real CLI with the committed catalog", async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
       temporaryDirectories.push(directory);
       const paths = [host, origin, discovery].flatMap((value, form) => [
@@ -2101,7 +2104,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         writeFileSync(path, contents);
         return path;
       }));
-      const result = runGateArguments(["--require-known-values", "--paths", ...paths], {
+      const result = await runGateArguments(["--require-known-values", "--paths", ...paths], {
         LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
         LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(import.meta.dir, "privacy-known-value-fingerprints.json"),
       });
@@ -2126,7 +2129,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "large chained calls", text: `relay${`("${host}")`.repeat(100_000)};`, pass: false, budget: 10_000 },
       { name: "large quoted JSON", text: JSON.stringify(Array(10_000).fill(host)), pass: true, budget: 3000 },
     ];
-    for (const specimen of boundedCases) test(`${specimen.name}: all sources stay bounded`, async () => {
+    for (const specimen of boundedCases) test.concurrent(`${specimen.name}: all sources stay bounded`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
       temporaryDirectories.push(directory);
       const publication = join(directory, "bounded.ts");
@@ -2327,7 +2330,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     for (const source of ["fingerprint", "raw file", "environment"] as const) {
       for (const exactOnly of [true, false]) {
         for (const spelling of spellings) {
-          test(`${source} exactOnly=${exactOnly} ${spelling.name}`, () => {
+          test.concurrent(`${source} exactOnly=${exactOnly} ${spelling.name}`, async () => {
             const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
             temporaryDirectories.push(directory);
             const publication = join(directory, "publication.md");
@@ -2354,7 +2357,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
                 environment.LLV_PRIVACY_KNOWN_VALUES_FILE = configuration;
               } else environment.LLV_PRIVACY_KNOWN_VALUES = input;
             }
-            const result = runGate([publication], environment);
+            const result = await runGate([publication], environment);
             expect(result.exitCode).toBe(!exactOnly || spelling.contiguous ? 1 : 0);
             expect(result.stdout.toString().includes("known_value:")).toBe(!exactOnly || spelling.contiguous);
             expect(result.stdout.toString()).not.toContain(value);
@@ -2366,7 +2369,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     for (const exactOnly of [true, false]) {
       for (const contiguous of [true, false]) {
-        test(`commit exactOnly=${exactOnly} contiguous=${contiguous}`, () => {
+        test.concurrent(`commit exactOnly=${exactOnly} contiguous=${contiguous}`, async () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
           temporaryDirectories.push(directory);
           runGit(directory, ["init", "--quiet"]);
@@ -2378,7 +2381,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
             fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
               ...(exactOnly ? { exactOnly: true } : {}) }] }));
-          const result = runGateArguments(["--base", "HEAD~1", "--check-commits"], {
+          const result = await runGateArguments(["--base", "HEAD~1", "--check-commits"], {
             LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
           }, directory);
           expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
@@ -2390,7 +2393,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     for (const exactOnly of [true, false]) {
       for (const contiguous of [true, false]) {
-        test(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, () => {
+        test.concurrent(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, async () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
           temporaryDirectories.push(directory);
           const generation = generatePrivacyPlaceholders(directory);
@@ -2402,7 +2405,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
             fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
               ...(exactOnly ? { exactOnly: true } : {}) }] }));
-          const result = runGateArguments(["--repository", directory, "--paths", image], {
+          const result = await runGateArguments(["--repository", directory, "--paths", image], {
             ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
             LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
             OCR_TEXT: ocrText,
@@ -2421,7 +2424,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }
 
     for (const policy of ["true", null, 1]) {
-      test(`rejects malformed exactOnly policy ${JSON.stringify(policy)}`, () => {
+      test.concurrent(`rejects malformed exactOnly policy ${JSON.stringify(policy)}`, async () => {
         const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
         temporaryDirectories.push(directory);
         const configuration = join(directory, "known.json");
@@ -2429,13 +2432,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         writeFileSync(publication, "Synthetic safe text");
         writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
           fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"), exactOnly: policy }] }));
-        const result = runGate([publication], { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration });
+        const result = await runGate([publication], { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration });
         expect(result.exitCode).toBe(1);
         expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nconfiguration_error: 1\n");
       });
     }
 
-    test("compact policy survives a duplicate exactOnly fingerprint", () => {
+    test.concurrent("compact policy survives a duplicate exactOnly fingerprint", async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
       temporaryDirectories.push(directory);
       const configuration = join(directory, "known.json");
@@ -2444,12 +2447,12 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       const fingerprint = { length: value.length, sha256: createHash("sha256").update(value).digest("hex") };
       writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
         fingerprints: [fingerprint, { ...fingerprint, exactOnly: true }] }));
-      const result = runGate([publication], { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration });
+      const result = await runGate([publication], { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration });
       expect(result.exitCode).toBe(1);
       expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
     });
 
-    test("preserves JSON-looking legacy values without format opt-in", () => {
+    test.concurrent("preserves JSON-looking legacy values without format opt-in", async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
       temporaryDirectories.push(directory);
       const input = join(directory, "known.txt");
@@ -2458,7 +2461,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       const legacyValue = `{${value}}`;
       writeFileSync(input, legacyValue);
       writeFileSync(publication, words.join(" "));
-      const raw = runGate([publication], { LLV_PRIVACY_KNOWN_VALUES: legacyValue,
+      const raw = await runGate([publication], { LLV_PRIVACY_KNOWN_VALUES: legacyValue,
         LLV_PRIVACY_KNOWN_VALUES_FILE: "", LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "",
         LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain" });
       expect(raw.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 1\n");
@@ -2532,7 +2535,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(catalog).toContain(createHash("sha256").update(knownLabel.replaceAll("-", "")).digest("hex"));
   });
 
-  test("rejects fingerprint catalogs reached through symlinked ancestors", () => {
+  test.concurrent("rejects fingerprint catalogs reached through symlinked ancestors", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const realDirectory = join(root, "real-catalog");
@@ -2544,7 +2547,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const publication = join(root, "publication.md");
     writeFileSync(publication, "Synthetic publication.\n");
 
-    const result = runGateArguments(["--require-known-values", "--paths", publication], {
+    const result = await runGateArguments(["--require-known-values", "--paths", publication], {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(linkedDirectory, "known-values.json"),
       LLV_PRIVACY_KNOWN_VALUES: "",
       LLV_PRIVACY_KNOWN_VALUES_FILE: "",
@@ -2556,7 +2559,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects symlink publication inputs without reading their targets", () => {
+  test.concurrent("rejects symlink publication inputs without reading their targets", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const target = join(directory, "private-target.txt");
@@ -2565,7 +2568,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFileSync(target, `${syntheticHome}\n`);
     symlinkSync(target, link);
 
-    const result = runGate([link]);
+    const result = await runGate([link]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2575,7 +2578,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("discovers committed regular-file to symlink type changes", () => {
+  test.concurrent("discovers committed regular-file to symlink type changes", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     runGit(directory, ["init", "--quiet"]);
@@ -2592,7 +2595,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     runGit(directory, ["add", "publication.md"]);
     runGit(directory, ["commit", "--quiet", "-m", "fixture type change"]);
 
-    const result = runGateArguments(["--base", base], {}, directory);
+    const result = await runGateArguments(["--base", base], {}, directory);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nunsafe_path: 1\n");
@@ -2600,14 +2603,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects dangling symlinks without resolving their target strings", () => {
+  test.concurrent("rejects dangling symlinks without resolving their target strings", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const publication = join(directory, "publication.md");
     const target = ["", "home", "fixture-person", "missing-target"].join("/");
     symlinkSync(target, publication);
 
-    const result = runGate([publication]);
+    const result = await runGate([publication]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2617,7 +2620,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("samples GIF and video frames while keeping decoded content private", () => {
+  test.concurrent("samples GIF and video frames while keeping decoded content private", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.gif");
@@ -2630,7 +2633,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", "printf '%s' 'synthetic-frame'");
     const environment = installTool(directory, "tesseract", `printf x >> "$FRAME_COUNTER"\nprintf '%s\\n' '${syntheticHome}'`);
 
-    const result = runGate([animation], { ...environment, FRAME_COUNTER: counter });
+    const result = await runGate([animation], { ...environment, FRAME_COUNTER: counter });
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2641,7 +2644,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("inspects every video stream with class-only diagnostics", () => {
+  test.concurrent("inspects every video stream with class-only diagnostics", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2653,7 +2656,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", `case "$*" in *"0:v:1"*) printf '%s' 'private-frame';; *) printf '%s' 'safe-frame';; esac`);
     const environment = installTool(directory, "tesseract", `frame=$(cat)\nif [ "$frame" = "private-frame" ]; then printf '%s\\n' '${syntheticHome}'; fi`);
 
-    const result = runGate([animation], environment);
+    const result = await runGate([animation], environment);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2663,7 +2666,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("inspects metadata from every video stream", () => {
+  test.concurrent("inspects metadata from every video stream", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2675,7 +2678,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", "printf '%s' 'safe-frame'");
     const environment = installTool(directory, "tesseract");
 
-    const result = runGate([animation], environment);
+    const result = await runGate([animation], environment);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2685,7 +2688,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("fails closed before sampling excessive video streams", () => {
+  test.concurrent("fails closed before sampling excessive video streams", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2701,7 +2704,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", `printf x >> "$FRAME_COUNTER"\nprintf '%s' 'safe-frame'`);
     const environment = installTool(directory, "tesseract");
 
-    const result = runGate([animation], { ...environment, FRAME_COUNTER: counter });
+    const result = await runGate([animation], { ...environment, FRAME_COUNTER: counter });
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2711,7 +2714,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("samples representative frame indexes when video duration is unknown", () => {
+  test.concurrent("samples representative frame indexes when video duration is unknown", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2724,7 +2727,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", `printf x >> "$FRAME_COUNTER"\nprintf '%s' 'synthetic-frame'`);
     const environment = installTool(directory, "tesseract", `printf '%s\n' '${syntheticHome}'`);
 
-    const result = runGate([animation], { ...environment, FRAME_COUNTER: counter });
+    const result = await runGate([animation], { ...environment, FRAME_COUNTER: counter });
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2735,7 +2738,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("fails closed when protected late video frames cannot be bounded", () => {
+  test.concurrent("fails closed when protected late video frames cannot be bounded", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const animation = join(directory, "capture.mp4");
@@ -2747,7 +2750,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", `printf '%s\n' "$*" >> "$SAMPLE_LOG"\nprintf '%s' 'synthetic-frame'`);
     const environment = installTool(directory, "tesseract", "printf '%s' 'synthetic-safe-ocr'");
 
-    const result = runGate([animation], { ...environment, SAMPLE_LOG: sampleLog });
+    const result = await runGate([animation], { ...environment, SAMPLE_LOG: sampleLog });
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ninspection_error: 1\nprovenance_invalid: 1\n");
@@ -2756,7 +2759,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("matches a Ukrainian OCR value with configured multilingual language data", () => {
+  test.concurrent("matches a Ukrainian OCR value with configured multilingual language data", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -2769,7 +2772,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFingerprintCatalog(fingerprints, ukrainianValue);
     const environment = installTool(directory, "tesseract", `printf '%s' "$*" > "$OCR_ARGUMENTS"\nprintf '%s\n' "$OCR_TEXT"`);
 
-    const result = runGate([image], {
+    const result = await runGate([image], {
       ...environment,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints,
       LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
@@ -2786,7 +2789,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("fails closed when configured OCR language data is unavailable", () => {
+  test.concurrent("fails closed when configured OCR language data is unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -2795,7 +2798,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeValidProvenance(directory, "capture.png", contents);
     const environment = installTool(directory, "tesseract", "exit 1");
 
-    const result = runGate([image], {
+    const result = await runGate([image], {
       ...environment,
       LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
     });
@@ -2806,13 +2809,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects PNG media renamed with a Markdown extension", () => {
+  test.concurrent("detects PNG media renamed with a Markdown extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.md");
     writeFileSync(image, liveCapturePng());
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe([
@@ -2825,7 +2828,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("detects video media renamed with a text extension", () => {
+  test.concurrent("detects video media renamed with a text extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const video = join(directory, "capture.txt");
@@ -2836,7 +2839,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     installTool(directory, "ffmpeg", "printf '%s' 'synthetic-frame'");
     const environment = installTool(directory, "tesseract", `printf '%s' '${syntheticHome}'`);
 
-    const result = runGate([video], environment);
+    const result = await runGate([video], environment);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2846,14 +2849,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("matches operator-provided private labels without publishing them", () => {
+  test.concurrent("matches operator-provided private labels without publishing them", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const text = join(directory, "release-notes.md");
     const privateLabel = ["fixture", "private", "project", "label"].join("-");
     writeFileSync(text, `Evidence for ${privateLabel}.\n`);
 
-    const result = runGate([text], { LLV_PRIVACY_KNOWN_VALUES: privateLabel });
+    const result = await runGate([text], { LLV_PRIVACY_KNOWN_VALUES: privateLabel });
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2863,7 +2866,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("discovers publication changes relative to the requested Git base", () => {
+  test.concurrent("discovers publication changes relative to the requested Git base", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     runGit(directory, ["init", "--quiet"]);
@@ -2878,7 +2881,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
     writeFileSync(notes, `Synthetic release evidence.\n${syntheticHome}\n`);
 
-    const result = runGateArguments(["--base", base], {}, directory);
+    const result = await runGateArguments(["--base", base], {}, directory);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -2936,7 +2939,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(shouldFailGithubAudit(new Map([["resource_identifier", 1]]), false)).toBe(true);
   });
 
-  test("uses trusted scanner and fingerprints when every candidate gate surface is tampered", () => {
+  test.concurrent("uses trusted scanner and fingerprints when every candidate gate surface is tampered", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const candidate = join(root, "candidate");
@@ -2964,7 +2967,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const trustedCatalog = join(root, "trusted-fingerprints.json");
     writeFingerprintCatalog(trustedCatalog, knownValue);
 
-    const result = runGateArguments(["--repository", candidate, "--base", "HEAD", "--require-known-values"], {
+    const result = await runGateArguments(["--repository", candidate, "--base", "HEAD", "--require-known-values"], {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: trustedCatalog,
       LLV_PRIVACY_KNOWN_VALUES: "",
       LLV_PRIVACY_KNOWN_VALUES_FILE: "",
@@ -2978,7 +2981,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects candidate-created adversarial exemptions", () => {
+  test.concurrent("rejects candidate-created adversarial exemptions", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     runGit(root, ["init", "--quiet"]);
@@ -3014,7 +3017,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     runGit(root, ["commit", "--quiet", "-m", "candidate exemption"]);
     const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
 
-    const result = runGateArguments(
+    const result = await runGateArguments(
       ["--repository", root, "--base", "HEAD^", "--paths", image],
       installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`),
     );
@@ -3034,7 +3037,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects live output and source digests that contradict the trusted generator", () => {
+  test.concurrent("rejects live output and source digests that contradict the trusted generator", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     runGit(root, ["init", "--quiet"]);
@@ -3070,7 +3073,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "--quiet", "-m", "candidate publication"]);
 
-    const result = runGateArguments(
+    const result = await runGateArguments(
       ["--repository", root, "--base", "HEAD^", "--paths", image],
       installTool(root, "tesseract"),
     );
@@ -3088,7 +3091,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects candidate-controlled generators that self-certify live media", () => {
+  test.concurrent("rejects candidate-controlled generators that self-certify live media", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const directory = join(root, "published");
@@ -3118,7 +3121,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = runGateArguments(
+    const result = await runGateArguments(
       ["--repository", root, "--paths", image],
       installTool(directory, "tesseract"),
     );
@@ -3136,7 +3139,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("allows adversarial exemptions already present in the trusted base", () => {
+  test.concurrent("allows adversarial exemptions already present in the trusted base", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     runGit(root, ["init", "--quiet"]);
@@ -3169,7 +3172,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     runGit(root, ["commit", "--quiet", "-m", "trusted exemption"]);
     const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
 
-    const result = runGateArguments(
+    const result = await runGateArguments(
       ["--repository", root, "--base", "HEAD", "--paths", image],
       installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`),
     );
@@ -3182,7 +3185,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects symlink manifests and provenance generators", () => {
+  test.concurrent("rejects symlink manifests and provenance generators", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const contents = redactedPlaceholderPng();
@@ -3221,7 +3224,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     rmSync(regularGenerator);
     symlinkSync(externalGenerator, regularGenerator);
 
-    const result = runGate(
+    const result = await runGate(
       [manifestLinkImage, generatorLinkImage],
       installTool(root, "tesseract"),
     );
@@ -3231,7 +3234,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects asset and manifest paths reached through symlinked ancestors", () => {
+  test.concurrent("rejects asset and manifest paths reached through symlinked ancestors", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const realDirectory = join(root, "real-publication");
@@ -3242,7 +3245,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const linkedDirectory = join(root, "linked-publication");
     symlinkSync(realDirectory, linkedDirectory);
 
-    const result = runGate(
+    const result = await runGate(
       [join(linkedDirectory, "capture.png")],
       installTool(root, "tesseract"),
     );
@@ -3253,7 +3256,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects provenance generators reached through symlinked ancestors", () => {
+  test.concurrent("rejects provenance generators reached through symlinked ancestors", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const publicationDirectory = join(root, "published");
@@ -3282,7 +3285,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = runGate([image], installTool(root, "tesseract"));
+    const result = await runGate([image], installTool(root, "tesseract"));
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3290,7 +3293,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("rejects provenance generators outside the asset boundary", () => {
+  test.concurrent("rejects provenance generators outside the asset boundary", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const directory = join(root, "published");
@@ -3317,14 +3320,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = runGate([image], installTool(root, "tesseract"));
+    const result = await runGate([image], installTool(root, "tesseract"));
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("requires a dedicated generator version declaration", () => {
+  test.concurrent("requires a dedicated generator version declaration", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3348,7 +3351,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3360,7 +3363,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     { name: "malformed", value: "bun latest!" },
     { name: "mismatched", value: "bun-1.3.14" },
   ]) {
-    test(`rejects ${runtimeFixture.name} provenance generator runtime declarations`, () => {
+    test.concurrent(`rejects ${runtimeFixture.name} provenance generator runtime declarations`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const image = join(directory, "capture.png");
@@ -3375,7 +3378,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       else manifest.assets[0].generatorRuntime = runtimeFixture.value;
       writeFileSync(manifestPath, JSON.stringify(manifest));
 
-      const result = runGate([image], installTool(directory, "tesseract"));
+      const result = await runGate([image], installTool(directory, "tesseract"));
 
       expect(result.exitCode).toBe(1);
       expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3384,7 +3387,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     });
   }
 
-  test("classifies private network, resource, and transcript-shaped media text", () => {
+  test.concurrent("classifies private network, resource, and transcript-shaped media text", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3396,7 +3399,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const transcriptMarker = ["trans", "cript"].join("") + ": synthetic fixture utterance";
     const ocr = [syntheticAddress, syntheticIdentifier, transcriptMarker].join("\\n");
 
-    const result = runGate([image], installTool(directory, "tesseract", `printf '%b\\n' '${ocr}'`));
+    const result = await runGate([image], installTool(directory, "tesseract", `printf '%b\\n' '${ocr}'`));
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3415,7 +3418,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("scans embedded raster metadata independently from OCR", () => {
+  test.concurrent("scans embedded raster metadata independently from OCR", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3424,7 +3427,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFileSync(image, contents);
     writeValidProvenance(directory, "capture.png", contents);
 
-    const result = runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image], installTool(directory, "tesseract"));
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3434,7 +3437,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("scans compressed PNG text, eXIf, and trailing payloads", () => {
+  test.concurrent("scans compressed PNG text, eXIf, and trailing payloads", async () => {
     const root = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(root);
     const syntheticHome = ["", "home", "fixture-person", "metadata"].join("/");
@@ -3455,7 +3458,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       images.push(image);
     }
 
-    const result = runGate(images, installTool(root, "tesseract"));
+    const result = await runGate(images, installTool(root, "tesseract"));
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3471,7 +3474,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     { byteOrder: "le" as const, location: "trailing payload" as const },
     { byteOrder: "be" as const, location: "trailing payload" as const },
   ]) {
-    test(`scans odd-aligned ${fixture.byteOrder.toUpperCase()} UTF-16 in ${fixture.location}`, () => {
+    test.concurrent(`scans odd-aligned ${fixture.byteOrder.toUpperCase()} UTF-16 in ${fixture.location}`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
       temporaryDirectories.push(directory);
       const syntheticHome = ["", "home", "fixture-person", `${fixture.byteOrder}-metadata`].join("/");
@@ -3483,7 +3486,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       writeFileSync(image, contents);
       writeValidProvenance(directory, "capture.png", contents);
 
-      const result = runGate([image], installTool(directory, "tesseract"));
+      const result = await runGate([image], installTool(directory, "tesseract"));
       const output = result.stdout.toString();
 
       expect(result.exitCode).toBe(1);
@@ -4631,7 +4634,7 @@ describe("commitMessageFindings", () => {
     expect(notices).toEqual(["commit_message: range unreadable"]);
   });
 
-  test("fails closed for a raw commit declaring a legacy message encoding", () => {
+  test.concurrent("fails closed for a raw commit declaring a legacy message encoding", async () => {
     const repo = gitRepo();
     const tree = git(repo, "rev-parse", "HEAD^{tree}").trim();
     const parent = git(repo, "rev-parse", "HEAD").trim();
@@ -4645,14 +4648,14 @@ describe("commitMessageFindings", () => {
     runGit(repo, ["update-ref", "refs/heads/feature", object.stdout.toString().trim()]);
     // The previous per-message reader asked Git to transcode this value.
     expect(git(repo, "log", "-1", "--format=%B")).toContain(value);
-    const result = runGateArguments(["--base", "main", "--check-commits"], { LLV_PRIVACY_KNOWN_VALUES: value }, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], { LLV_PRIVACY_KNOWN_VALUES: value }, repo);
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toContain("inspection_error:");
     expect(result.stdout.toString()).not.toContain(value);
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("reads a message that is nothing but a hash-shaped value", () => {
+  test.concurrent("reads a message that is nothing but a hash-shaped value", async () => {
     /* #1315, second round. The hashes and the messages arrived in one stream
        that carries no lengths, so the reader decided where a message ended by
        SHAPE: forty lowercase hex characters were the next commit's hash. A raw
@@ -4665,7 +4668,7 @@ describe("commitMessageFindings", () => {
     /* No terminal newline: the message is the last thing in the object. */
     expect(git(repo, "cat-file", "commit", flagged).endsWith(value)).toBe(true);
 
-    const result = runGateArguments(
+    const result = await runGateArguments(
       ["--base", "main", "--check-commits"],
       { LLV_PRIVACY_KNOWN_VALUES: value },
       repo,
@@ -4749,20 +4752,20 @@ describe("mergeBoundaryReview", () => {
     return result.stdout.toString().trim();
   }
 
-  test.each(escapedVersionSourceLines)("escaped version source lines pass files and commit messages (%#)", (line) => {
+  test.concurrent.each(escapedVersionSourceLines)("escaped version source lines pass files and commit messages (%#)", async (line) => {
     const repo = gitRepo();
     writeFileSync(join(repo, "source.ts"), line + "\n");
     commit(repo, `test: escaped package version\n\n${line}`, canonicalIdentity);
 
     expect(sensitiveClasses(line).has("email_address")).toBe(false);
     expect(commitMessageFindings(repo, "main").size).toBe(0);
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.each(packageVersionSamples)("package versions pass files, commit messages and identities (%#)", (specifier) => {
+  test.concurrent.each(packageVersionSamples)("package versions pass files, commit messages and identities (%#)", async (specifier) => {
     const repo = gitRepo();
     writeFileSync(join(repo, "packages.md"), `bun add -g ${specifier}\n`);
     commit(repo, `chore: install ${specifier}`, { email: specifier, name: "Fixture Tool" });
@@ -4770,29 +4773,29 @@ describe("mergeBoundaryReview", () => {
     expect(sensitiveClasses(specifier).has("email_address")).toBe(false);
     expect(commitMessageFindings(repo, "main").size).toBe(0);
     expect(mergeBoundaryReview(repo, "main").findings.size).toBe(0);
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.each(versionLookingRealAddresses)("version-like real domains fail files, commit messages and identities (%#)", (address) => {
+  test.concurrent.each(versionLookingRealAddresses)("version-like real domains fail files, commit messages and identities (%#)", async (address) => {
     const repo = gitRepo();
     writeFileSync(join(repo, "packages.md"), address);
     commit(repo, `chore: inspect ${address}`, { email: address, name: "Fixture Person" });
 
     expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
     expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address: 3\n");
     expect(result.stdout.toString()).not.toContain(address);
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.each(uppercaseControlEscapes.flatMap((escape) => ["file", "message", "author", "committer"].map((surface) => [escape, surface] as const)))(
+  test.concurrent.each(uppercaseControlEscapes.flatMap((escape) => ["file", "message", "author", "committer"].map((surface) => [escape, surface] as const)))(
     "uppercase control escape %s cannot hide an email on the %s surface",
-    (escape, surface) => {
+    async (escape, surface) => {
       const repo = gitRepo();
       const address = ["probe", `1.2.3${escape}.com`].join("@");
       const author = { email: surface === "author" ? address : canonicalIdentity.email, name: "Fixture Author" };
@@ -4800,7 +4803,7 @@ describe("mergeBoundaryReview", () => {
       writeFileSync(join(repo, "packages.md"), surface === "file" ? address : "safe fixture text");
       commitWithIdentities(repo, surface === "message" ? `chore: inspect ${address}` : "chore: safe fixture message", author, committer);
 
-      const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+      const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
       expect(result.exitCode).toBe(1);
       expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address:");
       expect(result.stdout.toString()).not.toContain(address);
@@ -4808,25 +4811,25 @@ describe("mergeBoundaryReview", () => {
     },
   );
 
-  test.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", (unit) => {
+  test.concurrent.each(systemdUnitSamples)("systemd unit names pass commit messages and identities (%#)", async (unit) => {
     const repo = gitRepo();
     commit(repo, `chore: inspect ${unit}`, { email: unit, name: "Fixture Tool" });
 
     expect(commitMessageFindings(repo, "main").size).toBe(0);
     expect(mergeBoundaryReview(repo, "main").findings.size).toBe(0);
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
   });
 
-  test.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD commits and identities blocked (%#)", (address) => {
+  test.concurrent.each(unitLookingRealAddresses)("systemd suffix rule keeps real-TLD commits and identities blocked (%#)", async (address) => {
     const repo = gitRepo();
     commit(repo, `chore: inspect ${address}`, { email: address, name: "Fixture Person" });
 
     expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
     expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toContain("PRIVACY GATE: FAIL\nemail_address: 2\n");
     expect(result.stdout.toString()).not.toContain(address);
@@ -4990,26 +4993,26 @@ describe("mergeBoundaryReview", () => {
     expect(review.notices).toEqual(["merge_boundary: range unreadable"]);
   });
 
-  test("both commit reads name themselves when the base cannot be resolved", () => {
+  test.concurrent("both commit reads name themselves when the base cannot be resolved", async () => {
     /* One flag runs two reads over the commits. `inspection_error: 2` with no
        notice under it says only that something the gate could not read exists
        somewhere. */
     const repo = gitRepo();
     commit(repo, "feat: something", canonicalIdentity);
 
-    const result = runGateArguments(["--base", "no-such-base", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "no-such-base", "--check-commits"], {}, repo);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toContain("commit_message: range unreadable");
     expect(result.stdout.toString()).toContain("merge_boundary: range unreadable");
   });
 
-  test("the gate reads the merge boundary under --check-commits and withholds the address", () => {
+  test.concurrent("the gate reads the merge boundary under --check-commits and withholds the address", async () => {
     const repo = gitRepo();
     const personal = ["someone", "personal.dev"].join("@");
     commit(repo, "feat: something", { email: personal, name: "Someone" });
 
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -5019,12 +5022,12 @@ describe("mergeBoundaryReview", () => {
     expect(output).not.toContain(personal);
   });
 
-  test("an address in the commit body is still flagged, and named as a message finding", () => {
+  test.concurrent("an address in the commit body is still flagged, and named as a message finding", async () => {
     const repo = gitRepo();
     const personal = ["someone", "personal.dev"].join("@");
     commit(repo, `feat: write to ${personal} about it`, canonicalIdentity);
 
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -5034,7 +5037,7 @@ describe("mergeBoundaryReview", () => {
     expect(output).not.toContain(personal);
   });
 
-  test("a forge-composed 'Update branch' merge commit passes every field the gate reads", () => {
+  test.concurrent("a forge-composed 'Update branch' merge commit passes every field the gate reads", async () => {
     /* #1315 read this commit as the one that failed. It is clean on all three
        surfaces, and this pins that: the AUTHOR is an account on the forge's
        no-reply host, the COMMITTER is the forge's own web-flow identity — now
@@ -5058,12 +5061,12 @@ describe("mergeBoundaryReview", () => {
     expect(review.notices).toEqual([]);
     expect(commitMessageFindings(repo, "main").size).toBe(0);
 
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.exitCode).toBe(0);
   });
 
-  test("a single-parent commit with the forge's web-flow committer is attributable and named", () => {
+  test.concurrent("a single-parent commit with the forge's web-flow committer is attributable and named", async () => {
     /* The forge mailbox identifies a merge only when the commit graph agrees.
        A normal commit can carry the same committer identity, and that field
        remains part of what a squash merge composes into its message even when
@@ -5077,7 +5080,7 @@ describe("mergeBoundaryReview", () => {
     expect(identityField(repo, "%ae")).toBe(forgeWebFlowIdentity.email);
     expect(identityField(repo, "%ce")).toBe(forgeWebFlowIdentity.email);
 
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe(
       `PRIVACY GATE: FAIL\nemail_address: 2\n`
@@ -5089,7 +5092,7 @@ describe("mergeBoundaryReview", () => {
     expect(result.stdout.toString()).not.toContain(forgeWebFlowIdentity.email);
   });
 
-  test("a message with a real-looking address still fails behind a forge merge, and is named", () => {
+  test.concurrent("a message with a real-looking address still fails behind a forge merge, and is named", async () => {
     /* The narrowed range and the forge exemptions must not carry a person
        across with them: this commit is the branch's own, and the merge that
        follows it publishes it either way. */
@@ -5102,7 +5105,7 @@ describe("mergeBoundaryReview", () => {
     runGit(repo, ["checkout", "--quiet", "feature"]);
     mergeAsForge(repo, "main", "feature");
 
-    const result = runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    const result = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
