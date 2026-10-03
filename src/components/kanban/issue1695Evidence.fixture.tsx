@@ -369,7 +369,11 @@ function structuredSnapshot() {
       ...(FEED_CONTINUITY ? { liveTurn: feedContinuityStep === 2 ? null : {
         turnId: "continuity-turn", text: continuousAnswer, items: [{ itemId: feedContinuityStep ? "continuity-answer" : null,
           text: continuousAnswer, phase: feedContinuityStep ? "awaiting-echo" : "streaming",
-          startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null }],
+          startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null },
+          ...(feedContinuityStep ? Array.from({ length: 9 }, (_, index) => ({
+            itemId: `continuity-tool-${index}`, text: "", phase: "awaiting-echo" as const, startedAt: iso(58 - index), completedAt: iso(58 - index),
+            tool: { id: `continuity-tool-${index}`, name: "Bash", args: { command: "pwd" }, status: "ok" as const },
+          })) : [])],
       } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,

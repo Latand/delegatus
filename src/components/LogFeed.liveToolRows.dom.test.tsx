@@ -432,13 +432,13 @@ test("canonical text-tool-text fragments retain their source order at handoff", 
     .toEqual(["before", "tool", "after"]);
 });
 
-test("the shared live tail bounds prose and tools while retaining older replies", () => {
+test("all unclaimed replies remain readable in the shared scroller", () => {
   sessionState.session = { ...session, liveTurn: { turnId: "bounded", text: "Reply 39", items: Array.from({ length: 40 }, (_, i) => ({
     itemId: `bounded-${i}`, text: `Reply ${i}`, phase: "awaiting-echo" as const, startedAt: AT(i), completedAt: AT(i),
   })) } };
   const { host } = render();
-  expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(8);
-  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("32");
+  expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(40);
+  expect(host.querySelector("[data-live-turn-earlier]")).toBeNull();
 });
 
 test("streaming markdown holds unfinished fences and tables until completion", () => {
@@ -650,4 +650,32 @@ test("completion after a non-overlapping reconnect retains the already read open
   flushSync(() => original.querySelector<HTMLButtonElement>("button")!.click());
   expect(original.textContent).toContain(full);
   expect(original.querySelector("[data-live-turn-omitted-chars]")).toBeNull();
+});
+
+
+test("an observed reply survives later tool calls and reconnect until its own echo", () => {
+  const turnId = "retained-before-tools";
+  const record = { type: "assistant", uuid: "observed-before-tools", timestamp: AT(0),
+    message: { content: [{ type: "text", text: "Already read reply" }] } };
+  let live = projectRuntimeLiveTurnItem(null, turnId, record, "completed", AT(0));
+  sessionState.session = { ...session, liveTurn: live };
+  const { host, paint } = render();
+  const original = host.querySelector('[data-live-turn-item-id="observed-before-tools"]')!;
+  for (let index = 0; index < 9; index++) {
+    live = projectRuntimeLiveTurnItem(live, turnId, { type: "assistant", uuid: `later-envelope-${index}`,
+      message: { content: [{ type: "tool_use", id: `later-call-${index}`, name: "Bash", input: { command: "pwd" } }] } }, "completed", AT(index + 1));
+    sessionState.session = { ...session, liveTurn: live };
+    paint();
+    expect(original.isConnected).toBe(true);
+    expect(original.textContent).toContain("Already read reply");
+  }
+  expect(host.querySelectorAll("[data-live-tool]")).toHaveLength(8);
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("1");
+  sessionState.session = { ...session, liveTurn: null };
+  paint();
+  expect(original.isConnected).toBe(true);
+  tailState.lines = [JSON.stringify(record)];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="observed-before-tools"]')).toBe(original);
+  expect(host.querySelectorAll('[data-feed-source-id="observed-before-tools"]')).toHaveLength(1);
 });

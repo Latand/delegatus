@@ -1123,8 +1123,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         : assistantHandoff.pending.find(answer => answer.live === item)?.order ?? Infinity;
       return order(a) - order(b);
     });
-    const tail = liveTurnTail(ordered);
-    return { ...tail, handoff: { ...assistantHandoff, pending: assistantHandoff.pending.filter(answer => tail.rows.includes(answer.live)) } };
+    // Replies remain conversation rows until their own canonical echo adopts them.
+    // Only transient tools and transport summaries share the eight-step tail.
+    const tail = liveTurnTail(ordered.filter(item => item.tool || !item.text.trim()));
+    return { ...tail, handoff: assistantHandoff };
   }, [assistantHandoff, visibleLiveTurnItems, runtimeLiveTurn]);
   /* The status bar names the tool that is running NOW: a live tool row from the
      structured host (issue #1100) is newer than anything the transcript window

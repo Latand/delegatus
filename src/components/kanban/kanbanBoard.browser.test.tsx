@@ -15509,6 +15509,9 @@ describe("conversation feed continuity and errors", () => {
             }, answer)).toBe(true);
             const y = await page.evaluate(() => (window as unknown as { continuityNode: HTMLElement }).continuityNode.getBoundingClientRect().top);
             if (step === 1) {
+              expect(await page.locator("[data-live-tool]").count()).toBe(8);
+              expect(await page.locator("[data-live-turn-earlier]").getAttribute("data-live-turn-earlier")).toBe("1");
+              await row.scrollIntoViewIfNeeded();
               await page.screenshot({ path: path.join(out, `${locale}-${width}-before-echo.png`) });
               settledY = await page.evaluate(() => (window as unknown as { continuityNode: HTMLElement }).continuityNode.getBoundingClientRect().top);
             }
@@ -15525,7 +15528,7 @@ describe("conversation feed continuity and errors", () => {
           const position = await canonical.boundingBox();
           await page.screenshot({ path: path.join(out, `${locale}-${width}-answer.png`) });
           expect(pageErrors).toEqual([]);
-          readings.push({ locale, width, retainedNode: true, answerRows: 1, echoShift, position });
+          readings.push({ locale, width, retainedNode: true, answerRows: 1, retainedAfterNineTools: true, echoShift, position });
         } finally { await context.close(); }
         const errors = await openFixture(browser, `${server.base}?scenario=feed-failures#c=conversation_search-ver-2`,
           { width, height: 900 }, "light", locale, "reduce", width === 390);
