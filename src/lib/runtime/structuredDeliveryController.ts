@@ -695,6 +695,22 @@ export async function bindStructuredDeliveryQueue(
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
     },
+    succession: (conversationId, binding) => {
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      if (!conversation || conversation.engine !== "codex") return { status: "refused", reason: "native queue conversation is unavailable" };
+      const migration = conversation.migration;
+      const source = conversation.generations.find(generation => generation.id === binding.threadId && generation.accountId === binding.accountId);
+      if (!migration || !source || migration.sourceGenerationId !== source.id) return null;
+      if (conversation.switchHold) return { status: "refused", reason: `account switch failed: ${conversation.switchHold.reason}` };
+      if (conversation.reconfigure?.status === "cancelled" || migration.phase === "rolled-back") return { status: "refused", reason: "runtime switch cancelled" };
+      if (conversation.reconfigure?.status === "failed" || migration.phase === "failed-recoverable") {
+        return { status: "refused", reason: `runtime switch failed: ${conversation.reconfigure?.error ?? migration.error ?? "successor is unavailable"}` };
+      }
+      if (migration.phase !== "committed" || conversation.reconfigure?.status === "applying") return { status: "pending" };
+      const current = conversation.generations.at(-1);
+      if (!source.archivedAt || !current || current.id !== migration.providerReceipt?.nativeId || current.accountId !== migration.targetId) return null;
+      return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
+    },
   });
   const queue = new StructuredDeliveryQueue(
     {

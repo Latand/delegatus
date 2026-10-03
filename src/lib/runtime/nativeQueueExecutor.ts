@@ -17,6 +17,12 @@ export interface NativeQueueExecutorPort {
   client: RuntimeHostClient;
   resolveHost(conversationId: string): EngineHost | null;
   binding(conversationId: string): NativeQueueBinding | null;
+  /** Registry evidence of a succession from this exact predecessor. */
+  succession?(conversationId: string, binding: NativeQueueBinding):
+    | { status: "pending" }
+    | { status: "committed"; binding: NativeQueueBinding }
+    | { status: "refused"; reason: string }
+    | null;
   settled?(entry: NativeQueueRecord): Promise<void> | void;
 }
 
@@ -24,43 +30,64 @@ export interface NativeQueueExecutorPort {
 export class NativeQueueExecutor {
   constructor(private readonly port: NativeQueueExecutorPort) {}
 
-  async execute(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void> {
+  /** false leaves the original operation queued for the controller's next wake. */
+  async execute(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void | false> {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) throw new Error("native queue journal is unavailable");
     const transition = (change: Parameters<NonNullable<RuntimeHostClient["nativeQueueTransition"]>>[1]) => client.nativeQueueTransition!(command.operationId, change);
     const prior = await client.operationStatus(command.operationId);
     if (!prior || (prior.receipt.status !== "queued" && prior.receipt.status !== "pending")) return;
     if (refusalReason) { await transition({ phase: "refused", reason: refusalReason }); return; }
-    const host = this.port.resolveHost(command.conversationId);
-    const native = host?.nativeQueue;
-    const owns = () => {
-      const binding = this.port.binding(command.conversationId);
-      return host === this.port.resolveHost(command.conversationId) && binding && sameNativeQueueBinding(binding, command.binding);
-    };
-    if (!host || !native || !owns() || native.queue.threadId !== command.binding.threadId) {
-      await transition({ phase: "refused", reason: "native queue host or account ownership changed" });
-      return;
-    }
     const records = await client.nativeQueueRead(command.conversationId);
-    /* A reorder names native submission ids, and a queue-level start names
-       nothing at all (native's `queuedSubmissionId` is nullable). Neither has a
-       journal entry to own, so neither looks for one. */
+    /* Reorders and queue-level starts have no journal entry of their own. */
     const entryTargeted = command.action !== "reorder" && (command.action === "add" || command.entryId !== undefined);
     const entry = entryTargeted ? records.find(e => e.entryId === (command.action === "add" ? command.operationId : command.entryId)) : null;
     if (entryTargeted && (!entry || entry.mutationOperationId !== command.operationId)) throw new Error("native queue mutation identity is unavailable");
     const version = entry?.versions.find(v => v.revision === entry.revision);
+    let binding = command.action === "add" && entry ? entry.binding : command.binding;
+    const succession = this.port.succession?.(command.conversationId, binding);
+    if (succession?.status === "refused") {
+      await transition({ phase: "refused", reason: succession.reason });
+      return;
+    }
+    if (succession?.status === "pending") return false;
+    const rebinding = succession?.status === "committed" && !sameNativeQueueBinding(binding, succession.binding);
+    if (rebinding) {
+      if (command.action !== "add" || entry?.state !== "admitted" || version?.input || entry.nativeSubmissionId || entry.proof) {
+        await transition({ phase: "refused", reason: "native queue submitted input belongs to the previous runtime" });
+        return;
+      }
+      binding = succession.binding;
+    }
+    const host = this.port.resolveHost(command.conversationId);
+    const native = host?.nativeQueue;
+    const owns = () => {
+      const current = this.port.binding(command.conversationId);
+      return host === this.port.resolveHost(command.conversationId) && current && sameNativeQueueBinding(current, binding);
+    };
+    if ((!host || !native) && rebinding && sameNativeQueueBinding(this.port.binding(command.conversationId) ?? command.binding, binding)) return false;
+    if (!host || !native || !owns() || native.queue.threadId !== binding.threadId) {
+      await transition({ phase: "refused", reason: "native queue host or account ownership changed" });
+      return;
+    }
     let actuated = false;
     let prepared = false;
     try {
-      const input = entry && version ? version.input ?? await native.prepare(entry, version) : [];
-      const health = await host.health();
+      const input = entry && version ? version.input ?? await native.prepare({ ...entry, binding }, version) : [];
+      const health = await host.health().catch(error => {
+        if (rebinding && owns()) return null;
+        throw error;
+      });
+      if (!health) return false;
+      if (rebinding && owns() && (health.status === "dead" || health.status === "unhosted")) return false;
+      if (rebinding && owns() && health.status === "attention" && health.activeTurnRef === null) return false;
       if (!owns() || health.status === "dead" || health.status === "unhosted") throw new StructuredSendRefusedError("native queue writer is unavailable");
       if (command.turnId !== undefined && command.turnId !== health.activeTurnRef) throw new StructuredSendRefusedError("stale-turn");
       if ((command.action === "start" || command.action === "send-now") && health.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
       if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && health.status !== "idle") throw new StructuredSendRefusedError("idle state is unproven");
       if (command.action === "add" && health.status === "attention" && health.activeTurnRef === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
       // Atomic journal CAS: a second executor cannot pass this boundary.
-      await transition({ phase: "prepared", input });
+      await transition({ phase: "prepared", input, ...(rebinding ? { binding } : {}) });
       prepared = true;
       if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
       actuated = true;
@@ -118,7 +145,8 @@ export class NativeQueueExecutor {
       }
       const refused = error instanceof NativeQueueProtocolRefusal || error instanceof NativeQueueNotSubmittedError || error instanceof StructuredSendRefusedError;
       await transition({ phase: refused || !actuated ? "refused" : "uncertain",
-        reason: refused ? error.message.slice(0, 240) : "native queue mutation outcome is unknown; no mutation was retried" });
+        reason: refused || !actuated ? (error instanceof Error ? error.message : String(error)).slice(0, 240)
+          : "native queue mutation outcome is unknown; no mutation was retried" });
     }
   }
 
