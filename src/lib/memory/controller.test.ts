@@ -259,6 +259,10 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
     resumeSpecFor: (_root, pathname) => mode === "relay" && pathname === child ? null : ({ command: "synthetic", engine, cwd: root, transcript, windowName: "synthetic", launchProfile: emptyLaunchProfile({ cwd: root }) }),
     deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } });
   expect(result.ok).toBe(true);
+  // Another submission queued before actuation can journal after this receipt.
+  fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
+    ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Earlier queued input" } }
+    : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Earlier queued input" }] } }) + "\n");
   const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
     prompt_id: "synthetic-machine", turn_id: "synthetic-machine", prompt: wire };
   expect(await offerForHook(request, input)).toBe("");

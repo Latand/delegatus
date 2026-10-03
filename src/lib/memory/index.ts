@@ -302,8 +302,13 @@ export class MemoryIndex {
       for (const delivery of deliveries) {
         const journal = delivery.transcript ?? (delivery.id.startsWith("spawn:") ? transcript : undefined);
         if (journal && engine) {
-          const journaled = nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0);
-          if (journaled && journaled.key !== cursor?.key) continue;
+          const journaled = nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt));
+          if (journaled && journaled.key !== cursor?.key) {
+            // Retire only the matching delivery occurrence. Unrelated queued
+            // records can precede actuation and carry no receipt evidence.
+            db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(journaled.key, delivery.id);
+            continue;
+          }
         }
         db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(request, delivery.id);
         return delivery.origin;

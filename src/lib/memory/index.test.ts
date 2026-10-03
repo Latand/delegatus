@@ -342,6 +342,9 @@ test("an unobserved terminal delivery cannot suppress a later identical typed oc
     const transcript = path.join(root, "synthetic.jsonl");
     fs.writeFileSync(transcript, "");
     index.recordTerminalDelivery("synthetic-delivery", "synthetic-conversation", "Repeat synthetic input", "agent", transcript);
+    fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-queued", message: { role: "user", content: "Earlier queued input" } }) + "\n");
+    index.close(); // Pending authorship survives an unrelated journal and reload.
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-other", "Different typed input", transcript, "claude")).toBeNull();
     fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Repeat synthetic input" } }) + "\n");
     expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBeNull();
   } finally {

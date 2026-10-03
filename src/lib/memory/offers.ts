@@ -15,7 +15,7 @@ export function offeredMemoryForTranscript(filename: string): Record<string, str
     for (const turn of index.nativeTurns(conversation.id, filename)) {
       let key = turn.occurrence;
       if (!key) {
-        const occurrence = nativeOccurrenceAfter(filename, conversation.engine as "claude" | "codex", turn.offset);
+        const occurrence = nativeOccurrenceAfter(filename, conversation.engine as "claude" | "codex", turn.offset, turn.digest);
         if (occurrence?.digest === turn.digest && index.bindNativeTurn(conversation.id, turn.request, occurrence.key)) key = occurrence.key;
       }
       if (key) native.set(turn.request, key);

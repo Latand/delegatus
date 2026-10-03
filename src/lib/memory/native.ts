@@ -4,7 +4,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
 /** The next journaled user occurrence after a hook's byte cursor. Read work
  * is bounded independently of transcript length; never join by words alone. */
-export function nativeOccurrenceAfter(filename: string, engine: "claude" | "codex", offset: number) {
+export function nativeOccurrenceAfter(filename: string, engine: "claude" | "codex", offset: number, digest?: string) {
   let fd: number | undefined;
   try {
     fd = fs.openSync(filename, "r");
@@ -18,7 +18,10 @@ export function nativeOccurrenceAfter(filename: string, engine: "claude" | "code
       try {
         const row = JSON.parse(line);
         const user = normalizeSessionLine(engine, row).find(({ record }) => record.kind === "message" && record.role === "user");
-        if (user?.record.kind === "message") return { key: `native:${messageTextDigest(line)}`, digest: messageTextDigest(user.record.text) };
+        if (user?.record.kind === "message") {
+          const occurrenceDigest = messageTextDigest(user.record.text);
+          if (!digest || occurrenceDigest === digest) return { key: `native:${messageTextDigest(line)}`, digest: occurrenceDigest };
+        }
       } catch { /* A concurrently appended partial record is retried later. */ }
     }
   } catch { /* No materialized transcript yet. */ }
