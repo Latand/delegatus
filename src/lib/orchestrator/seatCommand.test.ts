@@ -702,6 +702,38 @@ test("adoption refuses a conversation whose project, cwd, transcript, or lifecyc
   }
 });
 
+test("rotation reserves the successor on the incumbent's task without changing its launch parent", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  saveTasks([]);
+  const registry = new AgentRegistry(path.join(sandbox, "rotation-membership.json"), undefined, undefined, { sqliteMode: "off" });
+  const launches: string[] = [];
+  const { deps } = dependencies({
+    spawn: async (body) => {
+      const result = registry.beginSpawnRequest({
+        engine: "claude", cwd: "/workspace", explicitProject: "proj-a",
+        role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+        clientAttemptId: String(body.clientAttemptId), requestDigest: spawnAdmissionBodyDigest(body),
+        launchProfile: emptyLaunchProfile({ cwd: "/workspace", title: String(body.title) }),
+      });
+      if (result.kind === "conflict") throw new Error("unexpected conflict");
+      expect(result.receipt.launchProfile.parentConversationId).toBeNull();
+      launches.push(result.receipt.conversationId);
+      return { status: 200, body: { ok: true, conversationId: result.receipt.conversationId, path: null } };
+    },
+  });
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  const original = loadTasks()[0]!;
+  saveTasks([{ ...original, text: "Keep the operator's seat title", details: "Keep these notes", board: "shown" }]);
+  for (const clientRequestId of ["rotation_membership_1", "rotation_membership_2"]) {
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId }, deps)).status).toBe(200);
+  }
+  const tasks = loadTasks();
+  expect(tasks).toHaveLength(1);
+  expect(tasks[0]).toMatchObject({ id: original.id, text: "Keep the operator's seat title", details: "Keep these notes", board: "shown" });
+  expect(tasks[0]!.assignments.map(a => a.conversationId)).toEqual(launches);
+});
+
 test("rotation composes a bounded handoff, switches designation atomically, and links both cards", async () => {
   const { deps } = dependencies();
   await executeOrchestratorSeatRequest(spawnRequest(), deps);

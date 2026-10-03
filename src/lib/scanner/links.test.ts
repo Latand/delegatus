@@ -156,6 +156,7 @@ describe("linkEntries", () => {
     const childPath = path.join(SANDBOX, "container-stage-child.jsonl");
     const parentConversation = registry.ensureConversation("claude", parentPath, "work");
     const begun = registry.beginSpawnRequest({
+      launchProfile: { title: "Lineage lookup fixture" },
       engine: "claude",
       cwd: SANDBOX,
       launchProfile: { title: "Build the requested change" },
@@ -195,6 +196,7 @@ describe("linkEntries", () => {
     const childPath = path.join(SANDBOX, "provenance-lookup-child.jsonl");
     const parentConversation = registry.ensureConversation("claude", parentPath, "work");
     const begun = registry.beginSpawnRequest({
+      launchProfile: { title: "Lineage lookup fixture" },
       engine: "claude",
       cwd: SANDBOX,
       launchProfile: { title: "Build the requested change" },
@@ -238,6 +240,7 @@ describe("linkEntries", () => {
     const childPath = path.join(SANDBOX, "enrolled-handoff-child.jsonl");
     const parentConversation = registry.ensureConversation("claude", parentPath, "work");
     const begun = registry.beginSpawnRequest({
+      launchProfile: { title: "Lineage lookup fixture" },
       engine: "claude",
       cwd: SANDBOX,
       launchProfile: { title: "Build the requested change" },

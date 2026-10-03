@@ -5,13 +5,15 @@ import path from "node:path";
 
 import { createTranscriptHostObserver, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
+import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
 import { allowedKillTarget, applyResourceTargets, buildResourceSnapshot, canonicalResourceEntry, conflictingResourceHost, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES } from "./resources";
 
-const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node") || "node";
-const NODE_SHELL = "'" + NODE_BIN.replaceAll("'", "'\\''") + "'";
+const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
+const NODE_SHELL = shellQuote(NODE_BIN);
 
 const SESSION_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const SECOND_SESSION_ID = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
@@ -351,7 +353,7 @@ async function withResourceWorkerChunks<T>(
   const pidFile = path.join(directory, "pid");
   const encodedChunks = JSON.stringify(chunks.map((chunk) => chunk.toString("base64")));
   writeFileSync(executable, [
-    "#!/usr/bin/env node",
+    `#!${NODE_BIN}`,
     'const { readFileSync, writeFileSync } = require("node:fs");',
     `writeFileSync(${JSON.stringify(pidFile)}, readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0]);`,
     `const chunks = ${encodedChunks}.map((chunk) => Buffer.from(chunk, "base64"));`,
@@ -1641,7 +1643,7 @@ describe("resource recurring reads", () => {
           const escapedReady = path.join(directory, "term-escaped-ready");
           const memberReady = path.join(directory, "term-member-ready");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/env node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const [pidFile, readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
@@ -1653,7 +1655,7 @@ describe("resource recurring reads", () => {
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/env node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedReady, memberReady, pipes] = process.argv.slice(2);',
@@ -1776,7 +1778,7 @@ describe("resource recurring reads", () => {
           const transitionArmed = path.join(directory, "owner-transition-armed");
           const transitionOrder = path.join(directory, "owner-transition-order");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/env node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
@@ -1789,7 +1791,7 @@ describe("resource recurring reads", () => {
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/env node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedNamespace, escapedReady, memberReady, ownerMode, transitionOrder] = process.argv.slice(2);',
@@ -1907,7 +1909,7 @@ describe("resource recurring reads", () => {
       const escapedScript = path.join(directory, "retained-namespace-child.cjs");
       const memberScript = path.join(directory, "retained-namespace-member.cjs");
       writeFileSync(escapedScript, [
-        '#!/usr/bin/env node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
         'process.on("SIGTERM", () => {});',
@@ -1919,7 +1921,7 @@ describe("resource recurring reads", () => {
         '',
       ].join("\n"));
       writeFileSync(memberScript, [
-        '#!/usr/bin/env node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [escapedScript, pidFile, namespaceFile, readyFile, memberReady] = process.argv.slice(2);',
@@ -1995,7 +1997,7 @@ describe("resource recurring reads", () => {
     await withResourceWorkerScript((directory) => {
       const memberScript = path.join(directory, "concurrent-term-member.cjs");
       writeFileSync(memberScript, [
-        '#!/usr/bin/env node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [directory, key] = process.argv.slice(2);',
@@ -2141,7 +2143,9 @@ describe("resource recurring reads", () => {
 
   test("cleanup never adopts a recycled process group after the original leader exits", async () => {
     await withResourceWorkerScript([
-      "read -r _",
+      // Consume the request before exiting so this exercises exit cleanup,
+      // rather than racing the input write and reporting EPIPE.
+      "cat > /dev/null",
       "exit 0",
     ], async () => {
       let leaderPid = 0;

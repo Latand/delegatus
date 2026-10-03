@@ -127,8 +127,8 @@ test("a legacy display-name ownership collapses into the cwd repository identity
 
 test("explicit project validation rejects ambiguous aliases", () => {
   expect(validExplicitProject(LLV_PROJECT)).toBe(LLV_PROJECT);
-  expect(validExplicitProject("latand")).toBe("latand");
-  expect(validExplicitProject("  latand  ")).toBe("latand");
+  expect(validExplicitProject("selected-project")).toBe("selected-project");
+  expect(validExplicitProject("  selected-project  ")).toBe("selected-project");
   expect(validExplicitProject("")).toBeNull();
   expect(validExplicitProject("   ")).toBeNull();
   expect(validExplicitProject("has space")).toBeNull();
@@ -143,7 +143,7 @@ test("ownership normalization fails closed on malformed durable records", () => 
   expect(normalizeProjectOwnership(valid)).toEqual(valid);
   expect(normalizeProjectOwnership(null)).toBeNull();
   expect(normalizeProjectOwnership(undefined)).toBeNull();
-  expect(normalizeProjectOwnership("latand")).toBeNull();
+  expect(normalizeProjectOwnership("selected-project")).toBeNull();
   expect(normalizeProjectOwnership({ ...valid, source: "scanner" })).toBeNull();
   expect(normalizeProjectOwnership({ ...valid, project: "" })).toBeNull();
   expect(normalizeProjectOwnership({ project: LLV_PROJECT, source: "relocation" }))

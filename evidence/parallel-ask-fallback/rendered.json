@@ -1,0 +1,65 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1440,
+      "message": "Check the review status",
+      "notice": "Seat idle — sent directly.",
+      "geometry": {
+        "x": 10,
+        "right": 1430,
+        "bottom": 118,
+        "width": 1420,
+        "inkWidth": 117.640625,
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "message": "Check the review status",
+      "notice": "Seat idle — sent directly.",
+      "geometry": {
+        "x": 10,
+        "right": 380,
+        "bottom": 118,
+        "width": 370,
+        "inkWidth": 117.640625,
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "message": "Перевір стан рев'ю",
+      "notice": "Оркестратор вільний — надіслано напряму.",
+      "geometry": {
+        "x": 10,
+        "right": 1430,
+        "bottom": 118,
+        "width": 1420,
+        "inkWidth": 218.84375,
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "message": "Перевір стан рев'ю",
+      "notice": "Оркестратор вільний — надіслано напряму.",
+      "geometry": {
+        "x": 10,
+        "right": 380,
+        "bottom": 118,
+        "width": 370,
+        "inkWidth": 218.84375,
+        "overflow": false
+      },
+      "pageErrors": []
+    }
+  ]
+}
