@@ -372,7 +372,7 @@ function structuredSnapshot() {
           startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null },
           ...(feedContinuityStep ? Array.from({ length: 9 }, (_, index) => ({
             itemId: `continuity-tool-${index}`, text: "", phase: "awaiting-echo" as const, startedAt: iso(58 - index), completedAt: iso(58 - index),
-            tool: { id: `continuity-tool-${index}`, name: "Bash", args: { command: "pwd" }, status: "ok" as const },
+            tool: { engine: "claude" as const, name: "Bash", args: { command: "pwd" }, status: "ok" as const },
           })) : [])],
       } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
