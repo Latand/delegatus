@@ -1,5 +1,5 @@
 {
-  "commit": "20df6efe33bb76e258b6bb54873616c7786de2d0",
+  "commit": "6003279ebd36dd3cd0676f16eda1c3cfd7e75feb",
   "frames": {
     "1440-en-off": {
       "blockerRows": [],
@@ -354,7 +354,7 @@
     },
     "1440-en-install-available-installation": {
       "overflow": 0,
-      "text": "Update to bbbbbbb (1.6.1)UpdateThis builds the new version. Nothing restarts until you choose to.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
       "action": false,
       "buttons": [
         {
@@ -382,7 +382,63 @@
     },
     "1440-en-install-package-installation": {
       "overflow": 0,
-      "text": "Update to bbbbbbb (1.6.2)UpdateThis builds the new version. Nothing restarts until you choose to.Fetch bbbbbbbInstall dependenciesReady",
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 69.8125,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nOn. Green merges will build and apply at a quiet moment.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 69.8125,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nAutomatic updates are unavailable for this install."
+    },
+    "1440-en-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
       "action": false,
       "buttons": [
         {
@@ -401,7 +457,7 @@
       "overflow": 0,
       "card": {
         "x": 185,
-        "y": 350,
+        "y": 416,
         "width": 1070,
         "height": 126
       },
@@ -410,7 +466,7 @@
     },
     "1440-en-install-restart-terminal-installation": {
       "overflow": 0,
-      "text": "Restart this launcher from its terminal once to enable one-click updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Restart this launcher from its terminal once to enable one-click updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -418,7 +474,7 @@
     },
     "1440-en-install-start-launcher-installation": {
       "overflow": 0,
-      "text": "Restart this install from its terminal with the launcher to enable updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Restart this install from its terminal with the launcher to enable updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -884,7 +940,7 @@
     },
     "1440-uk-install-available-installation": {
       "overflow": 0,
-      "text": "Оновити до bbbbbbb (1.6.1)ОновитиЦе збирає нову версію. Нічого не перезапускається, доки ви цього не вирішите.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
       "action": false,
       "buttons": [
         {
@@ -912,7 +968,63 @@
     },
     "1440-uk-install-package-installation": {
       "overflow": 0,
-      "text": "Оновити до bbbbbbb (1.6.2)ОновитиЦе збирає нову версію. Нічого не перезапускається, доки ви цього не вирішите.Завантажити bbbbbbbВстановити залежностіГотово",
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 79.59375,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nУвімкнено. Після зеленого мерджу оновлення застосовується в тиху хвилину.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 79.59375,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nАвтооновлення недоступне для цієї інсталяції."
+    },
+    "1440-uk-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
       "action": false,
       "buttons": [
         {
@@ -931,7 +1043,7 @@
       "overflow": 0,
       "card": {
         "x": 185,
-        "y": 350,
+        "y": 416,
         "width": 1070,
         "height": 126
       },
@@ -940,7 +1052,7 @@
     },
     "1440-uk-install-restart-terminal-installation": {
       "overflow": 0,
-      "text": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -948,7 +1060,7 @@
     },
     "1440-uk-install-start-launcher-installation": {
       "overflow": 0,
-      "text": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -1414,7 +1526,7 @@
     },
     "390-en-install-available-installation": {
       "overflow": 0,
-      "text": "Update to bbbbbbb (1.6.1)UpdateThis builds the new version. Nothing restarts until you choose to.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
       "action": false,
       "buttons": [
         {
@@ -1442,7 +1554,63 @@
     },
     "390-en-install-package-installation": {
       "overflow": 0,
-      "text": "Update to bbbbbbb (1.6.2)UpdateThis builds the new version. Nothing restarts until you choose to.Fetch bbbbbbbInstall dependenciesReady",
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nOn. Green merges will build and apply at a quiet moment.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nAutomatic updates are unavailable for this install."
+    },
+    "390-en-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
       "action": false,
       "buttons": [
         {
@@ -1461,7 +1629,7 @@
       "overflow": 0,
       "card": {
         "x": 16,
-        "y": 444,
+        "y": 642,
         "width": 358,
         "height": 179.5
       },
@@ -1470,7 +1638,7 @@
     },
     "390-en-install-restart-terminal-installation": {
       "overflow": 0,
-      "text": "Restart this launcher from its terminal once to enable one-click updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Restart this launcher from its terminal once to enable one-click updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -1478,7 +1646,7 @@
     },
     "390-en-install-start-launcher-installation": {
       "overflow": 0,
-      "text": "Restart this install from its terminal with the launcher to enable updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Restart this install from its terminal with the launcher to enable updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -1944,7 +2112,7 @@
     },
     "390-uk-install-available-installation": {
       "overflow": 0,
-      "text": "Оновити до bbbbbbb (1.6.1)ОновитиЦе збирає нову версію. Нічого не перезапускається, доки ви цього не вирішите.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
       "action": false,
       "buttons": [
         {
@@ -1972,7 +2140,63 @@
     },
     "390-uk-install-package-installation": {
       "overflow": 0,
-      "text": "Оновити до bbbbbbb (1.6.2)ОновитиЦе збирає нову версію. Нічого не перезапускається, доки ви цього не вирішите.Завантажити bbbbbbbВстановити залежностіГотово",
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nУвімкнено. Після зеленого мерджу оновлення застосовується в тиху хвилину.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nАвтооновлення недоступне для цієї інсталяції."
+    },
+    "390-uk-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
       "action": false,
       "buttons": [
         {
@@ -1991,7 +2215,7 @@
       "overflow": 0,
       "card": {
         "x": 16,
-        "y": 462,
+        "y": 660,
         "width": 358,
         "height": 179.5
       },
@@ -2000,7 +2224,7 @@
     },
     "390-uk-install-restart-terminal-installation": {
       "overflow": 0,
-      "text": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
@@ -2008,7 +2232,7 @@
     },
     "390-uk-install-start-launcher-installation": {
       "overflow": 0,
-      "text": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "text": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
       "action": false,
       "buttons": [],
       "clippedText": false,
