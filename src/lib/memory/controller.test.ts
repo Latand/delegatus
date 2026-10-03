@@ -49,7 +49,7 @@ for (const mode of ["delayed input", "delayed body", "unconfirmed", "successful"
     if (mode === "delayed input") await Bun.sleep(1100);
     const id = memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)[0].id;
     return Response.json({ answers: { [id]: { noul: .8 } }, usage: { cost: .0001 } });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   let finished: Promise<string> = Promise.resolve("");
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
     const input = await request.json();

@@ -32,7 +32,9 @@ test("grounded opening request is the first operator turn on both engines, after
 
 for (const length of [100, 4200]) test(`citation accounting retains the tail of a ${length}-character real reply separately from Jev`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-citation-tail-"));
-  const index = new MemoryIndex(path.join(root, "index.sqlite"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const index = new MemoryIndex();
   try {
     const source = path.join(root, "cross.md");
     fs.writeFileSync(source, "---\nname: Widget cache\ndescription: Widget cache requires invalidation.\nmetadata:\n  type: project\n---\nInvalidate the widget cache.\n");
@@ -45,9 +47,13 @@ for (const length of [100, 4200]) test(`citation accounting retains the tail of 
       const context = memoryTurnContext(filename, "codex", "Continue");
       const reply = context.findLast(t => t.role === "assistant")!;
       index.recordCitations("conversation-fixture", (reply as typeof reply & { citationText?: string }).citationText ?? reply.text);
-      expect(index.offers(entries[0].id)[0].outcome).toBe(suffix.includes("7-8") ? "cited" : null);
+      if (suffix.includes("7-8")) expect(index.offers(entries[0].id)[0].outcome).toBe("cited");
+      else expect(index.offers(entries[0].id)[0].outcome).toBeNull();
       expect(reply.text.length).toBeLessThanOrEqual(4000);
       expect(JSON.stringify(groundedRequest({ engine: "codex", prompt: "Continue", candidates: [], context }))).not.toContain("citationText");
     }
-  } finally { index.close(); fs.rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    index.close(); fs.rmSync(root, { recursive: true, force: true });
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
 });

@@ -41,7 +41,7 @@ for (const status of [401, 429, 503]) test(`HTTP ${status} releases the shared s
   const original = globalThis.fetch;
   const settled: number[] = [];
   try {
-    globalThis.fetch = (async () => new Response(null, { status })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(null, { status })) as unknown as typeof fetch;
     expect(await injectMemory(input, { ...ports(), decide: (body, signal) => decideMemories(body, "fixture", signal), settle: cost => settled.push(cost) })).toBe("");
     expect(settled).toEqual([0]);
   } finally { globalThis.fetch = original; }
@@ -55,7 +55,7 @@ test("malformed billed decisions settle reported cost while uncertain failures r
         if (mode === "network") throw Error("offline");
         if (mode === "timeout") return await new Promise<Response>(() => {});
         return Response.json({ answers: {}, usage: { cost: .002 } });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
       expect(await injectMemory(input, { ...ports(), reserve: cost => { reserved = cost; return true; },
         decide: (body, signal) => decideMemories(body, "fixture", signal), settle: cost => settled.push(cost) })).toBe("");
       expect(settled).toEqual([mode === "billed" ? .002 : reserved]);
