@@ -807,7 +807,7 @@ for (const tokenSource of KEY_SOURCES) {
       const after = await until(() => {
         const record = readRecord(fixture.state);
         return record.web.requestId === "restart-token-protected-web"
-          && ["healthy", "failed"].includes(record.web.state) ? record : null;
+          && record.web.pid !== before.web.pid && ["healthy", "failed"].includes(record.web.state) ? record : null;
       });
       expect(after.web.state).toBe("healthy");
       expect(after.web.revision).toBe((broken ? fixture.first : next.sha).slice(0, 7));
@@ -851,7 +851,7 @@ for (const invalidCharacter of ["\n", "\r", "\u0100", "\u0436", "\u00e9"] as con
 
     const after = await until(() => {
       const record = readRecord(fixture.state);
-      return record.web.requestId === "restart-malformed-token" && ["healthy", "failed"].includes(record.web.state) ? record : null;
+      return record.web.requestId === "restart-malformed-token" && record.web.pid !== before.web.pid && ["healthy", "failed"].includes(record.web.state) ? record : null;
     });
     expect(after.web.state).toBe("healthy");
     expect(after.web.revision).toBe(fixture.first.slice(0, 7));
@@ -873,7 +873,7 @@ for (const invalidCharacter of ["\n", "\r", "\u0100", "\u0436", "\u00e9"] as con
     request(after, "web", "restart-malformed-token-again");
     const again = await until(() => {
       const record = readRecord(fixture.state);
-      return record.web.requestId === "restart-malformed-token-again" && ["healthy", "failed"].includes(record.web.state) ? record : null;
+      return record.web.requestId === "restart-malformed-token-again" && record.web.pid !== after.web.pid && ["healthy", "failed"].includes(record.web.state) ? record : null;
     });
     expect(again.web.state).toBe("healthy");
     expect(again.web.error?.kind).toBe("message");
@@ -898,7 +898,7 @@ test("a key with a tab inside is sent, and the restart moves onto the new releas
   request(before, "web", "restart-tab-token");
   const after = await until(() => {
     const record = readRecord(fixture.state);
-    return record.web.requestId === "restart-tab-token" && ["healthy", "failed"].includes(record.web.state) ? record : null;
+    return record.web.requestId === "restart-tab-token" && record.web.pid !== before.web.pid && ["healthy", "failed"].includes(record.web.state) ? record : null;
   });
   expect(after.web.state).toBe("healthy");
   expect(after.web.error).toBeNull();
