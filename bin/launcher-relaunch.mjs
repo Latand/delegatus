@@ -78,12 +78,13 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   startupLock.release();
   const start = entry => {
     const child = spawn(process.execPath, [...process.execArgv, entry, ...args], { cwd: plan.root, detached: true, stdio: "ignore",
-      env: { ...process.env, LLV_LAUNCHER_REEXEC: loads ? "1" : "0", LLV_LAUNCHER_INSTALL_ROOT: plan.root,
+      env: { ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: plan.root,
         LLV_LAUNCHER_CHECKOUT: plan.root, LLV_LAUNCHER_TRIAL: intent.requestId } });
     child.on("error", () => {}); child.unref(); return child;
   };
   let child = start(loads ? nextEntry : priorEntry);
   let failed = !loads;
+  let startedPrior = !loads;
   const portIndex = args.findIndex(arg => arg === "--port" || arg === "-p");
   const port = Number(portIndex >= 0 ? args[portIndex + 1] : 8898);
   const key = viewerBootGateKey(process.env);
@@ -110,8 +111,8 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       }
     }
     if (child.exitCode !== null || child.signalCode !== null) {
-      if (failed) throw new Error("The prior release could not start; update custody is retained.");
-      failed = true; loads = false; rollback("The replacement launcher failed before readiness."); child = start(priorEntry);
+      if (startedPrior) throw new Error("The prior release could not start; update custody is retained.");
+      failed = true; startedPrior = true; rollback("The replacement launcher failed before readiness."); child = start(priorEntry);
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
