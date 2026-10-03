@@ -1032,6 +1032,15 @@ async function main() {
     if (webRestartTimer) clearTimeout(webRestartTimer);
     webRestartTimer = null;
   };
+    const probeHeaders = () => {
+      // Use the serving child's effective token, but never let a malformed
+      // value reach fetch: Bun's header error includes the rejected value.
+      const { LLV_TOKEN: token } = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
+      const value = typeof token === "string" ? token.trim() : "";
+      const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
+      if (value && !/[^\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
+      return headers;
+    };
   relaunch = createRelaunch({ paths: selfUpdate, installRoot: packageRoot, entry: cliPath,
     release: serverRef.release, servingRelease: () => serverRef.release, record: {
       set: (...input) => record?.set(...input), remove: () => record?.remove(),
@@ -1177,7 +1186,7 @@ async function main() {
   try {
     await waitForReadiness(options.port, relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess);
     if (relaunch.hasTrial()) {
-      const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
+      const page = await probePageAndChunk(options.port, undefined, probeHeaders());
       if (page) throw new Error(page);
     }
   } catch (error) {
@@ -1239,7 +1248,7 @@ async function main() {
       try {
         await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
         if (verifyPage) {
-          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
+          const page = await probePageAndChunk(options.port, undefined, probeHeaders());
           if (page) throw new Error(page);
         }
         handle.state.restarting = false;
@@ -1342,10 +1351,7 @@ async function main() {
         const url = new URL(`http://127.0.0.1:${options.port}/api/self-update/launcher-admission`);
         url.searchParams.set("requestId", requestId);
         url.searchParams.set("gateId", autoGateId);
-        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: {
-          ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
-          ...(runtime.llvToken ? { authorization: `Bearer ${runtime.llvToken}` } : {}),
-        } });
+        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: probeHeaders() });
         if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
           await response.body?.cancel();
           return false;
