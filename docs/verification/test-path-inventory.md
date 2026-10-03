@@ -2,13 +2,180 @@
 
 Inventory of all **1520 tracked test files** at `origin/main` = `1d0eda9302bfa5c1df7e392f6002091ab0c7c7e9` (the fetched start point).
 
-Baseline: 1,333 pass, 167 fail, 3 timeout, 17 gated/skipped. Latest per-file results: **1434 pass, 66 fail, 2 timeout, 18 gated/skipped**; **101 baseline failures now pass**. Remaining failures are assigned below to fenced lanes or explicit decisions; this does not claim all main tests are green.
+Baseline: 1,333 pass, 167 fail, 3 timeout, 17 gated/skipped. Latest per-file results: **1435 pass, 65 fail, 2 timeout, 18 gated/skipped**; **102 baseline failures now pass**. Remaining failures are assigned below to fenced lanes or explicit decisions; this does not claim all main tests are green.
 
-Each executed file ran sequentially in its own process, with unique isolated state/HOME/config and short temporary paths, under the heavy-check flock and an 8 GiB systemd scope. Baseline timeout: 120s; targeted reruns: 300s. Bun 1.4.0; the Python test used Python 3. No live registry or unowned process was stopped. Browser opt-ins and credential prerequisites were not enabled. Tests containing partial skips still count as pass only when their process exited successfully.
+Each executed file ran sequentially in its own process, with unique isolated state/HOME/config and short temporary paths, under the heavy-check flock and an 8 GiB systemd scope. Baseline timeout: 120s; targeted reruns: 300s. Bun 1.4.0; the Python test used Python 3. No live registry or unowned process was stopped. Browser opt-ins and credential prerequisites were not enabled. The C54 rerun supplied compiled CSS and an installed Chromium cache in a disposable source export, exercising both themes without changing committed captures. Tests containing partial skips still count as pass only when their process exited successfully.
 
 P=pass; F=fail; T=timeout; G=gated or prerequisite-skipped (not a Linux exclusion); no entire file was Linux-only skipped. `B→F` means baseline→latest; a single status is unchanged. Causes: B=code bug, S=stale test, M=machine-dependent default/budget, L=state/cache leak, E=environment. L includes within-file singleton leaks exposed by fresh-process execution.
 
 Decisions retained: recapture or retire historical screenshot evidence; reconcile uncertain-delivery expectations in their owning lanes; profile or recalibrate the link-sync CPU budget. Thresholds and pinned captures were preserved. Authenticated pipeline coverage remains gated without an isolated credential.
+
+## Repeating the inventory
+
+Prerequisites: Linux with a working user systemd manager, `flock`, GNU `timeout`, Python 3, Node (including `node` on PATH), Git and Bun **1.4.0**. Run from a clean checkout of the revision to verify. Use the pinned baseline below and pin the candidate with `git rev-parse HEAD`; a moving `origin/main` changes the experiment. The recipe uses disposable clones because evidence tests can rewrite files. Dependencies are installed from each revision's lockfile. Baseline intentionally has no production build; missing CSS/build prerequisites therefore remain baseline failures.
+
+Copy this runner into fresh scratch storage. It uses the original tracked-path selection and environment allowlist. Each invocation runs one phase sequentially; each file gets a new short `/tmp/iv-*` sandbox. No operator HOME, owner token, structured-host link, credentials, browser opt-in or other `LLV_*` setting passes through. Logs and PID receipts stay local.
+
+```bash
+export INVENTORY_OUT=$(mktemp -d /var/tmp/test-inventory.XXXXXX)
+export INVENTORY_BUN=$(command -v bun)
+export INVENTORY_NODE=$(command -v node)
+cat > "$INVENTORY_OUT/run.py" <<'PY'
+import json, os, pathlib, re, shutil, subprocess, sys, tempfile, time
+
+repo = pathlib.Path.cwd()
+out = pathlib.Path(os.environ["INVENTORY_OUT"])
+phase = os.environ.get("INVENTORY_PHASE", "baseline")
+tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+files = sys.argv[1:] or sorted(p for p in tracked if
+    re.search(r"[.](test|spec)[.](tsx?|[cm]?jsx?)$", p) or
+    re.search(r"(^|/)test_[^/]+[.]py$", p))
+assert len(files) == len(set(files)) and all(p in tracked for p in files)
+logs = out / phase
+logs.mkdir()  # A new phase refuses to overwrite previous evidence.
+(out / (phase + "-manifest.json")).write_text(json.dumps(files, indent=2) + "\n")
+(logs / "revision.txt").write_text(subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], text=True))
+for index, file in enumerate(files):
+    row = {"file": file}
+    source = (repo / file).read_text()
+    if "LLV_KANBAN_BROWSER_TEST" in source or "LLV_SWIPE_BROWSER_TEST" in source:
+        row.update(status="gated", reason="explicit browser opt-in remains disabled")
+    else:
+        with tempfile.TemporaryDirectory(prefix="iv-", dir="/tmp") as directory:
+            root = pathlib.Path(directory)
+            for folder in ["s", "h", "c", "t", "d", "cache"]:
+                (root / folder).mkdir()
+            env = {k: v for k, v in os.environ.items() if k in [
+                "PATH", "LANG", "LC_ALL", "TERM", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]}
+            env.update(HOME=str(root / "h"), XDG_CONFIG_HOME=str(root / "c"),
+                XDG_DATA_HOME=str(root / "d"), XDG_CACHE_HOME=str(root / "cache"),
+                LLV_STATE_DIR=str(root / "s"), TMPDIR=str(root / "t"),
+                NODE_ENV="test", CI="1")
+            if os.environ.get("INVENTORY_NODE_QUOTING") == "1":
+                alias = root / "node'$fixture"
+                alias.symlink_to(os.environ["INVENTORY_NODE"])
+                env["LLV_TEST_NODE_BIN"] = str(alias)
+            if os.environ.get("INVENTORY_BROWSER_CACHE"):
+                env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ["INVENTORY_BROWSER_CACHE"]
+            command = ["python3", file] if file.endswith(".py") else [
+                os.environ["INVENTORY_BUN"], "test", "./" + file]
+            start = time.monotonic()
+            logfile = logs / (str(index) + ".log")
+            with logfile.open("w") as log:
+                child = subprocess.Popen(["timeout", "--kill-after=5s",
+                    os.environ.get("INVENTORY_TIMEOUT", "120s"), *command],
+                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                with (out / "pids.jsonl").open("a") as receipts:
+                    receipts.write(json.dumps({"pid": child.pid, "file": file,
+                        "phase": phase, "sandbox": directory}) + "\n")
+                code = child.wait()
+            content = logfile.read_text(errors="replace")
+            counts = {k: int(v) for v, k in re.findall(
+                r"^\s*(\d+) (pass|fail|skip|todo)\s*$", content, re.M)}
+            status = "timeout" if code in [124, 137] else "pass" if code == 0 else "fail"
+            if code == 0 and counts.get("pass", 0) == 0 and counts.get("skip", 0) > 0:
+                status = "prerequisite-skipped"
+            row.update(status=status, code=code, counts=counts,
+                seconds=round(time.monotonic() - start, 2), log=logfile.name)
+    with (out / (phase + ".jsonl")).open("a") as stream:
+        stream.write(json.dumps(row) + "\n")
+    print(json.dumps(row), flush=True)
+PY
+```
+
+Create baseline and candidate clones, install dependencies, then run the baseline with a 120s **process** timeout per path (Bun's own test-case timeouts also apply). The lock surrounds the entire sequential runner and the 8 GiB scope covers its children. An unavailable user systemd manager or dependency install is a prerequisite failure; do not silently drop the scope or lock.
+
+```bash
+export INVENTORY_BASE=1d0eda9302bfa5c1df7e392f6002091ab0c7c7e9
+export INVENTORY_HEAD=$(git rev-parse HEAD)
+for spec in "baseline:$INVENTORY_BASE" "candidate:$INVENTORY_HEAD"; do
+  folder=${spec%%:*}
+  revision=${spec#*:}
+  git clone --shared --no-checkout . "$INVENTORY_OUT/$folder-source"
+  git -C "$INVENTORY_OUT/$folder-source" checkout --detach "$revision"
+  (cd "$INVENTORY_OUT/$folder-source" && "$INVENTORY_BUN" install --frozen-lockfile)
+done
+(cd "$INVENTORY_OUT/baseline-source" &&
+  INVENTORY_PHASE=baseline INVENTORY_TIMEOUT=120s \
+  flock /var/tmp/llv-heavy-gate.lock \
+  systemd-run --user --scope -p MemoryMax=8G python3 "$INVENTORY_OUT/run.py")
+```
+
+For targeted reruns, select exact baseline paths with a changed result in this table, plus every changed executable test. This is a reproducible replacement for the historical scratch selection manifests. Supply a 300s timeout. Run individual additional paths by replacing the argument list with the desired repo-relative path. Each new rerun must have a distinct phase name.
+
+```bash
+mapfile -t reruns < <(python3 - <<'PY'
+import os, pathlib, re, subprocess
+text = pathlib.Path("docs/verification/test-path-inventory.md").read_text()
+paths = {p for p, before, after in re.findall(
+    r"^\| `([^`]+)` \| ([PFTG]) \| ([PFTG]) \|", text, re.M) if before != after}
+changed = subprocess.check_output(["git", "diff", "--name-only",
+    os.environ["INVENTORY_BASE"], os.environ["INVENTORY_HEAD"]], text=True).splitlines()
+paths.update(p for p in changed if re.search(r"[.](test|spec)[.](tsx?|[cm]?jsx?)$", p))
+print("\n".join(sorted(paths)))
+PY
+)
+(cd "$INVENTORY_OUT/candidate-source" &&
+  INVENTORY_PHASE=rerun INVENTORY_TIMEOUT=300s \
+  flock /var/tmp/llv-heavy-gate.lock \
+  systemd-run --user --scope -p MemoryMax=8G \
+  python3 "$INVENTORY_OUT/run.py" "${reruns[@]}")
+```
+
+Browser prerequisites: the ungated C54 suite needs `.next/static/css/*.css` from `bun run build` (the package selects webpack) and Playwright Chromium matching the pinned `playwright-core`. Build and install the browser in scratch, then rerun C54:
+
+```bash
+build_root=$(mktemp -d /tmp/iv-build.XXXXXX)
+mkdir "$build_root"/{h,c,s,t}
+(cd "$INVENTORY_OUT/candidate-source" &&
+  flock /var/tmp/llv-heavy-gate.lock \
+  systemd-run --user --scope -p MemoryMax=8G \
+  timeout --kill-after=5s 900s env -i PATH="$PATH" \
+  HOME="$build_root/h" XDG_CONFIG_HOME="$build_root/c" \
+  LLV_STATE_DIR="$build_root/s" TMPDIR="$build_root/t" \
+  NEXT_TELEMETRY_DISABLED=1 NODE_OPTIONS=--max-old-space-size=6144 \
+  "$INVENTORY_BUN" run build)
+(cd "$INVENTORY_OUT/candidate-source" &&
+  PLAYWRIGHT_BROWSERS_PATH="$INVENTORY_OUT/browsers" \
+  "$INVENTORY_BUN" node_modules/playwright-core/cli.js install chromium)
+(cd "$INVENTORY_OUT/candidate-source" &&
+  INVENTORY_PHASE=browser INVENTORY_TIMEOUT=300s \
+  INVENTORY_BROWSER_CACHE="$INVENTORY_OUT/browsers" \
+  flock /var/tmp/llv-heavy-gate.lock \
+  systemd-run --user --scope -p MemoryMax=8G \
+  python3 "$INVENTORY_OUT/run.py" src/components/mobile/issue1347Evidence.browser.test.tsx)
+```
+
+Require a successful build and browser installation before the last command. Its existing test checks light and dark; generated captures stay in the disposable clone. Leave `LLV_KANBAN_BROWSER_TEST` and `LLV_SWIPE_BROWSER_TEST` unset. Authenticated integration requires a separately provisioned isolated credential; this recipe supplies none.
+
+Aggregation: exit 0 with at least one passing case is P, nonzero is F, 124/137 is T. Explicit opt-in files and zero-pass/all-skip successful processes are G; inspect their skip guards before distinguishing a Linux exclusion from an unmet prerequisite. In this inventory every such skip is a prerequisite. Partial skips with exit 0 remain P. Python exit 0 is P even without Bun counts. Causes require reading the corresponding log; a failed build/browser prerequisite must not be reported as a passing browser check.
+
+The historical result order was `baseline`, `fixed`, `fixed2`, `fixed3`, `fixed4`, `fixed5`, `quoted`, `final`, `final2`, `final3`, followed by this review's C54 rerun. `quoted` enabled `INVENTORY_NODE_QUOTING=1` for the resource/extraction shell-path regressions. For a fresh reproduction, use `baseline`, `rerun`, then `browser`. Fold in that explicit order, replacing only existing baseline keys; an absent rerun retains its baseline result. Never sum process counts across phases. This copyable fold prints the exact per-path table and totals:
+
+```bash
+python3 - baseline rerun browser <<'PY'
+import collections, json, os, pathlib, sys
+out = pathlib.Path(os.environ["INVENTORY_OUT"])
+base = {r["file"]: r for r in map(json.loads, (out / "baseline.jsonl").read_text().splitlines())}
+latest = dict(base)
+for phase in sys.argv[1:]:
+    source = out / (phase + ".jsonl")
+    if source.exists():
+        for row in map(json.loads, source.read_text().splitlines()):
+            if row["file"] in base:
+                latest[row["file"]] = row
+codes = {"pass": "P", "fail": "F", "timeout": "T", "gated": "G", "prerequisite-skipped": "G"}
+for file in sorted(base):
+    print(f'| `{file}` | {codes[base[file]["status"]]} | {codes[latest[file]["status"]]} |')
+print(dict(collections.Counter(codes[r["status"]] for r in latest.values())))
+print("repaired:", sum(base[p]["status"] in ["fail", "timeout"] and
+    latest[p]["status"] == "pass" for p in base))
+PY
+```
+
+Recipe verification used the copied runner under the documented lock/scope: `AccountBadge.render.test.tsx` passed 4 cases; the old C54 selector failed at the unchanged geometry assertion (114px versus -1), then the corrected file passed the full light/dark test (first card bottom 276px). `kanbanBoard.browser.test.tsx` was gated before launch; `pipelineStageHostAccess.integration.test.ts` exited 0 with one prerequisite skip. Folding these actual records produced two P and two G with one repaired failure. Both changed executable files passed lint, and the full fingerprint-aware, commit-aware local privacy gate passed. Committed captures and fenced files remain unchanged.
 
 ## Ownership
 
@@ -93,7 +260,7 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | C51 | B | AttentionPanel.tsx uses raw z-50 outside the shared layer scale; baseline names exact production source. | O14 |
 | C52 | S | Composer height is adaptive; retired fixed 160px expectation receives 143px under phone chrome. | O15 |
 | C53 | S | Review deck tap target uses inline height rather than retired h-12 class; assert actual minimum target size. | — |
-| C54 | E | Required compiled CSS is absent at baseline; full browser run rewrites committed capture artifacts, so recapture versus retirement needs a decision. | — |
+| C54 | S | Baseline lacks compiled CSS; supplying it exposes the stale data-mobile2-row selector (firstRowBottom=-1). Use the current data-phone-card-kind conversation card; full light/dark browser rerun passes in scratch with unchanged geometry assertions and committed captures. | — |
 | C55 | S | Mobile header fixture waits for retired shelf control removed by current phone menu design. | O15 |
 | C56 | S | DOM fixture does not install requestAnimationFrame/cancelAnimationFrame used by production components; browser lifecycle cannot mount normally. | O12 |
 | C57 | S | Seat attention lifecycle projection changed; exact seatState contract/test is active in task-motion work. | O12 |
@@ -666,7 +833,7 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | `src/components/mobile/MobileTaskScreen.entry.dom.test.tsx` | F | P | C30 |
 | `src/components/mobile/chatBudget.test.ts` | P | P | — |
 | `src/components/mobile/directReviewDeck.dom.test.tsx` | F | P | C53 |
-| `src/components/mobile/issue1347Evidence.browser.test.tsx` | F | F | C54 |
+| `src/components/mobile/issue1347Evidence.browser.test.tsx` | F | P | C54 |
 | `src/components/mobile/issue1671Evidence.browser.test.tsx` | G | G | — |
 | `src/components/mobile/mobileBoardModel.test.ts` | P | P | — |
 | `src/components/mobile/mobileChatState.test.ts` | P | P | — |
