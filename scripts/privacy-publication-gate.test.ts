@@ -468,33 +468,6 @@ function installPrivacyPlaceholderFixture(directory: string) {
   return placeholderFixture.result;
 }
 
-// OCR policy coverage uses the real inspector and trusted reproduction path.
-// Keep one independent inspector per immutable catalog: the second spelling
-// of each policy can reuse its verified generator catalog. Real CLI argument
-// and verdict coverage remains in the text/commit policy cases above it.
-const ocrInspectors = new Map<string, typeof import("./privacy-publication-gate")>();
-async function inspectOcrPolicy(image: string, directory: string, environment: Record<string, string> & { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: string }) {
-  const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
-  try {
-    Object.assign(process.env, environment);
-    const catalog = readFileSync(environment.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, "utf8");
-    const key = createHash("sha256").update(catalog).digest("hex");
-    let scanner = ocrInspectors.get(key);
-    if (!scanner) {
-      const loaded: typeof import("./privacy-publication-gate") = await import(`${gate}?ocr-policy=${key}`);
-      ocrInspectors.set(key, loaded);
-      scanner = loaded;
-    }
-    const notices: string[] = [];
-    const findings = scanner.inspectPaths([image], false, false, directory, undefined, notices);
-    return { stdout: Buffer.from(scanner.formatPrivacyReport(findings, notices)), stderr: Buffer.alloc(0), exitCode: findings.size ? 1 : 0 };
-  } finally {
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
-  }
-}
-
 function writeFingerprintCatalog(path: string, value: string): void {
   const compact = value.normalize("NFKC").toLocaleLowerCase("en-US").replaceAll(/[^\p{L}\p{N}]/gu, "");
   writeFileSync(path, JSON.stringify({
@@ -2174,11 +2147,12 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "long template identifiers", text: `export default ${"a".repeat(200_000)} /*c*/ ${tick}${host}${tick}`, pass: false, budget: 30_000 },
       { name: "long prose whitespace", text: " ".repeat(200_000) + host, pass: true, budget: 30_000 },
       { name: "large unquoted tokens", text: `(${host})`.repeat(4000), pass: false, budget: 30_000 },
-      { name: "large chained calls", text: `relay${`("${host}")`.repeat(100_000)};`, pass: false, budget: 30_000 },
+      { name: "large chained calls", text: `relay${`("${host}")`.repeat(100_000)};`, pass: false, budget: 31_000 },
       { name: "large quoted JSON", text: JSON.stringify(Array(10_000).fill(host)), pass: true, budget: 30_000 },
     ];
-    // Hosted whole-case upper bound: 9964.07 ms. A 30 s per-source bound
-    // gives at least 3x that observation and still rejects minute-scale scans.
+    // Hosted whole-case upper bound, including reruns: 10025.04 ms.
+    // The chained-call bound is 31 s; other scans retain 30 s. Each gives
+    // at least 3x its worst observation and still rejects minute-scale scans.
     // Load each configuration once in an isolated child, then measure every
     // input alone. Reusing immutable scanner instances avoids 126 extra imports.
     let boundedRun: Promise<{ code: number; stderr: string; results: Array<Array<{
@@ -2249,19 +2223,103 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         expect(result.report).not.toContain(domain);
       }
     }, 100_000);
+    // Read each immutable corpus across all configurations before moving to
+    // the next channel. This keeps the production preparation cache useful
+    // without sharing configuration-specific verdicts. Every scanner still
+    // inspects every file and reads both real Git histories independently.
+    let relayBatches: ReturnType<typeof prepareRelayBatches> | undefined;
+    async function prepareRelayBatches() {
+      const environmentKeys = ["LLV_PRIVACY_KNOWN_VALUES", "LLV_PRIVACY_KNOWN_VALUES_FILE",
+        "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE", "LLV_PRIVACY_KNOWN_VALUES_FORMAT"];
+      const saved = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
+      try {
+        const batches = [];
+        for (const source of sources) {
+          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+          temporaryDirectories.push(directory);
+          mkdirSync(join(directory, ".git"));
+          const environment = configuration(directory, source);
+          Object.assign(process.env, environment);
+          const modulePath = `${gate}?relay-source=${encodeURIComponent(source)}`;
+          const scanner: typeof import("./privacy-publication-gate") = await import(modulePath);
+          const publications = cases.map((specimen, index) => {
+            const extension = specimen.name.includes("JSON") ? ".json" : specimen.name.includes("shell") ? ".sh" : specimen.name.includes("Python") ? ".py" : specimen.name === "test code" ? ".test.ts" : ".ts";
+            const filename = `case-${index}${extension}`;
+            const path = join(directory, filename);
+            writeFileSync(path, specimen.text);
+            return { path, digest: createHash("sha256").update(filename).digest("hex") };
+          });
+          const identityCases = cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "base-domain email",
+          "review shell bare prefix", "review shell bare suffix", "review shell port suffix"].includes(c.name)
+          || c.name.startsWith("review tagged template")
+          || c.name.startsWith("review returned call tagged suffix")
+          || c.name.startsWith("review Unicode zero-width shell")
+          || c.name.startsWith("review Unicode NFKC shell")
+          || c.name.startsWith("raw quoted wrapper suffix")
+          || c.name.startsWith("raw bare ")
+          || c.name.startsWith("raw entity comment ")
+          || c.name.startsWith("raw entity quoted comment ")
+          || c.name.startsWith("raw Unicode trivia ")
+          || c.name.startsWith("raw template group ")
+          || c.name.startsWith("raw encoded ")
+          || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
+          || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
+          || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name));
+          const commitCases = cases.filter((c) => !c.text.includes("\0") && (["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || ((c.name.startsWith("review ") || c.name.startsWith("raw ")) && c.name !== "review metadata boundary")));
+          const histories = [];
+          for (const [channel, specimens] of [["identity", identityCases], ["commit", commitCases]] as const) {
+            const repository = join(directory, channel);
+            mkdirSync(repository);
+            await runGit(repository, ["init", "--quiet"]);
+            // fast-import preserves git's recorded identity/message behavior
+            // without initializing and committing a new repository per case.
+            const records = [{ name: "base", text: "base", pass: true }, ...specimens];
+            const stream = records.map((specimen, index) => {
+              const name = channel === "identity" && index > 0 ? specimen.text.replace(/[\n<>]/g, "").replace(/^[\x09-\x0d ]+|[\x09-\x0d ]+$/g, "") : "Fixture Tool";
+              const message = channel === "commit" ? specimen.text + "\n" : "fixture\n";
+              return `commit refs/heads/matrix\nmark :${index + 1}\ncommitter ${name} <noreply@example.invalid> ${index + 1} +0000\ndata ${Buffer.byteLength(message)}\n${message}\n`;
+            }).join("");
+            const imported = Bun.spawnSync(["git", "fast-import", "--quiet", "--export-marks=.git/marks"], { cwd: repository, stdin: Buffer.from(stream), stdout: "pipe", stderr: "pipe" });
+            await runGit(repository, ["symbolic-ref", "HEAD", "refs/heads/matrix"]);
+            const hashes = readFileSync(join(repository, ".git/marks"), "utf8").trim().split("\n").map((line) => line.split(" ")[1]);
+            histories.push({ channel, specimens, repository, imported, hashes });
+          }
+          batches.push({ source, directory, environment, scanner, publications, histories,
+            fileNotices: [] as string[], fileFindings: new Map<import("./privacy-publication-gate").FindingClass, number>(),
+            reviews: [] as Array<{ channel: "identity" | "commit"; specimens: typeof cases;
+              imported: { exitCode: number; stderr: Buffer }; hashes: string[]; notices: string[];
+              findings: Map<import("./privacy-publication-gate").FindingClass, number> }> });
+        }
+        for (const batch of batches) {
+          Object.assign(process.env, batch.environment);
+          batch.fileFindings = batch.scanner.inspectPaths(batch.publications.map((publication) => publication.path),
+            false, true, batch.directory, undefined, batch.fileNotices);
+        }
+        for (const channel of ["identity", "commit"] as const) {
+          for (const batch of batches) {
+            Object.assign(process.env, batch.environment);
+            const history = batch.histories.find((history) => history.channel === channel)!;
+            const notices: string[] = [];
+            const findings = channel === "identity"
+              ? (() => { const result = batch.scanner.mergeBoundaryReview(history.repository, history.hashes[0]); notices.push(...result.notices); return result.findings; })()
+              : batch.scanner.commitMessageFindings(history.repository, history.hashes[0], notices);
+            batch.reviews.push({ ...history, notices, findings });
+          }
+        }
+        return batches;
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+      }
+    }
     for (const source of sources) {
       test.serial(`${source}: file, commit and merge-identity batches assert every specimen`, async () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        mkdirSync(join(directory, ".git"));
-        const environment = configuration(directory, source);
+        const batches = await (relayBatches ??= prepareRelayBatches());
+        const { directory, environment, scanner, publications, fileNotices, fileFindings, reviews } = batches.find((batch) => batch.source === source)!;
         const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
         try {
           Object.assign(process.env, environment);
-          // Each source gets its own module instance: known values are loaded at
-          // import time. Restore the environment before leaving this batch.
-          const modulePath = `${gate}?relay-source=${encodeURIComponent(source)}`;
-          const scanner: typeof import("./privacy-publication-gate") = await import(modulePath);
           // Inspect the complete source bytes once per source configuration.
           // File/line attribution has dedicated CLI regressions elsewhere.
           const sourceFindings = scanner.inspectPaths([gate, import.meta.path], false, true, directory);
@@ -2294,15 +2352,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
             if (savedPath === undefined) delete process.env.PATH; else process.env.PATH = savedPath;
             if (savedOcr === undefined) delete process.env.OCR_TEXT; else process.env.OCR_TEXT = savedOcr;
           }
-          const publications = cases.map((specimen, index) => {
-            const extension = specimen.name.includes("JSON") ? ".json" : specimen.name.includes("shell") ? ".sh" : specimen.name.includes("Python") ? ".py" : specimen.name === "test code" ? ".test.ts" : ".ts";
-            const filename = `case-${index}${extension}`;
-            const path = join(directory, filename);
-            writeFileSync(path, specimen.text);
-            return { path, digest: createHash("sha256").update(filename).digest("hex") };
-          });
-          const fileNotices: string[] = [];
-          const fileFindings = scanner.inspectPaths(publications.map((publication) => publication.path), false, true, directory, undefined, fileNotices);
           const attributed = new Set(fileNotices.map((notice) => `${notice.split(" ")[0].split(":")[1]} ${notice.split(" ")[1]}`));
           // Configuration/path failures cannot silently escape case mapping.
           expect([...fileFindings.values()].reduce((sum, count) => sum + count, 0)).toBe(attributed.size);
@@ -2323,43 +2372,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
             expect(knownFiles.has(digest), specimen.name).toBe(!specimen.pass);
             expect((caseNotices.get(digest) ?? []).join("\n")).not.toContain(domain);
           }
-          const identityCases = cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "base-domain email",
-        "review shell bare prefix", "review shell bare suffix", "review shell port suffix"].includes(c.name)
-        || c.name.startsWith("review tagged template")
-        || c.name.startsWith("review returned call tagged suffix")
-        || c.name.startsWith("review Unicode zero-width shell")
-        || c.name.startsWith("review Unicode NFKC shell")
-        || c.name.startsWith("raw quoted wrapper suffix")
-        || c.name.startsWith("raw bare ")
-        || c.name.startsWith("raw entity comment ")
-        || c.name.startsWith("raw entity quoted comment ")
-        || c.name.startsWith("raw Unicode trivia ")
-        || c.name.startsWith("raw template group ")
-        || c.name.startsWith("raw encoded ")
-        || (c.name.startsWith("raw comment ") && !c.text.includes("\n"))
-        || (c.name.startsWith("raw trivia ") && !(c.pass && c.text.includes("\n")))
-        || /^(?:raw (?:call|index|nested call|multi argument call) (?:prefix|suffix)|raw standalone (?:call|index))/.test(c.name));
-          const commitCases = cases.filter((c) => !c.text.includes("\0") && (["host", "origin", "discovery", "bare domain", "base-domain email", "percent host", "quoted code", "test code", "JSON"].includes(c.name) || ((c.name.startsWith("review ") || c.name.startsWith("raw ")) && c.name !== "review metadata boundary")));
-          for (const [channel, specimens] of [["identity", identityCases], ["commit", commitCases]] as const) {
-            const repository = join(directory, channel);
-            mkdirSync(repository);
-            await runGit(repository, ["init", "--quiet"]);
-            // fast-import preserves git's recorded identity/message behavior
-            // without initializing and committing a new repository per case.
-            const records = [{ name: "base", text: "base", pass: true }, ...specimens];
-            const stream = records.map((specimen, index) => {
-              const name = channel === "identity" && index > 0 ? specimen.text.replace(/[\n<>]/g, "").replace(/^[\x09-\x0d ]+|[\x09-\x0d ]+$/g, "") : "Fixture Tool";
-              const message = channel === "commit" ? specimen.text + "\n" : "fixture\n";
-              return `commit refs/heads/matrix\nmark :${index + 1}\ncommitter ${name} <noreply@example.invalid> ${index + 1} +0000\ndata ${Buffer.byteLength(message)}\n${message}\n`;
-            }).join("");
-            const imported = Bun.spawnSync(["git", "fast-import", "--quiet", "--export-marks=.git/marks"], { cwd: repository, stdin: Buffer.from(stream), stdout: "pipe", stderr: "pipe" });
+          for (const { channel, specimens, imported, hashes, notices, findings } of reviews) {
             expect(imported.exitCode, imported.stderr.toString()).toBe(0);
-            await runGit(repository, ["symbolic-ref", "HEAD", "refs/heads/matrix"]);
-            const hashes = readFileSync(join(repository, ".git/marks"), "utf8").trim().split("\n").map((line) => line.split(" ")[1]);
-            const notices: string[] = [];
-            const findings = channel === "identity"
-              ? (() => { const result = scanner.mergeBoundaryReview(repository, hashes[0]); notices.push(...result.notices); return result.findings; })()
-              : scanner.commitMessageFindings(repository, hashes[0], notices);
             expect(findings.has("inspection_error")).toBe(false);
             const reported = new Set(notices.map((notice) => notice.split(" ")[1]));
             const known = new Set(notices.filter((notice) => notice.includes("known_value")).map((notice) => notice.split(" ")[1]));
@@ -2482,7 +2496,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
             fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
               ...(exactOnly ? { exactOnly: true } : {}) }] }));
-          const result = await inspectOcrPolicy(image, directory, {
+          const result = await runGateArguments(["--repository", directory, "--paths", image], {
             ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
             LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
             OCR_TEXT: ocrText,
