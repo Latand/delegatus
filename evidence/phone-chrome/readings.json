@@ -1,0 +1,653 @@
+{
+  "readings": [
+    {
+      "key": "390-en-light-tasks3",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Background tasks · 3",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "pinned": {
+          "text": "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
+          "open": "Open task card",
+          "sideways": 0
+        },
+        "tasks": {
+          "rows": 3,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        },
+        "taskMenu": {
+          "head": "PID 2146102",
+          "items": [
+            "Stop task",
+            "Show output",
+            "Copy command"
+          ],
+          "sideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-light-pinned-only",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": null,
+        "order": [
+          "pinned",
+          "seat"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-light-tasks8",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Background tasks · 8",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "tasks": {
+          "rows": 8,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-light-empty",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": false,
+        "background": null,
+        "order": [
+          "seat",
+          "pipeline"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-dark-tasks3",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Background tasks · 3",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "pinned": {
+          "text": "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
+          "open": "Open task card",
+          "sideways": 0
+        },
+        "tasks": {
+          "rows": 3,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        },
+        "taskMenu": {
+          "head": "PID 2146102",
+          "items": [
+            "Stop task",
+            "Show output",
+            "Copy command"
+          ],
+          "sideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-dark-pinned-only",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": null,
+        "order": [
+          "pinned",
+          "seat"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-dark-tasks8",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Background tasks · 8",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "tasks": {
+          "rows": 8,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-en-dark-empty",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Read answer aloud"
+      },
+      "rowState": {
+        "pinned": false,
+        "background": null,
+        "order": [
+          "seat",
+          "pipeline"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-light-tasks3",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Фонові задачі · 3",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "pinned": {
+          "text": "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
+          "open": "Відкрити картку",
+          "sideways": 0
+        },
+        "tasks": {
+          "rows": 3,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        },
+        "taskMenu": {
+          "head": "PID 2146102",
+          "items": [
+            "Зупинити задачу",
+            "Показати вивід",
+            "Копіювати команду"
+          ],
+          "sideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-light-pinned-only",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": null,
+        "order": [
+          "pinned",
+          "seat"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-light-tasks8",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Фонові задачі · 8",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "tasks": {
+          "rows": 8,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-light-empty",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": false,
+        "background": null,
+        "order": [
+          "seat",
+          "pipeline"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-dark-tasks3",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Фонові задачі · 3",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "pinned": {
+          "text": "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
+          "open": "Відкрити картку",
+          "sideways": 0
+        },
+        "tasks": {
+          "rows": 3,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        },
+        "taskMenu": {
+          "head": "PID 2146102",
+          "items": [
+            "Зупинити задачу",
+            "Показати вивід",
+            "Копіювати команду"
+          ],
+          "sideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-dark-pinned-only",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": null,
+        "order": [
+          "pinned",
+          "seat"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-dark-tasks8",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": true,
+        "background": "Фонові задачі · 8",
+        "order": [
+          "pinned",
+          "background"
+        ],
+        "sideways": 0
+      },
+      "sheets": {
+        "tasks": {
+          "rows": 8,
+          "standingStop": 0,
+          "hostWord": false,
+          "sideways": 0,
+          "sheetSideways": 0
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "key": "390-uk-dark-empty",
+      "frame": {
+        "barHeight": 52,
+        "barBottom": 52,
+        "feedTop": 57,
+        "gap": 5,
+        "strips": 0,
+        "speechInBar": 0,
+        "reports": true,
+        "sideways": 0,
+        "barBadge": 0
+      },
+      "speak": {
+        "width": 44,
+        "height": 44,
+        "copy": true,
+        "inMessage": true,
+        "header": false,
+        "label": "Прочитати відповідь уголос"
+      },
+      "rowState": {
+        "pinned": false,
+        "background": null,
+        "order": [
+          "seat",
+          "pipeline"
+        ],
+        "sideways": 0
+      },
+      "sheets": {},
+      "pageErrors": []
+    }
+  ],
+  "failures": []
+}

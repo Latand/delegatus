@@ -15664,3 +15664,50 @@ describe("a task card folds the conversations outside this board into one line o
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+
+describe("parallel ask idle fallback", () => {
+  browserTest("composer confirms direct delivery in both languages at desktop and 390 px", async () => {
+    const out = path.resolve(".artifacts/parallel-ask-fallback");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/deputyBlockEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=composer-fallback`, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const message = locale === "uk" ? "Перевір стан рев'ю" : "Check the review status";
+          const textarea = page.locator("textarea");
+          await textarea.fill(message);
+          await textarea.press("Control+Shift+Enter");
+          const notice = page.getByText(translate(locale, "composer.parallelSentDirectly"), { exact: true });
+          await notice.waitFor({ timeout: 5_000 }).catch(async (error) => {
+            await page.screenshot({ path: path.join(out, "failure.png") });
+            console.error(await page.locator("body").innerText(), pageErrors);
+            throw error;
+          });
+          expect(await textarea.inputValue()).toBe("");
+          const body = await page.evaluate(() => (window as unknown as { parallelFallbackBody: { text: string } }).parallelFallbackBody);
+          expect(body.text).toBe(message);
+          const geometry = await notice.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(element);
+            const ink = range.getBoundingClientRect();
+            return { x: box.x, right: box.right, bottom: box.bottom, width: box.width, inkWidth: ink.width, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          expect(geometry.overflow).toBe(false);
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.inkWidth).toBeLessThanOrEqual(geometry.width);
+          expect(geometry.bottom).toBeLessThanOrEqual(900);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          cases.push({ locale, width, message, notice: await notice.innerText(), geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/parallel-ask-fallback", { recursive: true });
+      fs.writeFileSync("evidence/parallel-ask-fallback/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

@@ -414,3 +414,40 @@ test("the expired-sign-in guidance reads in both languages", () => {
     setLocale("en");
   }
 });
+
+/*
+ * Read-aloud lives beside each assistant message on the phone, in the message's
+ * own action row, and nowhere else on the screen: the conversation header no
+ * longer carries a speech control (the operator's call, 2026-10-02).
+ */
+test("phone: the read-aloud control sits in the message's own action row, next to copy, at 44 px", async () => {
+  setViewport("narrowPhone");
+  const realFetch = globalThis.fetch;
+  const info = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+  globalThis.fetch = (async () => new Response(JSON.stringify(info), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  try {
+    const host = mount(<FeedItem item={prose()} speakText="The projection lives in one module." speakId="claude:2026-09-02T13:43:00Z:k" />);
+    const actions = host.querySelector("[data-mobile-message-actions]")!;
+    const deadline = Date.now() + 2_000;
+    while (!actions.querySelector("[data-tts-trigger]") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    const speak = actions.querySelector<HTMLButtonElement>("[data-tts-trigger]")!;
+    expect(speak).toBeTruthy();
+    expect(speak.getAttribute("aria-label")).toBe(tr("tts.read"));
+    expect(speak.hasAttribute("data-tts-header")).toBe(false);
+    /* The control is a full 44 px target, and copy is its neighbour in the row. */
+    expect(classOf(speak)).toContain("h-11");
+    expect(classOf(speak)).toContain("w-11");
+    expect(actions.querySelector(`button[aria-label="${en["feed.copyMd"]}"]`)).toBeTruthy();
+    /* It finds the rendered text it reads aloud from the message's own anchor. */
+    expect(karaokeRoots(speak)).toEqual([host.querySelector<HTMLElement>("[data-tts-body]")!]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("phone: a continuation fragment of an answer carries no read-aloud control of its own", async () => {
+  setViewport("narrowPhone");
+  const host = mount(<FeedItem item={prose()} />);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(host.querySelector("[data-mobile-message-actions] [data-tts-trigger]")).toBeNull();
+});
