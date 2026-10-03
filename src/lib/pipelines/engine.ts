@@ -2789,6 +2789,7 @@ function terminalReviewGrantForFix(
 ): PipelineReviewGrant | null {
   let current: PipelineStageAttempt | undefined = attempt;
   const visited = new Set<string>();
+  const fulfilledReviews = new Set<string>([stage.id]);
   while (current?.activatedBy) {
     const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
     // The nearest continuation root owns this work. Never trace through it
@@ -2797,17 +2798,18 @@ function terminalReviewGrantForFix(
       ? pipeline.reviewGrants?.find((candidate) => candidate.stageId === activation.stageId
         && candidate.terminalAttempt === activation.attempt)
       : null;
-    if (grant && grant.stageId !== stage.id) {
+    if (grant && !fulfilledReviews.has(grant.stageId)) {
       const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
       return review?.onFail ? grant : null;
     }
-    // Passing this grant's own reviewer fulfills its inner obligation. Keep
-    // tracing so an outer granted fix still returns to its original reviewer.
+    // Passed reviewers on this ancestry already fulfilled their obligation;
+    // only an outstanding outer review may receive this return.
     const key = `${activation.stageId}:${activation.attempt}`;
     if (visited.has(key)) break;
     visited.add(key);
     current = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
       .find((candidate) => candidate.n === activation.attempt && !candidate.historical);
+    if (current?.state === "passed") fulfilledReviews.add(activation.stageId);
   }
   return null;
 }
