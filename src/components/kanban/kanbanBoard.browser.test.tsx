@@ -15114,6 +15114,47 @@ describe("task motion and waiting reasons", () => {
     } finally { await browser.close(); server.stop(); }
     expect(gaps).toEqual([]);
   }, 180_000);
+
+  /* A draft nothing has been sent from has started nothing, so its card carries no motion line: the line pushed
+     the prompt field onto the window's bottom edge. Frames at 1440 in en and uk go to LLV_TASK_STATES_PNG_DIR. */
+  browserTest("a card of unsent drafts carries no motion line and keeps its prompt field in the window at 1440 in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: 1440, height: 900 }, "light", locale, "reduce", false);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+          if (await seat.count()) await seat.click();
+          await page.waitForTimeout(600);
+          for (const nth of [1, 2]) {
+            await page.click(`[data-bar-control][aria-label="${locale === "uk" ? "Створити" : "Create"}"]`);
+            await page.getByRole("menuitem", { name: locale === "uk" ? "Нова розмова з агентом" : "New conversation with an agent" }).click();
+            await page.waitForFunction((count) => document.querySelectorAll("[data-kanban-draft] textarea").length >= count, nth, { timeout: 10_000 });
+            await page.waitForTimeout(800);
+            const drafts = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-draft]")].map((draft) => {
+              const area = draft.querySelector("textarea")!.getBoundingClientRect();
+              const card = draft.closest(".card");
+              return { motionLines: card?.querySelectorAll("[data-motion]").length ?? 0, areaBottom: Math.round(area.bottom), windowHeight: window.innerHeight,
+                column: card?.closest<HTMLElement>("[data-status]")?.dataset.status ?? "", opened: draft.contains(document.activeElement) };
+            }));
+            drafts.forEach((draft, index) => {
+              if (draft.motionLines) failures.push(`${locale}-${nth}: draft ${index} card draws ${draft.motionLines} motion line(s)`);
+              /* The draft just opened is the one in focus: its prompt field is in the window, as the operator types in it. */
+              if (draft.opened && draft.areaBottom > draft.windowHeight - 24) failures.push(`${locale}-${nth}: draft ${index} in ${draft.column} ends its prompt at ${draft.areaBottom} in a ${draft.windowHeight} px window`);
+            });
+            await page.screenshot({ path: path.join(out, `unsent-drafts-1440-${locale}-${nth}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 180_000);
 });
 
 describe("agent memory isolation", () => {

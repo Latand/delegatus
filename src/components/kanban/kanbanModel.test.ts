@@ -700,6 +700,12 @@ test("a draft stands in Assigned, unless a reader is open in a card there: then 
   expect(draftCard(new Set(["conversation_fixture_9"])).status).toBe("assigned");
   /* The agent in Assigned is open to read: a draft above it would push it out of the window. */
   expect(draftCard(new Set([conversationIdentity(live)])).status).toBe("inbox");
+  /* Nothing has started on a card of drafts alone, in Assigned or in Inbox: it is not stopped, and no reason is missing. */
+  for (const readers of [undefined, new Set([conversationIdentity(live)])]) {
+    const card = draftCard(readers);
+    expect(card.motion.key).toBe("not-started");
+    expect(taskReasonFiltersOfCard(card)).toEqual([]);
+  }
 });
 
 

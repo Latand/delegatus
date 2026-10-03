@@ -744,7 +744,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       pipelines: summaries,
       stepSummary: stepProjection.summary,
       ...(holdTarget ? { holdTarget: { title: holdTarget.text.split("\n")[0]!, done: holdTarget.status === "done" } } : {}),
-      motion: taskMotion({ status, hold: overridden && overridden !== "blocked" ? undefined : task?.hold, needsYou, working,
+      /* A card holding only unsent drafts has started nothing, so nothing stopped: it reads as not started in any column. */
+      motion: taskMotion({ status: !task && !members.length && !mirrors.length && drafts.length > 0 ? "inbox" : status, hold: overridden && overridden !== "blocked" ? undefined : task?.hold, needsYou, working,
         inFlight: inFlight.length > 0, pipelines: summaries.map(summary => summary.pipeline),
         steps: stepProjection.steps.map(step => ({ motion: step.motion, open: step.effectiveState === "open", hold: step.hold, since: step.since })) }, now * 1000),
       working,
