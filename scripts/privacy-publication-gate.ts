@@ -986,6 +986,10 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
 }
 
 const knownValues = loadKnownValues();
+// A file finding is checked once during inspection and again while producing
+// per-line notices. The prepared text is shared across those views; cache the
+// config-specific match so fingerprint windows are not hashed twice.
+const knownValueMatches = new WeakMap<object, boolean>();
 
 function configuredOcrLanguages(): string | undefined {
   const languages = (process.env.LLV_PRIVACY_OCR_LANGUAGES ?? "eng").trim();
@@ -1735,11 +1739,16 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
     }
     prepared.staticFindings = [...findings];
   }
-  const normalizedText = known.searchable.toLocaleLowerCase("en-US");
-  if (knownValues.values.some((entry) => entry.exactOnly
-    ? known.exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
-    : normalizedText.includes(entry.value.toLocaleLowerCase("en-US")))
-    || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true)) {
+  let matchesKnownValue = knownValueMatches.get(prepared);
+  if (matchesKnownValue === undefined) {
+    const normalizedText = known.searchable.toLocaleLowerCase("en-US");
+    matchesKnownValue = knownValues.values.some((entry) => entry.exactOnly
+      ? known.exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
+      : normalizedText.includes(entry.value.toLocaleLowerCase("en-US")))
+      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true);
+    knownValueMatches.set(prepared, matchesKnownValue);
+  }
+  if (matchesKnownValue) {
     findings.add("known_value");
   }
   return findings;
