@@ -246,3 +246,10 @@ test("a record another process wrote under the key after the pre-read is finishe
   expect(calls.forks).toEqual([]);
   expect(calls.delivered).toEqual([]);
 });
+
+
+test("a stale composer cannot fall back to a replacement seat", async () => {
+  const { ports: current, calls } = ports({ seatBusy: async () => false });
+  expect(await askOrchestratorInParallel({ ...ask, seatConversationId: "old-seat" }, current)).toMatchObject({ ok: false, code: "seat_not_found" });
+  expect(calls.delivered).toEqual([]);
+});

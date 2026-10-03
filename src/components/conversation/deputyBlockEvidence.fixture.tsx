@@ -23,6 +23,8 @@ import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import type { RuntimeSession } from "@/lib/runtime/contracts";
 import type { FileEntry } from "@/lib/types";
 
+import { TmuxComposer } from "@/components/TmuxComposer";
+import { publishSeatProject } from "@/components/orchestrator/seatDeputies";
 import { LogFeed } from "@/components/LogFeed";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { emptyStore } from "@/components/runtime/runtimeModel";
@@ -151,7 +153,7 @@ function session(conversationId: string, items: RuntimeLiveTurnItem[]): RuntimeS
   return {
     conversationId,
     sessionKey: { engine: "claude", sessionId: conversationId },
-    hostKind: "claude-stream-broker",
+    hostKind: "claude-broker",
     host: "hosted",
     turn: "running",
     provenance: "structured",
@@ -164,7 +166,7 @@ function session(conversationId: string, items: RuntimeLiveTurnItem[]): RuntimeS
     workflowId: null,
     cwd: "/workspace/demo",
     artifactPath: null,
-    capabilities: { steer: false, structuredAttention: true },
+    capabilities: { steer: false, structuredAttention: true, imageInput: { supported: true } },
     activeTurnId: `turn_${conversationId}`,
     liveTurn: { turnId: `turn_${conversationId}`, text: "", items },
   } as unknown as RuntimeSession;
@@ -172,6 +174,26 @@ function session(conversationId: string, items: RuntimeLiveTurnItem[]): RuntimeS
 
 const store = emptyStore();
 for (const [conversationId, items] of Object.entries(current.live)) store.sessions[conversationId] = session(conversationId, items);
+if (scenario === "composer-fallback") {
+  // A stale running runtime view beside the server's current idle reading.
+  store.sessions.conversation_seat = session("conversation_seat", []);
+  publishSeatProject("conversation_seat", "delegatus");
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("/api/orchestrator/ghost?")) return Response.json({ conversationId: "conversation_seat", busy: false });
+    if (url === "/api/orchestrator/ghost") return Response.json({ ok: false, code: "seat_not_busy", error: "seat idle" }, { status: 409 });
+    if (url === "/api/runtime/send") {
+      const body = JSON.parse(String(init?.body));
+      Object.assign(window, { parallelFallbackBody: body });
+      return Response.json({ ok: true, operationId: "direct-ask", receipt: {
+        operationId: "direct-ask", idempotencyKey: body.idempotencyKey, conversationId: "conversation_seat",
+        kind: "send", status: "delivered", revision: 1, at: new Date().toISOString(), text: body.text,
+      } });
+    }
+    if (url.startsWith("/api/orchestrator/seat")) return Response.json({ seat: null });
+    return Response.json({ targets: {}, accounts: [], operations: [], receipts: [] });
+  }) as typeof fetch;
+}
 const state: RuntimeBusState = { store, connection: "live", resyncedAt: null, lastEventAt: null, enabled: true, structuredHostsEnabled: true };
 setRuntimeBusForTests({
   getState: () => state,
@@ -213,7 +235,7 @@ const seatFile = {
 
 createRoot(document.getElementById("root")!).render(
   <main data-deputy-evidence={scenario} className="flex min-h-0 flex-1 flex-col bg-canvas text-primary">
-    <LogFeed
+    {scenario === "composer-fallback" ? <TmuxComposer file={seatFile} /> : <LogFeed
       file={seatFile}
       showSvc={false}
       lineFilter=""
@@ -223,6 +245,6 @@ createRoot(document.getElementById("root")!).render(
       setFollow={() => undefined}
       compact
       deputies={current.deputies}
-    />
+    />}
   </main>,
 );
