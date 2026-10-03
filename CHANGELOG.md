@@ -8,6 +8,36 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.9.1] — 2026-10-03
+
+### Added
+- **Update replaces the whole installation.** Checkout and packaged updates
+  replace the resident launcher, Viewer and runtime host together, verify their
+  serving identities, and restore the previous release on failure. Recovery
+  Viewers re-adopt their launcher; manual and older installs receive the exact
+  prerequisite action. Checkout `deploy_exact_sha` uses the same durable apply
+  and settlement path ([#2495]).
+- **Busy installations drain admitted work before an automatic update.** New
+  autonomous work waits while the original cohort finishes. The hold survives
+  recovery, both restart roles and rollback. After six hours the dialog names
+  the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
+
+### Fixed
+- **The host deploy command authenticates on team installations.**
+  `scripts/rebuild.sh` uses the existing controller credential for admission
+  and status polling. The client connects only to a validated loopback address,
+  refuses redirects, and keeps credentials out of arguments and output. Receipt
+  replay and deployment exit codes are preserved ([#2495]).
+- **Bun-only MCP startup checks use the shipped launcher modules.** The macOS
+  newcomer fixture and the hermetic MCP fixtures now copy the published `bin`
+  directory, including platform identity and launcher helpers, so new imports
+  are covered automatically ([#2495]).
+
+### Maintainer notes
+- Release-pointer reads and update admission retain main's asynchronous Git
+  checks together with durable drain custody. This version prepares the npm
+  release; tagging and publication are separate release steps.
+
 ## [1.9.0] — 2026-10-01
 
 ### Added
@@ -1715,7 +1745,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/Latand/delegatus/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Latand/delegatus/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/Latand/delegatus/compare/v1.7.0...v1.7.1
@@ -1901,3 +1932,5 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2385]: https://github.com/Latand/delegatus/pull/2385
 [#2387]: https://github.com/Latand/delegatus/pull/2387
 [#2388]: https://github.com/Latand/delegatus/pull/2388
+[#2430]: https://github.com/Latand/delegatus/pull/2430
+[#2495]: https://github.com/Latand/delegatus/pull/2495

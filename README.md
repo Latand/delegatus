@@ -85,6 +85,9 @@ service, or the exact command for its terminal. Packaged installs download a
 published npm release into the user's cache, so global installation permissions
 are not needed. Docker's runtime-host profile uses its deployment coordinator.
 
+Packaged releases before 1.9.1 need one launch of `bunx delegatus-cli@latest`
+to load this updater. Later updates use the Update dialog.
+
 **Automatic updates**, off by default, waits for green checks and holds new work
 while the current cohort finishes. The dialog shows the work it awaits and asks
 for a decision when the drain overruns. A failed automatic apply rolls back and
