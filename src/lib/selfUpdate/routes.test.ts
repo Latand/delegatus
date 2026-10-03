@@ -688,7 +688,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
   });
 
-  test.each(["accepted", "refused"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {
+  test.each(["accepted", "refused", "overlap"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {
     const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     h.deps.bun = process.execPath;
     const releaseDir = join(h.deps.dir, "built-release");
@@ -697,7 +697,11 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     if (checkoutResult.code !== 0) throw new Error(checkoutResult.stderr);
     mkdirSync(join(releaseDir, ".next")); writeFileSync(join(releaseDir, ".next", "BUILD_ID"), "fixture");
     mkdirSync(join(releaseDir, "bin")); writeFileSync(join(releaseDir, "bin", "launcher-relaunch.mjs"), "delegatus-launcher-relaunch-v1");
-    writeFileSync(join(releaseDir, "bin", "cli.mjs"), 'process.stdout.write("fixture version\\n");');
+    const entered = join(releaseDir, "preflight-entered");
+    const released = join(releaseDir, "preflight-released");
+    writeFileSync(join(releaseDir, "bin", "cli.mjs"), outcome === "overlap"
+      ? `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(entered)}, ""); while (!fs.existsSync(${JSON.stringify(released)})) await new Promise(r => setTimeout(r, 5));`
+      : 'process.stdout.write("fixture version\\n");');
     const pointer = JSON.stringify({ sha: tipSha, dir: releaseDir, checkoutHead: firstSha }); writeFileSync(record.releasePointer, pointer);
     const calls: string[][] = [];
     h.deps.install = {
@@ -707,7 +711,17 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     expect((await snapshot()).action?.id).toBe("restart-service");
     await until(next => next.check.state !== "checking");
-    const result = await h.service.performInstallAction();
+    const first = h.service.performInstallAction();
+    if (outcome === "overlap") {
+      try {
+        const deadline = Date.now() + 2_000;
+        while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+        expect(existsSync(entered)).toBe(true);
+        expect(await h.service.performInstallAction()).toMatchObject({ ok: false, status: 409 });
+        expect(calls).toHaveLength(0);
+      } finally { writeFileSync(released, ""); await first; }
+    }
+    const result = await first;
     if (outcome === "refused") {
       expect(result).toMatchObject({ ok: false, status: 503 });
       expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed" });

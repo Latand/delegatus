@@ -1375,7 +1375,7 @@ export class SelfUpdateService {
         if (rollbackPointer === undefined) return refuse(409, "cannot-restart", "The prior serving release cannot be verified");
         if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
         this.apply.begin(record, release.sha, "operator", undefined, { rollbackPointer,
-          rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "ready" });
+          rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "building" });
         this.apply.patch({ externalRestart: true });
         // An old bootstrap cannot read the trial if the new entry fails before
         // loading its recovery code. Reject that entry before stopping anything.
@@ -1396,6 +1396,7 @@ export class SelfUpdateService {
           this.changes.emit();
           return refuse(503, "cannot-restart", "The replacement launcher could not load; the prior release is restored for the next start");
         }
+        this.apply.patch({ state: "ready" });
         const runner = this.runnerFor(record);
         runner.restore({ ...idleUpdate(CHECKOUT_STEPS), state: "done", target: release.sha, targetShort: release.sha.slice(0, 7), releaseDir: release.dir,
           startedAt: this.apply.current!.startedAt, finishedAt: new Date(this.deps.now()).toISOString(), steps: idleUpdate(CHECKOUT_STEPS).steps.map(step => ({ ...step, state: "done" })) });
