@@ -109,6 +109,8 @@ export interface StructuredMessageDependencies {
   previewImageRefs?: (images: readonly RuntimeImageUpload[]) => StructuredImageRef[];
   /** Cross-process fence spanning image publication and durable reservation. */
   withImageAdmissionLock?: <T>(operation: () => Promise<T>) => Promise<T>;
+  /** Rechecked while holding the reservation lock, before a new delivery is persisted. */
+  admissionGuard?: () => boolean;
   executeSwitch?: (conversationId: ViewerConversationId, registry: AgentRegistry) => Promise<RegistryConversation>;
   /** Set only by startup recovery when it delivers the continuation an
       interruption obligation is owed (#1835). A dependency on purpose: nothing
@@ -183,6 +185,13 @@ function refusedBeforeReservation<T extends Extract<StructuredMessageResult, { o
   return { ...result, admission: "refused" };
 }
 
+class AdmissionGuardRejectedError extends Error {
+  constructor() {
+    super("delivery admission guard rejected the request");
+    this.name = "AdmissionGuardRejectedError";
+  }
+}
+
 function ownershipUnavailable(condition: ConversationDeliverabilityCondition = "synchronizing"): Extract<StructuredMessageResult, { ok: false }> {
   return refusedBeforeReservation({
     ok: false,
@@ -247,6 +256,7 @@ function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok:
       : error instanceof StructuredEnvelopeTooLargeError
         ? 413
         : 503,
+    ...(error instanceof AdmissionGuardRejectedError ? { admission: "refused" as const } : {}),
     ...(isRuntimeHostTransportFailure(error) ? { transportUncertain: true } : {}),
   };
 }
@@ -1125,6 +1135,7 @@ export async function enqueueStructuredMessage(
   let publishedImages = false;
   const admitDurably = () => withAdmissionSection(admissionKey, async () => {
     const admit = () => {
+      if (dependencies.admissionGuard && !dependencies.admissionGuard()) throw new AdmissionGuardRejectedError();
       const replay = registry.preflightDeliveryReservation(
         conversation.id,
         content.content.text,

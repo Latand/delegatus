@@ -26,7 +26,7 @@ export interface ReportReplyPorts {
   seat(project: string): ReplySeat | null;
   ready(seat: ReplySeat): Promise<boolean>;
   original(binding: OriginalSendBinding): Promise<OriginalSendEvidence>;
-  deliver(binding: OriginalSendBinding & { path: string }): Promise<{ ok: boolean; operationId?: string; delivered?: boolean; refused?: boolean }>;
+  deliver(binding: OriginalSendBinding & { path: string; isRecipientCurrent: () => boolean }): Promise<{ ok: boolean; operationId?: string; delivered?: boolean; refused?: boolean }>;
   withdraw(operationId: string, deliveryId: string | null): Promise<"withdrawn" | "too-late" | "unknown">;
 }
 
@@ -37,8 +37,15 @@ export function reportReplyOperatorId(): string | null {
 }
 
 /** Same durable reservation and runtime journal used by seat directives. */
-export async function deliverReportReply(binding: OriginalSendBinding & { path: string }, dependencies: StructuredMessageDependencies = {}) {
-  const result = await enqueueStructuredMessage({ ...binding, images: [], origin: { kind: "operator" }, policy: "queue", text: binding.text! }, dependencies);
+export async function deliverReportReply(
+  binding: OriginalSendBinding & { path: string; isRecipientCurrent?: () => boolean },
+  dependencies: StructuredMessageDependencies = {},
+) {
+  const { isRecipientCurrent, ...request } = binding;
+  const result = await enqueueStructuredMessage({ ...request, images: [], origin: { kind: "operator" }, policy: "queue", text: binding.text! }, {
+    ...dependencies,
+    admissionGuard: isRecipientCurrent ?? dependencies.admissionGuard,
+  });
   if (!result) return { ok: false, refused: true };
   return { ok: result.ok, operationId: result.operationId,
     delivered: result.ok && result.outcome === "delivered", refused: !result.ok && result.admission === "refused" };
@@ -59,7 +66,7 @@ export const productionReportReplyPorts: ReportReplyPorts = {
     return session?.host === "hosted" && session.turn === "idle";
   },
   original: resolveOriginalSend,
-  deliver: deliverReportReply,
+  deliver: ({ isRecipientCurrent, ...binding }) => deliverReportReply(binding, { admissionGuard: isRecipientCurrent }),
   withdraw: async (operationId, deliveryId) => {
     // A migration hold has not reached the runtime journal. Fence only a
     // still-held row under the same lock its assignment uses.
@@ -141,53 +148,70 @@ function binding(row: ReportReplyRow): OriginalSendBinding {
   return { conversationId: row.recipient!, clientMessageId: bridgeDirectiveId(`telegram_${row.key}`, row.attempt), text: row.text, origin: { kind: "operator" } };
 }
 
+const liveReplyAdmissions = new Map<string, Promise<unknown>>();
+
+async function withLiveReplyAdmission<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const queued = (liveReplyAdmissions.get(key) ?? Promise.resolve()).catch(() => {}).then(run);
+  liveReplyAdmissions.set(key, queued);
+  try {
+    return await queued;
+  } finally {
+    if (liveReplyAdmissions.get(key) === queued) liveReplyAdmissions.delete(key);
+  }
+}
+
 /** The inbox holds busy/rotating seats. An uncertain send keeps its frozen identity. */
 export async function drainReportReplies(store: TelegramBotStore, botId: string, ports: ReportReplyPorts): Promise<void> {
-  for (let row of store.pendingReportReplies()) {
-    if (row.botId !== botId || row.senderId !== ports.operatorId()) continue;
-    const save = (next: ReportReplyRow): boolean => {
-      if (!store.updateReportReply(row, next)) return false;
-      row = { ...next, revision: row.revision + 1 };
-      return true;
-    };
-    const finish = () => {
-      recordBridgeDirectiveAnswer(row.seq, { project: row.project, seatConversationId: row.recipient! }, seatIdentityResolver(id => agentRegistry().canonicalConversationId(id)));
-      save({ ...row, state: "delivered", text: "" });
-    };
-    const current = ports.seat(row.project);
-    if (row.recipient) {
-      const original = await ports.original(binding(row));
-      if (original.kind === "found") {
-        if (!original.current.readable) continue;
-        const receipt = original.current.value;
-        if (receipt.state === "delivered") { finish(); continue; }
-        const safe = receipt.resend === "safe";
-        const rotated = current?.conversationId !== row.recipient;
-        const withdrawn = rotated && receipt.state === "in-flight"
-          && await ports.withdraw(original.operationId, original.deliveryId) === "withdrawn";
-        if (safe || withdrawn) {
-          if (!save({ ...row, attempt: row.attempt + 1, recipient: null, operationId: null, refused: false })) continue;
-        } else continue;
-      } else if (original.kind !== "absent" || row.operationId) continue;
-      else if (current && current.conversationId !== row.recipient) {
-        // The durable delivery path reserves this deterministic message key
-        // before enqueueing. An absent original receipt and no saved operation
-        // prove this binding never crossed that admission boundary.
-        if (!save({ ...row, attempt: row.attempt + 1, recipient: null, operationId: null, refused: false })) continue;
+  for (const pending of store.pendingReportReplies()) {
+    if (pending.botId !== botId || pending.senderId !== ports.operatorId()) continue;
+    await withLiveReplyAdmission(pending.key, async () => {
+      let row = store.pendingReportReplies().find(candidate => candidate.key === pending.key);
+      if (!row) return;
+      const save = (next: ReportReplyRow): boolean => {
+        if (!store.updateReportReply(row, next)) return false;
+        row = { ...next, revision: row.revision + 1 };
+        return true;
+      };
+      const finish = () => {
+        recordBridgeDirectiveAnswer(row.seq, { project: row.project, seatConversationId: row.recipient! }, seatIdentityResolver(id => agentRegistry().canonicalConversationId(id)));
+        save({ ...row, state: "delivered", text: "" });
+      };
+      const current = ports.seat(row.project);
+      if (row.recipient) {
+        const original = await ports.original(binding(row));
+        if (original.kind === "found") {
+          if (!original.current.readable) return;
+          const receipt = original.current.value;
+          if (receipt.state === "delivered") { finish(); return; }
+          const safe = receipt.resend === "safe";
+          const rotated = current?.conversationId !== row.recipient;
+          const withdrawn = rotated && receipt.state === "in-flight"
+            && await ports.withdraw(original.operationId, original.deliveryId) === "withdrawn";
+          if (safe || withdrawn) {
+            if (!save({ ...row, attempt: row.attempt + 1, recipient: null, operationId: null, refused: false })) return;
+          } else return;
+        } else if (original.kind !== "absent" || row.operationId) return;
+        else if (current && current.conversationId !== row.recipient) {
+          // The durable delivery path reserves this deterministic message key
+          // before enqueueing. An absent original receipt and no saved operation
+          // prove this binding never crossed that admission boundary.
+          if (!save({ ...row, attempt: row.attempt + 1, recipient: null, operationId: null, refused: false })) return;
+        }
       }
-    }
-    if (!current || !await ports.ready(current)) continue;
-    // Refresh designation after the asynchronous readiness check.
-    if (ports.seat(row.project)?.conversationId !== current.conversationId) continue;
-    if (!row.recipient && !save({ ...row, recipient: current.conversationId })) continue;
-    if (row.recipient !== current.conversationId) continue;
-    // Persist the dispatch boundary before asking the durable delivery path.
-    if (!save({ ...row, refused: false })) continue;
-    const result = await ports.deliver({ ...binding(row), path: current.path ?? "" });
-    if (result.delivered) { finish(); continue; }
-    if (result.operationId) {
-      recordBridgeDirectivePendingAnswer(row.seq, { project: row.project, seatConversationId: row.recipient! }, result.operationId, seatIdentityResolver(id => agentRegistry().canonicalConversationId(id)));
-    }
-    save({ ...row, operationId: result.operationId ?? row.operationId, refused: result.refused === true });
+      if (!current || !await ports.ready(current)) return;
+      // Refresh designation after the asynchronous readiness check.
+      if (ports.seat(row.project)?.conversationId !== current.conversationId) return;
+      if (!row.recipient && !save({ ...row, recipient: current.conversationId })) return;
+      if (row.recipient !== current.conversationId) return;
+      // Persist the dispatch boundary before asking the durable delivery path.
+      if (!save({ ...row, refused: false })) return;
+      const result = await ports.deliver({ ...binding(row), path: current.path ?? "",
+        isRecipientCurrent: () => ports.seat(row.project)?.conversationId === current.conversationId });
+      if (result.delivered) { finish(); return; }
+      if (result.operationId) {
+        recordBridgeDirectivePendingAnswer(row.seq, { project: row.project, seatConversationId: row.recipient! }, result.operationId, seatIdentityResolver(id => agentRegistry().canonicalConversationId(id)));
+      }
+      save({ ...row, operationId: result.operationId ?? row.operationId, refused: result.refused === true });
+    });
   }
 }

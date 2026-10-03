@@ -13,7 +13,7 @@ process.env.LLV_STATE_DIR = path.join(root, "state");
 const { TelegramBotService, productionTelegramBotDependencies } = await import("./service");
 const { TelegramBotStore } = await import("./store");
 const { FakeBotTransport, fakeBotToken, ok, refused } = await import("./fakeTransport");
-const { reportReplyOperatorId, deliverReportReply, productionReportReplyPorts } = await import("./reportReplies");
+const { reportReplyOperatorId, deliverReportReply, drainReportReplies, productionReportReplyPorts } = await import("./reportReplies");
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 
 // Invented fixture identities, shared with the bot's existing fake-transport tests.
@@ -430,5 +430,82 @@ test("Telegram intake reaches the real durable seat reservation and runtime jour
     journal.transitionOperation(pending.operationId!, "delivered");
     await poll([]);
     expect(store.pendingReportReplies()).toHaveLength(0);
+  } finally { registry.close(); journal.close(); }
+});
+
+test("a live reply dispatch rechecks designation under reservation lock and serializes overlapping drains", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const registryFile = path.join(directory, "registry.json");
+  const journalFile = path.join(directory, "runtime.sqlite");
+  const registry = new AgentRegistry(registryFile);
+  const journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+  try {
+    const firstPath = path.join(directory, "fixture-first-session.jsonl");
+    const successorPath = path.join(directory, "fixture-successor-session.jsonl");
+    const launchProfile = emptyLaunchProfile({ cwd: directory });
+    registry.reconcileConversations([firstPath, successorPath].map(artifactPath => ({
+      engine: "codex", path: artifactPath, accountId: "fixture-account", launchProfile,
+      turn: { state: "idle" as const, source: "empty" as const, terminalAt: null }, observedAt: now.toISOString(),
+    })));
+    const first = registry.conversationForPath(firstPath)!;
+    const successor = registry.conversationForPath(successorPath)!;
+    for (const [conversation, artifactPath] of [[first, firstPath], [successor, successorPath]] as const) {
+      const generation = conversation.generations.at(-1)!;
+      journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server",
+        host: "hosted", turn: "idle", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+      } });
+    }
+    const seatIntent = (key: string, conversationId: string) => {
+      beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture mandate", clientRequestId: key, mode: "spawn" });
+      completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: key, conversationId, path: null });
+    };
+    seatIntent("fixture-live-dispatch-first", first.id);
+    recipient = first.id;
+    report.origin!.conversationId = first.id;
+    report.targetSeatConversationId = first.id;
+    transport.script("sendMessage", ok({ message_id: 10, date }));
+    await service.send({ conversationId: first.id, clientRequestId: `bridge-report:${report.id}`, chat: "fixture-reports", text: "Proceed?" });
+    ports.seat = productionReportReplyPorts.seat;
+
+    let entered!: () => void;
+    const reachedReadSession = new Promise<void>(resolve => { entered = resolve; });
+    let resumeRead!: () => void;
+    const readSessionBarrier = new Promise<void>(resolve => { resumeRead = resolve; });
+    let paused = false;
+    const client = {
+      readSession: async ({ conversationId }: { conversationId: string }) => {
+        if (conversationId === first.id && !paused) {
+          paused = true;
+          entered();
+          await readSessionBarrier;
+        }
+        return journal.snapshot().sessions.find(session => session.conversationId === conversationId) ?? null;
+      },
+      command: async (command: Parameters<InstanceType<typeof RuntimeJournal>["executeOperation"]>[0]) => journal.executeOperation(command),
+      operationStatus: async (id: string) => journal.operationResult(id),
+    } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+    ports.deliver = binding => deliverReportReply(binding, {
+      enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+    });
+    ports.original = binding => resolveOriginalSend(binding, { registry, client });
+    const firstDrain = poll([reply()]);
+    await reachedReadSession;
+    beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture successor mandate", clientRequestId: "fixture-live-dispatch-successor", mode: "spawn" });
+    completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "fixture-live-dispatch-successor", conversationId: successor.id, path: null });
+    recipient = successor.id;
+    const overlappingDrain = drainReportReplies(store, botId, ports);
+    resumeRead();
+    await Promise.all([firstDrain, overlappingDrain]);
+
+    const effects = journal.effectBatch(20, ["runtime.send"]);
+    expect(effects).toHaveLength(1);
+    expect(effects[0].payload).toMatchObject({ conversationId: successor.id });
+    expect(store.pendingReportReplies()).toHaveLength(1);
+    expect(store.pendingReportReplies()[0]).toMatchObject({ recipient: successor.id, operationId: expect.any(String) });
   } finally { registry.close(); journal.close(); }
 });
