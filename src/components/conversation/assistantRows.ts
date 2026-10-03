@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { assistantEchoText, type FeedEntry, type Item } from "../feed/parse";
 import type { RuntimeTurnAxis } from "@/lib/runtime/contracts";
-import { newestTranscriptInstant, transcriptInstant } from "../feed/transcriptOrder";
+import { transcriptInstant } from "../feed/transcriptOrder";
 import { LIVE_TURN_ITEM_LIMIT, LIVE_TURN_OVERFLOW_LIMIT, runtimeLiveTurnItems, type RuntimeLiveTurn, type RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 
 interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; wire: RuntimeLiveTurnItem; order: number; turnId: string; occurrence: number }
@@ -61,8 +61,8 @@ const bindingIdentity = (entry: FeedEntry) => source(entry.item)
     !entry.anchorKey && "text" in entry.item ? entry.item.text : null]);
 
 /** Pane-owned completed replies survive a missing runtime snapshot until an
- * actual echo or durable claim retires them. Idle turns retain the existing
- * fence for stranded streaming drafts. No transcript/parser state changes.
+ * actual echo or durable claim retires them. Idle settles the caret without
+ * proving canonical ownership. No transcript/parser state changes.
  */
 export function projectAssistantHandoff(previous: AssistantHandoff | null, liveTurn: RuntimeLiveTurn | null,
   feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null): AssistantHandoff {
@@ -106,7 +106,6 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     if (prior) bindings.set(entry.key, prior);
   }
   const remaining: PendingAnswer[] = [];
-  const transcriptAt = newestTranscriptInstant(feed);
   const claimedRows = new Set(bindings.keys());
   const hiddenEchoes = new Set<string>();
   // One assistant record can project into prose, review and citation cards.
@@ -119,9 +118,14 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   }
   const echoes = [...groups.values()].map(rows => ({ rows,
     text: rows.map(row => assistantEchoText(row.item)).join("\n\n"),
+    displayText: rows.map(row => row.item.kind === "blob" ? row.item.text : assistantEchoText(row.item)).join("\n\n"),
     at: rows.map(row => transcriptInstant(row.item)).find(value => value !== null) ?? null,
   }));
   for (let entry of pending) {
+    if (turn === "idle" && entry.live.phase === "streaming") {
+      // Keep the wire phase for matching a missed completion's longer echo.
+      entry = { ...entry, live: { ...entry.live, phase: "awaiting-echo" } };
+    }
     const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
       && pendingEchoMatches(echo.text, entry)
       && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
@@ -139,7 +143,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       if (mirror) {
         // The canonical event may contain a prefix the transport never sent.
         // Hydrate the same live node while the identified mirror is pending.
-        entry = { ...entry, live: { ...entry.live, text: mirror.text, omittedChars: 0 } };
+        entry = { ...entry, live: { ...entry.live, text: mirror.displayText, omittedChars: 0 } };
         for (const row of mirror.rows) { hiddenEchoes.add(row.key); claimedRows.add(row.key); }
       }
     }
@@ -155,9 +159,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
         // A structured answer can expand into several cards; each keeps a unique key.
         bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live) ?? transcriptInstant(match.item), order: entry.order, identity: bindingIdentity(match) });
       });
-    } else if ((!entry.live.itemId || !claims.has(entry.live.itemId))
-      && !(entry.live.phase === "streaming" && turn === "idle" && transcriptAt !== null
-        && at(entry.live) !== null && at(entry.live)! <= transcriptAt)) remaining.push(entry);
+    } else if (!entry.live.itemId || !claims.has(entry.live.itemId)) remaining.push(entry);
   }
   while (retiredAnswers.length > LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT) retiredAnswers.shift();
   return { pending: remaining, bindings, sequence, retiredAnswers, liveOrder, hiddenEchoes };

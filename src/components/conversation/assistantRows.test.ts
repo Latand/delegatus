@@ -215,11 +215,14 @@ test("a clipped identified completion suppresses its event-first full-text mirro
   expect(rows(feed, state)).toHaveLength(1);
 });
 
-test("idle turns fence stranded streaming drafts while completed replies await their own echo", () => {
+test("idle turns end the caret while observed replies await their own echo", () => {
   const streaming = live("streaming", null);
   const state = projectAssistantHandoff(null, streaming, [], claims, "running");
   expect(projectAssistantHandoff(state, null, [later], claims, "unknown").pending).toHaveLength(1);
-  expect(projectAssistantHandoff(state, null, [later], claims, "idle").pending).toEqual([]);
+  const idle = projectAssistantHandoff(state, null, [later], claims, "idle");
+  expect(idle.pending).toHaveLength(1);
+  expect(idle.pending[0].live.phase).toBe("awaiting-echo");
+  expect(projectAssistantHandoff(idle, null, [later, echo], claims, "idle").pending).toEqual([]);
   expect(projectAssistantHandoff(null, live("awaiting-echo"), [later], claims, "idle").pending).toHaveLength(1);
 });
 
@@ -438,4 +441,23 @@ test("an empty budgeted wire body cannot claim another answer's canonical record
   state = projectAssistantHandoff(state, second, both, new Set(["later-answer", "earlier-answer"]));
   expect(state.pending).toEqual([]);
   expect(state.bindings.get(both.at(-1)!.key)?.key).toBe(original);
+});
+
+
+test.each([240_009, 24_009])("a missed completion adopts its capped or redacted canonical blob (%s)", (size) => {
+  const answer = "Opening:" + "a".repeat(size) + ":ending" + (size < 30_000 ? " token=fixture-secret-value" : "");
+  const streamed = appendRuntimeLiveTurnDelta(null, "blob-turn", answer, "2026-10-02T10:00:00Z");
+  let state = projectAssistantHandoff(null, streamed, [], claims);
+  const original = state.pending[0].key;
+  const parser = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  const feed = parser.feed([JSON.stringify({ type: "response_item", timestamp: "2026-10-02T10:00:01Z",
+    payload: { type: "message", id: "blob-answer", role: "assistant", content: [{ type: "output_text", text: answer }] } })], 0, false).items;
+  expect(feed[0].item.kind).toBe("blob");
+  if (feed[0].item.kind === "blob") {
+    expect(feed[0].item.text.length).toBeLessThanOrEqual(200_000);
+    if (size < 30_000) expect(feed[0].item.text).not.toContain("fixture-secret-value");
+  }
+  state = projectAssistantHandoff(state, null, feed, new Set(["blob-answer"]), "unknown");
+  expect(state.pending).toEqual([]);
+  expect(state.bindings.get(feed[0].key)?.key).toBe(original);
 });

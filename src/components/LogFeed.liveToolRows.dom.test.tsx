@@ -405,17 +405,22 @@ test("one host message keeps prose before its same-timestamp tool", () => {
   expect(liveRows(render().host)).toEqual(["prose:one-message-prose", "tool:one-message-tool:run"]);
 });
 
-test("an idle broker's stranded draft leaves the rendered feed once the transcript advances", () => {
+test("an idle snapshot retains observed text until its own echo arrives", () => {
   sessionState.session = { ...session, liveTurn: { turnId: "stranded", text: "Partial draft", items: [{
     itemId: null, text: "Partial draft", phase: "streaming", startedAt: AT(0), completedAt: null,
   }] } };
   const { host, paint } = render();
+  const original = host.querySelector("[data-live-turn]");
   expect(host.querySelector("[data-live-turn-caret]")).not.toBeNull();
   sessionState.session = { ...sessionState.session, turn: "idle", liveTurn: null };
   tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(5), message: { content: "Later request" } })];
   paint();
-  expect(host.querySelector("[data-live-turn]")).toBeNull();
+  expect(host.querySelector("[data-live-turn]")).toBe(original);
   expect(host.querySelector("[data-live-turn-caret]")).toBeNull();
+  tailState.lines.push(JSON.stringify({ type: "assistant", uuid: "settled-draft", timestamp: AT(3), message: { content: [{ type: "text", text: "Partial draft completed" }] } }));
+  paint();
+  expect(host.querySelector('[data-feed-source-id="settled-draft"]')).toBe(original);
+  expect(original?.textContent).toContain("Partial draft completed");
 });
 
 test("canonical text-tool-text fragments retain their source order at handoff", () => {

@@ -318,10 +318,11 @@ export type Item = (
 /* The wire text can begin with marker-shaped literal content. Keep it outside
    the public Item shape so legacy parsed rows retain their exact contracts. */
 const rawUserTexts = new WeakMap<Item, string>();
-// Correlation uses complete structured segments while cards keep display caps.
+// Correlation uses original complete segments; public cards keep redaction and caps.
 const assistantEchoTexts = new WeakMap<Item, string>();
 export function assistantEchoText(item: Item): string | null {
-  if (item.kind === "prose" || item.kind === "blob") return item.text;
+  if (item.kind === "prose") return item.text;
+  if (item.kind === "blob") return assistantEchoTexts.get(item) ?? item.text;
   if (item.kind === "review" || item.kind === "mem-citation") return assistantEchoTexts.get(item) ?? item.raw;
   return null;
 }
@@ -1730,12 +1731,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const pushBlobIfHuge = (text: string, sourceId?: string): boolean => {
     if (!looksLikeBlob(text)) return false;
-    push({
+    const item: Item = {
       kind: "blob",
       bytes: text.length,
       text: redactSecrets(text).slice(0, BLOB_KEEP),
       ...(sourceId ? { sourceId } : {}),
-    });
+    };
+    // Private matching metadata never becomes the blob's displayed payload.
+    if (item.text !== text) assistantEchoTexts.set(item, text);
+    push(item);
     return true;
   };
   const pushImage = (block: Record<string, unknown>, fileWrap: Record<string, unknown>) => {
