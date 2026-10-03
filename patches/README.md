@@ -1,6 +1,6 @@
 # Dependency patches
 
-`braces@3.0.3.patch` ports the runtime mitigation from the tree at upstream
+`braces-3.0.3.patch` ports the runtime mitigation from the tree at upstream
 commit `28d440b5dd449dbf1fe6f3506cf94ecca4d02660` in
 [braces PR 72](https://github.com/micromatch/braces/pull/72). That tip's own
 commit adjusts a test shim; the runtime mitigation is already in its tree.
