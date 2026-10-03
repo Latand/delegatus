@@ -119,6 +119,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || typeof wake.commit.proposal !== "boolean" || !string(wake.commit.fingerprint)
           || !integer(wake.commit.eventsThrough) || !Array.isArray(wake.commit.reasons)
           || !Array.isArray(wake.commit.children) || !wake.commit.children.every(string)
+          || (wake.commit.acknowledgmentLines !== undefined
+            && (!Array.isArray(wake.commit.acknowledgmentLines) || !wake.commit.acknowledgmentLines.every(item => item && string(item.key) && string(item.line))))
           || (wake.commit.itemLines !== undefined
             && (!Array.isArray(wake.commit.itemLines) || !wake.commit.itemLines.every(item => item && string(item.version) && string(item.line))))
           || (wake.commit.itemsShown !== undefined

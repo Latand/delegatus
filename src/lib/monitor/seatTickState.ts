@@ -62,6 +62,15 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
     fingerprint: raw.fingerprint.slice(0, 200),
     eventsThrough: raw.eventsThrough,
+    ...(Array.isArray(raw.acknowledgmentLines) ? { acknowledgmentLines: raw.acknowledgmentLines.filter(
+      (entry): entry is { key: string; line: string } => !!entry && typeof entry === "object"
+        && typeof entry.key === "string" && typeof entry.line === "string",
+    ) } : {}),
+    ...(Array.isArray(raw.itemLines) ? { itemLines: raw.itemLines.filter(
+      (entry): entry is { version: string; line: string } => !!entry && typeof entry === "object"
+        && typeof entry.version === "string" && typeof entry.line === "string",
+    ) } : {}),
+    ...(Array.isArray(raw.itemsShown) ? { itemsShown: conversationIds(raw.itemsShown) } : {}),
     /* A plan written before the harvest existed names no child, and a landing
        credited from it harvests nothing — the safe direction. */
     children: conversationIds(raw.children),

@@ -834,6 +834,8 @@ export interface SeatTickWakeCommit {
   itemsShown?: string[];
   /** Complete redacted bullets used to verify visibility in the frozen text. */
   itemLines?: { version: string; line: string }[];
+  /** Each settlement credit is bound to the complete frozen bullet that earns it. */
+  acknowledgmentLines?: { key: string; line: string }[];
   /** A proposal wake, which advances the 24-hour slot as well as the stamp. */
   proposal: boolean;
   reasons: SeatTickWakeReasonKind[];

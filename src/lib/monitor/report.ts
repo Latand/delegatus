@@ -189,7 +189,7 @@ export function seatTickBullet(item: SeatTickItem): string {
  * decides "already shown" from the landed wake's record, per seat epoch, so a
  * successor still sees the note on its first wake.
  */
-function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean): string[] {
+function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean, previewLimit = SEAT_TICK_PROMPT_PREVIEW_LIMIT): string[] {
   if (!monitorPrompt) return [];
   if (unchanged) {
     return ["", `Standing monitor note unchanged since your last wake (${monitorPrompt.length} chars; seat_tick_settings with verbose:true reads it).`];
@@ -198,7 +198,7 @@ function seatTickPromptSection(monitorPrompt: string | null | undefined, unchang
     "",
     "Standing monitor note for this project, in the seat's own words (seat_tick_settings sets, replaces and clears it). "
       + "It shapes what you look at; the contract still governs what you do:",
-    seatTickPromptPreview(monitorPrompt),
+    seatTickPromptPreview(monitorPrompt, previewLimit),
   ];
 }
 
@@ -217,9 +217,9 @@ export function seatTickNoteRevision(monitorPrompt: string | null | undefined): 
  */
 export const SEAT_TICK_PROMPT_PREVIEW_LIMIT = 1_000;
 
-export function seatTickPromptPreview(monitorPrompt: string): string {
-  if (monitorPrompt.length <= SEAT_TICK_PROMPT_PREVIEW_LIMIT) return monitorPrompt;
-  return `${monitorPrompt.slice(0, SEAT_TICK_PROMPT_PREVIEW_LIMIT).trimEnd()}… [preview, ${monitorPrompt.length} chars; seat_tick_settings returns the full note]`;
+export function seatTickPromptPreview(monitorPrompt: string, limit = SEAT_TICK_PROMPT_PREVIEW_LIMIT): string {
+  if (monitorPrompt.length <= limit) return monitorPrompt;
+  return `${monitorPrompt.slice(0, limit).trimEnd()}… [preview, ${monitorPrompt.length} chars; seat_tick_settings returns the full note]`;
 }
 
 export function seatTickWakeMessage(input: {
@@ -297,13 +297,44 @@ export function seatTickWakeMessage(input: {
   if (signals.length > 0) {
     lines.push("", "Signals:", ...signals.map((signal) => `- ${signal.label}`));
   }
-  return boundedSeatTickMessage(lines, [
+  const reserved = [
     ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
     ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
     ...seatTickContractLines(input.mandateCarriesContract === true),
-  ]);
+  ];
+  // Large report ledgers keep all their keys. Shorten the note's explicitly
+  // marked preview when that tail would exceed the payload bound.
+  if (input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
+    const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true);
+    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - note.length, note.length,
+      ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100));
+  }
+  return boundedSeatTickMessage(lines, reserved);
+}
+
+/** A retry must make agenda progress even while a large report ledger stays
+ * unpaid. Bind a complete, explicitly marked summary to the same item; its
+ * source retains the full details and the landing earns its ordinary credit. */
+export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage>[0]): { text: string; items: readonly SeatTickItem[] } {
+  const text = seatTickWakeMessage(input);
+  const first = input.items[0];
+  if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged)
+    || `\n${text}\n`.includes(`\n${redactMonitorText(seatTickBullet(first))}\n`)) return { text, items: input.items };
+  const source = first.kind === "maintenance" ? "seat_tick_settings verbose:true" : first.kind === "child"
+    ? `get_conversation ${first.id}` : first.kind === "pipeline" || first.kind === "provisioning"
+      ? `get_pipeline ${first.id}` : first.kind === "pull-request" ? `pull request ${first.id}` : "the board and current source";
+  const suffix = `… [summary; ${source} holds the full item]`;
+  // Fit against the real redacted renderer, including headings, all owed
+  // keys, instructions and the mandate's contract. Later items remain owed.
+  for (let limit = Math.min(first.label.length, 600); limit >= 0; limit -= 50) {
+    const summary = { ...first, label: first.label.slice(0, limit).trimEnd() + suffix, finalMessage: undefined };
+    const items = [summary, ...input.items.slice(1)];
+    const candidate = seatTickWakeMessage({ ...input, items });
+    if (`\n${candidate}\n`.includes(`\n${redactMonitorText(seatTickBullet(summary))}\n`)) return { text: candidate, items };
+  }
+  return { text, items: input.items };
 }
 
 /**

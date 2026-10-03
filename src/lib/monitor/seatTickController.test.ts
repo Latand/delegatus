@@ -6761,6 +6761,152 @@ test.each([false, true])("five production-size settlements credit only complete 
   expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
 });
 
+test("a legacy retained wake credits four complete settlements and delivers the unseen fifth later", async () => {
+  const { gatherSeatTickInput } = await import("./seatTickSources");
+  const { seatTickDecision, seatTickWakeCommitPlan } = await import("./seatTick");
+  const ids = Array.from({ length: 5 }, (_, index) => [String(index).padStart(8, "0"), "0000", "4000", "8000", "1".repeat(12)].join("-"));
+  const lanes = ids.map(id => ({ ...pipelineRecord({ ...settledLane, id }),
+    task: "Settlement title ".padEnd(119, "s"),
+    taskFinishWaits: [{ taskId: "waiting-task", open: ["other-lane-a", "other-lane-b"] }],
+  }));
+  const rig = harness({ delivery: HELD, settings: { ...defaultSeatTickSettings(PROJECT),
+    monitorPrompt: "Standing monitor note ".padEnd(7_622, "n"), reason: "Operator instructions ".padEnd(500, "i"),
+  } });
+  rig.deps.sources!.pipelines = () => lanes as never;
+  const initial = rig.deps.readState!(PROJECT);
+  const input = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, rig.deps.sources!);
+  const decision = seatTickDecision(input);
+  expect(decision.verdict.kind).toBe("wake");
+  const legacyCommit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: input.changeFingerprint, eventsThrough: 0 })!;
+  delete legacyCommit.itemLines;
+  delete legacyCommit.itemsShown;
+  delete legacyCommit.acknowledgmentLines;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const row = rig.deps.readState!(PROJECT);
+  const wake = { ...row.outstandingWake!, commit: legacyCommit };
+  const complete = ids.filter(id => agendaOf(wake.text!).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
+  expect(complete).toHaveLength(4);
+  expect(legacyCommit.announcedLanes).toHaveLength(5);
+  rig.deps.writeState!(PROJECT, { ...row, outstandingWake: wake });
+  rig.deps.sources!.wakeState = async observed => {
+    expect(observed.clientMessageId).toBe(wake.clientMessageId);
+    expect(observed.text).toBe(wake.text);
+    return "landed";
+  };
+  rig.deps.sources!.now = () => NOW + MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
+  rig.deps.deliver = async message => { rig.sent.push(message); return { ok: true, target: "structured", outcome: "delivered", structured: true }; };
+  rig.deps.sources!.now = () => NOW + 70 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(2);
+  expect(agendaOf(rig.sent[1]!.text).some(line => line.includes(ids[4]!) && line.endsWith("task waits for 2 open pipelines"))).toBe(true);
+  expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
+});
+
+test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained %s credits only complete bullets through controller settlement", async kind => {
+  const { seatTickWakeMessage, seatTickBullet } = await import("./report");
+  const { seatTickWakeCommitPlan } = await import("./seatTick");
+  const ids = Array.from({ length: 5 }, (_, index) => kind === "child"
+    ? ["conversation", String(index).padStart(16, "0")].join("_") : `legacy-${kind}-${index}`);
+  const items: import("./types").SeatTickItem[] = ids.map(id => ({
+    id, kind: kind === "stall" ? "pipeline" : kind,
+    label: "Settlement ".padEnd(500, "s"),
+    ...(kind === "child" ? { outcomeId: id, stateTokens: [`${id}@one`] } : {}),
+    ...(kind === "deploy" ? { deploy: { deploymentId: id, phase: "succeeded", sha: "a".repeat(40), error: null } } : {}),
+    ...(kind === "maintenance" ? { maintenance: { runId: id } } : {}),
+    ...(kind === "stall" ? { stallToken: `${id}@one` } : {}),
+  }));
+  const verdict: Extract<import("./types").SeatTickVerdict, { kind: "wake" }> = {
+    kind: "wake", items, reasons: [{ kind: "interval", detail: "pending settlements" }], deferred: 0,
+    gaps: [], skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 },
+  };
+  const text = seatTickWakeMessage({ project: PROJECT, items, reasons: verdict.reasons, deferred: 0, signals: [],
+    operatorInstructions: "Instructions ".padEnd(500, "i"), monitorPrompt: "Note ".padEnd(7_622, "n"),
+  });
+  const complete = items.filter(item => text.includes(`\n${seatTickBullet(item)}\n`));
+  expect(complete.length).toBeGreaterThan(0);
+  expect(complete.length).toBeLessThan(items.length);
+  const commit = seatTickWakeCommitPlan(verdict, { fingerprint: "legacy", eventsThrough: 0, terminalChildren: ids })!;
+  delete commit.acknowledgmentLines;
+  delete commit.itemLines;
+  delete commit.itemsShown;
+  const outstandingWake = {
+    clientMessageId: `legacy-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
+    preparedAt: new Date(NOW - MINUTE).toISOString(), text, commit,
+  };
+  const rig = harness({ wakeState: "landed" });
+  let row: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, outstandingWake };
+  rig.deps.readState = () => row;
+  rig.deps.writeState = (_project, next) => { row = next; };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const ledger = (state: SeatTickProjectState) => kind === "child" ? state.harvestedChildren
+    : kind === "deploy" ? state.announcedDeploys : kind === "maintenance" ? state.announcedMaintenance : state.reportedStalls;
+  const keys = (entries: typeof items) => entries.map(item => kind === "stall" ? item.stallToken! : item.id);
+  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(keys(complete));
+  if (kind === "child") expect(rig.deps.readState!(PROJECT).childrenShown).toEqual(complete.map(item => `${item.id}@one`));
+
+  // A later bounded wake proves the remainder, including opaque identities
+  // that a pre-upgrade record could not bind to its displayed source id.
+  const remaining = items.filter(item => !complete.includes(item));
+  const next = { ...verdict, items: remaining };
+  const nextText = seatTickWakeMessage({ project: PROJECT, items: remaining, reasons: next.reasons, deferred: 0, signals: [] });
+  const nextCommit = seatTickWakeCommitPlan(next, { fingerprint: "new", eventsThrough: 0, terminalChildren: ids, frozenText: nextText })!;
+  rig.deps.writeState!(PROJECT, { ...rig.deps.readState!(PROJECT), outstandingWake: {
+    clientMessageId: `new-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
+    preparedAt: new Date(NOW + MINUTE).toISOString(), text: nextText, commit: nextCommit,
+  } });
+  rig.deps.sources!.now = () => NOW + 2 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(keys(items));
+});
+
+test.each([30, 200])("full report ledgers deliver a complete maintenance settlement within two wakes and retain unrelated debt (label chars: %s)", async labelChars => {
+  const { emptyMaintenanceCounts, emptyMaintenanceLog } = await import("@/lib/boardMaintenance/types");
+  const { maintenanceItemLabel, parseMaintenanceReport } = await import("@/lib/boardMaintenance/text");
+  const at = new Date(NOW).toISOString();
+  const reportsOwed = Array.from({ length: 64 }, (_, index) => ({
+    key: `lane:owed-${index}:completed`, label: `Genuine settlement ${index} `.padEnd(labelChars, "l"), receivedAt: at,
+  }));
+  const asksOwed = Array.from({ length: 16 }, (_, index) => ({
+    key: `ask:rsg_${String(index).padStart(32, "0")}`, setId: `rsg_${String(index).padStart(32, "0")}`,
+    conversationId: CONVERSATION, at,
+  }));
+  const attention = parseMaintenanceReport(Array.from({ length: 5 }, (_, index) =>
+    `attention: ${String(index).padStart(8, "0")} | ${"Attention ".padEnd(300, "a")} | ${"Option ".padEnd(300, "o")}`,
+  ).join("\n")).attention;
+  const run: import("@/lib/boardMaintenance/types").MaintenanceRun = {
+    kind: "run", runId: "maintenance-full-ledger", taskId: "maintenance-card", project: PROJECT,
+    slot: 1, intervalHours: 3, claimedAt: at, launchedAt: at, endedAt: at, state: "succeeded",
+    seat: { seatEpoch: 7, conversationId: CONVERSATION }, repoDir: null, clientAttemptId: "fixture-maintenance",
+    launchId: null, conversationId: null, transcriptPath: null, failure: null,
+    log: { ...emptyMaintenanceLog(), attention }, counts: emptyMaintenanceCounts(), changedTaskIds: [], supersededTaskIds: [],
+  };
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: "Custom older mandate", promptVersion: 20 },
+    settings: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Standing note ".padEnd(7_622, "n"), reason: "Instructions ".padEnd(500, "i") },
+    state: { reportsOwed, asksOwed },
+  });
+  rig.deps.sources!.maintenanceRuns = () => [run];
+  rig.deps.sources!.reports = { ...reportPort(() => []), suggestions: () => ({ admissions: [], sets: [{
+    conversationId: CONVERSATION, setId: asksOwed.at(-1)!.setId, at,
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+    replies: [{ label: "Proceed", text: "Proceed with the prepared work" }],
+  }] }) };
+  for (let round = 0; round < 2; round++) {
+    rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(4_000);
+    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
+    expect(rig.written.at(-1)!.asksOwed).toEqual(asksOwed);
+    for (const ask of asksOwed) expect(rig.sent.at(-1)!.text).toContain(ask.key);
+  }
+  const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
+  expect(bullet.length).toBeGreaterThan(1_200);
+  if (labelChars === 200) expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
+  else expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[summary; seat_tick_settings verbose:true holds the full item]")]);
+  expect(rig.written.at(-1)!.announcedMaintenance).toEqual([run.runId]);
+});
+
 test("the controller keeps unpaid report reminders after the delivered agenda drains, until its matching bridge report lands", async () => {
   const { scopedReportId } = await import("@/lib/bridge/store");
   const rig = harness({ pipelines: [settledLane, ...OPEN_LANE] });

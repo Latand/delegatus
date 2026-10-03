@@ -1669,8 +1669,12 @@ export function seatTickReportLines(
     if (!owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
   }
   if (owed.length > 0) {
-    const named = owed.slice(0, OWED_NAMED_LIMIT).map((entry) => entry.label).join(", ");
-    const more = owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
+    const labels = owed.slice(0, OWED_NAMED_LIMIT).map((entry) => entry.label).join(", ");
+    // Labels describe the ledger; the first durable key and coversOwed bind
+    // the report. Large previews must leave room for pending agenda work.
+    const compact = labels.length > 400;
+    const named = compact ? `${owed.length} outcome(s)` : labels;
+    const more = !compact && owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
     const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
     lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
     if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
@@ -1990,10 +1994,28 @@ export function seatTickWakeCommitPlan(
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
   const reportedStalls = items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
+  const acknowledgmentLines = items.flatMap(item => {
+    const keys = [
+      ...(item.kind === "child" ? (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id])
+        .filter(id => terminal.has(id)).map(id => `child:${id}`) : []),
+      ...(item.stateTokens ?? []).map(id => `shown:${id}`),
+      ...(item.laneAnnouncement ? [`lane:${item.laneAnnouncement}`] : []),
+      ...(item.maintenance ? [`maintenance:${item.maintenance.runId}`] : []),
+      ...(item.kind === "deploy" ? [`deploy:${item.id}`] : []),
+      ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
+      ...(context.bridgeReports ? seatTickOwedOutcomes([item]).map(outcome => `report:${outcome.key}`) : []),
+    ];
+    return keys.map(key => ({ key, line: redactMonitorText(seatTickBullet(item)) }));
+  });
+  for (const child of verdict.unreadableChildren ?? []) {
+    const line = redactMonitorText(`- ${child.conversationId} — ${child.title}: ${child.reason}`);
+    if (framed === null || framed.includes(`\n${line}\n`)) acknowledgmentLines.push({ key: `shown:${child.stateToken}`, line });
+  }
   return {
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
     itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
+    acknowledgmentLines,
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
   };
@@ -2024,6 +2046,7 @@ export function seatTickWakeCommit(
       later than the truth, which can cost one extra ask and never a missed one. */
   reachedAt?: string | null,
 ): SeatTickProjectState {
+  commit = visibleWakeAcknowledgments(state, commit);
   const at = new Date(now).toISOString();
   const received = reachedAt && Number.isFinite(Date.parse(reachedAt)) && Date.parse(reachedAt) <= now ? reachedAt : at;
   const owed = commit.reportsOwed?.length
@@ -2155,4 +2178,62 @@ function visibleAgendaVersions(state: SeatTickProjectState, commit: SeatTickWake
   if (text === undefined || commit.itemLines === undefined) return commit.itemsShown ?? [];
   const framed = `\n${text}\n`;
   return commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`)).map(item => item.version);
+}
+
+/** Upgrade retained plans without rewriting their delivery identity or text.
+ * A legacy plan lacks the source-to-bullet binding; credit only identities
+ * its complete agenda bullets prove. Ambiguous opaque outcome/run identities
+ * remain owed and get a fresh, provable wake. Pure planners have no payload. */
+function visibleWakeAcknowledgments(state: SeatTickProjectState, commit: SeatTickWakeCommit): SeatTickWakeCommit {
+  if (!state.outstandingWake || commit.proposal) return commit;
+  const text = state.outstandingWake.text ?? "";
+  const framed = `\n${text}\n`;
+  const proofs = commit.acknowledgmentLines;
+  const visible = new Set(proofs?.filter(proof => framed.includes(`\n${proof.line}\n`)).map(proof => proof.key));
+  const agenda = text.split("\nItems:\n")[1]?.split(/\n\n(?:Why you were woken:|Signals:|Bridge reports:|Snapshot at |Operator instructions for every wake:|Standing monitor note|Contract:|Spawned children whose transcript)/)[0] ?? "";
+  const bullets = [...agenda.matchAll(/^- \[([^\]]+)\] (\S+) — ([\s\S]*?)(?=\n- \[|$)/gm)]
+    .filter(match => !match[0].trimEnd().endsWith("…")
+      && framed.includes(`\n${match[0].trimEnd()}\n`));
+  const named = (kind: string, id: string) => bullets.some(match => match[1] === kind && match[2] === id);
+  const allows = (kind: string, id: string): boolean => {
+    if (proofs !== undefined) return visible.has(`${kind}:${id}`);
+    switch (kind) {
+      case "child": return named("child", id);
+      case "shown": return named("child", id.slice(0, id.lastIndexOf("@")));
+      case "lane": {
+        const lane = id.slice(0, id.lastIndexOf(":"));
+        return named("pipeline", lane) || named("provisioning", lane);
+      }
+      case "deploy": return named("deploy", id);
+      case "maintenance": return named("maintenance", id);
+      case "stall": {
+        const source = id.slice(0, id.lastIndexOf("@"));
+        return source.startsWith("child:") ? named("child", source.slice(6)) : named("pipeline", source);
+      }
+      case "report": {
+        if (id.startsWith("lane:")) {
+          const lane = id.slice(5, id.lastIndexOf(":"));
+          return named("pipeline", lane) || named("provisioning", lane);
+        }
+        if (id.startsWith("deploy:")) {
+          const [, sha, phase] = id.split(":");
+          return bullets.some(match => match[1] === "deploy"
+            && (commit.announcedDeploys ?? []).includes(match[2]!)
+            && match[3]!.includes(` ${phase}, sha ${sha}`));
+        }
+        return false;
+      }
+      default: return false;
+    }
+  };
+  const filter = (kind: string, ids: readonly string[] | undefined) => (ids ?? []).filter(id => allows(kind, id));
+  return { ...commit,
+    children: filter("child", commit.children),
+    shownChildren: filter("shown", commit.shownChildren),
+    announcedLanes: filter("lane", commit.announcedLanes),
+    announcedDeploys: filter("deploy", commit.announcedDeploys),
+    announcedMaintenance: filter("maintenance", commit.announcedMaintenance),
+    reportedStalls: filter("stall", commit.reportedStalls),
+    reportsOwed: commit.reportsOwed?.filter(outcome => allows("report", outcome.key)),
+  };
 }

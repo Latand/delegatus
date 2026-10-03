@@ -32,7 +32,7 @@ import { appendSeatTickRecord } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
-import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
@@ -1308,8 +1308,8 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
   const renderedVerdict = verdict.kind === "wake" ? { ...verdict, items: withChildFinalMessages(verdict.items) } : verdict;
-  const text = verdict.kind === "wake"
-    ? seatTickWakeMessage({
+  const payload = verdict.kind === "wake"
+    ? seatTickWakePayload({
       project: input.project,
       snapshotAt,
       reasons: verdict.reasons,
@@ -1333,7 +1333,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
       reportLines: verdict.reportLines,
     })
-    : seatTickProposalMessage({
+    : { items: [], text: seatTickProposalMessage({
       project: input.project,
       snapshotAt,
       issues,
@@ -1344,7 +1344,9 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       monitorPrompt: input.settings.monitorPrompt,
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
-    });
+    }) };
+  const text = payload.text;
+  if (renderedVerdict.kind === "wake") renderedVerdict.items = [...payload.items];
   const commit = seatTickWakeCommitPlan(renderedVerdict, {
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
