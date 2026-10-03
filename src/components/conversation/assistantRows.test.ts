@@ -350,3 +350,31 @@ test.each([{ texts: ["First occurrence", "Second occurrence"] }, { texts: ["Repe
   state = projectAssistantHandoff(state, third, canonicalBoth, claims);
   expect(state.pending).toHaveLength(1);
 });
+
+
+test("growing deltas do not evict a carried canonical reply's retirement", () => {
+  const timestamp = "2026-10-02T10:00:00Z";
+  let live = projectRuntimeLiveTurnItem(null, "canonical-turn", { type: "assistant", message: { content: [{ type: "text", text: "Already canonical answer" }] } }, "completed", timestamp)!;
+  const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+  const feed = session.feed([JSON.stringify({ type: "assistant", timestamp, message: { content: [{ type: "text", text: "Already canonical answer" }] } })], 0, false).items;
+  let state = projectAssistantHandoff(null, live, feed, claims);
+  expect(state.pending).toEqual([]);
+  live = appendRuntimeLiveTurnDelta(live, "subsequent-turn", "New answer ", "2026-10-02T10:01:00Z")!;
+  state = projectAssistantHandoff(state, live, [], claims);
+  for (let index = 0; index < 550; index++) {
+    live = appendRuntimeLiveTurnDelta(live, "subsequent-turn", "x", "2026-10-02T10:01:00Z")!;
+    state = projectAssistantHandoff(state, live, [], claims);
+  }
+  expect(state.pending.map(answer => answer.live.text)).toEqual(["New answer " + "x".repeat(550)]);
+});
+
+test.each([true, false])("timestamp-free legacy echo preserves canonical source order (dated=%s)", (dated) => {
+  const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+  const feed = session.feed([
+    JSON.stringify({ type: "assistant", ...(dated ? { timestamp: "2026-10-02T10:00:00Z" } : {}), message: { content: [{ type: "text", text: "Observed answer" }] } }),
+    JSON.stringify({ type: "user", ...(dated ? { timestamp: "2026-10-02T10:00:05Z" } : {}), message: { content: "Next request" } }),
+  ], 0, false).items;
+  let state = projectAssistantHandoff(null, { turnId: "legacy-turn", text: "Observed answer" }, [], claims);
+  state = projectAssistantHandoff(state, null, feed, claims);
+  expect(rows([...feed], state).map(row => "text" in row.item ? row.item.text : "")).toEqual(["Observed answer", "Next request"]);
+});

@@ -6,17 +6,18 @@ import type { RuntimeTurnAxis } from "@/lib/runtime/contracts";
 import { newestTranscriptInstant, transcriptInstant } from "../feed/transcriptOrder";
 import { LIVE_TURN_ITEM_LIMIT, LIVE_TURN_OVERFLOW_LIMIT, runtimeLiveTurnItems, type RuntimeLiveTurn, type RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 
-interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; wire: RuntimeLiveTurnItem; order: number; stream: string; turnId: string; occurrence: number }
+interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; wire: RuntimeLiveTurnItem; order: number; turnId: string; occurrence: number }
+interface RetiredAnswer { wire: RuntimeLiveTurnItem; turnId: string; occurrence: number; text: string }
 interface Binding { key: string; at: number | null; order: number; identity: string }
 export interface AssistantHandoff {
   pending: PendingAnswer[];
   bindings: Map<string, Binding>;
   sequence: number;
-  retiredStreams: ReadonlySet<string>;
+  retiredAnswers: readonly RetiredAnswer[];
   liveOrder: ReadonlyMap<string, number>;
   hiddenEchoes: ReadonlySet<string>;
 }
-const empty = (): AssistantHandoff => ({ pending: [], bindings: new Map(), sequence: 0, retiredStreams: new Set(), liveOrder: new Map(), hiddenEchoes: new Set() });
+const empty = (): AssistantHandoff => ({ pending: [], bindings: new Map(), sequence: 0, retiredAnswers: [], liveOrder: new Map(), hiddenEchoes: new Set() });
 const at = (live: RuntimeLiveTurnItem) => {
   const value = Date.parse(live.startedAt ?? live.completedAt ?? "");
   return Number.isFinite(value) ? value : null;
@@ -48,11 +49,8 @@ const retainedBody = (entry: PendingAnswer, live: RuntimeLiveTurnItem): RuntimeL
   }
   return live;
 };
-// Occurrences sharing an instant still own separate retirement claims. A dated
-// descriptor carried into the next turn keeps its original identity.
-const streamKey = (live: RuntimeLiveTurnItem, turnId: string, occurrence = 0) => JSON.stringify([
-  live.startedAt, live.startedAt === null ? turnId : null, textKey(live.text), occurrence,
-]);
+// Equal text and timestamps still describe separate occurrences in the wire.
+const occurrenceKey = (live: RuntimeLiveTurnItem) => JSON.stringify([live.startedAt, textKey(live.text)]);
 const source = (item: Item) => "sourceId" in item ? item.sourceId : undefined;
 // Parser sequence keys restart on a new filter or locale. Bind the original
 // transcript projection, so a reused sequence key cannot adopt another row.
@@ -74,17 +72,18 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   const pending = state.pending.map(entry => liveTurn && entry.turnId !== liveTurn.turnId
     && entry.live.startedAt === null && entry.live.phase === "streaming"
     ? { ...entry, live: { ...entry.live, phase: "awaiting-echo" as const }, wire: { ...entry.wire, phase: "awaiting-echo" as const } } : entry);
-  const retiredStreams = new Set(state.retiredStreams);
+  const retiredAnswers = [...state.retiredAnswers];
   const current = runtimeLiveTurnItems(liveTurn);
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
   const usedPending = new Set<number>();
   const occurrences = new Map<string, number>();
   for (const [order, live] of current.entries()) {
-    const baseStream = streamKey(live, liveTurn!.turnId);
+    const baseStream = occurrenceKey(live);
     const occurrence = occurrences.get(baseStream) ?? 0;
     occurrences.set(baseStream, occurrence + 1);
-    const stream = streamKey(live, liveTurn!.turnId, occurrence);
-    if (live.tool || live.omittedItems || !live.itemId && retiredStreams.has(stream)) continue;
+    if (live.tool || live.omittedItems || !live.itemId && retiredAnswers.some(answer =>
+      answer.wire.startedAt === live.startedAt && (live.startedAt !== null || answer.turnId === liveTurn!.turnId)
+      && answer.occurrence === occurrence && (answer.wire.text === live.text || echoTextMatches(answer.text, live)))) continue;
     const index = pending.findIndex((entry, index) => !usedPending.has(index) && (
       live.itemId && entry.wire.itemId === live.itemId
       || !entry.wire.itemId && entry.wire.startedAt === live.startedAt
@@ -92,12 +91,11 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
         && (entry.wire.text === live.text || entry.wire.phase === "streaming"
           || Boolean(live.omittedChars) && entry.wire.text.endsWith(live.text))));
     if (index >= 0) {
-      if (pending[index].stream !== stream) retiredStreams.add(pending[index].stream);
-      pending[index] = { ...pending[index], live: retainedBody(pending[index], live), wire: live, order, stream, occurrence };
+      pending[index] = { ...pending[index], live: retainedBody(pending[index], live), wire: live, order, occurrence };
       usedPending.add(index);
     } else if (live.text.trim()) {
       usedPending.add(pending.length);
-      pending.push({ key: `assistant-pending:${sequence++}`, live, wire: live, order, stream, turnId: liveTurn!.turnId, occurrence });
+      pending.push({ key: `assistant-pending:${sequence++}`, live, wire: live, order, turnId: liveTurn!.turnId, occurrence });
     }
   }
   const bindings = new Map<string, Binding>();
@@ -146,22 +144,22 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     }
     if (matches.length) {
       if (!entry.live.itemId) {
-        retiredStreams.add(entry.stream);
-        // A legacy reconnect may contain the complete split reply instead of
-        // the prefix consumed by this pane. Both are already canonical.
-        if (echo) retiredStreams.add(streamKey({ ...entry.wire, text: echo.text }, entry.turnId, entry.occurrence));
+        // Bound completed occurrence ownership, never intermediate deltas.
+        // Its canonical body also recognizes later transport suffix clipping.
+        retiredAnswers.push({ wire: entry.wire, turnId: entry.turnId, occurrence: entry.occurrence,
+          text: echo?.text ?? entry.live.text });
       }
       matches.forEach((match, index) => {
         claimedRows.add(match.key);
         // A structured answer can expand into several cards; each keeps a unique key.
-        bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live), order: entry.order, identity: bindingIdentity(match) });
+        bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live) ?? transcriptInstant(match.item), order: entry.order, identity: bindingIdentity(match) });
       });
     } else if ((!entry.live.itemId || !claims.has(entry.live.itemId))
       && !(entry.live.phase === "streaming" && turn === "idle" && transcriptAt !== null
         && at(entry.live) !== null && at(entry.live)! <= transcriptAt)) remaining.push(entry);
   }
-  while (retiredStreams.size > LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT) retiredStreams.delete(retiredStreams.values().next().value!);
-  return { pending: remaining, bindings, sequence, retiredStreams, liveOrder, hiddenEchoes };
+  while (retiredAnswers.length > LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT) retiredAnswers.shift();
+  return { pending: remaining, bindings, sequence, retiredAnswers, liveOrder, hiddenEchoes };
 }
 
 export function useAssistantHandoff(identity: string | null, live: RuntimeLiveTurn | null,
@@ -241,7 +239,8 @@ export function mergeAssistantRows<T extends { key: string; kind: string; item?:
     : row.item?.kind === "cmd-group" ? Math.min(...row.item.ids.map(id => handoff.liveOrder.get(id) ?? Infinity))
       : row.item && source(row.item) ? handoff.liveOrder.get(source(row.item)!) : undefined);
   for (const entry of waiting) {
-    const index = entry.at === null ? -1 : result.findIndex(row => {
+    const index = entry.at === null ? entry.canonicalIndex === undefined ? -1 : result.findIndex(row =>
+      (placed.get(row.key)?.canonicalIndex ?? canonicalOrder.get(row.key) ?? -Infinity) > entry.canonicalIndex!) : result.findIndex(row => {
       const other = placed.get(row.key);
       const instant = (other ? other.at : instantOf(row)) ?? -Infinity;
       const order = other?.order ?? orderOf(row);
