@@ -1029,3 +1029,93 @@ for (const broken of [false, true]) {
     else expect(after.launcher.revision).toBe(next.sha);
   }, 120_000);
 }
+
+// Uses two exported, built revisions. Every process and listener belongs to
+// this fixture; the operator's install and fixed ports are never consulted.
+test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions apply, roll back, and re-adopt a recovery Viewer", async () => {
+  const firstDir = process.env.LLV_REHEARSAL_FIRST!;
+  const nextDir = process.env.LLV_REHEARSAL_NEXT!;
+  for (const directory of [firstDir, nextDir]) {
+    if (!directory || !path.resolve(directory).startsWith("/var/tmp/")) throw new Error("Rehearsal builds must be isolated exports");
+    expect(existsSync(path.join(directory, ".next", "BUILD_ID"))).toBe(true);
+    expect(existsSync(path.join(directory, "dist", "runtime-host.mjs")) || existsSync(path.join(directory, "src", "runtime-host", "main.ts"))).toBe(true);
+  }
+  const root = mkdtempSync("/var/tmp/delegatus-real-apply-"); roots.push(root);
+  const first = git(firstDir, "rev-parse", "HEAD");
+  const target = git(nextDir, "rev-parse", "HEAD");
+  expect(first).not.toBe(target);
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(LLV_|DELEGATUS_|NEXT_|__NEXT_|GIT_)/.test(key)
+    && !["PORT", "HOSTNAME", "NODE_ENV", "TMPDIR"].includes(key)));
+  const token = "fixture-rehearsal-access-key";
+  const state = path.join(root, "state");
+  const env = { ...clean, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"), XDG_CACHE_HOME: path.join(root, "cache"),
+    TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: state, LLV_BUN_EXECUTABLE: process.execPath, LLV_TOKEN: token, LLV_DEBUG: "1", NODE_ENV: "production" as const };
+  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.XDG_CACHE_HOME, env.TMPDIR, state]) mkdirSync(directory, { recursive: true });
+  const fixture = { root, checkout: firstDir, first, state, env };
+  const running = await start(fixture);
+  const readHealthy = () => { const r = readRecord(state); return r.launcher.state === "healthy" && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; };
+  let record = await until(readHealthy, 120_000);
+  const { UnixRuntimeHostClient } = await import("../src/lib/runtime/client");
+  const health = async (r: LauncherRecord) => {
+    const answer = await new UnixRuntimeHostClient(r.socket).runtimeHostHealth();
+    expect(answer.pid).toBe(r.runtimeHost.pid!);
+    const page = await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${token}` } });
+    expect(page.status).toBe(200);
+    expect((await page.text()).includes("/_next/static/")).toBe(true);
+  };
+  await health(record);
+  const oldWeb = record.web.pid;
+  const oldHost = record.runtimeHost.pid;
+  const pointer = JSON.stringify({ sha: target, dir: nextDir, checkoutHead: first });
+  writeFileSync(record.releasePointer, pointer);
+  writeFileSync(record.requestFile, JSON.stringify({ role: "relaunch", requestId: "real-success", target, rollbackPointer: null }));
+  record = await until(() => { const r = readHealthy(); return r?.launcher.requestId === "real-success" && r.launcher.revision === target ? r : null; }, 150_000);
+  expect(record.web.pid).not.toBe(oldWeb); expect(record.runtimeHost.pid).not.toBe(oldHost);
+  expect(record.web.revision).toBe(target.slice(0, 7)); expect(record.runtimeHost.revision).toBe(target.slice(0, 7));
+  await health(record);
+
+  const brokenDir = path.join(root, "broken");
+  git(root, "clone", "--shared", nextDir, brokenDir);
+  // Compiled artifacts represent a deliberately broken candidate at the
+  // same revision. The rollback restores the exact serving pointer bytes.
+  const { cpSync, symlinkSync } = await import("node:fs");
+  symlinkSync(path.join(nextDir, "node_modules"), path.join(brokenDir, "node_modules"));
+  symlinkSync(path.join(nextDir, ".next"), path.join(brokenDir, ".next"));
+  cpSync(path.join(nextDir, "dist"), path.join(brokenDir, "dist"), { recursive: true });
+  writeFileSync(path.join(brokenDir, "dist", "runtime-host.mjs"), "process.exit(3);\n");
+  writeFileSync(record.releasePointer, JSON.stringify({ sha: target, dir: brokenDir, checkoutHead: first }));
+  writeFileSync(record.requestFile, JSON.stringify({ role: "relaunch", requestId: "real-rollback", target, rollbackPointer: pointer }));
+  record = await until(() => { const r = readHealthy(); return r?.launcher.requestId === "real-rollback" && r.launcher.error?.kind === "fell-back" ? r : null; }, 150_000);
+  expect(readFileSync(record.releasePointer, "utf8")).toBe(pointer);
+  expect(readlinkSync(`/proc/${record.launcher.pid}/cwd`)).toBe(nextDir);
+  await health(record);
+
+  // Suspend only our recorded supervisor while replacing its owned child
+  // with a manually started recovery process. Adoption runs after resume.
+  const supervisor = record.launcher.pid;
+  process.kill(supervisor, "SIGSTOP");
+  let orphan: ReturnType<typeof spawn> | null = null;
+  try {
+    process.kill(record.web.pid!, "SIGTERM");
+    await until(() => { try { return readFileSync(`/proc/${record.web.pid}/stat`, "utf8").includes(") Z "); } catch { return true; } }, 20_000);
+    orphan = spawn(process.execPath, ["--bun", path.join(nextDir, "node_modules", "next", "dist", "bin", "next"), "start", "--hostname", "127.0.0.1", "--port", String(running.port)], {
+      cwd: nextDir, env: { ...env, PORT: String(running.port), HOSTNAME: "127.0.0.1", LLV_STATE_OWNER: "viewer", LLV_RUNTIME_HOST_SOCKET: record.socket }, stdio: "ignore",
+    });
+    children.add(orphan);
+    await until(() => { try { return existsSync(`/proc/${orphan!.pid}`) && orphan!.exitCode === null; } catch { return false; } });
+    const { readStartIdentity } = await import("./self-update-supervisor.mjs");
+    const adopted = record.requestFile.replace(/request-([^/]+)\.json$/, "adopt-$1.json");
+    writeFileSync(adopted, JSON.stringify({ pid: orphan.pid, startIdentity: readStartIdentity(orphan.pid!), port: running.port, socket: record.socket }));
+    // Require this recovery web to answer before allowing takeover.
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      try { if ((await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${token}` } })).status === 200) break; } catch { /* recovery boot */ }
+      await Bun.sleep(100);
+    }
+    expect((await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
+  } finally { process.kill(supervisor, "SIGCONT"); }
+  const orphanPid = orphan!.pid;
+  record = await until(() => { const r = readHealthy(); return r && r.web.pid !== orphanPid && !existsSync(`/proc/${orphanPid}`) ? r : null; }, 120_000);
+  expect(record.launcher.pid).toBe(supervisor); expect(record.web.revision).toBe(target.slice(0, 7));
+  await health(record);
+}, 480_000);
