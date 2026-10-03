@@ -562,9 +562,9 @@ test("an unmerged pull request waits out the wake interval like every other reas
   expect(decision.verdict.kind).toBe("quiet");
 });
 
-/* And the retry guard applies to it too, so a pull request nobody merges stops
-   costing an hourly wake and becomes one card instead. */
-test("an unmerged pull request that has stopped producing change is held by the retry guard", () => {
+/* A pull request still owed to the seat remains offerable when the old row
+   has no showing history, even after its retry guard was exhausted. */
+test("an unmerged pull request with unknown showing history passes an exhausted retry guard", () => {
   const decision = seatTickDecision(input({
     pullRequests: [pullRequest()],
     state: stateWith({
@@ -573,8 +573,8 @@ test("an unmerged pull request that has stopped producing change is held by the 
       wakesWithoutChange: { "unmerged-pr": 2 },
     }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "every wake reason is held by the retry guard" });
-  expect(decision.cards.map((card) => card.ref)).toContain("seat-tick-stuck-unmerged-pr");
+  expect(reasonsOf(decision.verdict)).toEqual(["unmerged-pr"]);
+  expect(decision.cards).toEqual([]);
 });
 
 /* Several at once name the first and count the rest, and every one of them is
@@ -734,22 +734,22 @@ test("an unreadable source raises no wake before the interval has elapsed", () =
   expect(decision.verdict.kind).toBe("error");
 });
 
-/* And the retry guard bounds it too: a reason the guard has stopped is not
-   revived by a gap beside it, and the check that has nothing left to carry
-   still refuses to call itself quiet. */
-test("a reason the retry guard holds is not revived by an unreadable source", () => {
+/* A non-versioned owed outcome remains bounded by the guard even while a
+   separate source gap keeps the overall check from claiming quiet. */
+test("a guarded child outcome is not revived by an unreadable source", () => {
+  const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() });
   const decision = seatTickDecision(input({
-    pipelines: [lane()],
+    children: [finished],
     pullRequestsUnavailable: "timed-out",
     changeFingerprint: "fp-1",
     state: stateWith({
       lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString(),
       lastWakeFingerprint: "fp-1",
-      wakesWithoutChange: { interval: 2 },
+      wakesWithoutChange: { "child-terminal": 2 },
     }),
   }));
   expect(decision.verdict.kind).toBe("error");
-  expect(decision.cards.map((entry) => entry.ref)).toContain("seat-tick-stuck-interval");
+  expect(decision.cards.map((entry) => entry.ref)).toContain("seat-tick-stuck-child-terminal");
   expect(decision.state.quietSince).toBeNull();
 });
 
@@ -1023,19 +1023,19 @@ test("a proposal card still open on the board holds the next proposal off", () =
   expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
 });
 
-test("a fruitless reason is re-sent at most twice, then becomes a card and drops out of wakes", () => {
+test("a fruitless child outcome is re-sent at most twice, then becomes a card", () => {
   const base = {
-    pipelines: [lane()],
+    children: [child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() })],
     state: stateWith({
       lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString(),
       lastWakeFingerprint: "fp-1",
-      wakesWithoutChange: { interval: 2 },
+      wakesWithoutChange: { "child-terminal": 2 },
     }),
   };
   const decision = seatTickDecision(input(base));
   expect(decision.verdict).toEqual({ kind: "quiet", detail: "every wake reason is held by the retry guard" });
   expect(decision.cards).toHaveLength(1);
-  expect(decision.cards[0]).toMatchObject({ kind: "retry-guard", ref: "seat-tick-stuck-interval" });
+  expect(decision.cards[0]).toMatchObject({ kind: "retry-guard", ref: "seat-tick-stuck-child-terminal" });
 });
 
 test("board movement clears the retry guard, so a reason that starts working again is sent again", () => {

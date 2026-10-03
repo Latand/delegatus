@@ -615,12 +615,10 @@ test("a board whose assigned cards are all past the backlog bound wakes nobody",
   expect(seatTickDecision(input).verdict.kind).toBe("quiet");
 });
 
-/* The guard half of the same defect. `updatedAt` decides whether a card is an
-   unstarted task or backlog, so moving the card IS the discharge — and while
-   that field was missing from the change fingerprint, the guard entry keyed on
-   the fingerprint could not see the movement and went on suppressing the reason
-   past the condition it was guarding. */
-test("moving a stale card moves the fingerprint, so the retry guard cannot outlive the staleness it guarded", async () => {
+/* `updatedAt` decides whether a card is an unstarted task or backlog. Moving
+   the card changes the fingerprint; a legacy row with no showing history also
+   keeps the newly unstarted task offerable past its exhausted guard. */
+test("moving a stale card changes the fingerprint and unknown history keeps its task offerable", async () => {
   const stale = await gather(
     { pipelines: [], tasks: [boardCard({ updatedAt: new Date(NOW - 40 * DAY_MS).toISOString() })], events: SETTLED_HISTORY },
     withCursor(9853, OVERDUE),
@@ -638,11 +636,11 @@ test("moving a stale card moves the fingerprint, so the retry guard cannot outli
   expect(reasonsOf(released)).toEqual(["unstarted-task"]);
   expect(released.cards).toEqual([]);
 
-  /* And it is the movement that released it, not the guard having lapsed: the
-     same guard against the state this check actually read still holds. */
+  /* With no history proving the task was shown, unchanged source movement
+     does not make the pending task disappear behind the guard. */
   const held = seatTickDecision({ ...moved, state: { ...moved.state, ...spent, lastWakeFingerprint: moved.changeFingerprint } });
-  expect(reasonsOf(held)).toEqual([]);
-  expect(held.cards.map((card) => card.kind)).toEqual(["retry-guard"]);
+  expect(reasonsOf(held)).toEqual(["unstarted-task"]);
+  expect(held.cards).toEqual([]);
 });
 
 /* ------------------------------------------------------------------------- *
