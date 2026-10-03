@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -47,6 +47,47 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("shared memory settings", () => {
+  browserTest("project switch and explanation render in both languages at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/shared-memory"); fs.mkdirSync(out, { recursive: true });
+    let enabled = true;
+    const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+      "/api/memory/settings": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ enabled, capUsd: 1, spentUsd: .002 });
+      },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+    });
+    const browser = await launchChromium();
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        enabled = true;
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const offer = page.locator("[data-memory-offer]"); await offer.waitFor();
+          const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
+          expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
+          await offer.locator("summary").click();
+          expect(await offer.locator("p").innerText()).toContain("constraint 15");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
+          const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);
+          await control.click(); await page.waitForFunction(() => !(document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked);
+          const geometry = await setting.evaluate(el => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/settings.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
 
 describe("runtime idle performance", () => {
   browserTest("limits keep the phone stream joined without snapshot refetches", async () => {
@@ -5522,6 +5563,191 @@ describe("fast TTS header", () => {
     const browser = await launchChromium();
     try { await captureFastTtsHeaders(browser, true); } finally { await browser.close(); }
   }, 120_000);
+});
+
+/*
+ * The phone conversation's chrome (2026-10-02): the pinned message and the
+ * background tasks live behind the header's ⋯ menu, nothing sits under the bar,
+ * the seat's report button is back on the bar, and read-aloud sits beside each
+ * assistant message and nowhere in the header.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone chrome"
+ *
+ * Frames go to `$HOME/Pictures/delegatus-review/phone-chrome/`, readings to
+ * `evidence/phone-chrome/readings.json`.
+ */
+describe("phone chrome", () => {
+  browserTest("pinned message and background tasks in the ⋯ menu, read-aloud beside the message, at 390 in en and uk, light and dark", async () => {
+    const out = path.join(os.homedir(), "Pictures/delegatus-review/phone-chrome");
+    const evidence = path.resolve("evidence/phone-chrome");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const speech = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+    const { base, stop } = await serveFixture({ "/api/tts/backend": speech });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    const scenes = [
+      { name: "tasks3", query: "chrome=3" },
+      { name: "pinned-only", query: "chrome=0" },
+      { name: "tasks8", query: "chrome=8" },
+      { name: "empty", query: "chrome=0&nopin" },
+    ] as const;
+    /** Every visible control inside `root` that a finger has to hit, under 44 px in either direction. */
+    const smallControls = (page: Page, root: string) => page.evaluate((selector) => {
+      const scope = document.querySelector(selector);
+      if (!scope) return ["missing"];
+      return [...scope.querySelectorAll<HTMLElement>("button, a[href], [role=menuitem]")].flatMap((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.width < 43.5 || rect.height < 43.5 ? [`${node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 24)} ${Math.round(rect.width)}x${Math.round(rect.height)}`] : [];
+      });
+    }, root);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const scene of scenes) {
+        const key = `390-${lang}-${scheme}-${scene.name}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        const tasksOn = scene.name === "tasks3" || scene.name === "tasks8";
+        const pinnedOn = scene.name !== "empty";
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?${scene.query}&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-bar] [data-mobile2-open=menu]", { timeout: 20_000 });
+          await page.waitForSelector("[data-mobile-message=agent]", { timeout: 20_000 });
+          await pause(page, 900);
+          /* The bar: its height, its icons, and what sits between it and the feed. */
+          const frame = await page.evaluate(() => {
+            const bar = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+            const feed = document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect();
+            return {
+              barHeight: bar.height, barBottom: bar.bottom, feedTop: feed.top, gap: Math.round(feed.top - bar.bottom),
+              strips: document.querySelectorAll("[data-task-relations], [data-task-relations-slot], [data-flip-key]").length,
+              speechInBar: document.querySelectorAll("[data-mobile2-bar] [data-tts-trigger], [data-mobile2-bar] [data-tts-header]").length,
+              reports: !!document.querySelector('[data-mobile2-bar] [data-mobile2-open=reports]'),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              barBadge: document.querySelectorAll("[data-mobile2-bar] [data-mobile2-menu-badge], [data-mobile2-bar] [data-mobile2-notice-dot]").length,
+            };
+          });
+          if (frame.barHeight !== 52) fail(`the bar is ${frame.barHeight}px high`);
+          /* The pane's own card frame (its border and engine stripe) is the 5 px that is always there; a strip is 44 px or more. */
+          if (frame.gap > 8) fail(`${frame.gap}px sit between the bar and the feed`);
+          if (frame.strips) fail(`${frame.strips} strips remain under the bar`);
+          if (frame.speechInBar) fail("a speech control is on the bar");
+          if (!frame.reports) fail("the seat's report button is not on the bar");
+          if (frame.sideways > 0) fail(`the page scrolls sideways by ${frame.sideways}px`);
+          if (frame.barBadge) fail("the bar carries a badge or dot");
+          const barSmall = await smallControls(page, "[data-mobile2-bar]");
+          if (barSmall.length) fail(`bar controls under 44 px: ${barSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-conversation.png`) });
+          /* Read-aloud: in the message's own action row, at 44 px, with copy beside it. */
+          await page.waitForSelector("[data-mobile-message-actions] [data-tts-trigger]", { timeout: 10_000 });
+          const speak = await page.evaluate(() => {
+            const trigger = [...document.querySelectorAll<HTMLElement>("[data-mobile-message-actions] [data-tts-trigger]")].at(-1)!;
+            const rect = trigger.getBoundingClientRect();
+            const row = trigger.closest("[data-mobile-message-actions]")!;
+            return { width: rect.width, height: rect.height, copy: !!row.querySelector("button[aria-label]:not([data-tts-trigger])"), inMessage: !!trigger.closest("[data-mobile-message]"), header: trigger.hasAttribute("data-tts-header"), label: trigger.getAttribute("aria-label") };
+          });
+          if (speak.width < 44 || speak.height < 44) fail(`the read-aloud control is ${speak.width}x${speak.height}`);
+          if (!speak.copy || !speak.inMessage || speak.header) fail(`the read-aloud control sits wrong: ${JSON.stringify(speak)}`);
+          const messageSmall = await smallControls(page, "[data-mobile-message-actions]");
+          if (messageSmall.length) fail(`message controls under 44 px: ${messageSmall.join(", ")}`);
+          await page.locator("[data-mobile-message-actions]").last().scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-read-aloud.png`) });
+          /* The header menu, open. */
+          await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+          await page.waitForSelector("[data-mobile2-sheet=menu]");
+          await pause(page, 500);
+          const rowState = await page.evaluate(() => ({
+            pinned: !!document.querySelector('[data-mobile2-menu-row=pinned]'),
+            background: document.querySelector('[data-mobile2-menu-row=background]')?.textContent?.trim() ?? null,
+            order: [...document.querySelectorAll("[data-mobile2-menu-row]")].slice(0, 2).map((node) => node.getAttribute("data-mobile2-menu-row")),
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          }));
+          if (rowState.pinned !== pinnedOn) fail(`pinned row ${rowState.pinned}, expected ${pinnedOn}`);
+          const tasksCount = scene.name === "tasks3" ? 3 : scene.name === "tasks8" ? 8 : 0;
+          const tasksLabel = translate(lang, "mobile2.chat.menuBackground", { count: tasksCount });
+          if ((rowState.background !== null) !== tasksOn || (tasksOn && !rowState.background!.includes(tasksLabel))) fail(`tasks row ${JSON.stringify(rowState.background)}, expected ${tasksOn ? tasksLabel : "none"}`);
+          if (rowState.sideways > 0) fail(`menu scrolls sideways by ${rowState.sideways}px`);
+          const menuSmall = await smallControls(page, "[data-mobile2-sheet=menu]");
+          if (menuSmall.length) fail(`menu controls under 44 px: ${menuSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          const sheets: Record<string, unknown> = {};
+          if (pinnedOn && scene.name === "tasks3") {
+            await page.locator("[data-mobile2-menu-row=pinned]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]");
+            await pause(page, 500);
+            const pinned = await page.evaluate(() => ({ text: document.querySelector("[data-mobile2-pinned-item] p")?.textContent ?? "", open: document.querySelector("[data-mobile2-pinned-open]")?.textContent?.trim() ?? "", sideways: document.documentElement.scrollWidth - innerWidth }));
+            if (!pinned.text.includes("Never leave a lane without an owner.")) fail("the pinned sheet does not show the full text");
+            if (!pinned.open.includes(translate(lang, "mobile2.pinned.openCard"))) fail(`the pinned sheet's button reads ${pinned.open}`);
+            if (pinned.sideways > 0) fail(`pinned sheet scrolls sideways by ${pinned.sideways}px`);
+            const small = await smallControls(page, "[data-mobile2-sheet=pinned]");
+            if (small.length) fail(`pinned sheet controls under 44 px: ${small.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-pinned-sheet.png`) });
+            sheets.pinned = pinned;
+            await page.locator("[data-mobile2-sheet=pinned] [data-mobile2-close]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]", { state: "detached" });
+            await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]");
+          }
+          if (tasksOn) {
+            await page.locator("[data-mobile2-menu-row=background]").click();
+            await page.waitForSelector("[data-mobile2-sheet=background]");
+            await pause(page, 500);
+            const list = await page.evaluate(() => ({
+              rows: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task]").length,
+              standingStop: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task-stop]").length,
+              hostWord: (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Stop host") || (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Зупинити хост"),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              sheetSideways: (() => { const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=background] [data-mobile2-sheet-body]"); return body ? body.scrollWidth - body.clientWidth : 0; })(),
+            }));
+            const expected = scene.name === "tasks3" ? 3 : 8;
+            if (list.rows !== expected) fail(`${list.rows} task rows, expected ${expected}`);
+            if (list.standingStop) fail("a Stop control is visible before a task's ⋯ is opened");
+            if (list.hostWord) fail("the tasks sheet says «host»");
+            if (list.sideways > 0 || list.sheetSideways > 0) fail(`tasks sheet scrolls sideways (${list.sideways}/${list.sheetSideways})`);
+            const listSmall = await smallControls(page, "[data-mobile2-sheet=background]");
+            if (listSmall.length) fail(`tasks sheet controls under 44 px: ${listSmall.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-tasks-sheet.png`) });
+            sheets.tasks = list;
+            if (scene.name === "tasks3") {
+              await page.locator("[data-mobile2-task-menu]").first().click();
+              await page.waitForSelector("[data-mobile2-task-actions]");
+              await pause(page, 300);
+              const taskMenu = await page.evaluate(() => ({
+                head: document.querySelector("[data-mobile2-task-actions]")?.firstElementChild?.textContent?.trim() ?? "",
+                items: [...document.querySelectorAll("[data-mobile2-task-actions] [role=menuitem]")].map((node) => node.textContent?.trim()),
+                sideways: document.documentElement.scrollWidth - innerWidth,
+              }));
+              const wanted = [translate(lang, "task.stopTask"), translate(lang, "task.showOutput"), translate(lang, "task.copyCommand")];
+              if (!/^PID \d+$/.test(taskMenu.head)) fail(`the task menu header reads ${taskMenu.head}`);
+              if (JSON.stringify(taskMenu.items) !== JSON.stringify(wanted)) fail(`the task menu holds ${JSON.stringify(taskMenu.items)}`);
+              if (taskMenu.sideways > 0) fail(`task menu scrolls sideways by ${taskMenu.sideways}px`);
+              const small = await smallControls(page, "[data-mobile2-task-actions]");
+              if (small.length) fail(`task menu controls under 44 px: ${small.join(", ")}`);
+              await page.screenshot({ path: path.join(out, `${key}-task-menu.png`) });
+              sheets.taskMenu = taskMenu;
+            }
+          }
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings.push({ key, frame, speak, rowState, sheets, pageErrors });
+        } catch (error) {
+          failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("fast TTS live latency", () => {

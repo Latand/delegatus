@@ -409,3 +409,28 @@ test("an agent relay that carries the mandate text stays the internal card", () 
   expect(html).toContain("orchestrator");
   expect(html).not.toContain("data-mandate-card");
 });
+
+for (const engine of ["claude", "codex"] as const) for (const locale of ["en", "uk"] as const) {
+  test(`${engine} native offers render once for their own occurrence after reload in ${locale}`, () => {
+    setLocale(locale);
+    const first = engine === "claude"
+      ? JSON.stringify({ type: "user", uuid: "synthetic-first", timestamp: at(1000), message: { role: "user", content: "Repeat synthetic input" } })
+      : codexUserLine("Repeat synthetic input", at(1000));
+    const second = engine === "claude"
+      ? JSON.stringify({ type: "user", uuid: "synthetic-second", timestamp: at(3000), message: { role: "user", content: "Repeat synthetic input" } })
+      : codexUserLine("Repeat synthetic input", at(3000));
+    const parse = () => engine === "claude" ? claudeItems([first, second]) : codexItems([first, codexEventLine("Repeat synthetic input", at(1001)), second]);
+    const memoryOffers = { [`native:${messageTextDigest(first)}`]: ["Synthetic memory name"] };
+    for (const items of [parse(), parse()]) {
+      const lookup = provenanceLookupFor({ memoryOffers }, items);
+      const users = items.filter(item => item.kind === "user");
+      expect(lookup.memoryFor!(users[0])).toEqual(["Synthetic memory name"]);
+      expect(lookup.memoryFor!(users[1])).toEqual([]);
+      const markup = renderToStaticMarkup(<MessageProvenanceProvider value={lookup}>
+        {users.map((item, index) => <FeedItem key={index} item={item} />)}
+      </MessageProvenanceProvider>);
+      expect(markup.match(/data-memory-offer/g)).toHaveLength(1);
+      expect(markup).toContain("Synthetic memory name");
+    }
+  });
+}

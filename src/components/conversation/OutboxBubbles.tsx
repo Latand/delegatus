@@ -14,7 +14,7 @@ import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 import { DELIVERY_WAIT_TICK_MS } from "@/components/runtime/deliveryWait";
 import { type TFunction, useLocale } from "@/lib/i18n";
 
-import { appendComposerDraft } from "@/components/TmuxComposer";
+import { appendComposerDraft, restoreOutboxDraft } from "@/components/TmuxComposer";
 
 import { messageRowModel, messageRowOperationId, type MessageRowSession, type MessageRowSwitchHold } from "./messageRow";
 import { publishRenderedMessageRows } from "./renderedRows";
@@ -499,12 +499,12 @@ export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntr
       }
       const cleared = clearParkedOutbox(cardId, id);
       if (cleared) {
-        if (cleared.text.trim()) appendComposerDraft(cardId, cleared.text);
+        restoreOutboxDraft(cardId, cleared);
         return;
       }
       if (!entry || entry.deliveryUncertain || entry.operationId || entry.deliveryReceipt) return;
       cancelOutbox(cardId, id);
-      if (entry.text.trim()) appendComposerDraft(cardId, entry.text);
+      restoreOutboxDraft(cardId, entry);
     },
     /* An injection that provably failed: the row goes and its words are
        appended to the draft. Sending them again mints a new key, which is a

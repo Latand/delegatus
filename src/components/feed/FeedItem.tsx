@@ -285,7 +285,9 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, sp
        it replaces (send-latency slice 3): the message keeps one width, one
        opacity, one type size and one set of controls from the moment it is
        submitted to the moment the transcript carries it. */
-    return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} sender={provenance.senderFor(sourceItem)} />;
+    const memoryNames = provenance.memoryFor?.(sourceItem) ?? [];
+    return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} sender={provenance.senderFor(sourceItem)}
+      below={memoryNames.length ? <details data-memory-offer className="mt-1 w-full min-w-0 text-right text-caption text-muted"><summary className="truncate" title={memoryNames.join(" · ")}>{t("memory.offered", { names: memoryNames.join(" · ") })}</summary><p className="whitespace-normal break-words">{memoryNames.join(" · ")}</p></details> : undefined} />;
   }
   if (item.kind === "tool" && item.mcp) return <McpCallCard event={item} />;
   if (item.kind === "tool" && item.wakeup) return <WakeupCard event={item} wakeup={item.wakeup} />;
