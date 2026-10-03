@@ -18911,3 +18911,48 @@ test.each([1, 2] as const)("a final granted fix repaired inside its budget remai
   expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(3 + rounds);
   expect(completed.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!.input).toContain(lastReview.verdict!.findings![0]!);
 });
+
+
+test.each(["host", "spawn"] as const)("reviewer %s retries spend no extra granted round", async (failure) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, `retry-${failure}-grant`, 3)).error).toBeUndefined();
+  await buildRound(h, "first granted fix");
+  const spawn = h.ports.spawnAgent;
+  if (failure === "spawn") {
+    h.ports.spawnAgent = async () => { throw new Error("runtime host request timed out"); };
+    h.ports.sleep = async () => {};
+  } else {
+    h.ports.spawnAgent = async (input, reserve) => ({ ...await spawn(input, reserve), paneId: null });
+  }
+  await tickPipelines([], h.ports);
+  const interruptedLane = loadPipelines()[0]!;
+  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(interrupted.verdict).toBeNull();
+  if (failure === "host") {
+    h.durableTurns.set(interrupted.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(interrupted.startedAt!) + 1 });
+    h.ports.conversationTurnInterrupted = async () => "stalled";
+    h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
+  } else {
+    expect(interruptedLane.state).toBe("needs_decision");
+  }
+  expect((await patchPipeline(parked.id, { action: "retry-stage", expectedStageId: "critique", expectedAttempt: interrupted.n }, h.ports)).error).toBeUndefined();
+  h.ports.spawnAgent = spawn;
+  delete h.ports.conversationTurnInterrupted;
+  await critiqueRound(h, "fail", "first completed granted review");
+  const retried = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(retried.activatedBy).toEqual(interrupted.activatedBy);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  for (let round = 1; round < 3; round++) {
+    await buildRound(h, `granted fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
+    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
+  }
+  const final = loadPipelines()[0]!;
+  const reviews = final.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(6);
+  expect(reviews.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
+  expect(final.reviewPending?.terminalRecheck).toBe(true);
+});

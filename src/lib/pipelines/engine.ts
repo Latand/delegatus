@@ -2817,20 +2817,27 @@ function terminalGrantIsLastRound(pipeline: Pipeline, grant: PipelineReviewGrant
   const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
   if (!review) return false;
   const grantRoot = { stageId: grant.stageId, attempt: grant.terminalAttempt };
-  let completedReviews = 0;
+  const completedReviews = new Set<string>();
   for (const run of pipeline.runs) {
     if (run.stageId !== grant.stageId) continue;
     for (const candidate of run.attempts) {
-      if (candidate.n <= grant.terminalAttempt) continue;
+      const reviewActivation = candidate.activatedBy;
+      if (candidate.n <= grant.terminalAttempt || candidate.historical || !candidate.verdict
+        || !candidate.completedAt || !["passed", "failed", "needs_decision"].includes(candidate.state)
+        || reviewActivation?.edge !== "pass") continue;
       let current: PipelineStageAttempt | undefined = candidate;
       const visited = new Set<string>();
       while (current?.activatedBy) {
         const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
         if (activation.edge === "fail" && activation.stageId === grantRoot.stageId
           && activation.attempt === grantRoot.attempt) {
-          completedReviews += 1;
+          // Host/spawn retries carry the same incoming pass activation.
+          // Only a completed review of that fix spends its granted round.
+          completedReviews.add(`${reviewActivation.stageId}:${reviewActivation.attempt}`);
           break;
         }
+        if (activation.edge === "fail" && pipeline.reviewGrants?.some((newer) =>
+          newer.stageId === activation.stageId && newer.terminalAttempt === activation.attempt)) break;
         const key = `${activation.stageId}:${activation.attempt}`;
         if (visited.has(key)) break;
         visited.add(key);
@@ -2839,7 +2846,7 @@ function terminalGrantIsLastRound(pipeline: Pipeline, grant: PipelineReviewGrant
       }
     }
   }
-  return completedReviews >= grant.rounds - 1;
+  return completedReviews.size >= grant.rounds - 1;
 }
 
 /** Stop a lane whose spent review budget left an unreviewed head (#1938). The
