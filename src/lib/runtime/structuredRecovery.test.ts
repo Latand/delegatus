@@ -6,14 +6,16 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 
 import { UNKNOWN_RESET_RECHECK_MS } from "./accountPark";
 import type { RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
-import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredRecoveryHeldError } from "./structuredRecovery";
 import { structuredResumeSessionId } from "./structuredSpawn";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"));
@@ -1669,4 +1671,57 @@ test("resume waits for a short account mutation and starts one successor", async
     expect(await recovery).toMatchObject({ spawned: true, conversationId: conversation.id });
     expect(spawns).toBe(1);
   } finally { release(); await holder; await recovery.catch(() => {}); }
+});
+
+test("recovery rechecks the update hold after waiting for the account lock", async () => {
+  const directory = fs.mkdtempSync(path.join(sandbox, "drain-lock-"));
+  const artifactPath = path.join(directory, `${crypto.randomUUID()}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const reserved = registry.holdDelivery(conversation.id, "continue", "account-lock-send", "text", [], null, { origin: { kind: "agent" } });
+  const request = { path: artifactPath, conversationId: conversation.id,
+    delivery: { operationId: reserved.command.operationId, origin: reserved.command.origin } };
+  let launches = 0;
+  let releaseLock!: () => void;
+  let lockAcquired!: () => void;
+  let accountResolved!: () => void;
+  const locked = new Promise<void>(resolve => { lockAcquired = resolve; });
+  const release = new Promise<void>(resolve => { releaseLock = resolve; });
+  const resolved = new Promise<void>(resolve => { accountResolved = resolve; });
+  const blocker = withAccountMutationLockAsync(async () => { lockAcquired(); await release; });
+  const dependencies = {
+    registry, client: {} as RuntimeHostClient, transport: () => "structured" as const, park: () => null,
+    resolveAccount: (): AccountContext => {
+      accountResolved();
+      return { engine: "codex", accountId: "default", kind: "managed", home: directory, transcriptRoot: directory, env: { NODE_ENV: "test" } };
+    },
+    requestDeliveryDrain: () => {},
+    spawn: async (input: Parameters<NonNullable<import("./structuredRecovery").StructuredRecoveryDependencies["spawn"]>>[0]) => {
+      launches += 1;
+      return { ok: true as const, target: null, path: artifactPath, conversationId: conversation.id, launchId: input.receipt.launchId,
+        launched: true, retrySafe: false, initialMessage: "delivered" as const, state: "settled" as const };
+    },
+  };
+  const file = drainFile();
+  try {
+    await locked;
+    const recovering = recoverDeadStructuredConversation(request, dependencies);
+    await resolved;
+    writeDrain(file, { id: "account-lock-hold", target: "candidate", since: reserved.createdAt, until: 0, persistent: true });
+    releaseLock();
+    await blocker;
+    await expect(recovering).rejects.toBeInstanceOf(StructuredRecoveryHeldError);
+    expect(launches).toBe(0);
+    expect(Object.keys(registry.snapshot().receipts)).toHaveLength(0);
+    releaseDrain(file, "account-lock-hold");
+    expect(await recoverDeadStructuredConversation(request, dependencies)).toMatchObject({ spawned: true });
+    expect(launches).toBe(1);
+    expect(Object.keys(registry.snapshot().receipts)).toHaveLength(1);
+  } finally {
+    releaseLock();
+    await blocker;
+    releaseDrain(file, "account-lock-hold");
+    registry.close();
+  }
 });

@@ -708,6 +708,7 @@ async function recoverReclaimedMessage(
     recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
       path: request.path || conversation.generations.at(-1)?.path || "",
       conversationId: conversation.id,
+      delivery: { operationId: reservation.command.operationId, origin: reservation.command.origin },
     }, {
       registry,
       client,
@@ -799,6 +800,7 @@ export async function deliverHeldStructuredMessage(
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
         conversationId: request.conversationId,
+        delivery: { operationId: request.command?.operationId ?? request.deliveryId, origin: request.command?.origin },
       }, {
         registry,
         client,
@@ -1192,6 +1194,7 @@ export async function enqueueStructuredMessage(
       recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path || session.artifactPath || "",
         conversationId: session.conversationId as ViewerConversationId,
+        delivery: { operationId: recoveryReservation!.command.operationId, origin: recoveryReservation!.command.origin },
       }, { registry, client });
     } catch (error) {
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;

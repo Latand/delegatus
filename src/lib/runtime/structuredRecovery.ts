@@ -1,4 +1,4 @@
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { resolveContinuityAccount } from "@/lib/accounts/manager";
@@ -10,11 +10,13 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
-import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
+import { StructuredRecoveryContendedError, StructuredRecoveryHeldError, type StructuredRecoveryDelivery } from "./structuredRecoveryContention";
+export { StructuredRecoveryHeldError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
   failStagedResume,
@@ -27,6 +29,9 @@ import { spawnTransport } from "./spawnTransport";
 export interface StructuredRecoveryRequest {
   path: string;
   conversationId?: string | null;
+  /** The durable send that needs this host. Its original acceptance determines
+      whether recovery belongs to the work an automatic update is draining. */
+  delivery?: StructuredRecoveryDelivery;
 }
 
 export interface StructuredRecoveryResult {
@@ -379,18 +384,29 @@ async function recoverCandidate(
     );
     let begun: SpawnBeginResult;
     try {
-      begun = await registry.beginSpawnRequestAsync({
-        engine: current.engine,
-        cwd: current.spec.cwd,
-        transport: "structured",
-        accountId: account.accountId,
-        conversationId: current.conversationId,
-        parentConversationId: current.parentConversationId,
-        purpose: "resume-successor",
-        origin: { kind: "successor" },
-        expectedArtifactPath: current.path,
-        launchProfile: current.spec.launchProfile,
-      });
+      begun = await withAccountMutationLockAsync(() => {
+        // The hold may have landed while recovery waited for this lock. Read
+        // the immutable delivery cohort before the first durable spawn write.
+        const hold = request.delivery?.origin?.kind === "agent" ? activeDrain() : null;
+        if (hold && request.delivery) {
+          const acceptedAt = registry.deliveryAdmissionAtForOperation(request.delivery.operationId)
+            ?? request.delivery.admittedAt;
+          const accepted = Date.parse(acceptedAt ?? "");
+          if (!Number.isFinite(accepted) || accepted >= Date.parse(hold.since)) throw new StructuredRecoveryHeldError();
+        }
+        return registry.beginSpawnRequestAsync({
+          engine: current.engine,
+          cwd: current.spec.cwd,
+          transport: "structured",
+          accountId: account.accountId,
+          conversationId: current.conversationId,
+          parentConversationId: current.parentConversationId,
+          purpose: "resume-successor",
+          origin: { kind: "successor" },
+          expectedArtifactPath: current.path,
+          launchProfile: current.spec.launchProfile,
+        });
+      }, { holder: "resume admission", caller: "resume" });
     } catch (error) {
       /* #1716: the lock throws its typed busy refusal from the acquire, before
          the reservation's transaction is admitted, so this recovery reserved

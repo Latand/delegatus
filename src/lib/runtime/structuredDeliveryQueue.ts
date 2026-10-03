@@ -14,7 +14,7 @@ import {
   structuredContent,
   type StructuredMessageContent,
 } from "./structuredContent";
-import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
+import { StructuredRecoveryContendedError, StructuredRecoveryHeldError, type StructuredRecoveryDelivery } from "./structuredRecoveryContention";
 
 export interface StructuredDeliveryEffect {
   id: string;
@@ -111,7 +111,7 @@ export type StructuredHostResolver = (conversationId: string) => EngineHost | nu
     whether it started one. A {@link StructuredRecoveryContendedError} says the
     attempt was refused before it reserved anything; the queue keeps the
     operation queued and tries again on a bounded schedule (#1716). */
-export type StructuredHostRecovery = (conversationId: string) => Promise<boolean>;
+export type StructuredHostRecovery = (conversationId: string, delivery: StructuredRecoveryDelivery) => Promise<boolean>;
 export type StructuredKillRefusal = (conversationId: string) => string | null | Promise<string | null>;
 
 const STRUCTURED_DELIVERY_BATCH_SIZE = 100;
@@ -1993,10 +1993,15 @@ export class StructuredDeliveryQueue {
    * in recovery arrives unmarked and settles failed with every other failure,
    * since trying again there could reserve a second successor.
    */
-  private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId">): Promise<void> {
+  private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId"> & { origin?: MessageOrigin }): Promise<void> {
     if (!this.recoverHost) return;
     try {
-      const recovered = await this.recoverHost(effect.conversationId);
+      const admission = await this.port.status(effect.operationId);
+      const recovered = await this.recoverHost(effect.conversationId, {
+        operationId: effect.operationId,
+        origin: effect.origin,
+        admittedAt: admission?.admittedAt ?? admission?.at,
+      });
       this.contendedRecoveries.delete(effect.operationId);
       if (recovered) {
         this.rerun = true;
@@ -2006,6 +2011,10 @@ export class StructuredDeliveryQueue {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
+      if (error instanceof StructuredRecoveryHeldError) {
+        this.retrySoon();
+        return;
+      }
       let reason = `structured host recovery failed: ${failureReason(error)}`;
       if (error instanceof StructuredRecoveryContendedError) {
         const attempts = (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;

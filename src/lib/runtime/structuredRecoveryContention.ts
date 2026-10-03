@@ -1,4 +1,19 @@
 import type { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import type { MessageOrigin } from "./messageOrigin";
+
+export interface StructuredRecoveryDelivery {
+  operationId: string;
+  origin?: MessageOrigin;
+  admittedAt?: string;
+}
+
+/** No successor receipt or host was created; the accepted send stays retryable. */
+export class StructuredRecoveryHeldError extends Error {
+  constructor() {
+    super("new autonomous recovery is held for the automatic update");
+    this.name = "StructuredRecoveryHeldError";
+  }
+}
 
 /**
  * Host recovery refused by account-mutation contention before its successor
