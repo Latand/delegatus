@@ -207,10 +207,12 @@ test("column width changes keep the mounted seat view", async () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     const mountedSeat = host.querySelector("[data-test-seat]");
     const before = seatRenders;
+    rendered.length = 0;
     flushSync(() => host.querySelector<HTMLElement>('[data-col-width="inbox"]')!.click());
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(host.querySelector('.column[data-status="inbox"]')?.getAttribute("data-wide")).toBe("1");
     expect(seatRenders).toBe(before);
+    expect(rendered).toEqual([]);
     expect(host.querySelector("[data-test-seat]")).toBe(mountedSeat);
     render(tasks, { seat: () => <section data-test-seat="replacement" /> });
     expect(host.querySelector("[data-test-seat]")?.getAttribute("data-test-seat")).toBe("replacement");

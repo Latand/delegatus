@@ -9,12 +9,13 @@
       "reading": {
         "before": {
           "width": 254,
-          "height": 161
+          "height": 161.4375
         },
         "after": {
-          "width": 254,
-          "height": 161
-        }
+          "width": 253.99996948242188,
+          "height": 161.4375
+        },
+        "naturalWidth": 454
       },
       "settled": {
         "width": 480,
@@ -27,12 +28,13 @@
       "reading": {
         "before": {
           "width": 454,
-          "height": 129
+          "height": 129.4375
         },
         "after": {
           "width": 454,
-          "height": 129
-        }
+          "height": 129.4375
+        },
+        "naturalWidth": 254
       },
       "settled": {
         "width": 280,
