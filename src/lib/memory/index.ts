@@ -71,37 +71,49 @@ export class MemoryIndex {
     fsSync.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     this.db = new sqlite.Database(filename, { create: true });
     fsSync.chmodSync(filename, 0o600);
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA busy_timeout = 5000;
-      CREATE TABLE IF NOT EXISTS memory_files (path TEXT PRIMARY KEY, identity TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS memory_entries (
-        id TEXT PRIMARY KEY, engine TEXT, kind TEXT, scope TEXT, project TEXT,
-        sourcePath TEXT, sourceKind TEXT, title TEXT, summary TEXT, body TEXT, writtenAt TEXT, flags TEXT
-      );
-      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, title, summary, body);
-      CREATE TABLE IF NOT EXISTS memory_offers (
-        memory_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT,
-        at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
-        PRIMARY KEY (memory_id, request_id)
-      );
-      CREATE TABLE IF NOT EXISTS memory_injection_names (
-        memory_id TEXT NOT NULL, request_id TEXT NOT NULL, title TEXT NOT NULL,
-        PRIMARY KEY (memory_id, request_id)
-      );
-      INSERT OR IGNORE INTO memory_injection_names
-        SELECT o.memory_id, o.request_id, e.title FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id
-        WHERE o.channel = 'inject';
-      CREATE TABLE IF NOT EXISTS memory_terminal_deliveries (
-        id TEXT PRIMARY KEY, conversation TEXT, digest TEXT, origin TEXT, request TEXT, transcript TEXT, offset INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest);
-      CREATE TABLE IF NOT EXISTS memory_native_turns (
-        conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
-        PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
-      );
-      CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
-    `);
+    try {
+      this.db.exec(`
+        PRAGMA busy_timeout = 0;
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS memory_files (path TEXT PRIMARY KEY, identity TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS memory_entries (
+          id TEXT PRIMARY KEY, engine TEXT, kind TEXT, scope TEXT, project TEXT,
+          sourcePath TEXT, sourceKind TEXT, title TEXT, summary TEXT, body TEXT, writtenAt TEXT, flags TEXT
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, title, summary, body);
+        CREATE TABLE IF NOT EXISTS memory_offers (
+          memory_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT,
+          at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
+          PRIMARY KEY (memory_id, request_id)
+        );
+        CREATE TABLE IF NOT EXISTS memory_terminal_deliveries (
+          id TEXT PRIMARY KEY, conversation TEXT, digest TEXT, origin TEXT, request TEXT, transcript TEXT, offset INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest);
+        CREATE TABLE IF NOT EXISTS memory_native_turns (
+          conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
+          PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
+        );
+        CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
+      `);
+      if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
+        // Migrate once, atomically, without waiting behind a live writer. A hook
+        // can abandon a contended first open and retry on a later prompt.
+        this.db.transaction(() => {
+          this.db!.exec(`CREATE TABLE memory_injection_names (
+            memory_id TEXT NOT NULL, request_id TEXT NOT NULL, title TEXT NOT NULL,
+            PRIMARY KEY (memory_id, request_id)
+          );
+          INSERT INTO memory_injection_names
+            SELECT o.memory_id, o.request_id, e.title FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id
+            WHERE o.channel = 'inject';`);
+        })();
+      }
+      this.db.exec("PRAGMA busy_timeout = 5000");
+    } catch (error) {
+      this.db.close(); this.db = undefined;
+      throw error;
+    }
     return this.db;
   }
 

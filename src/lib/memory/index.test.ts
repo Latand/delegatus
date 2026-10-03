@@ -363,6 +363,10 @@ test("injected names remain the offered names after source edits, removal and re
     const candidates = index.injectionCandidates("widget parser", "project-a", "codex", "historical-conversation");
     expect(candidates).toHaveLength(1);
     index.recordInjection(candidates.map(entry => ({ ...entry, score: .8 })), "historical-turn", "historical-conversation");
+    index.close();
+    // Existing releases have the eight-column ledger and no name snapshot.
+    const legacy = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+    legacy.exec("DROP TABLE memory_injection_names"); legacy.close();
     fs.writeFileSync(source.path, "---\nname: Renamed widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nChanged parser reference.\n");
     await index.refresh([source]);
     index.close();
@@ -372,4 +376,20 @@ test("injected names remain the offered names after source edits, removal and re
     expect(index.turnOffers("historical-conversation")).toMatchObject([{ title: "Widget parser", score: .8 }]);
     expect(index.offers(candidates[0].id)).toHaveLength(1);
   } finally { index.close(); }
+});
+
+
+test("cold hook bookkeeping fails open on contention and retries initialization after unlock", () => {
+  const index = new MemoryIndex();
+  index.search({ query: "widget" });
+  index.close();
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  db.exec("DROP TABLE memory_injection_names; BEGIN IMMEDIATE");
+  try {
+    const started = performance.now();
+    expect(() => index.claimHook("cold-conversation", "cold-turn")).toThrow();
+    expect(performance.now() - started).toBeLessThan(500);
+  } finally { db.exec("ROLLBACK"); db.close(); }
+  try { expect(index.claimHook("cold-conversation", "cold-turn")).toBeTrue(); }
+  finally { index.close(); }
 });
