@@ -12309,6 +12309,7 @@ test("a terminal spent gate re-checks the last fix and completes only on pass (#
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
   await buildRound(h, "initial build");
   await critiqueRound(h, "fail", "finding");
   await buildRound(h, "last fix");
@@ -18913,13 +18914,20 @@ test.each([1, 2] as const)("a final granted fix repaired inside its budget remai
 });
 
 
-test.each(["host", "spawn"] as const)("reviewer %s retries spend no extra granted round", async (failure) => {
+test.each([
+  { failure: "host", retryRound: 0 }, { failure: "spawn", retryRound: 0 },
+  { failure: "host", retryRound: 2 }, { failure: "spawn", retryRound: 2 },
+] as const)("reviewer $failure retries spend no extra granted round (round $retryRound)", async ({ failure, retryRound }) => {
   const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
   movingHeadPorts = h.ports;
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   const parked = (await driveWithController(h)).pipeline;
   expect((await continueReview(parked, `retry-${failure}-grant`, 3)).error).toBeUndefined();
-  await buildRound(h, "first granted fix");
+  for (let round = 0; round < retryRound; round++) {
+    await buildRound(h, `granted fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
+  }
+  await buildRound(h, "fix before reviewer retry");
   const spawn = h.ports.spawnAgent;
   if (failure === "spawn") {
     h.ports.spawnAgent = async () => { throw new Error("runtime host request timed out"); };
@@ -18931,6 +18939,7 @@ test.each(["host", "spawn"] as const)("reviewer %s retries spend no extra grante
   const interruptedLane = loadPipelines()[0]!;
   const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
   expect(interrupted.verdict).toBeNull();
+  expect(interrupted.activatedBy?.budgetRecheck === true).toBe(retryRound === 2);
   if (failure === "host") {
     h.durableTurns.set(interrupted.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(interrupted.startedAt!) + 1 });
     h.ports.conversationTurnInterrupted = async () => "stalled";
@@ -18944,8 +18953,8 @@ test.each(["host", "spawn"] as const)("reviewer %s retries spend no extra grante
   await critiqueRound(h, "fail", "first completed granted review");
   const retried = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
   expect(retried.activatedBy).toEqual(interrupted.activatedBy);
-  expect(loadPipelines()[0]!.state).toBe("running");
-  for (let round = 1; round < 3; round++) {
+  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
+  for (let round = retryRound + 1; round < 3; round++) {
     await buildRound(h, `granted fix ${round + 1}`);
     await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
     expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
@@ -18955,4 +18964,64 @@ test.each(["host", "spawn"] as const)("reviewer %s retries spend no extra grante
   expect(reviews).toHaveLength(6);
   expect(reviews.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
   expect(final.reviewPending?.terminalRecheck).toBe(true);
+});
+
+
+test("a terminal budget decision with findings requires a grant rather than a decision answer", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await critiqueRound(h, "fail", "initial finding");
+  await buildRound(h, "last budget fix");
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(review.agentPath!, { text: 'Review still has findings\n\n```json\n{"status":"needs_decision","findings":["P1 retained defect"]}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  const revision = pipelineRevision(parked);
+  const result = await patchPipeline(parked.id, {
+    action: "resolve-decision", clientRequestId: "budget-decision-answer", answer: "Review this head again",
+    expectedRevision: revision, expectedStageId: "critique", expectedAttempt: review.n,
+  }, h.ports, { kind: "operator" });
+  expect(result).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  expect(loadPipelines()[0]!.decisionAnswers).toBeUndefined();
+  expect((await continueReview(parked, "budget-decision-grant", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P1 retained defect");
+  await buildRound(h, "granted defect fix");
+  await critiqueRound(h, "pass", "fresh review passes");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+
+test.each([false, true])("a blocked terminal reviewer retries its unspent activation (granted: %s)", async (granted) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  if (granted) {
+    const parked = (await driveWithController(h)).pipeline;
+    expect((await continueReview(parked, "blocked-final-grant", 1)).error).toBeUndefined();
+    await buildRound(h, "granted fix");
+  } else {
+    await tickPipelines([], h.ports);
+    await buildRound(h, "initial build");
+    await critiqueRound(h, "fail", "initial finding");
+    await buildRound(h, "last budget fix");
+  }
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(review.activatedBy?.budgetRecheck).toBe(true);
+  h.messages.set(review.agentPath!, { text: 'Review unavailable\n\n```json\n{"status":"fail","blocked":true,"blockedReason":"Review environment unavailable","findings":["P1 review blocked"]}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.reviewPending).toBeUndefined();
+  expect((await patchPipeline(blocked.id, { action: "skip-stage" }, h.ports)).status).toBe(409);
+  expect((await patchPipeline(blocked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await critiqueRound(h, "pass", "environment restored; independent review passes");
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.activatedBy).toEqual(review.activatedBy);
 });

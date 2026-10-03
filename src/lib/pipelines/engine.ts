@@ -2822,7 +2822,7 @@ function terminalGrantIsLastRound(pipeline: Pipeline, grant: PipelineReviewGrant
     if (run.stageId !== grant.stageId) continue;
     for (const candidate of run.attempts) {
       const reviewActivation = candidate.activatedBy;
-      if (candidate.n <= grant.terminalAttempt || candidate.historical || !candidate.verdict
+      if (candidate.n <= grant.terminalAttempt || candidate.historical || !candidate.verdict || candidate.verdict.blocked === true
         || !candidate.completedAt || !["passed", "failed", "needs_decision"].includes(candidate.state)
         || reviewActivation?.edge !== "pass") continue;
       let current: PipelineStageAttempt | undefined = candidate;
@@ -2891,11 +2891,15 @@ function currentTerminalReviewPending(pipeline: Pipeline): boolean {
 
 /** A settled terminal re-check spent its round. Only a revision-checked
     continuation grant can send its findings through another fix and review.
-    A transport failure without a verdict still retries the same activation. */
-function terminalBudgetDecisionRefusal(attempt: PipelineStageAttempt | null): PipelinePatchResult | null {
+    A transport failure without a verdict, or an explicitly blocked reviewer,
+    still retries the same activation without spending a completed review. */
+function terminalBudgetDecisionRefusal(
+  attempt: PipelineStageAttempt | null, allowBlockedRetry = false,
+): PipelinePatchResult | null {
   if (attempt?.activatedBy?.budgetRecheck && attempt.verdict
     && ["failed", "needs_decision"].includes(attempt.state)
-    && attempt.verdict.status !== "pass") {
+    && verdictRoutesAsFail({ verdict: attempt.verdict, output: attempt.output ?? "" })
+    && !(allowBlockedRetry && attempt.verdict.blocked === true)) {
     return { error: "terminal review budget is spent; use continue-review with addRounds and expectedRevision", status: 409 };
   }
   return null;
@@ -8109,6 +8113,8 @@ function resolveDecision(
   if (expectation) return expectation;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
+  if (budgetRefusal) return budgetRefusal;
   if (stage?.kind !== "run" || !attempt || attempt.state !== "needs_decision"
     || attempt.verdict?.status !== "needs_decision" || !attempt.completedAt) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
@@ -8896,7 +8902,7 @@ export async function patchPipeline(
         : pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
-      const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
+      const budgetRefusal = terminalBudgetDecisionRefusal(attempt, true);
       if (budgetRefusal) return budgetRefusal;
       if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
         return { error: "the original stage activation is still reconciling", status: 409 };
