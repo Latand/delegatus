@@ -532,9 +532,15 @@ function fileScanRefreshPromise(
     // detectable on the next read, even if this pass did not discover it.
     const membership = await probeFileCatalogMembership(slot);
     let scanRunnerStarted = false;
-    const snapshot = await coordinatedFileScan({ fresh, join, signal }, (intent, generationSignal) => {
-      scanRunnerStarted = true;
-      if (reason === "membership") slot.membershipRefreshStartedAt = Date.now();
+    const snapshot = await coordinatedFileScan({
+      fresh,
+      join,
+      signal,
+      onStart: () => {
+        scanRunnerStarted = true;
+        if (reason === "membership") slot.membershipRefreshStartedAt = Date.now();
+      },
+    }, (intent, generationSignal) => {
       return configuredFileScanRunner(intent, {
         persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
         ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),

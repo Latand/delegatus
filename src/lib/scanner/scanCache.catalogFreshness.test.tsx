@@ -21,7 +21,7 @@ Object.assign(process.env, {
 const sessions = path.join(process.env.LLV_CODEX_HOME!, "sessions");
 fs.mkdirSync(sessions, { recursive: true });
 const { cachedFileScan, completedFileScan, currentFileScan, resetFilesRouteCacheForTests, setFileScanRunnerForTests } = await import("./scanCache");
-const { coordinatedFileScan, runFileCatalogScan } = await import("./scanCoordinator");
+const { coordinatedFileScan, fileScanCoordinatorStatus, runFileCatalogScan } = await import("./scanCoordinator");
 const { GET: filesGet } = await import("@/app/api/files/route");
 const { GET: conversationsGet } = await import("@/app/api/conversations/route");
 const { collectSnapshot } = await import("@/lib/view/collect");
@@ -333,6 +333,50 @@ test("a completed read begun during an older refresh waits for one trailing memb
     expect(scans).toBe(3);
   } finally {
     release();
+  }
+});
+
+test("a membership read acknowledges a controller generation queued before its probe", async () => {
+  writeSession("queued-membership-controller-seat");
+  await currentFileScan();
+  const cacheScansBefore = scans;
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+  let firstDiscovered!: () => void;
+  const firstReady = new Promise<void>(resolve => { firstDiscovered = resolve; });
+  let startsAfterWarm = 0;
+  const first = coordinatedFileScan({ persist: true }, async (intent, signal) => {
+    startsAfterWarm += 1;
+    const snapshot = await runFileCatalogScan(intent, {}, signal);
+    firstDiscovered();
+    await firstGate;
+    return snapshot;
+  });
+  await firstReady;
+
+  const controllerStarts: number[] = [];
+  const queuedController = coordinatedFileScan({ persist: true, join: false }, async (intent, signal) => {
+    startsAfterWarm += 1;
+    controllerStarts.push(clock);
+    return runFileCatalogScan(intent, {}, signal);
+  });
+  const newAgent = writeSession("queued-membership-controller-agent");
+  try {
+    const membershipRead = completedFileScan();
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (fileScanCoordinatorStatus().queued === 1 && fileScanCoordinatorStatus().subscribers >= 3) break;
+      await Bun.sleep(1);
+    }
+    expect(fileScanCoordinatorStatus()).toEqual({ inFlight: true, queued: 1, subscribers: 3 });
+    releaseFirst();
+    const [completed] = await Promise.all([membershipRead, first, queuedController]);
+
+    expect(completed!.snapshot.files.some(entry => entry.path === newAgent)).toBe(true);
+    expect(startsAfterWarm).toBe(2);
+    expect(controllerStarts).toHaveLength(1);
+    expect(startsAfterWarm + scans - cacheScansBefore).toBe(2);
+  } finally {
+    releaseFirst();
   }
 });
 
