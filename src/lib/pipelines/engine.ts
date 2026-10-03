@@ -2880,10 +2880,46 @@ function parkForReview(
   writeParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
+/** Recover terminal parks written before resumable budget metadata existed.
+    The settled verdict and its passed predecessor are the durable evidence;
+    a blocked reviewer or a transport-only failure has no spent review here. */
+function terminalReviewPendingFromAttempt(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+): NonNullable<Pipeline["reviewPending"]> | null {
+  const activation = attempt.activatedBy;
+  if (!stage.onFail || stage.next !== null || activation?.edge !== "pass" || !activation.budgetRecheck
+    || !attempt.verdict || attempt.verdict.blocked === true || !attempt.completedAt
+    || !["failed", "needs_decision"].includes(attempt.state)
+    || !verdictRoutesAsFail({ verdict: attempt.verdict, output: attempt.output ?? "" })) return null;
+  const fix = runFor(pipeline, activation.stageId)?.attempts.find((candidate) =>
+    candidate.n === activation.attempt && !candidate.historical);
+  if (fix?.state !== "passed") return null;
+  return {
+    terminalRecheck: true, stageId: stage.id, attempt: attempt.n,
+    fixStageId: activation.stageId, fixAttempt: fix.n,
+    reviewedHead: attempt.reviewHeadSha ?? pipeline.lastPassedCommit,
+    currentHead: pipeline.lastPassedCommit, verdict: attempt.verdict.status,
+    findings: attempt.verdict.findings?.length ?? 0, at: attempt.completedAt,
+  };
+}
+
+function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
+  if (pipeline.reviewPending || (pipeline.state !== "needs_decision" && pipeline.pausedState !== "needs_decision")) return false;
+  const stage = currentStage(pipeline);
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  const pending = stage && attempt ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
+  if (!pending) return false;
+  pipeline.reviewPending = pending;
+  if (pipeline.state === "needs_decision") {
+    pipeline.stateDetail = reviewPendingDetail(pending);
+    writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
+  }
+  return true;
+}
+
 /** A retry or a decision resolution can leave budget metadata as history.
     Only the parked attempt it describes may spend a continuation grant. */
-function currentTerminalReviewPending(pipeline: Pipeline): boolean {
-  const pending = pipeline.reviewPending;
+function currentTerminalReviewPending(pipeline: Pipeline, pending = pipeline.reviewPending): boolean {
   return pending?.terminalRecheck === true
     && pipeline.cursor?.stageId === pending.stageId
     && currentAttempt(pipeline, pending.stageId)?.n === pending.attempt;
@@ -3051,21 +3087,9 @@ function routeFailedAttempt(
 ): boolean {
   if (!stage.onFail) return false;
   if (attempt.activatedBy?.budgetRecheck) {
-    const activation = attempt.activatedBy;
-    const fix = runFor(pipeline, activation.stageId)?.attempts.find((candidate) => candidate.n === activation.attempt);
-    if (reviewed && attempt.verdict && fix?.state === "passed") {
-      pipeline.reviewPending = {
-        terminalRecheck: true,
-        stageId: stage.id,
-        attempt: attempt.n,
-        fixStageId: activation.stageId,
-        fixAttempt: fix.n,
-        reviewedHead: attempt.reviewHeadSha ?? pipeline.lastPassedCommit,
-        currentHead: pipeline.lastPassedCommit,
-        verdict: attempt.verdict.status,
-        findings: attempt.verdict.findings?.length ?? 0,
-        at: attempt.completedAt!,
-      };
+    const pending = reviewed ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
+    if (pending) {
+      pipeline.reviewPending = pending;
       park(pipeline, reviewPendingDetail(pipeline.reviewPending), attempt, { kind: "review-budget" });
     } else {
       park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
@@ -6473,6 +6497,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, ports) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, ports) || pipelineChanged;
         pipelineChanged = rebindPipelineAttemptPaths(pipeline, ports) || pipelineChanged;
+        pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
@@ -8183,8 +8208,11 @@ function continueReview(
   if (pipelineRevision(pipeline) !== req.expectedRevision) {
     return { error: "the pipeline changed since it was read; read it again before continuing review", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
-  const pending = pipeline.reviewPending;
-  const terminalRecheck = pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline);
+  const current = currentStage(pipeline);
+  const attempt = current ? currentAttempt(pipeline, current.id) : null;
+  const pending = pipeline.reviewPending ?? (pipeline.state === "needs_decision" && current && attempt
+    ? terminalReviewPendingFromAttempt(pipeline, current, attempt) : null);
+  const terminalRecheck = pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline, pending ?? undefined);
   if (!pending || (pipeline.state !== "needs_review" && !terminalRecheck)) {
     return { error: `continue-review requires needs_review or a failed terminal budget re-check; this one is ${pipeline.state}`, status: 409 };
   }

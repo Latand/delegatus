@@ -19025,3 +19025,26 @@ test.each([false, true])("a blocked terminal reviewer retries its unspent activa
   expect(completed.state).toBe("completed");
   expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.activatedBy).toEqual(review.activatedBy);
 });
+
+
+test.each(["tick", "direct"] as const)("an older failed terminal park regains same-lane continuation metadata (%s)", async (recovery) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const legacy = (await driveWithController(h)).pipeline;
+  delete legacy.reviewPending;
+  legacy.stateDetail = "budget spent: 1 findings left (critique): retained finding";
+  savePipelines([legacy]);
+  if (recovery === "tick") {
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique", fixStageId: "build" });
+    expect(loadPipelines()[0]!.stateDetail).toContain("continue-review");
+  }
+  const parked = loadPipelines()[0]!;
+  expect((await continueReview(parked, `legacy-${recovery}-grant`, 2)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.id).toBe(legacy.id);
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  const continued = (await driveWithController(h)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
+});
