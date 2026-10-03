@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +26,7 @@ fs.mkdirSync(sessions, { recursive: true });
 
 const { listFilesWithProjectCatalog } = await import("@/lib/scanner");
 const { ROOTS } = await import("@/lib/scanner/roots");
-const { cachedFileScan, currentFileScan, persistedFileScanSnapshot, resetFilesRouteCacheForTests } = await import("@/lib/scanner/scanCache");
+const { cachedFileScan, currentFileScan, persistedFileScanSnapshot, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } = await import("@/lib/scanner/scanCache");
 const { linkEntries } = await import("@/lib/scanner/links");
 const { activityVerdict, transcriptTurnResult } = await import("@/lib/scanner/activity");
 const { entryEffort } = await import("@/lib/scanner/effort");
@@ -37,6 +37,8 @@ const { lastTurnFor } = await import("@/lib/scanner/turnDuration");
 const { pendingQuestionFor } = await import("@/lib/scanner/questions");
 const { AgentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { reconcileMigrationInventory } = await import("@/lib/accounts/migration/coordinator");
+
+afterEach(() => setFileCatalogMembershipProbeForTests(null));
 
 function writeSession(filename: string, cwd: string): string {
   const pathname = path.join(sessions, filename);
@@ -704,7 +706,9 @@ test("a cold restart after upgrade rejects pre-#406 persisted lastTurn boundarie
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
     resetFilesRouteCacheForTests();
     const warm = await cachedFileScan(undefined, undefined, 0);
-    expect(warm.cacheStatus).toBe("hit");
+    // Restarted snapshots remain servable while filesystem membership is
+    // revalidated in the background.
+    expect(warm.cacheStatus).toBe("stale");
     expect(warm.snapshot.files.find((entry) => entry.path === transcript)?.lastTurn)
       .toEqual({ startedAt: promptStartedAt, endedAt });
   } finally {
@@ -1106,6 +1110,7 @@ test("a transient real scanner failure preserves the completed route snapshot un
 });
 
 test("task twin EIO preserves canonical files generation and durable snapshots until recovery", async () => {
+  setFileCatalogMembershipProbeForTests(async () => null);
   const previousTestStateDir = process.env.LLV_STATE_DIR;
   const testStateDir = path.join(sandbox, "task-twin-generation-state");
   const taskRoot = ROOTS["claude-tasks"];
@@ -1154,6 +1159,7 @@ test("task twin EIO preserves canonical files generation and durable snapshots u
     expect(recovered.generation).toBeGreaterThanOrEqual(stale.targetGeneration);
     expect(recovered.snapshot.files.map((entry) => entry.path)).toContain(taskPath);
   } finally {
+    setFileCatalogMembershipProbeForTests(null);
     fs.promises.access = originalAccess;
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
@@ -1164,6 +1170,7 @@ test("task twin EIO preserves canonical files generation and durable snapshots u
 });
 
 test("transcript metadata EIO after rewrite retains canonical snapshots until convergence", async () => {
+  setFileCatalogMembershipProbeForTests(async () => null);
   resetFilesRouteCacheForTests();
   const transcript = path.join(sessions, "metadata-rewrite.jsonl");
   const alpha = `${JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/alpha" } })}\n`;
@@ -1215,9 +1222,11 @@ test("transcript metadata EIO after rewrite retains canonical snapshots until co
   expect(recovered.snapshot.files.find((entry) => entry.path === transcript)?.cwd).toBe("/repo/bravo");
   expect(fs.readFileSync(snapshotPath)).not.toEqual(canonicalSnapshot);
   expect(fs.readFileSync(indexPath)).not.toEqual(canonicalIndex);
+  setFileCatalogMembershipProbeForTests(null);
 });
 
 test("sidecar metadata EIO after rewrite retains canonical snapshots until convergence", async () => {
+  setFileCatalogMembershipProbeForTests(async () => null);
   resetFilesRouteCacheForTests();
   const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "sidecar", "session", "subagents", "agent-x.jsonl");
   const sidecar = transcript.slice(0, -".jsonl".length) + ".meta.json";
@@ -1269,6 +1278,7 @@ test("sidecar metadata EIO after rewrite retains canonical snapshots until conve
   expect(recovered.snapshot.files.find((entry) => entry.path === transcript)?.title).toBe("Agent bravo");
   expect(fs.readFileSync(snapshotPath)).not.toEqual(canonicalSnapshot);
   expect(fs.readFileSync(indexPath)).not.toEqual(canonicalIndex);
+  setFileCatalogMembershipProbeForTests(null);
 });
 
 test("a confirmed ENOENT deletion remains a complete inventory change", async () => {

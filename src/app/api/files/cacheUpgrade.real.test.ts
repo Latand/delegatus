@@ -181,7 +181,9 @@ test("compatible restart reuses persisted scan and full body with known, null an
   try {
     const scan = await cachedFileScan(undefined, undefined, 0);
     expect(scan.generation).toBe(0);
-    expect(scan.cacheStatus).toBe("hit");
+    // A process restart starts membership revalidation while serving the
+    // persisted snapshot, so this generation is retained as stale.
+    expect(scan.cacheStatus).toBe("stale");
     expectActivity(scan.snapshot.files);
     const full = await readFiles("full");
     expect(full.headers.get("x-llv-files-projection-cache")).toBe("stale");

@@ -1860,3 +1860,31 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | `src/runtime-host/terminalProjectionRetention.test.ts` | P | P | — |
 | `src/runtime-host/viewerEntries.test.ts` | P | P | — |
 | `src/styles/tokens.contrast.test.ts` | P | P | — |
+
+## PR #2489 grouped pre-push observation
+
+The pre-push touched-tests command runs all 101 selected paths in one Bun
+process. The hook reported 286 failures and 14 errors. A controlled reproduction
+in a disposable checkout reported 1,092 pass, 2 skip, 287 fail and 14 errors
+across the same 101 files in 170.95s. Three of five sampled failing paths passed
+when run alone, showing cross-file interference in the grouped process, which
+shares one isolated `LLV_STATE_DIR` and process-wide caches. Two samples also
+exposed standalone test issues: restart assertions expected `hit` while
+membership revalidation serves the persisted generation as `stale`, and EIO
+recovery cases accidentally waited on the membership-probe coalescing path.
+Those assertions and test seams were corrected; all five sampled files then
+passed by exact path with separate `HOME`, `LLV_STATE_DIR` and `TMPDIR`.
+
+| Sampled path | Isolated result after correction |
+| --- | --- |
+| `src/app/api/board/route.test.ts` | 66 pass, 0 fail |
+| `src/app/api/files/cacheUpgrade.real.test.ts` | 5 pass, 0 fail |
+| `src/app/api/files/response.perf.test.ts` | 2 pass, 0 fail |
+| `src/app/api/files/route.test.ts` | 120 pass, 0 fail |
+| `src/app/api/files/scanCache.real.test.ts` | 18 pass, 0 fail |
+
+The grouped phase was not repeated on a clean `origin/main` export; even the
+candidate reproduction took nearly three minutes before the five path runs.
+This is an outside-spec hook observation for follow-up: the grouped touched-test
+phase accumulates cross-file failures for a PR touching many test files, while
+those files can pass independently by path.
