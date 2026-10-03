@@ -11,9 +11,11 @@ import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
    `auto.json`, and the launcher's own record. A fresh process reads them
    back, so the surface carries on where the previous one stopped. */
 import { runtimeHostMatches } from "./pid";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { realExec } from "@/lib/workflows/provision";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
@@ -1360,7 +1362,40 @@ export class SelfUpdateService {
           if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
         }
         if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
-        this.apply.begin(record, release.sha, "operator"); this.apply.patch({ state: "ready", externalRestart: true });
+        // Old code may have published the candidate and switched only web.
+        // The resident host identifies the prior coherent release; capturing
+        // the current pointer here would restore the failed candidate again.
+        const serving = await this.snapshot();
+        if (serving.processes.runtimeHost.state !== "healthy" || serving.processes.runtimeHost.lastHealthOk !== true) {
+          return refuse(409, "cannot-restart", "The serving runtime host must be healthy before a launcher upgrade");
+        }
+        const rollbackPointer = record.checkout ? await this.pointerForServing(record, {
+          ...serving, serving: { ...serving.serving, web: serving.serving.runtimeHost },
+        }) : null;
+        if (rollbackPointer === undefined) return refuse(409, "cannot-restart", "The prior serving release cannot be verified");
+        if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
+        this.apply.begin(record, release.sha, "operator", undefined, { rollbackPointer,
+          rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "ready" });
+        this.apply.patch({ externalRestart: true });
+        // An old bootstrap cannot read the trial if the new entry fails before
+        // loading its recovery code. Reject that entry before stopping anything.
+        const scratch = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/var/tmp", "delegatus-upgrade-preflight-"));
+        let loads = false;
+        try {
+          mkdirSync(join(scratch, "tmp"));
+          const environment: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])),
+            PATH: process.env.PATH, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"),
+            TMPDIR: join(scratch, "tmp"), LLV_STATE_DIR: join(scratch, "state"), LLV_LAUNCHER_REEXEC: "1",
+            LLV_LAUNCHER_INSTALL_ROOT: record.checkout ?? packageRoot(record) };
+          loads = (await realExec(this.deps.bun, ["--bun", join(release.dir, "bin", "cli.mjs"), "--version"], release.dir, environment,
+            { timeoutMs: 30_000, maxOutputBytes: 64 * 1024 })).code === 0;
+        } finally { rmSync(scratch, { recursive: true, force: true }); }
+        if (!loads) {
+          this.apply.restoreUntaken(record);
+          this.apply.patch({ state: "failed", detail: "The replacement launcher failed its load check before restart" });
+          this.changes.emit();
+          return refuse(503, "cannot-restart", "The replacement launcher could not load; the prior release is restored for the next start");
+        }
         const runner = this.runnerFor(record);
         runner.restore({ ...idleUpdate(CHECKOUT_STEPS), state: "done", target: release.sha, targetShort: release.sha.slice(0, 7), releaseDir: release.dir,
           startedAt: this.apply.current!.startedAt, finishedAt: new Date(this.deps.now()).toISOString(), steps: idleUpdate(CHECKOUT_STEPS).steps.map(step => ({ ...step, state: "done" })) });

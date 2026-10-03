@@ -25,10 +25,11 @@ export class ApplyController {
     } catch (error) { if (existsSync(join(directory, "apply.json"))) throw error; }
     recoverCheckoutDeployments(directory, this.current);
   }
-  begin(record: LauncherRecord, target: string, trigger: ApplyIntent["trigger"], deploymentId?: string, options: { rollbackPointer?: string | null; state?: "building" | "ready"; autoGateId?: string } = {}): void {
+  begin(record: LauncherRecord, target: string, trigger: ApplyIntent["trigger"], deploymentId?: string, options: { rollbackPointer?: string | null; rollbackRevision?: string | null; state?: "building" | "ready"; autoGateId?: string } = {}): void {
     if (this.current && ["building", "ready", "switching"].includes(this.current.state)) throw new Error("An apply is already active");
     this.current = { requestId: randomUUID(), target, releasePointer: record.releasePointer, trigger, deploymentId, rollbackPointer: options.rollbackPointer !== undefined ? options.rollbackPointer : existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null,
-      rollbackWebRevision: record.web.revision, rollbackHostRevision: record.runtimeHost.revision,
+      rollbackWebRevision: options.rollbackRevision !== undefined ? options.rollbackRevision : record.web.revision,
+      rollbackHostRevision: options.rollbackRevision !== undefined ? options.rollbackRevision : record.runtimeHost.revision,
       launcherPid: record.launcher.pid, launcherIdentity: record.launcher.startIdentity, state: options.state ?? "building", autoGateId: options.autoGateId, rolledBack: false, startedAt: new Date().toISOString() };
     if (!record.checkout && record.installRoot) {
       try { const version = JSON.parse(readFileSync(join(record.installRoot, "package.json"), "utf8")).version;

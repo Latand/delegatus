@@ -690,12 +690,14 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
 
   test.each(["accepted", "refused"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {
     const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    h.deps.bun = process.execPath;
     const releaseDir = join(h.deps.dir, "built-release");
     await git(checkout, "fetch", "origin");
     const checkoutResult = await runGit(["worktree", "add", "--detach", releaseDir, tipSha], checkout);
     if (checkoutResult.code !== 0) throw new Error(checkoutResult.stderr);
     mkdirSync(join(releaseDir, ".next")); writeFileSync(join(releaseDir, ".next", "BUILD_ID"), "fixture");
     mkdirSync(join(releaseDir, "bin")); writeFileSync(join(releaseDir, "bin", "launcher-relaunch.mjs"), "delegatus-launcher-relaunch-v1");
+    writeFileSync(join(releaseDir, "bin", "cli.mjs"), 'process.stdout.write("fixture version\\n");');
     const pointer = JSON.stringify({ sha: tipSha, dir: releaseDir, checkoutHead: firstSha }); writeFileSync(record.releasePointer, pointer);
     const calls: string[][] = [];
     h.deps.install = {
@@ -710,12 +712,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       expect(result).toMatchObject({ ok: false, status: 503 });
       expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed" });
       expect(existsSync(record.requestFile.replace(/^(.+\/)request/, "$1trial"))).toBe(false);
-      expect(readFileSync(record.releasePointer, "utf8")).toBe(pointer);
+      expect(existsSync(record.releasePointer)).toBe(false);
       return;
     }
     expect(result).toEqual({ ok: true });
     expect(calls[0]?.slice(-4)).toEqual(["systemctl", "--user", "restart", "delegatus.service"]);
-    expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", target: tipSha, rollbackPointer: pointer, externalRestart: true });
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", target: tipSha, rollbackPointer: null,
+      rollbackWebRevision: firstSha.slice(0, 7), rollbackHostRevision: firstSha.slice(0, 7), externalRestart: true });
     expect(existsSync(record.requestFile)).toBe(false);
   });
 
