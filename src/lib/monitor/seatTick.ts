@@ -1384,7 +1384,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (versionedReasons.has(reason.kind) && pending.length === 0) continue;
     // Held-back items have never been delivered. A whole-board retry count
     // must not prevent later pages from reaching the seat.
-    const unseenPage = input.state.itemsShown !== undefined && pending.some(item => item.itemVersion && !shownItems.has(item.itemVersion));
+    /* An absent history is a legacy row with unknown showings, so pending
+       versioned work remains eligible to initialize it past an exhausted
+       whole-reason retry guard. */
+    const unseenPage = pending.some(item => item.itemVersion && !shownItems.has(item.itemVersion));
     if (!unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
       guardHeld += 1;
       cards.push({

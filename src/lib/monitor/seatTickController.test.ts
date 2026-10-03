@@ -1316,6 +1316,95 @@ test("a completed lane whose pull request is still open wakes the seat, naming t
   expect(rig.sent[0]!.text).toContain("[pull-request] #1289 — wake on a merge that is waiting");
 });
 
+test("legacy exhausted PR guard drains every page and then suppresses unchanged PRs", async () => {
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const stateDir = fs.mkdtempSync(path.join(SANDBOX, "legacy-pr-pagination-"));
+  process.env.LLV_STATE_DIR = stateDir;
+  const stateFile = path.join(stateDir, "seat-tick.json");
+  const branches = Array.from({ length: 22 }, (_, index) => `pipeline/legacy-pr-${index + 1}`);
+  const lanes = branches.map((branch, index) => ({
+    ...FINISHED_LANE[0]!, id: `pipeline_legacy_pr_${index + 1}`, branch,
+  }));
+  const openPullRequests = branches.map((headRefName, index) => ({
+    number: index + 1, title: `Completed lane ${index + 1}`, headRefName,
+    createdAt: FINISHED_PR_CREATED, updatedAt: "2026-08-28T11:30:00.000Z",
+  }));
+  const stateOptions = { stateFile, pipelines: lanes, openPullRequests };
+  let now = NOW;
+  try {
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+    /* Establish the current gathered fingerprint and a complete delivered
+       history, then create the already-present retry card with the real board
+       writer. The following write models a pre-upgrade SQLite row: all legacy
+       retry state survives and the newer showing-history column is absent. */
+    const alreadyDelivered = new Set<string>();
+    for (let page = 0; page < 5; page += 1) {
+      const rig = harness({ ...stateOptions, now });
+      const record = await runSeatTickCheck(PROJECT, rig.deps);
+      expect(record).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"], items: page < 4 ? 5 : 2 });
+      for (const match of rig.sent[0]!.text.matchAll(/\[pull-request\] (#[0-9]+)/g)) alreadyDelivered.add(match[1]!);
+      now += 61 * MINUTE;
+    }
+    expect(alreadyDelivered.size).toBe(22);
+    const delivered = readSeatTickState(PROJECT, stateFile);
+    expect(delivered.itemsShown).toHaveLength(22);
+
+    const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+    const { seatTickRetryGuardCardText, seatTickRetryGuardRef } = await import("./cards");
+    const tasksFile = path.join(stateDir, "tasks.json");
+    const retryRef = seatTickRetryGuardRef("unmerged-pr");
+    const retryCardText = seatTickRetryGuardCardText(PROJECT,
+      'Wakes for "unmerged-pr" stopped producing any board or pipeline change; the tick has stopped re-sending it until state moves',
+      retryRef, new Date(now).toISOString());
+    saveTasks([{
+      id: crypto.randomUUID(), project: PROJECT, status: "inbox", text: retryCardText,
+      placement: "unplaced", assignments: [], createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+    }], tasksFile);
+    const retryCard = loadTasks(tasksFile).find((task) => task.text.includes(retryRef));
+    expect(retryCard).toBeDefined();
+    const cardBefore = { text: retryCard!.text, status: retryCard!.status };
+
+    const legacy = readSeatTickState(PROJECT, stateFile);
+    const currentFingerprint = legacy.lastWakeFingerprint;
+    expect(currentFingerprint).toBeTruthy();
+    delete legacy.itemsShown;
+    legacy.lastWakeAt = new Date(now - 61 * MINUTE).toISOString();
+    legacy.wakesWithoutChange = { "unmerged-pr": DEFAULT_SEAT_TICK_POLICY.retryGuard };
+    writeSeatTickState(PROJECT, legacy, stateFile);
+    const persistedLegacy = readSeatTickState(PROJECT, stateFile);
+    expect(persistedLegacy.itemsShown).toBeUndefined();
+    expect(persistedLegacy.accounting).toBeDefined();
+    expect(persistedLegacy).toMatchObject({
+      lastWakeFingerprint: currentFingerprint,
+      wakesWithoutChange: { "unmerged-pr": DEFAULT_SEAT_TICK_POLICY.retryGuard },
+    });
+
+    const reached = new Set<string>();
+    let wakeCount = 0;
+    for (let page = 0; page < 6; page += 1) {
+      const rig = harness({ ...stateOptions, now });
+      const record = await runSeatTickCheck(PROJECT, { ...rig.deps, ensureCard: undefined });
+      if (record?.verdict !== "wake") break;
+      wakeCount += 1;
+      expect(record.reasons).toEqual(["unmerged-pr"]);
+      expect(record.items).toBeLessThanOrEqual(DEFAULT_SEAT_TICK_POLICY.itemsPerWake);
+      for (const match of rig.sent[0]!.text.matchAll(/\[pull-request\] (#[0-9]+)/g)) reached.add(match[1]!);
+      now += 61 * MINUTE;
+    }
+    expect(wakeCount).toBeLessThanOrEqual(5);
+    expect(wakeCount).toBeGreaterThan(0);
+    expect(reached.size).toBe(22);
+    expect(loadTasks(tasksFile).find((task) => task.id === retryCard!.id)).toMatchObject(cardBefore);
+
+    const repeat = harness({ ...stateOptions, now });
+    expect(await runSeatTickCheck(PROJECT, repeat.deps)).toMatchObject({ verdict: "quiet", items: 0 });
+    expect(repeat.sent).toEqual([]);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+  }
+});
+
 test("a completed lane's delivery branch identifies the pull request it left open (#2081)", async () => {
   const rig = harness({
     pipelines: [{ ...FINISHED_LANE[0]!, branch: "pipeline/internal-lane", deliveryBranch: "pipeline/skeletons-transitions" }],
