@@ -115,6 +115,15 @@ override it resolves the canonical `refs/heads/main` tip and deploys that exact
 commit; a full 40-character commit SHA in either case pins a redeploy or a
 rollback and is posted lowercase.
 
+The command authenticates both admission and status reads with the install's
+existing `controller` service tag. It also reads the Viewer's access key when
+that perimeter is enabled. Run it as the install's host user, with the same
+`XDG_CONFIG_HOME` or `LLV_STATE_DIR` as the Viewer. It creates no credential and
+requires no member cookie. Credentials stay inside the HTTP client; it resolves
+and checks the loopback destination, pins that address and refuses redirects.
+`LLV_DEPLOY_IDEMPOTENCY_KEY` still claims the original receipt after an uncertain
+request. Busy admission exits 2; a successful terminal deployment exits 0.
+
 ### Bootstrap the runtime host onto a new revision (#1216)
 
 `scripts/rebuild.sh` replaces the runtime-host generation only in the
