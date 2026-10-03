@@ -73,6 +73,8 @@ export type Workflow = {
   fixerPath: string | null;
   fixerConversationId?: string | null;
   state: WorkflowState;
+  /** Durable authority token; changes when a control supersedes in-flight Git. */
+  controlGeneration?: string;
   /** The state to return to on resume/retry; set for paused and needs_decision. */
   pausedState: WorkflowState | null;
   stateDetail: string | null;

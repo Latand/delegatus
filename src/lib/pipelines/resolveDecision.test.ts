@@ -46,7 +46,7 @@ function harness() {
   let duringProvenance: (() => void) | null = null;
   let clock = 1_000_000;
   const ports: PipelinePorts = {
-    exec: (command, rawArgs) => {
+    exec: async (command, rawArgs) => {
       execCalls.push([command, ...rawArgs].join(" "));
       if (command === "timeout") {
         const race = duringProvenance;
@@ -54,7 +54,7 @@ function harness() {
         race?.();
         const bounded = rawArgs.slice(rawArgs.findIndex((argument) => argument === "git" || argument === "gh"));
         if (bounded[0] === "gh") return { code: 0, stdout: worktree.pullRequest, stderr: "" };
-        return ports.exec("git", bounded.slice(1), "");
+        return (await ports.exec("git", bounded.slice(1), ""));
       }
       const args = rawArgs;
       if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: "https://forge.example/repo.git\n", stderr: "" };
@@ -131,7 +131,7 @@ const stage = (id: string, next: string | null, extra: Record<string, unknown> =
 
 async function started(ports: PipelinePorts, stages: unknown[]): Promise<string> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Graph slice 2", publication: "internal", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn the entry stage
