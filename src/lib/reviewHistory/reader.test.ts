@@ -7,6 +7,7 @@ import { GET as list } from "@/app/api/review-history/route";
 import { GET as detail } from "@/app/api/review-history/[id]/route";
 import { GET as exported } from "@/app/api/review-history/[id]/export/route";
 import { BoardSelection } from "@/lib/mcp/boardSelection";
+import { isOperatorOwnedDirectory } from "@/lib/stateOwnership";
 import { compactFlow } from "./listAnswers";
 import { reviewHistorySelectionSource, MAX_ROW_BYTES } from "./reader";
 import { readArchiveArtifact, MAX_ARTIFACT_BYTES } from "./archiveArtifacts";
@@ -525,12 +526,16 @@ test("GET refuses unimported JSON and never creates or seeds state", async () =>
 });
 
 test("fresh unowned production process imports GETs without claiming ownership or initializing state", () => {
-  // A nonexistent non-temp config path exercises ownership admission. The
-  // probe never creates it; all actual scratch and the child's home are private.
-  const config = path.join(process.cwd(), "unowned-archive-probe");
+  // Keep this outside every temp root even when the checkout is under /var/tmp.
+  // The production child must classify the synthetic XDG root as operator-owned
+  // and refuse it before creating any part of that path.
+  const config = path.join(path.parse(process.cwd()).root, `unowned-archive-probe-${process.pid}`);
   expect(fs.existsSync(config)).toBe(false);
-  const env = { ...process.env, HOME: directory, XDG_CONFIG_HOME: config, NODE_ENV: "production", TMPDIR: directory };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: directory, XDG_CONFIG_HOME: config, NODE_ENV: "production", TMPDIR: directory };
   for (const key of ["LLV_STATE_DIR", "LLV_STATE_OWNER", "NEXT_PHASE", "NEXT_RUNTIME", "LLV_MODE"]) delete env[key as keyof typeof env];
+  const stateDirectory = path.join(config, "delegatus", "state");
+  expect(isOperatorOwnedDirectory(stateDirectory, env)).toBe(true);
+  expect(fs.existsSync(stateDirectory)).toBe(false);
   const probe = Bun.spawnSync({ cmd: [process.execPath, "-e", `
     const { NextRequest } = await import("next/server");
     const modules = await Promise.all([
@@ -546,6 +551,7 @@ test("fresh unowned production process imports GETs without claiming ownership o
   expect(probe.exitCode).toBe(0);
   expect(JSON.parse(probe.stdout.toString())).toEqual({ results: [503, 503, 503], owner: null });
   expect(fs.existsSync(config)).toBe(false);
+  expect(fs.existsSync(stateDirectory)).toBe(false);
 });
 
 
