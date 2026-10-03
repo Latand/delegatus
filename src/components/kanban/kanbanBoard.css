@@ -251,6 +251,11 @@
    end in an ellipsis before anything wraps; under 300 px they shorten to a
    dot and their number. Each carries its full text as a title. */
 .kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
+/* While the layout helper scales the head surface and counter-scales its text
+   layer, the end-aligned buttons sit at their final wide position. The head
+   clips them to its own box, so none paints over the gutter before the frame
+   edge reaches it. The buttons' focus rings fit inside the 12 px padding. */
+.kb .col-head:is([data-layout-animating], [data-column-text-held]) { overflow: clip; }
 .kb .col-head > * { flex-shrink: 0; }
 .kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .col-head .n { color: var(--color-muted); font-size: var(--text-ui); }

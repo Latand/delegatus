@@ -11771,7 +11771,8 @@ describe("column dwell smooth", () => {
           const geometry = () => page.evaluate(() => ["inbox", "assigned"].map((status) => {
             const column = document.querySelector<HTMLElement>(`.column[data-status="${status}"]`)!;
             const box = column.getBoundingClientRect(), body = column.querySelector(".col-body")!.getBoundingClientRect();
-            return { status, left: box.left, top: body.top, width: box.width, bottom: Math.min(body.bottom, innerHeight) };
+            const head = column.querySelector(".col-head")!.getBoundingClientRect();
+            return { status, left: box.left, top: body.top, width: box.width, bottom: Math.min(body.bottom, innerHeight), headTop: head.top, headBottom: head.bottom };
           }));
           const narrowBoxes = await geometry();
           await page.evaluate(() => {
@@ -11949,6 +11950,40 @@ describe("column dwell smooth", () => {
                 expect(minimum, `${locale} ${transition.name} ${box.status}: ${JSON.stringify(counts)}`).toBeGreaterThanOrEqual(0.5);
                 visibility.push({ transition: transition.name, column: box.status, baseline, minimum, firstMotionDelayMs: delay, maximumFrameTravelFraction, steps, counts });
               }
+              /* Header controls stay inside their column. Their text layer is
+                 counter-scaled from the top left while the head surface scales,
+                 so a control at its final wide position can paint over the
+                 gutter before the frame edge reaches it. The gutter right of
+                 each of the first two columns, in the header's own rows, holds
+                 only canvas in every decoded frame of the transition. */
+              const gutterWidth = narrowBoxes[1]!.left-(narrowBoxes[0]!.left+narrowBoxes[0]!.width);
+              const assignedRight = narrowBoxes[1]!.left+narrowBoxes[1]!.width;
+              const headRows = [Math.ceil(narrowBoxes[0]!.headTop+4), Math.floor(narrowBoxes[0]!.headBottom-4)] as const;
+              const gutterInk = (index: number, from: number, to: number, canvas: number) => {
+                const { data, info } = pixels[index]!;
+                let ink = 0;
+                for (let y = headRows[0]; y < headRows[1]; y++) for (let x = Math.ceil(from+2); x < Math.floor(to-2); x++) {
+                  const at = (y*info.width+x)*info.channels;
+                  if (canvas-(data[at]!+data[at+1]!+data[at+2]!)/3 > 50) ink++;
+                }
+                return ink;
+              };
+              const canvasOf = (index: number, from: number, to: number) => {
+                const { data, info } = pixels[index]!;
+                const row = Math.round((headRows[0]+headRows[1])/2);
+                const at = (row*info.width+Math.round((from+to)/2))*info.channels;
+                return (data[at]!+data[at+1]!+data[at+2]!)/3;
+              };
+              const restingGutters = [[narrowBoxes[0]!.left+narrowBoxes[0]!.width, narrowBoxes[1]!.left], [assignedRight, assignedRight+gutterWidth]] as const;
+              const canvases = restingGutters.map(([from, to]) => canvasOf(before, from, to));
+              const headLeaks = frames.flatMap((_, index) => {
+                if (paintTime(index) < commit || paintTime(index) > transition.end) return [];
+                const boundary = cardEdge(index).columnRight;
+                return [{ frame: index, inbox: gutterInk(index, boundary, boundary+gutterWidth, canvases[0]!), assigned: gutterInk(index, assignedRight, assignedRight+gutterWidth, canvases[1]!) }];
+              });
+              expect(headLeaks.length).toBeGreaterThan(5);
+              expect(headLeaks.filter((leak) => leak.inbox > 0 || leak.assigned > 0), `${locale} ${transition.name}: header control pixels outside their column`).toEqual([]);
+              visibility.push({ transition: transition.name, column: "head-gutters", headLeaks });
             }
             const decodedFrames = Number(execFileSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", path.resolve(videoPath)], { encoding: "utf8" }).trim());
             expect(decodedFrames).toBe(frames.length);
