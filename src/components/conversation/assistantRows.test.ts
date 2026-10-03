@@ -80,7 +80,7 @@ test("Codex event-first suppression consumes one occurrence inside the mirror bo
   const event = { ...echo, key: "event", item: { ...echo.item, engine: "codex", sourceId: undefined } } as FeedEntry;
   const repeated = { ...event, key: "second-event", anchorKey: "row:3:0" };
   const identified = { ...event, key: "other-source", item: { ...event.item, sourceId: "other-answer" } } as FeedEntry;
-  const late = { ...event, key: "late", item: { ...event.item, ts: "2026-10-02T10:00:02.001Z" } } as FeedEntry;
+  const late = { ...event, key: "late", anchorKey: "row:4:0", item: { ...event.item, ts: "2026-10-02T10:00:02.001Z" } } as FeedEntry;
   const feed = [event, repeated, identified, late];
   const state = projectAssistantHandoff(null, live("awaiting-echo"), feed, claims);
   expect([...state.hiddenEchoes]).toEqual(["event"]);
@@ -135,6 +135,27 @@ test("idless echoes own a single occurrence even when a later answer repeats the
   const state = projectAssistantHandoff(null, live("awaiting-echo", null), [echo, later, second], claims);
   expect(state.bindings.size).toBe(1);
   expect(rows([echo, later, second], state).map(row => row.key)).toEqual(["assistant-pending:0", "later", "second"]);
+});
+
+test.each(["A cited answer", "VERDICT: APPROVE\n\nThe implementation passes."])("split canonical projections adopt one idless stream: %s", (body) => {
+  const citation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[contract]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>";
+  const text = `${body}\n\n${citation}`;
+  const stream = appendRuntimeLiveTurnDelta(null, "split-turn", text, "2026-10-02T10:00:00Z");
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  const record = (id: string, timestamp: string) => JSON.stringify({ type: "response_item", timestamp,
+    payload: { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] } });
+  const feed = session.feed([record("split-answer", "2026-10-02T10:00:01Z"), record("next-answer", "2026-10-02T10:01:01Z")], 0, false).items;
+  let state = projectAssistantHandoff(null, stream, [], claims);
+  const original = state.pending[0].key;
+  state = projectAssistantHandoff(state, null, feed, new Set(["split-answer"]));
+  expect(state.pending).toEqual([]);
+  expect(state.bindings.size).toBe(2);
+  const rendered = rows(feed, state);
+  expect(rendered[0].key).toBe(original);
+  expect(rendered.map(row => row.item.kind)).toEqual([body.startsWith("VERDICT") ? "review" : "prose", "mem-citation", body.startsWith("VERDICT") ? "review" : "prose", "mem-citation"]);
+  expect(new Set(rendered.map(row => row.key)).size).toBe(4);
+  state = projectAssistantHandoff(state, stream, [], new Set(["split-answer"]), "unknown");
+  expect(state.pending).toEqual([]);
 });
 
 test("same-instant prose and tools preserve the host's source order", () => {

@@ -563,3 +563,40 @@ test("a pending seat reply keeps the live speaker lead while a deputy is active"
   const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "active" } as SeatDeputyView]);
   expect(host.querySelector('[data-live-turn] [data-seat-speaker="live"]')).not.toBeNull();
 });
+
+test("a missed completion adopts a citation-bearing streamed answer", () => {
+  file.engine = "codex"; file.fmt = "codex";
+  try {
+    const answer = "Citation answer\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[contract]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>";
+    sessionState.session = { ...session, liveTurn: appendRuntimeLiveTurnDelta(null, "citation-turn", answer, AT(0)) };
+    const { host, paint } = render();
+    const original = host.querySelector("[data-live-turn]");
+    sessionState.session = { ...session, turn: "unknown", liveTurn: null };
+    tailState.lines = [JSON.stringify({type:"response_item",timestamp:AT(1),payload:{type:"message",id:"citation-answer",role:"assistant",content:[{type:"output_text",text:answer}]}})];
+    paint();
+    const copies = [...host.querySelectorAll('[data-live-turn], [data-feed-kind="prose"]')].filter(node => node.textContent?.includes("Citation answer"));
+    expect(copies).toHaveLength(1);
+    expect(host.querySelector('[data-feed-source-id="citation-answer"]')).toBe(original);
+  } finally { file.engine="claude"; file.fmt="claude"; }
+});
+
+test("event-first citation-bearing completion shows one reply", () => {
+  file.engine = "codex"; file.fmt = "codex";
+  try {
+    const answer = "Event citation answer\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[contract]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>";
+    sessionState.session = { ...session, liveTurn: {turnId:"event-citation-turn",text:answer,items:[{itemId:"event-citation-answer",text:answer,phase:"awaiting-echo",startedAt:AT(0),completedAt:AT(1)}]} };
+    const { host, paint } = render();
+    const original = host.querySelector("[data-live-turn]");
+    tailState.lines = [JSON.stringify({type:"event_msg",timestamp:AT(1),payload:{type:"agent_message",message:answer}})];
+    paint();
+    const copies = [...host.querySelectorAll('[data-live-turn], [data-feed-kind="prose"]')].filter(node => node.textContent?.includes("Event citation answer"));
+    expect(copies).toHaveLength(1);
+    expect(host.querySelector('[data-feed-kind="mem-citation"]')).toBeNull();
+    tailState.lines.push(JSON.stringify({ type: "response_item", timestamp: AT(1), payload: { type: "message",
+      id: "event-citation-answer", role: "assistant", content: [{ type: "output_text", text: answer }] } }));
+    paint();
+    expect(host.querySelector('[data-feed-kind="prose"]')).toBe(original);
+    expect(host.querySelectorAll('[data-feed-kind="prose"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-feed-kind="mem-citation"]')).toHaveLength(1);
+  } finally { file.engine="claude"; file.fmt="claude"; }
+});

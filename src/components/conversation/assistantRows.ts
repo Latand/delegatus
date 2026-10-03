@@ -21,10 +21,13 @@ const at = (live: RuntimeLiveTurnItem) => {
   const value = Date.parse(live.startedAt ?? live.completedAt ?? "");
   return Number.isFinite(value) ? value : null;
 };
+const textKey = (text: string) => text.trim().replace(/\s+/g, " ");
+const projectedText = (item: Item): string | null => item.kind === "prose" || item.kind === "blob" ? item.text
+  : item.kind === "review" || item.kind === "mem-citation" ? item.raw : null;
 // Deltas keep their original start even when carried into a newer turn. A
 // legacy descriptor without that identity is fenced by its consumed text.
 const streamKey = (live: RuntimeLiveTurnItem, turnId: string) => JSON.stringify([
-  live.startedAt, live.startedAt === null ? [turnId, live.text] : null,
+  live.startedAt, live.startedAt === null ? [turnId, textKey(live.text)] : null,
 ]);
 const source = (item: Item) => "sourceId" in item ? item.sourceId : undefined;
 // Parser sequence keys restart on a new filter or locale. Bind the original
@@ -67,31 +70,41 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   const transcriptAt = newestTranscriptInstant(feed);
   const claimedRows = new Set<string>();
   const hiddenEchoes = new Set<string>();
+  // One assistant record can project into prose, review and citation cards.
+  // Reassemble only its own projections; identical later records stay separate.
+  const groups = new Map<string, FeedEntry[]>();
+  for (const row of feed) if (projectedText(row.item) !== null) {
+    const identity = source(row.item) ? `source:${source(row.item)}`
+      : row.anchorKey ? `record:${row.anchorKey.replace(/:\d+$/, "")}` : `row:${row.key}`;
+    groups.set(identity, [...(groups.get(identity) ?? []), row]);
+  }
+  const echoes = [...groups.values()].map(rows => ({ rows,
+    text: rows.map(row => projectedText(row.item)).join("\n\n"),
+    at: rows.map(row => transcriptInstant(row.item)).find(value => value !== null) ?? null,
+  }));
   for (const entry of pending) {
-    let matches = feed.filter(({ item, key }) => !claimedRows.has(key) && (entry.live.itemId
-      ? source(item) === entry.live.itemId || item.kind === "think" && item.members?.some(member => member.sourceId === entry.live.itemId)
-      : item.kind === "prose" && (item.text.trim() === entry.live.text.trim() || entry.live.phase === "streaming" && item.text.trim().startsWith(entry.live.text.trim()))
-        && (at(entry.live) === null || transcriptInstant(item) === null || transcriptInstant(item)! >= at(entry.live)!)));
-    if (!entry.live.itemId) matches = matches.slice(0, 1);
+    const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
+      && (textKey(echo.text) === textKey(entry.live.text) || entry.live.phase === "streaming" && textKey(echo.text).startsWith(textKey(entry.live.text)))
+      && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
+    const matches = entry.live.itemId ? feed.filter(({ item, key }) => !claimedRows.has(key)
+      && (source(item) === entry.live.itemId || item.kind === "think" && item.members?.some(member => member.sourceId === entry.live.itemId))) : echo?.rows ?? [];
     if (!matches.length && entry.live.itemId && !claims.has(entry.live.itemId) && entry.live.phase === "awaiting-echo") {
       // A legacy Codex agent_message can precede its identified response mirror.
       // Keep the live node until that mirror gives ownership, suppressing just
       // one same-text event within the parser's existing one-second boundary.
       const completedAt = Date.parse(entry.live.completedAt ?? "");
-      const mirror = feed.find(({ item, key }) => !claimedRows.has(key) && item.kind === "prose"
-        && item.engine === "codex" && !item.sourceId && item.text.trim() === entry.live.text.trim()
-        && Number.isFinite(completedAt) && transcriptInstant(item) !== null
-        && Math.abs(transcriptInstant(item)! - completedAt) <= 1000);
-      if (mirror) { hiddenEchoes.add(mirror.key); claimedRows.add(mirror.key); }
+      const mirror = echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key) && !source(row.item))
+        && echo.rows.some(({ item }) => item.kind === "prose" && item.engine === "codex" || item.kind === "review")
+        && textKey(echo.text) === textKey(entry.live.text) && Number.isFinite(completedAt)
+        && echo.at !== null && Math.abs(echo.at - completedAt) <= 1000);
+      if (mirror) for (const row of mirror.rows) { hiddenEchoes.add(row.key); claimedRows.add(row.key); }
     }
     if (matches.length) {
       if (!entry.live.itemId) {
         retiredStreams.add(entry.stream);
-        for (const match of matches) if (match.item.kind === "prose") {
-          // Legacy reconnects can contain the full reply rather than the prefix
-          // that this pane consumed. Both are already represented canonically.
-          retiredStreams.add(streamKey({ ...entry.live, text: match.item.text }, entry.turnId));
-        }
+        // A legacy reconnect may contain the complete split reply instead of
+        // the prefix consumed by this pane. Both are already canonical.
+        if (echo) retiredStreams.add(streamKey({ ...entry.live, text: echo.text }, entry.turnId));
       }
       matches.forEach((match, index) => {
         claimedRows.add(match.key);
