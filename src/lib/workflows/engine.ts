@@ -8,6 +8,7 @@ import type { ProjectSpawnResolution } from "@/lib/accounts/contracts";
 import { accountManager } from "@/lib/accounts/manager";
 import { projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { headCwd } from "@/lib/agent/transcript";
 import { closeFlow, createFlowFromRequest, patchFlow as patchReviewFlow } from "@/lib/flows/commands";
 import { lastAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
@@ -248,6 +249,7 @@ async function ensureStageAgent(
   persistCheckpoint: () => void,
 ): Promise<"spawning" | "waiting" | "ready"> {
   if (!run.startedAt) {
+    if (wf.mode === "auto" && activeDrain()) return "waiting";
     /* #1279: a workflow stage is a launch of the workflow's project's work, so
        it draws its account from that project's allowed set like every other
        one. An unbound project takes the branch this always took — the engine's

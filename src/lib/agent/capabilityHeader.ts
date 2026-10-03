@@ -10,3 +10,5 @@
  * import keeps working.
  */
 export const VIEWER_SPAWN_CAPABILITY_HEADER = "x-llv-spawn-capability";
+/** Narrows an operator-capability dispatch made on an agent's behalf. */
+export const VIEWER_AUTONOMOUS_SPAWN_HEADER = "x-llv-autonomous-spawn";

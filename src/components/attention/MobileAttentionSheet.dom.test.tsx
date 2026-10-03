@@ -251,7 +251,7 @@ test("a permission row puts its long headline on a truncated line of its own and
   const age = row.querySelector("[data-attention-age]")!;
   expect(age.textContent).toBe("3m ago");
   expect(age.parentElement!.contains(decision)).toBe(false);
-  expect(age.parentElement!.textContent).toContain("opus");
+  expect(age.parentElement!.textContent).toContain("Opus 5.5");
   expect(q(host, "[data-permission-allow]")).not.toBeNull();
   expect(q(host, "[data-permission-deny]")).not.toBeNull();
 });
@@ -299,4 +299,14 @@ test("an ask row never mounts permission buttons, even when its conversation als
   expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Fold the presets into one button?");
   expect(q(host, "[data-permission-actions]")).toBeNull();
   expect(q(host, "[data-permission-allow]")).toBeNull();
+});
+
+test("the phone Needs-you sheet names the long turn and offers both update choices", () => {
+  const decision = { id: "drain", at: new Date().toISOString(), project: PROJECT, blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+    turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: PROJECT, stage: null, seat: false }] } };
+  const host = mount(<MobileAttentionSheet entries={[{ kind: "update", id: "auto-update:drain", decision }]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} />);
+  expect(host.textContent).toContain("conversation_long_turn");
+  expect(q(host, '[data-action="deploy-now"]')).not.toBeNull();
+  expect(q(host, '[data-action="keep-waiting"]')).not.toBeNull();
+  expect(q(host, '[data-needs-you-dismiss-all]')).toBeNull();
 });

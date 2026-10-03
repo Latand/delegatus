@@ -41,6 +41,8 @@ interface StructuredOperationStatus {
 export interface StructuredDeliveryQueuePort {
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
+  /** Hold a fresh autonomous turn while original accepted work settles. */
+  autonomousTurnHeld?(operationId: string, admittedAt?: string): boolean;
   /** A terminal provider turn engages an account pick immediately (#1983).
       Live host health still fences a newer turn before applying it. */
   terminalTurn?(conversationId: string): boolean;
@@ -892,6 +894,7 @@ export class StructuredDeliveryQueue {
   }
 
   private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+    let updateHeld = false;
     if (this.port.handoffHeld?.()) return true;
     if (effects.length > 0 && effects.every(effect => effect.kind === "native-queue")
       && this.nativeExecutionRetries.get(effects[0]!.conversationId)?.ready() === false) {
@@ -1043,6 +1046,13 @@ export class StructuredDeliveryQueue {
         continue;
       }
       if (effect.kind === "native-queue") {
+        const admission = durableStatuses.get(effect.operationId);
+        const startsWork = effect.action === "add" || effect.action === "start" || effect.action === "send-now";
+        if (startsWork && effect.origin?.kind === "agent" && admission?.status !== "delivering"
+          && this.port.autonomousTurnHeld?.(effect.operationId, admission?.admittedAt ?? admission?.at)) {
+          updateHeld = true;
+          continue;
+        }
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
         if (!await this.executeNative(effect, boundary && effect.eventSeq <= boundary.eventSeq
           ? "conversation was intentionally terminated" : undefined)) return true;
@@ -1097,7 +1107,11 @@ export class StructuredDeliveryQueue {
         continue;
       }
       const host = this.resolveHost(effect.conversationId);
+      const heldForUpdate = () => (effect.kind === "send" || effect.kind === "steer") && effect.origin?.kind === "agent"
+        && !!this.port.autonomousTurnHeld?.(effect.operationId, durableStatuses.get(effect.operationId)?.admittedAt
+          ?? durableStatuses.get(effect.operationId)?.at);
       if (!host) {
+        if (heldForUpdate()) { updateHeld = true; continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
         await this.recoverUnavailableHost(effect);
@@ -1111,6 +1125,7 @@ export class StructuredDeliveryQueue {
       if (!state.readable) return this.fenceUnavailable();
       const health = state.value;
       if (health.status === "dead" || health.status === "unhosted") {
+        if (heldForUpdate()) { updateHeld = true; continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
         await this.recoverUnavailableHost(effect);
@@ -1138,6 +1153,9 @@ export class StructuredDeliveryQueue {
          already ended leaves nothing to interrupt and the message simply starts
          one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
       const steerByInterrupt = !steerOrQueue && steerRequested && host.steerFallback === "interrupt";
+      // Only in-turn steering joins the original cohort. Interrupt fallback
+      // replaces that turn and must wait along with other fresh turn starts.
+      if ((!maySteer || steerByInterrupt) && heldForUpdate()) { updateHeld = true; continue; }
       /* A host that DECLARED it cannot steer, which is the Claude broker: its
          write would land as an interrupt the operator never asked for, so the
          message is refused here rather than delivered as something else.
@@ -1373,7 +1391,7 @@ export class StructuredDeliveryQueue {
           : {}),
       });
     }
-    return Boolean(switchDeferred) || nativeReceiptUnavailable;
+    return Boolean(switchDeferred) || nativeReceiptUnavailable || updateHeld;
   }
 
   private async settleObservedSteer(effect: SendEffect, outcome: RuntimeSteerOutcome): Promise<void> {

@@ -7,6 +7,7 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
@@ -1441,7 +1442,8 @@ async function check(
         || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
       return alarmPayload(input, verdict, issues, wake.preparedAt);
     },
-    mayDispatch: () => !openingSeat?.conversationId || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead",
+    mayDispatch: () => !activeDrain() && (!openingSeat?.conversationId
+      || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead"),
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
@@ -1596,6 +1598,11 @@ async function check(
     // token, and the existing pending-delivery fence still prevents duplicates.
     if (rotated) {
       delivery = { clientMessageId, outcome: "seat-rotated" };
+    } else if (activeDrain()) {
+      // Proposal preparation may have awaited the forge while admission closed.
+      // No attempt has entered transport; leave its work for the release tick.
+      delivery = { clientMessageId, outcome: "update-held" };
+      fenceDetail = "new seat work is held for the automatic update";
     } else if (mcpHealth?.status === "dead" && !(
       verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
       && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
@@ -1716,7 +1723,7 @@ async function check(
       console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
     }
   }
-  try { const detail = await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
+  try { const detail = !activeDrain() && await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const record: SeatTickRunRecord = {
     schemaVersion: 1,
@@ -1980,6 +1987,7 @@ const tickHost = globalThis as typeof globalThis & {
  */
 export function startSeatTick(ports: {
   handoffHeld?: () => boolean;
+  drainHeld?: () => boolean;
   recordSuccessions?: () => unknown[];
   scheduleInterval?: (callback: () => void, delayMs: number) => ReturnType<typeof setInterval>;
   sweep?: () => Promise<unknown>;
@@ -2022,11 +2030,12 @@ export function startSeatTick(ports: {
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileSeatTick());
   const handoffHeld = ports.handoffHeld ?? (() => !!activeRestartGate(statePath("self-update", "auto-admission.json")));
+  const drainHeld = ports.drainHeld ?? (() => !!activeDrain());
   const run = () => {
     /* A check that outran its interval drops the next one rather than stacking
        it. A tick that would land behind the one before it is stale by
        construction, and staleness is the whole reason nothing is queued. */
-    if (tickHost.__llvSeatTickRunning || handoffHeld()) return;
+    if (tickHost.__llvSeatTickRunning || handoffHeld() || drainHeld()) return;
     tickHost.__llvSeatTickRunning = true;
     void Promise.resolve(sweep())
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))

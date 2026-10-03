@@ -5209,6 +5209,16 @@ export class AgentRegistry {
     });
   }
 
+  /** Immutable acceptance time, including a spawn's already-admitted first prompt. */
+  deliveryAdmissionAtForOperation(operationId: string): string | null {
+    return this.readKeyed(file => {
+      const owner = file.deliveryOperationOwners[operationId];
+      const delivery = owner ? file.heldDeliveries[owner.deliveryId]
+        : registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)[0];
+      return delivery ? initialSpawnReceiptOf(file, delivery)?.createdAt ?? delivery.createdAt : null;
+    });
+  }
+
   /** Resolves only the requested snapshot placeholders. SQLite-backed modes use
       one consistent keyed read; JSON mode retains its compatibility fallback. */
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {

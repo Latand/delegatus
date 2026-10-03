@@ -1327,11 +1327,14 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   return found;
 }
 
-export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending">): SeatTickSignalInput[] {
+export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending"> & Pick<Partial<AutoState>, "drain">): SeatTickSignalInput[] {
   if (auto.off) return [{ id: "self-update-off", label: `self-update: automatic updates turned off — ${auto.off.reason}` }];
-  if (auto.noticeAt && auto.waitingSince) {
-    const counts = [auto.lastBlockers?.turns ? `${auto.lastBlockers.turns} agent turns` : "", auto.lastBlockers?.stages ? `${auto.lastBlockers.stages} stages` : ""].filter(Boolean).join(", ");
-    return [{ id: "self-update-wait", label: `self-update: ${auto.waitingTarget?.slice(0, 7) ?? "built release"} has waited over 24 h for a quiet moment${counts ? ` (${counts})` : ""}` }];
+  if (auto.drain?.overranAt) {
+    const blockers = auto.drain.blockers;
+    const names = [...(blockers?.stageList ?? []).map((stage) => `${stage.stageId} · ${stage.task}`),
+      ...(blockers?.turnList ?? []).map((turn) => turn.seat ? turn.project ?? turn.conversationId : `${turn.engine} · ${turn.conversationId}`)].join(", ");
+    if (auto.drain.acknowledgedAt) return [];
+    return [{ id: "self-update-drain-overran", label: `self-update: admission remains held after 6 h; still blocked by ${names || "unreadable activity"}; the operator can deploy now or keep waiting in Needs-you` }];
   }
   return [];
 }

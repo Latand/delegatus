@@ -18,6 +18,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 import type { Flow } from "./types";
+import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 
 function spawnSync(command: string, args: string[], options: { cwd?: string; encoding?: BufferEncoding; env?: NodeJS.ProcessEnv } = {}): SpawnSyncReturns<string> {
   const env = { ...process.env, ...options.env };
@@ -1485,6 +1486,107 @@ function raceFlow(over: Partial<Flow>): Flow {
     ...over,
   } as unknown as Flow;
 }
+
+test.each(["pane", "headless"] as const)("automatic update holds a fresh %s reviewer without consuming its round", async (reviewerMode) => {
+  const implementer = writeCodexEntry(`drain-${reviewerMode}-implementer.jsonl`, { id: `drain-${reviewerMode}`, cwd: "/missing-drain-worktree" }, Date.now() / 1_000);
+  const flow = raceFlow({ state: "spawning", reviewerMode, implementerPath: implementer.path });
+  const entries = [implementer];
+  const byPath = new Map([[implementer.path, implementer]]);
+  flow.rounds = [newRound(flow, "marker", "ready")];
+  const before = structuredClone(flow);
+  writeDrain(drainFile(), { id: "flow-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    for (let i = 0; i < 3; i++) expect(await tickFlow(flow, entries, byPath, () => {})).toBe(false);
+    expect(flow).toEqual(before);
+    releaseDrain(drainFile(), "flow-drain");
+    // Admission resumes into the existing launch path; this fixture has no checkout.
+    await tickFlow(flow, entries, byPath, () => {});
+    expect(flow.state).toBe("needs_decision");
+    expect(flow.rounds).toHaveLength(1);
+  } finally { releaseDrain(drainFile(), "flow-drain"); }
+});
+
+test("fresh auto reviewer rechecks admission after waiting for the account mutation lock", async () => {
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "reviewer-admission-"));
+  expect(spawnSync("git", ["init", "-b", "main"], { cwd: root }).status).toBe(0);
+  expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "commit", "--allow-empty", "-m", "fixture"], { cwd: root }).status).toBe(0);
+  const implementer = writeCodexEntry("admission-implementer.jsonl", { id: crypto.randomUUID(), cwd: root }, Date.now() / 1_000);
+  const flow = raceFlow({ id: "flow-admission", cwd: root, state: "spawning", implementerPath: implementer.path });
+  flow.roles.reviewer = { engine: "claude", model: "fable", effort: "high" };
+  flow.rounds = [newRound(flow, "marker", "ready")];
+  saveFlows([flow]);
+  const before = structuredClone(flow);
+  const persistedBefore = loadFlows()[0];
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const exec = await import("./exec");
+  const account = { engine: "claude" as const, accountId: "account-a", kind: "managed" as const, home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account });
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "admitted-review", reviewerPath: null });
+  const nativeStatus = exec.headlessReviewStatus;
+  const status = spyOn(exec, "headlessReviewStatus").mockImplementation((...args) => launch.mock.calls.length
+    ? { status: "running", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null }
+    : nativeStatus(...args));
+  let entered!: () => void, resume!: () => void, queued!: () => void;
+  const acquired = new Promise<void>(r => { entered = r; });
+  const gate = new Promise<void>(r => { resume = r; });
+  const waiting = new Promise<void>(r => { queued = r; });
+  const nativeLock = mutation.withAccountMutationLockAsync;
+  const locking = nativeLock(async () => { entered(); await gate; });
+  await acquired;
+  const lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+  let ticking: Promise<boolean> | undefined;
+  try {
+    const entries = [implementer], byPath = new Map([[implementer.path, implementer]]);
+    const persist = () => saveFlows([flow]);
+    ticking = tickFlow(flow, entries, byPath, persist);
+    await waiting;
+    writeDrain(drainFile(), { id: "reviewer-admission", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    resume(); await locking; await ticking;
+    expect(launch).not.toHaveBeenCalled();
+    expect(flow).toEqual(before);
+    expect(loadFlows()[0]).toEqual(persistedBefore);
+    releaseDrain(drainFile(), "reviewer-admission");
+    await tickFlow(flow, entries, byPath, persist);
+    await tickFlow(flow, entries, byPath, persist);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(flow.rounds).toHaveLength(1); expect(flow.rounds[0].launchId).toBeTruthy();
+  } finally {
+    resume(); await locking; await ticking;
+    lock.mockRestore(); resolve.mockRestore(); launch.mockRestore(); status.mockRestore();
+    releaseDrain(drainFile(), "reviewer-admission");
+  }
+});
+
+test("automatic update holds fresh fix relays, while manual relays and released work deliver once", async () => {
+  const implementer = writeCodexEntry("drain-relay-implementer.jsonl", { id: "drain-relay", cwd: "/missing-drain-worktree" }, Date.now() / 1_000);
+  const entries = [implementer];
+  const byPath = new Map([[implementer.path, implementer]]);
+  const file = path.join(process.env.LLV_STATE_DIR!, "drain-relay-findings.md");
+  fs.writeFileSync(file, "VERDICT: REQUEST_CHANGES\n\nRepair the issue.\n");
+  const makeFlow = (mode: "auto" | "manual") => {
+    const flow = raceFlow({ id: `drain-${mode}`, state: "relaying", mode, implementerPath: implementer.path });
+    flow.rounds = [{ ...newRound(flow, "marker", "ready"), findingsPath: file, verdict: "REQUEST_CHANGES", findingsCount: 1 }];
+    return flow;
+  };
+  let delivered = 0;
+  const restore = setRelayDeliveryForTest(async (flow) => { delivered++; return flow.implementerPath; });
+  writeDrain(drainFile(), { id: "flow-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    const auto = makeFlow("auto");
+    const before = structuredClone(auto);
+    for (let i = 0; i < 3; i++) expect(await tickFlow(auto, entries, byPath, () => {})).toBe(false);
+    expect(auto).toEqual(before);
+    expect(delivered).toBe(0);
+    await tickFlow(makeFlow("manual"), entries, byPath, () => {});
+    expect(delivered).toBe(1);
+    releaseDrain(drainFile(), "flow-drain");
+    await tickFlow(auto, entries, byPath, () => {});
+    expect(auto.state).toBe("fixing");
+    expect(delivered).toBe(2);
+    expect(auto.rounds[0]!.relayedAt).not.toBeNull();
+  } finally { restore(); releaseDrain(drainFile(), "flow-drain"); }
+});
 
 test("terminal flows remain in tick results and scanner annotations", async () => {
   const flow = raceFlow({

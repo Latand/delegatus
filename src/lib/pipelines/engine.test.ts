@@ -12,6 +12,13 @@ import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { activeDrain, DRAIN_LEASE_MS } from "@/lib/selfUpdate/drain";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
+import { initialCheck } from "@/lib/selfUpdate/checkState";
+import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
+import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "@/lib/selfUpdate/types";
+import { endRestartGate, restartGateFile } from "@/lib/selfUpdate/restartGate";
+import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
@@ -2043,6 +2050,370 @@ async function create(ports: PipelinePorts, stages = RUN_STAGES as never, reques
   savePipelines([lane]);
   return lane;
 }
+
+test("held pending cursors let the real controller idle and release one successor", async () => {
+  const { FlowPipelineController } = await import("./controller");
+  const h = harness();
+  let held = true;
+  let cycles = 0;
+  const heartbeats: import("./controller").FlowPipelineControllerHeartbeat[] = [];
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports);
+  const controller = new FlowPipelineController({
+    tickPipelines: (entries) => tickPipelines(entries, h.ports),
+    tickFlows: async () => ({ changed: false }), scan: async () => ({ files: [], complete: true }),
+    publishHeartbeat: (heartbeat) => {
+      heartbeats.push(heartbeat);
+      // Bound the old defect without leaving its microtask loop alive.
+      if (heartbeat.state === "idle" && ++cycles === 12) held = false;
+    },
+  });
+  const unregister = registerPipelineTick(() => controller.tick());
+  try {
+    await controller.tick();
+    expect(controller.idle()).toBe(true);
+    expect(cycles).toBe(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(heartbeats.at(-1)?.state).toBe("idle");
+    held = false;
+    await controller.tick();
+    await controller.poll();
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(controller.idle()).toBe(true);
+  } finally { unregister(); }
+});
+
+test("automatic-update hold keeps a pending attempt and releases exactly one launch", async () => {
+  const h = harness();
+  let held = true;
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.cursor?.state).toBe("pending");
+  const attempt = waiting.runs[0]!.attempts[0]!;
+  expect(attempt.state).toBe("pending");
+  expect(attempt.spawnCalls ?? 0).toBe(0);
+  const detail = waiting.stateDetail;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(detail);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  held = false;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.n).toBe(attempt.n);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
+  const h = harness();
+  let held = false;
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "high" }, prompt: "Review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  h.setConversationActive(false);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  held = true;
+  for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+  expect(h.flowRequests).toHaveLength(0);
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  held = false;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.flowRequests).toHaveLength(1);
+});
+
+test.each([false, true])("automatic drain holds reserved custody with dead owner=%s and resumes its identity", async (deadOwner) => {
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const h = harness();
+  let held = false;
+  let reserveOnly = true;
+  h.ports.drainHold = () => held || (reserveOnly && !!loadPipelines()[0]?.runs[0]?.attempts[0]?.activation) ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  try {
+    await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const before = loadPipelines()[0]!;
+    const reserved = before.runs[0]!.attempts[0]!.activation!;
+    expect(reserved.phase).toBe("reserved");
+    if (deadOwner) {
+      reserved.owner = { pid: 2_147_483_647, startIdentity: "gone", bootEpoch: "gone" };
+      savePipelines([before]);
+    }
+    held = true;
+    await engineModule.drainStageActivations(h.ports);
+    const after = loadPipelines()[0]!.runs[0]!.attempts[0]!.activation!;
+    expect(after.id).toBe(reserved.id);
+    expect(after.owner).toBeUndefined();
+    expect(h.spawnInputs).toHaveLength(0);
+    const { probeQuiet } = await import("@/lib/selfUpdate/quiet");
+    expect((await probeQuiet({ busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot,
+      { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] }, Date.now(), true)).quiet).toBe(true);
+    held = false;
+    reserveOnly = false;
+    await engineModule.drainStageActivations(h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation).toBeUndefined();
+  } finally {
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+});
+
+test("reserved activation rechecks update admission after waiting for the mutation lease", async () => {
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const h = harness();
+  let reserveOnly = true;
+  let held = false;
+  let scanned!: () => void;
+  h.ports.drainHold = () => {
+    scanned?.();
+    return held || (reserveOnly && !!loadPipelines()[0]?.runs[0]?.attempts[0]?.activation)
+      ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: 0, persistent: true } : null;
+  };
+  let release!: () => void;
+  let locking: Promise<void> | undefined;
+  let draining: Promise<void> | undefined;
+  try {
+    await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+    reserveOnly = false;
+    const { withPipelineMutation } = await import("./store");
+    let entered!: () => void;
+    const acquired = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    locking = withPipelineMutation(async () => { entered(); await gate; });
+    await acquired;
+    const scanning = new Promise<void>(resolve => { scanned = resolve; });
+    draining = engineModule.drainStageActivations(h.ports);
+    await scanning;
+    held = true;
+    release(); await locking; await draining;
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toEqual(before);
+    held = false;
+    await engineModule.drainStageActivations(h.ports);
+    await engineModule.drainStageActivations(h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(h.spawnInputs[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
+  } finally {
+    release?.(); await locking; await draining;
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+});
+
+test("legacy pipeline account admission defers without parking or consuming its launch key", async () => {
+  const h = harness();
+  const drain = await import("@/lib/selfUpdate/drain");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "legacy-held-admission.json"));
+  setAgentRegistryForTests(registry);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockResolvedValue({ path: null } as never);
+  const ports = defaultPipelinePorts();
+  const keys: string[] = [];
+  h.ports.drainHold = ports.drainHold;
+  h.ports.spawnAgent = (input, reserve) => { keys.push(input.clientAttemptId); return ports.spawnAgent(input, reserve); };
+  let resume!: () => void, entered!: () => void, queued!: () => void;
+  const acquired = new Promise<void>(r => { entered = r; });
+  const gate = new Promise<void>(r => { resume = r; });
+  const waiting = new Promise<void>(r => { queued = r; });
+  const nativeLock = mutation.withAccountMutationLockAsync;
+  let locking: Promise<void> | undefined;
+  let ticking: ReturnType<typeof tickPipelines> | undefined;
+  let lock: ReturnType<typeof spyOn<typeof mutation, "withAccountMutationLockAsync">> | undefined;
+  try {
+    await create(h.ports); await tickPipelines([], h.ports);
+    locking = nativeLock(async () => { entered(); await gate; }); await acquired;
+    lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+    ticking = tickPipelines([], h.ports); await waiting;
+    drain.writeDrain(drain.drainFile(), { id: "legacy-admission", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    resume(); await locking; await ticking;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    expect(loadPipelines()[0]!).toMatchObject({ state: "running", cursor: { state: "pending" } });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ state: "pending", spawnCalls: 0 });
+    drain.releaseDrain(drain.drainFile(), "legacy-admission");
+    await tickPipelines([], h.ports);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    resume?.(); await locking; await ticking;
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    drain.releaseDrain(drain.drainFile(), "legacy-admission"); setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["early", "drain-switch-off"] as const)("managed %s admission holds actual pipeline launches across recovery until terminal status", async (admission) => {
+  const h = harness();
+  savePipelines([]);
+  const dir = fs.mkdtempSync("/var/tmp/managed-pipeline-custody-");
+  const target = "a".repeat(40);
+  const old = "b".repeat(40);
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  let turns = admission === "early" ? 0 : 1;
+  let requests = 0;
+  let status: import("@/lib/runtime/contracts").ViewerDeploymentStatus | null = null;
+  const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true });
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: rev(old), available: rev(target),
+    check: { ...idleCheck(), state: "update-available", relation: "behind" } }, update: null }));
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15,
+    mode: async () => ({ mode: "managed", record: null, reason: null }), releaseTarget: () => ({ revision: old }),
+    prepareCheckRepo: async () => dir, targetOnBranch: async () => true, describe: async (_repo: string, sha: string) => rev(sha),
+    hostHealth: async () => ({ pid: 102, generation: { revision: old } }), web: { pid: 101, port: null, startedAt: "" },
+    green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: turns ? [{ turn: "running", host: "hosted" }] : [] }), pipelines: loadPipelines, presence: () => [], memoryAvailableMb: () => 8192 },
+    requestDeployment: async (body: import("@/lib/runtime/contracts").ViewerDeploymentRequest) => {
+      requests++;
+      status = { deploymentId: "deployment-test", idempotencyKey: body.idempotencyKey, requestedRevision: target, revision: target,
+        phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+        owner: { pid: 102, startIdentity: null }, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), revisionNumber: 1 };
+      return { state: "accepted", deploymentId: "deployment-test", revision: target, replayed: false };
+    },
+    readDeployment: async () => status, findDeploymentByIdempotencyKey: async () => status,
+  } as unknown as ServiceDeps;
+  let service = new SelfUpdateService(deps);
+  h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
+  try {
+    await service.autoTick();
+    if (admission === "drain-switch-off") { turns = 0; await service.autoTick(); }
+    now += 60_000;
+    await service.autoTick();
+    expect(requests).toBe(1);
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+    if (admission === "drain-switch-off") await service.setAuto(false);
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    service.stop();
+    now += DRAIN_LEASE_MS + 1;
+    service = new SelfUpdateService(deps);
+    service.startAuto();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(requests).toBe(1);
+    status = { ...status!, phase: "rolled-back", terminal: true, revisionNumber: 2 };
+    await service.refreshManaged();
+    await service.snapshot();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
+  const h = harness();
+  const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
+  const target = "a".repeat(40);
+  const old = "b".repeat(40);
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  const record = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
+    releasePointer: path.join(dir, "release.json"), requestFile: path.join(dir, "request.json"), releasesDir: path.join(dir, "releases"),
+    web: { state: "healthy", revision: old.slice(0, 7), error: null }, runtimeHost: { state: "healthy", revision: old.slice(0, 7), error: null } } as LauncherRecord;
+  writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [target]: { state: "green" } }, rollbackCaptured: true });
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
+  const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,
+    serving: { web: rev(record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: rev(record.runtimeHost.revision === target.slice(0, 7) ? target : old) },
+    processes: { web: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] } },
+    meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
+    green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
+    prune: async () => {}, findDeploymentByIdempotencyKey: async () => null,
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, hostHealth: async () => ({ pid: 102 }),
+    describe: async (_repo: string, sha: string) => rev(sha), buildEnv: () => ({}),
+    createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),
+    targetOnBranch: async () => true,
+  } as unknown as ServiceDeps;
+  const makeService = () => {
+    const instance = new SelfUpdateService(deps);
+    instance.snapshot = async () => snapshot();
+    return instance;
+  };
+  let service = makeService();
+  h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
+  try {
+    await create(h.ports, [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "verify" },
+      { id: "verify", kind: "run", role: { roleId: "reviewer" }, prompt: "Verify", next: null },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    await service.autoTick();
+    if (admission === "drain") {
+      await service.autoTick();
+      expect(h.ports.drainHold()).not.toBeNull();
+    }
+    expect(fs.existsSync(record.requestFile)).toBe(false);
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built safely")], h.ports);
+    if (admission === "drain") for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+    expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "verify", state: "pending" });
+    expect(h.spawnInputs).toHaveLength(1);
+    await service.autoTick();
+    now += 60_000;
+    await service.autoTick();
+    expect(JSON.parse(fs.readFileSync(record.requestFile, "utf8")).role).toBe("web");
+    await tickPipelines([], h.ports);
+    const identity = loadPipelines()[0]!.runs[1]!.attempts[0]!.n;
+    endRestartGate(restartGateFile(record.requestFile), JSON.parse(fs.readFileSync(record.requestFile, "utf8")).autoGateId);
+    const pending = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending;
+    record.web = { ...record.web, requestId: pending.requestId, revision: target.slice(0, 7) };
+    fs.rmSync(record.requestFile);
+    await service.autoTick();
+    if (admission === "early-switch-off") {
+      expect(await service.setAuto(false)).toEqual({ ok: true });
+      service.stop();
+      now += DRAIN_LEASE_MS + 1;
+      service = makeService();
+      service.startAuto();
+      expect(h.ports.drainHold()).not.toBeNull();
+      await Bun.sleep(0);
+    }
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    if (admission === "host-fallback") {
+      await service.autoTick();
+      now += 60_000;
+      await service.autoTick();
+      const hostRequest = JSON.parse(fs.readFileSync(record.requestFile, "utf8"));
+      expect(hostRequest.role).toBe("runtime-host");
+      endRestartGate(restartGateFile(record.requestFile), hostRequest.autoGateId);
+      fs.rmSync(record.requestFile);
+      record.runtimeHost = { ...record.runtimeHost, requestId: hostRequest.requestId,
+        error: { kind: "fell-back", revision: old.slice(0, 7), detail: "candidate host failed" } };
+      await service.autoTick();
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(1);
+      service.stop();
+      now += DRAIN_LEASE_MS + 1;
+      service = makeService();
+      await service.autoTick();
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(1);
+      record.web.revision = old.slice(0, 7);
+    } else record.runtimeHost.revision = target.slice(0, 7);
+    await service.autoTick();
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.n).toBe(identity);
+  } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test.each([
   { prompt: "Build from {{prev.output}}", access: "read-write", sandbox: "full" },
@@ -15988,10 +16359,10 @@ async function reserveActivationOnly() {
   return h;
 }
 
-test("activation drain recovers the original registry launch after a process exits before binding", async () => {
+test.each([false, true])("activation drain recovers the original registry launch after a process exits before binding under hold=%s", async (held) => {
   const h = await reserveActivationOnly();
-  const registryPath = path.join(process.env.LLV_STATE_DIR!, "activation-crash-registry.json");
-  const marker = path.join(process.env.LLV_STATE_DIR!, "activation-crash-launch");
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `activation-crash-registry-${held}.json`);
+  const marker = path.join(process.env.LLV_STATE_DIR!, `activation-crash-launch-${held}`);
   const child = Bun.spawn([process.execPath, "-e", `
     import fs from "node:fs";
     const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
@@ -16024,13 +16395,105 @@ test("activation drain recovers the original registry launch after a process exi
     engine, accountId: "test", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" },
   }}));
   try {
+    const drain = await import("@/lib/selfUpdate/drain");
+    if (held) drain.writeDrain(drain.drainFile(), { id: "submitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
     const ports = defaultPipelinePorts();
-    await engineModule.drainStageActivations({ ...h.ports, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
+    await engineModule.drainStageActivations({ ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
     const recovered = loadPipelines()[0]!.runs[0]!.attempts[0]!;
     expect(recovered).toMatchObject({ n: 1, launchId: launch, spawnCalls: 1, state: "needs_decision" });
     expect(recovered.activation).toBeUndefined();
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
-  } finally { resolve.mockRestore(); setAgentRegistryForTests(null); }
+  } finally {
+    const drain = await import("@/lib/selfUpdate/drain");
+    drain.releaseDrain(drain.drainFile(), "submitted-recovery");
+    resolve.mockRestore(); setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitted reserving activation stays held at %s", async (seam) => {
+  const h = await reserveActivationOnly();
+  const drain = await import("@/lib/selfUpdate/drain");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `unsubmitted-${seam}.json`);
+  // Exit the actual executor after its reserving checkpoint, before any receipt.
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+    const { accountManager } = await import("./src/lib/accounts/manager.ts");
+    const { drainStageActivations, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    const registry = new AgentRegistry(process.env.LLV_TEST_REGISTRY);
+    setAgentRegistryForTests(registry);
+    accountManager.resolveProjectSpawn = (engine) => ({ kind: "available", account: {
+      engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR,
+      transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+    }});
+    registry.beginSpawnRequestAsync = async () => { process.exit(0); };
+    await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready" });
+    process.exit(2);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+  expect(before).toMatchObject({ launchId: null, spawnCalls: 1, activation: { phase: "reserving", owner: { pid: child.pid } } });
+  const registry = new AgentRegistry(registryPath);
+  setAgentRegistryForTests(registry);
+  expect(registry.spawnReceiptForClientAttempt(before.activation!.clientAttemptId)).toBeNull();
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const dispatches: string[] = [];
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    dispatches.push(input.receipt.launchId);
+    return { path: null } as never;
+  });
+  const hold = () => drain.writeDrain(drain.drainFile(), { id: "unsubmitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  let resume!: () => void;
+  let locking: Promise<void> | undefined;
+  let recovering: Promise<void> | undefined;
+  let lock: ReturnType<typeof spyOn<typeof mutation, "withAccountMutationLockAsync">> | undefined;
+  try {
+    const ports = defaultPipelinePorts();
+    const recoveryPorts = { ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt };
+    if (seam === "before-recovery") hold();
+    else {
+      let entered!: () => void, queued!: () => void;
+      const acquired = new Promise<void>(r => { entered = r; });
+      const gate = new Promise<void>(r => { resume = r; });
+      const waiting = new Promise<void>(r => { queued = r; });
+      const nativeLock = mutation.withAccountMutationLockAsync;
+      locking = nativeLock(async () => { entered(); await gate; });
+      await acquired;
+      lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+      recovering = engineModule.drainStageActivations(recoveryPorts);
+      await waiting;
+      hold(); resume(); await locking;
+    }
+    await (recovering ?? engineModule.drainStageActivations(recoveryPorts));
+    await engineModule.drainStageActivations(recoveryPorts);
+    expect(dispatches).toHaveLength(0);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    const held = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(held).toMatchObject({ n: before.n, launchId: null, spawnCalls: 1, activation: {
+      id: before.activation!.id, clientAttemptId: before.activation!.clientAttemptId, phase: "reserved", replay: true,
+    } });
+    expect(held.activation!.owner).toBeUndefined();
+    const { probeQuiet } = await import("@/lib/selfUpdate/quiet");
+    expect((await probeQuiet({ busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot,
+      { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] }, Date.now(), true)).quiet).toBe(true);
+    drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery");
+    await engineModule.drainStageActivations(recoveryPorts);
+    await engineModule.drainStageActivations(recoveryPorts);
+    expect(dispatches).toHaveLength(1);
+    const receipts = Object.values(registry.readOnlySnapshot().receipts);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(1);
+  } finally {
+    resume?.(); await locking; await recovering;
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
+  }
 });
 
 test("activation drain preserves uncertain read-write delivery and the staged recovery budget", async () => {

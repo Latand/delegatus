@@ -160,6 +160,55 @@ const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
 describe("automatic updates", () => {
+  test.each(["en", "uk"] as const)("named scheduled, draining and overrun states in %s", (locale) => {
+    setLocale(locale);
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: null, green: { state: "green" },
+      blockers: { turns: 1, stages: 1, operatorActiveAt: null, busy: true, busyReason: "seat-tick", memoryMb: null, unreadable: null,
+        turnList: [{ conversationId: "conversation_worker", engine: "codex", project: "Example", seat: false, stage: null }],
+        stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_builder" }] },
+      waitingSince: AT, longWait: true, drain: { state: "scheduled", at: AT } };
+    for (const [state, phrase] of [["scheduled", locale === "en" ? "From" : "Від"], ["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
+      ["overran", locale === "en" ? "held the update for 6 h" : "оновлення вже 6 год"]] as const) {
+      s.auto.drain = { state, at: AT, nextAt: AT };
+      const copy = text(section(render(s), "auto"));
+      expect(copy).toContain(phrase);
+      expect(copy).toContain("build · Finish the feature");
+      expect(copy).toContain("codex · worker");
+      expect(copy).toContain(locale === "en" ? "Orchestrator wake in progress" : "Триває пробудження оркестратора");
+      flushSync(() => root!.unmount());
+      host?.remove();
+    }
+  });
+  test.each(["keep-waiting", "deploy-now"] as const)("the six-hour %s choice posts its identity and broadcasts the accepted snapshot", async (choice) => {
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: NEW_REV, green: { state: "green" },
+      blockers: null, waitingSince: AT, longWait: true,
+      decision: { id: "drain-current", at: AT, project: "Example", blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+        turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", stage: null, seat: false }] } } };
+    const savedFetch = globalThis.fetch;
+    const posted: unknown[] = [];
+    let accepted: unknown;
+    const observe = (event: Event) => { accepted = (event as CustomEvent).detail; };
+    window.addEventListener("llv:auto-drain-decision", observe);
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ...s, auto: { ...s.auto, decision: null } }));
+    }) as typeof fetch;
+    try {
+      const el = render(s);
+      expect(el.querySelector("[data-auto-drain-decision]")?.textContent).toContain("conversation_long_turn");
+      expect(text(section(el, "auto"))).not.toContain("Waiting over");
+      button(el, choice)!.click();
+      await Bun.sleep(0);
+      expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
+      expect(accepted).toMatchObject({ auto: { decision: null } });
+    } finally {
+      globalThis.fetch = savedFetch;
+      window.removeEventListener("llv:auto-drain-decision", observe);
+    }
+  });
+
   test("the switch, blockers, serving revisions and history are visible", () => {
     const s = snapshot();
     s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, green: { state: "green" },

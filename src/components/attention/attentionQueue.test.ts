@@ -39,7 +39,7 @@ const pipelines = needsDecisionPipelineRows([pipeline("p-decide", "needs_decisio
 
 test("conversations and needs_decision pipelines are ONE list, conversations in queue order first, then the pipelines", () => {
   const entries = buildMobileAttentionQueue(conversations, pipelines);
-  expect(entries.map((entry) => `${entry.kind}:${entry.kind === "conversation" ? entry.item.file.path : entry.row.id}`)).toEqual([
+  expect(entries.map((entry) => `${entry.kind}:${entry.kind === "conversation" ? entry.item.file.path : entry.kind === "pipeline" ? entry.row.id : entry.decision.id}`)).toEqual([
     "conversation:/p/old.jsonl",
     "conversation:/p/new.jsonl",
     "pipeline:p-decide",
@@ -99,4 +99,10 @@ test("a lane is focused by the key its card answers to", () => {
   expect(laneFocusId(laneFocusPath("p-decide"))).toBe("p-decide");
   expect(laneFocusId("/p/old.jsonl")).toBeNull();
   expect(laneFocusId("group::pipeline::")).toBeNull();
+});
+
+test("a six-hour update decision joins Needs-you and uses its own choices", () => {
+  const decision = { id: "drain-1", at: "2026-01-01T06:00:00Z", project: PROJECT, blockers: null };
+  const entries = buildNeedsYouQueue([], [], NOW, [], decision);
+  expect(entries).toEqual([{ kind: "update", id: "auto-update:drain-1", decision }]);
 });

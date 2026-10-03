@@ -209,7 +209,7 @@ test("Run now launches a board-visible Codex conversation holding exactly viewer
   expect(body.mcpServers).toBeUndefined();
   expect(ports.grants[0]).toEqual(["viewer", "telegram"]);
   expect(body.engine).toBe("codex");
-  expect(body.model).toBe("gpt-6.1-sol");
+  expect(body.model).toBe((await import("@/lib/agent/models")).defaultModelFor("codex"));
   /* No role and no parent: a role preset or a lineage parent would classify
      the launch as delegated and strip the grant. The durable link to the run
      is the attempt id instead. */
@@ -1172,4 +1172,74 @@ test("a connector that is up but whose account is dead still fails with the real
   expect(file.retry).toBeNull();
   expect(ports.readinessWaits.length).toBe(1);
   expect(ports.spawns.length).toBe(0);
+});
+
+
+test("scheduled report holds its slot before admission while Run now remains available", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const ports = new FakePorts(); enableReports();
+  writeDrain(drainFile(), { id: "report-hold", target: "a".repeat(40), since: new Date(NOW).toISOString(), until: 0, persistent: true });
+  try {
+    const runner = new TelegramReportRunner(ports);
+    await runner.tick();
+    expect(ports.spawns).toHaveLength(0);
+    expect(readTelegramReports().active).toBeNull();
+    expect(readTelegramReports().cursor.lastScheduledDay).toBeNull();
+    expect((await runner.runNow()).ok).toBe(true);
+    await runner.settled();
+    expect(ports.spawns).toHaveLength(1);
+  } finally { releaseDrain(drainFile(), "report-hold"); }
+});
+
+test.each(["evidence", "account"] as const)("scheduled report defers after %s wait with the same durable run identity", async (seam) => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const ports = new FakePorts(); enableReports();
+  const runner = new TelegramReportRunner(ports);
+  let heldRun: string | null = null;
+  if (seam === "evidence") {
+    ports.afterRead = () => {
+      heldRun = activeRunId();
+      writeDrain(drainFile(), { id: "report-wait", target: "a".repeat(40), since: new Date(NOW).toISOString(), until: 0, persistent: true });
+    };
+  } else {
+    const spawn = ports.spawn.bind(ports);
+    ports.spawn = async input => {
+      expect(input.trigger).toBe("scheduled"); heldRun = activeRunId();
+      writeDrain(drainFile(), { id: "report-wait", target: "a".repeat(40), since: new Date(NOW).toISOString(), until: 0, persistent: true });
+      ports.spawn = spawn;
+      return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } };
+    };
+  }
+  try {
+    await runner.tick();
+    expect(ports.spawns).toHaveLength(0);
+    expect(readTelegramReports().active).toMatchObject({ runId: heldRun, admissionDeferred: true, conversationId: null });
+    ports.afterRead = null;
+    const restarted = new TelegramReportRunner(ports);
+    ports.clock += RUN_TIMEOUT_MS * 2;
+    await restarted.tick();
+    expect(ports.spawns).toHaveLength(0);
+    expect(activeRunId()).toBe(heldRun!);
+    releaseDrain(drainFile(), "report-wait");
+    await restarted.tick();
+    expect(ports.spawns).toHaveLength(1);
+    expect(ports.spawns[0].clientAttemptId).toBe(`telegram-report-${heldRun}`);
+    expect(activeRunId()).toBe(heldRun!);
+    await restarted.tick(); expect(ports.spawns).toHaveLength(1);
+  } finally { releaseDrain(drainFile(), "report-wait"); }
+});
+
+test("submitted scheduled report receipt recovers while drain is held", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const ports = new FakePorts(); enableReports();
+  const runner = new TelegramReportRunner(ports); await runner.tick();
+  const runId = activeRunId();
+  updateTelegramReports(state => { state.active!.conversationId = null; state.active!.admissionDeferred = true; });
+  ports.markerConversation = "conversation_report";
+  writeDrain(drainFile(), { id: "report-recovery", target: "a".repeat(40), since: new Date(NOW).toISOString(), until: 0, persistent: true });
+  try {
+    await new TelegramReportRunner(ports).tick();
+    expect(readTelegramReports().active).toMatchObject({ runId, conversationId: "conversation_report" });
+    expect(ports.spawns).toHaveLength(1);
+  } finally { releaseDrain(drainFile(), "report-recovery"); }
 });
