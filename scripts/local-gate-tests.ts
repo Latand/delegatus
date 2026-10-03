@@ -154,7 +154,15 @@ function dependencyGraph(root: string) {
   // Local/workspace installs can contain links back into the candidate tree.
   // Install these graphs in the baseline rather than borrowing those links.
   const dependencies = [manifest.dependencies, manifest.devDependencies, manifest.optionalDependencies, manifest.peerDependencies];
-  const shareable = !manifest.workspaces && !dependencies.some(group => Object.values(group ?? {}).some(value => typeof value === "string" && /^(?:file|link|workspace):/.test(value)));
+  const local = (value: unknown) => typeof value === "string" && /^(?:(?:file|link|workspace):|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|~[\\/])/.test(value);
+  const lockfile = path.join(root, "bun.lock");
+  const lock = existsSync(lockfile) ? readFileSync(lockfile, "utf8") : "";
+  // Bun records directory resolutions as name@file:path, including bare
+  // relative paths and resolutions reached through overrides or dependencies.
+  // Read tuple identities without requiring the newer Bun.JSONC API.
+  const resolutions = [...lock.matchAll(/"(?:[^"\\]|\\.)+"\s*:\s*\[\s*("(?:[^"\\]|\\.)*")/g)].map(match => JSON.parse(match[1]!));
+  const localResolution = resolutions.some(value => /@(?:file|link|workspace):/.test(value));
+  const shareable = !manifest.workspaces && !localResolution && !dependencies.some(group => Object.values(group ?? {}).some(local));
   return { fingerprint, shareable };
 }
 
@@ -172,10 +180,11 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     const baseFiles = new Set(git("ls-tree", "-r", "--name-only", "-z", base, "--", ...files).split("\0"));
     const oldFiles = files.filter(file => baseFiles.has(file));
     const graph = dependencyGraph(root);
+    const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
     const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v2", base, files, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
+    const identity = digest(JSON.stringify(["per-file-junit-v3", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);
     const entry = path.join(cache, `${identity}.json`);
@@ -197,7 +206,6 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
         // It registers no worktree/ref in the pushing repo and runs no hooks.
         command(["git", "clone", "--quiet", "--shared", "--no-checkout", "--", root, checkout], root, env);
         command(["git", "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", base], checkout, env);
-        const remote = git("config", "--get", "remote.origin.url").trim();
         command(["git", "config", "remote.origin.url", remote], checkout, env);
         const baseGraph = dependencyGraph(checkout);
         const sameGraph = graph.shareable && baseGraph.shareable && JSON.stringify(baseGraph.fingerprint) === JSON.stringify(graph.fingerprint);

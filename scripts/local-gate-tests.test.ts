@@ -50,8 +50,26 @@ test("a failure fixed by the push is reported; a skipped assertion is kept separ
   writeFileSync(path.join(f.dir, "example.test.ts"), source(false).replace('test("same', 'test.skip("same'));
   const skipped = f.run(); expect(skipped.fixed).toHaveLength(0); expect(skipped.absent).toHaveLength(1);
 });
+test("changing the baseline origin invalidates cache before a same-named regression can hide", () => {
+  const check = (extra = "true") => `import { test, expect } from "bun:test"; import { execFileSync } from "node:child_process"; const origin = execFileSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).trim(); test("origin contract", () => expect(origin.endsWith("green.git") && ${extra}).toBe(true));`;
+  const f = fixture(check());
+  f.git("remote", "set-url", "origin", "https://example.invalid/red.git");
+  expect(f.run().preexisting).toHaveLength(1);
+  f.git("remote", "set-url", "origin", "https://example.invalid/green.git");
+  writeFileSync(path.join(f.dir, "example.test.ts"), check("false"));
+  f.logs.length = 0;
+  const warm = f.run();
+  expect(warm.introduced.map(site => site.name)).toEqual(["origin contract"]);
+  expect(warm.preexisting).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("baseline run");
+  rmSync(f.cache, { recursive: true, force: true });
+  const cold = f.run();
+  expect(cold.introduced).toEqual(warm.introduced);
+  expect(cold.preexisting).toHaveLength(0);
+});
 test("a new test file is judged alone, even if an existing test with the same name failed", () => {
   const f = fixture(source(false)); writeFileSync(path.join(f.dir, "new.test.ts"), source(false));
+  f.git("remote", "remove", "origin");
   const result = f.run(["./new.test.ts"]);
   expect(result.introduced).toHaveLength(1); expect(result.introduced[0]!.file).toBe("new.test.ts");
   expect(f.logs.join("\n")).toContain("1 new file(s), judged on head alone");
@@ -213,6 +231,41 @@ test("a changed dependency patch cannot contaminate or reuse the baseline", () =
   expect(f.logs.join("\n")).toContain("baseline cache hit");
 });
 
+
+test.each(["relative directory", "local override"])("%s dependencies keep a green baseline and block cold and warm CLI runs", kind => {
+  const check = 'import { test, expect } from "bun:test"; import value from "fixture-dependency"; test("dependency returns true", () => expect(value).toBe(true));';
+  const f = fixture(check);
+  const dependency = path.join(f.dir, "dependency"); mkdirSync(dependency);
+  writeFileSync(path.join(dependency, "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0", main: "index.js" }));
+  writeFileSync(path.join(dependency, "index.js"), "module.exports = true;\n");
+  writeFileSync(path.join(f.dir, "package.json"), JSON.stringify(kind === "local override"
+    ? { name: "fixture", dependencies: { "fixture-dependency": "1.0.0" }, overrides: { "fixture-dependency": "./dependency" } }
+    : { name: "fixture", dependencies: { "fixture-dependency": "./dependency" } }));
+  const install = (cwd: string) => execFileSync(process.execPath, ["install", "--ignore-scripts"], { cwd, env: f.env, stdio: "pipe" });
+  install(f.dir);
+  f.git("add", "package.json", "bun.lock", "dependency"); f.git("commit", "-m", "local dependency baseline");
+  const base = f.git("rev-parse", "HEAD");
+  const manifest = readFileSync(path.join(f.dir, "package.json"), "utf8"), lock = readFileSync(path.join(f.dir, "bun.lock"), "utf8");
+  writeFileSync(path.join(dependency, "index.js"), "module.exports = false;\n");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless edit\n${check}`);
+  f.git("add", "dependency/index.js", "example.test.ts"); f.git("commit", "-m", "dependency regression");
+  expect(readFileSync(path.join(f.dir, "node_modules/fixture-dependency/index.js"), "utf8")).toContain("false");
+  expect(readFileSync(path.join(f.dir, "package.json"), "utf8")).toBe(manifest);
+  expect(readFileSync(path.join(f.dir, "bun.lock"), "utf8")).toBe(lock);
+  const control = path.join(f.dir, "env", "control");
+  execFileSync("git", ["clone", "--quiet", "--shared", "--no-checkout", f.dir, control], { env: f.env, stdio: "pipe" });
+  execFileSync("git", ["checkout", "--quiet", "--detach", base], { cwd: control, env: f.env, stdio: "pipe" });
+  install(control);
+  expect(spawnSync(process.execPath, ["test", "./example.test.ts"], { cwd: control, env: f.env }).status).toBe(0);
+  expect(spawnSync(process.execPath, ["test", "./example.test.ts"], { cwd: f.dir, env: f.env }).status).toBe(1);
+  for (const temperature of ["run", "cache hit"]) {
+    const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+    expect(cli.stdout).toContain(`baseline ${temperature}`);
+    expect(cli.stdout).toContain("NEW example.test.ts: dependency returns true");
+    expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures");
+    expect(cli.status).toBe(1);
+  }
+}, 60000);
 
 test("between-test errors match across private roots without hiding a changed path", () => {
   const xml = '<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>';
