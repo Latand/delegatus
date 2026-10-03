@@ -21,6 +21,7 @@ import {
   type ViewerMcpDomainDependencies,
 } from "@/lib/mcp/bindings";
 import { MemoryMcpReceiptStore, createMcpToolService, createViewerMcpServer } from "@/lib/mcp/server";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { writeManagedRecord } from "@/lib/selfUpdate/managed";
@@ -51,6 +52,7 @@ const OTHER_SEAT_ID = "conversation_44444444-4444-4444-8444-444444444444";
 const DEPUTY_ID = "conversation_55555555-5555-4555-8555-555555555555";
 const VIEWER_PROJECT = "repo-delegatus";
 const OTHER_PROJECT = "repo-elsewhere";
+const PREVIOUS_RELEASE = "b".repeat(40);
 const RELEASE = "4f3c1b9a8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a";
 
 let sandbox = "";
@@ -251,14 +253,16 @@ async function dialogSwitch(body: Record<string, unknown>): Promise<number> {
 
 const autoFile = () => path.join(sandbox, "self-update", "auto.json");
 function seedTerminalRollback(healthy = true): void {
-  rollbackHealth = healthy ? { pid: 102, generation: { revision: RELEASE } } as Awaited<ReturnType<ServiceDeps["hostHealth"]>> : null;
+  releaseTarget = { revision: PREVIOUS_RELEASE };
+  rollbackHealth = healthy ? { pid: 102, generation: { revision: PREVIOUS_RELEASE } } as Awaited<ReturnType<ServiceDeps["hostHealth"]>> : null;
   const clientKey = "rollback-case";
   const deploymentId = "rollback-deployment";
   const idempotencyKey = `self-update-${RELEASE.slice(0, 12)}-${clientKey}`;
   const at = "2026-09-30T10:00:00.000Z";
   fs.mkdirSync(path.dirname(autoFile()), { recursive: true });
   writeAuto(autoFile(), { ...initialAuto(), enabled: true,
-    managedPending: { target: { sha: RELEASE, short: RELEASE.slice(0, 7), version: "", date: "" }, clientKey, at } });
+    managedPending: { target: { sha: RELEASE, short: RELEASE.slice(0, 7), version: "", date: "" }, clientKey, at, from: PREVIOUS_RELEASE },
+    drain: { id: "rollback-cohort", target: { sha: RELEASE, short: RELEASE.slice(0, 7), version: "", date: "" }, since: at, overranAt: null, blockers: null, admitted: true } });
   writeManagedRecord(path.join(sandbox, "self-update", "managed.json"), {
     deploymentId, idempotencyKey, trigger: "auto", target: RELEASE, targetShort: RELEASE.slice(0, 7), targetVersion: null,
     requestedAt: at, observed: { image: at }, lastStep: "image", finishedAt: null, phase: "building", error: null, servingProgress: null,
@@ -347,10 +351,12 @@ test("an MCP rollback read keeps accepted custody until host health becomes avai
   setSelfUpdateServiceForTests(service);
   await once(WORKER, { clientRequestId: "rollback-cold-health-unavailable" });
   expect(JSON.parse(fs.readFileSync(autoFile(), "utf8")).managedPending).not.toBeNull();
-  rollbackHealth = { pid: 102, generation: { revision: RELEASE } } as Awaited<ReturnType<ServiceDeps["hostHealth"]>>;
+  expect(activeDrain(path.join(sandbox, "self-update", "auto-drain.json"))).not.toBeNull();
+  rollbackHealth = { pid: 102, generation: { revision: PREVIOUS_RELEASE } } as Awaited<ReturnType<ServiceDeps["hostHealth"]>>;
   const settled = await once(WORKER, { clientRequestId: "rollback-health-restored" });
   expect(settled.payload).toMatchObject({ enabled: false, phase: "idle" });
   expect(JSON.parse(fs.readFileSync(autoFile(), "utf8")).managedPending).toBeNull();
+  expect(activeDrain(path.join(sandbox, "self-update", "auto-drain.json"))).toBeNull();
 });
 
 test("the operator's own session writes, recorded as the operator", async () => {

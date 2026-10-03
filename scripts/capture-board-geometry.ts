@@ -5768,7 +5768,8 @@ async function selfUpdateAutoMain(): Promise<void> {
           || installation.buttons.some(button => !button.inside || width === 390 && (button.width < 44 || button.height < 44))) report.failures.push(`${tag}: install surface or control is unreadable`);
         if (snapshot.action) {
           const key = `selfUpdate.action.${snapshot.action.id}` as const;
-          if (!installation.text?.includes(messages[lang][key])) report.failures.push(`${tag}: missing localized prerequisite instruction`);
+          const instruction = messages[lang][key];
+          if (typeof instruction !== "string" || !installation.text?.includes(instruction)) report.failures.push(`${tag}: missing localized prerequisite instruction`);
           if (snapshot.action.command && !installation.text?.includes(snapshot.action.command)) report.failures.push(`${tag}: incomplete terminal command`);
         }
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
