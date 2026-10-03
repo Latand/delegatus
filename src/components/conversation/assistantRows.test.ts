@@ -256,3 +256,21 @@ test("a later clipped descriptor preserves the reply already observed by this pa
   state = projectAssistantHandoff(state, rewritten, [], claims);
   expect(state.pending[0].live.text).toBe("Corrected answer");
 });
+
+test("a fresh runtime window keeps old cached replies separate from its own unseen omissions", () => {
+  let old: RuntimeLiveTurn | null = null;
+  let state = projectAssistantHandoff(null, null, [], claims);
+  for (let index = 0; index < 10; index++) {
+    old = projectRuntimeLiveTurnItem(old, "old-turn", { type: "agentMessage", id: `old-${index}`, text: `Old answer ${index}` }, "completed", new Date(1760000000000 + index).toISOString());
+    state = projectAssistantHandoff(state, old, [], claims);
+  }
+  state = projectAssistantHandoff(state, null, [], claims);
+  let fresh: RuntimeLiveTurn | null = null;
+  for (let index = 0; index < 550; index++) fresh = projectRuntimeLiveTurnItem(fresh, "fresh-turn", { type: "agentMessage", id: `fresh-${index}`, text: `Fresh answer ${index}` }, "completed", new Date(1760000001000 + index).toISOString());
+  state = projectAssistantHandoff(state, fresh, [], claims);
+  const retained = retainedAssistantItems(state, fresh, runtimeLiveTurnItems(fresh).filter(item => item.tool || !item.text.trim()))
+    .sort((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
+  const tail = liveTurnTail(retained);
+  expect(tail.rows).toHaveLength(8);
+  expect(tail.earlier).toBe(552);
+});

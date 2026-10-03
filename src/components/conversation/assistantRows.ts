@@ -159,7 +159,15 @@ export function retainedAssistantItems(handoff: AssistantHandoff, liveTurn: Runt
     || !a.itemId && !b.itemId && a.startedAt !== null && a.startedAt === b.startedAt;
   const descriptors = runtimeLiveTurnItems(liveTurn);
   const aggregate = descriptors.length === LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT ? descriptors[0] : null;
-  const foldedButRetained = pending.filter(answer => !descriptors.some(item => sameReply(answer, item))).length;
+  const aggregateStart = Date.parse(aggregate?.startedAt ?? "");
+  const aggregateEnd = Date.parse(aggregate?.completedAt ?? "");
+  // An idle snapshot can reset the client's transport window. Older cached
+  // replies outside this aggregate's interval remain independent occurrences.
+  const foldedButRetained = pending.filter(answer => {
+    const instant = at(answer);
+    return instant !== null && instant >= aggregateStart && instant <= aggregateEnd
+      && !descriptors.some(item => sameReply(answer, item));
+  }).length;
   return [...pending, ...visible.flatMap(item => {
     if (!item.tool && pending.some(answer => sameReply(answer, item))) return [];
     if (item.omittedItems && !item.itemId && aggregate && !aggregate.itemId
