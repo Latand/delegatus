@@ -8,6 +8,7 @@ import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { memoryTurnContext } from "./context";
 import { groundedRequest } from "./selection";
 import { MemoryIndex } from "./index";
+import { memoryIndex } from "./service";
 
 test("grounded opening request is the first operator turn on both engines, after a machine launch", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-context-"));
@@ -55,5 +56,28 @@ for (const length of [100, 4200]) test(`citation accounting retains the tail of 
   } finally {
     index.close(); fs.rmSync(root, { recursive: true, force: true });
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} native terminal machine launch is machine context and never the opening operator request`, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-context-")), previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const filename = path.join(root, "synthetic.jsonl"), machine = "Machine opening: widget parsing", operator = "Operator opening: parser task";
+  const line = (id: string, text: string) => JSON.stringify(engine === "claude" ? { type: "user", uuid: id, message: { role: "user", content: text } }
+    : { type: "response_item", payload: { type: "message", turn_id: id, role: "user", content: [{ type: "input_text", text }] } });
+  try {
+    fs.writeFileSync(filename, "");
+    memoryIndex().recordTerminalDelivery("synthetic-machine", "synthetic-conversation", machine, "agent", filename);
+    fs.appendFileSync(filename, line("synthetic-machine", machine) + "\n");
+    expect(memoryIndex().terminalOrigin("synthetic-conversation", "native:synthetic-machine", machine, filename, engine)).toBe("agent");
+    fs.appendFileSync(filename, line("synthetic-operator", operator) + "\n");
+    memoryIndex().close();
+    const context = memoryTurnContext(filename, engine, "Continue");
+    expect(groundedRequest({ engine, prompt: "Continue", candidates: [], context }).state.openingRequest).toBe(operator);
+    expect(context.find(turn => turn.text === machine)?.role).toBe("machine");
+  } finally {
+    memoryIndex().close(); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

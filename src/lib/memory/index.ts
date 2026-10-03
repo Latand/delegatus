@@ -89,6 +89,10 @@ export class MemoryIndex {
         CREATE TABLE IF NOT EXISTS memory_terminal_deliveries (
           id TEXT PRIMARY KEY, conversation TEXT, digest TEXT, origin TEXT, request TEXT, transcript TEXT, offset INTEGER
         );
+        CREATE TABLE IF NOT EXISTS memory_terminal_occurrences (
+          delivery TEXT PRIMARY KEY, conversation TEXT, transcript TEXT, occurrence TEXT, offset INTEGER,
+          UNIQUE(conversation, transcript, occurrence)
+        );
         CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest);
         CREATE TABLE IF NOT EXISTS memory_native_turns (
           conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
@@ -357,11 +361,42 @@ export class MemoryIndex {
     this.hookDatabase(db => db.query("DELETE FROM memory_terminal_deliveries WHERE id = ? AND request IS NULL").run(id));
   }
 
+  private terminalOccurrences(db: BunDatabase, filename: string, engine: "claude" | "codex", conversation?: string) {
+    const bound = db.query<{ delivery: string; occurrence: string }, [string]>("SELECT delivery, occurrence FROM memory_terminal_occurrences WHERE transcript = ?").all(filename);
+    const seen = new Set(bound.map(row => row.occurrence)), joined = new Set(bound.map(row => row.delivery));
+    const receipts = db.query<{ id: string; conversation: string; digest: string; request: string | null; offset: number | null }, [string, string | null]>(
+      "SELECT id, conversation, digest, request, offset FROM memory_terminal_deliveries WHERE transcript = ? OR (transcript IS NULL AND conversation = ?) ORDER BY rowid DESC LIMIT 256"
+    ).all(filename, conversation ?? null).reverse();
+    const deadline = performance.now() + 100;
+    for (const receipt of receipts) {
+      if (joined.has(receipt.id)) continue;
+      if (performance.now() >= deadline) throw Error("memory occurrence join budget");
+      const cursor = receipt.request ? nativeHookCursor(filename, engine, receipt.request.slice("native:".length)) : null;
+      const occurrence = cursor?.key && cursor.digest === receipt.digest && !seen.has(cursor.key) ? cursor
+        : nativeOccurrenceAfter(filename, engine, receipt.offset ?? 0, receipt.digest, seen);
+      if (!occurrence?.key) continue;
+      db.query("INSERT OR IGNORE INTO memory_terminal_occurrences VALUES (?, ?, ?, ?, ?)")
+        .run(receipt.id, receipt.conversation, filename, occurrence.key, occurrence.offset);
+      seen.add(occurrence.key);
+    }
+    return seen;
+  }
+
+  terminalContextOrigins(filename: string, engine: "claude" | "codex", conversation?: string) {
+    return this.hookDatabase(db => {
+      this.replayTerminalDeliveries(db);
+      this.terminalOccurrences(db, filename, engine, conversation);
+      return new Map(db.query<{ offset: number; origin: string }, [string]>(`SELECT o.offset, d.origin FROM memory_terminal_occurrences o
+        JOIN memory_terminal_deliveries d ON d.id = o.delivery WHERE o.transcript = ?`).all(filename).map(row => [row.offset, row.origin]));
+    });
+  }
+
   terminalOrigin(conversation: string, request: string, prompt: string, transcript?: string, engine?: "claude" | "codex"): string | null {
     return this.hookDatabase(db => {
       // Replay before the binding transaction: a receipt file is removed only
       // after its independent SQLite insert committed successfully.
       this.replayTerminalDeliveries(db);
+      if (transcript && engine) this.terminalOccurrences(db, transcript, engine, conversation);
       return db.transaction(() => {
         const existing = db.query<{ origin: string }, [string, string]>("SELECT origin FROM memory_terminal_deliveries WHERE conversation = ? AND request = ?").get(conversation, request);
         if (existing) return existing.origin;
@@ -370,7 +405,9 @@ export class MemoryIndex {
         for (const delivery of deliveries) {
           const journal = delivery.transcript ?? (delivery.id.startsWith("spawn:") ? transcript : undefined);
           if (journal && engine) {
-            const journaled = nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt));
+            const joined = db.query<{ key: string; offset: number }, [string]>("SELECT occurrence AS key, offset FROM memory_terminal_occurrences WHERE delivery = ?").get(delivery.id);
+            const seen = new Set(db.query<{ occurrence: string }, [string]>("SELECT occurrence FROM memory_terminal_occurrences WHERE transcript = ?").all(journal).map(row => row.occurrence));
+            const journaled = joined ?? nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt), seen);
             if (journaled && journaled.key !== cursor?.key) {
               // Retire only the matching delivery occurrence. Unrelated queued
               // records can precede actuation and carry no receipt evidence.

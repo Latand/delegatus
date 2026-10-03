@@ -4,7 +4,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
 /** The next journaled user occurrence after a hook's byte cursor. Read work
  * is bounded independently of transcript length; never join by words alone. */
-export function nativeOccurrenceAfter(filename: string, engine: "claude" | "codex", offset: number, digest?: string) {
+export function nativeOccurrenceAfter(filename: string, engine: "claude" | "codex", offset: number, digest?: string, excluded: ReadonlySet<string> = new Set()) {
   let fd: number | undefined;
   try {
     fd = fs.openSync(filename, "r");
@@ -12,15 +12,21 @@ export function nativeOccurrenceAfter(filename: string, engine: "claude" | "code
     if (offset < 0 || offset >= size) return null;
     const bytes = Buffer.alloc(Math.min(size - offset, 256000));
     const read = fs.readSync(fd, bytes, 0, bytes.length, offset);
-    const text = bytes.subarray(0, read).toString("utf8");
     // An incomplete record has no occurrence identity yet.
-    for (const line of text.slice(0, text.lastIndexOf("\n")).split("\n")) {
+    let position = 0;
+    for (;;) {
+      const end = bytes.subarray(0, read).indexOf(10, position);
+      if (end < 0) break;
+      const occurrenceOffset = offset + position;
+      const line = bytes.subarray(position, end).toString("utf8");
+      position = end + 1;
       try {
         const row = JSON.parse(line);
         const user = normalizeSessionLine(engine, row).find(({ record }) => record.kind === "message" && record.role === "user");
         if (user?.record.kind === "message") {
           const occurrenceDigest = messageTextDigest(user.record.text);
-          if (!digest || occurrenceDigest === digest) return { key: `native:${messageTextDigest(line)}`, digest: occurrenceDigest };
+          const key = `native:${messageTextDigest(line)}`;
+          if ((!digest || occurrenceDigest === digest) && !excluded.has(key)) return { key, digest: occurrenceDigest, offset: occurrenceOffset };
         }
       } catch { /* A concurrently appended partial record is retried later. */ }
     }

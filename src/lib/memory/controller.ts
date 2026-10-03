@@ -86,7 +86,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       origin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine) ?? "operator";
       const initialOperator = receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt;
       if (origin !== "operator" || (transcript ? !transcript.includes(input.session_id) : !initialOperator)) return "";
-      const priorTurns = transcript ? memoryTurnContext(transcript, engine, prompt) : [];
+      const priorTurns = transcript ? memoryTurnContext(transcript, engine, prompt, conversationId) : [];
       if (!priorTurns.length && !initialOperator) return "";
       const cursor = transcript ? nativeHookCursor(transcript, engine, nativeId) : { offset: 0, digest: undefined };
       if (cursor.digest && cursor.digest !== messageTextDigest(prompt)) return "";
@@ -98,7 +98,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     const key = readOpenRouterApiKey();
     if (!key) return "";
     if (performance.now() >= deadline || !index.claimHook(conversationId, requestId)) return "";
-    const context = transcript ? memoryTurnContext(transcript, engine as "claude" | "codex", prompt) : [];
+    const context = transcript ? memoryTurnContext(transcript, engine as "claude" | "codex", prompt, conversationId) : [];
     // Recall terms follow the research order within the bounded transcript view.
     const recallQuery = [prompt, ...context.slice().reverse().map(turn => turn.text)].join("\n");
     const latestReply = context.findLast(turn => turn.role === "assistant");

@@ -393,3 +393,17 @@ test("cold hook bookkeeping fails open on contention and retries initialization 
   try { expect(index.claimHook("cold-conversation", "cold-turn")).toBeTrue(); }
   finally { index.close(); }
 });
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} two queued identical machine receipts own separate native occurrences`, () => {
+  const transcript = fixture("queued.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
+  try {
+    index.recordTerminalDelivery("queued-first", "queued-conversation", prompt, "agent", transcript);
+    index.recordTerminalDelivery("queued-second", "queued-conversation", prompt, "agent", transcript);
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-first", prompt, transcript, engine)).toBe("agent");
+    const line = JSON.stringify(engine === "claude" ? { type: "user", uuid: "synthetic-first", message: { role: "user", content: prompt } }
+      : { type: "response_item", payload: { type: "message", turn_id: "synthetic-first", role: "user", content: [{ type: "input_text", text: prompt }] } });
+    fs.appendFileSync(transcript, line + "\n");
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-second", prompt, transcript, engine)).toBe("agent");
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBeNull();
+  } finally { index.close(); }
+});
