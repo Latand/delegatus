@@ -371,7 +371,7 @@ function structuredSnapshot() {
           text: continuousAnswer, phase: feedContinuityStep ? "awaiting-echo" : "streaming",
           startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null },
           ...(feedContinuityStep ? Array.from({ length: 9 }, (_, index) => ({
-            itemId: `continuity-tool-${index}`, text: "", phase: "awaiting-echo" as const, startedAt: iso(58 - index), completedAt: iso(58 - index),
+            itemId: `continuity-tool-${index}`, text: "", phase: "awaiting-echo" as const, startedAt: iso(20 - index), completedAt: iso(20 - index),
             tool: { engine: "claude" as const, name: "Bash", args: { command: "pwd" }, status: "ok" as const },
           })) : [])],
       } } : {}),
