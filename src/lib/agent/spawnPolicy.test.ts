@@ -1,3 +1,4 @@
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -140,7 +141,7 @@ test("Claude spawn policy seeds a fresh account from the shared user settings sn
   };
 
   expect(settings.model).toBe("shared-model");
-  expect(settings.env).toEqual({ SHARED: "kept", ...controllerCommitIdentityEnv() });
+  expect(settings.env).toEqual({ SHARED: "kept", ...agentPublicationIdentityEnv(process.env) });
   expect(settings.hooks.PreToolUse).toHaveLength(1);
 });
 

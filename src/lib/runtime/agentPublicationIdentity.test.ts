@@ -5,7 +5,55 @@ import path from "node:path";
 
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
+import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+
+test.each([
+  ["claude", false], ["codex", false], ["claude", true], ["codex", true],
+] as const)("%s refuses inherited-author amend in a launched environment (worktree: %s)", (engine, worktree) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-amend-"));
+  try {
+    let cwd = path.join(root, "repo");
+    fs.mkdirSync(cwd);
+    const source = { NODE_ENV: "test", PATH: process.env.PATH, HOME: root, TMPDIR: root,
+      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent") };
+    const run = (args: string[], env: NodeJS.ProcessEnv = source) => Bun.spawnSync(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+    const ok = (args: string[], env?: NodeJS.ProcessEnv) => {
+      const result = run(args, env);
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      return result.stdout.toString().trim();
+    };
+    ok(["init", "-q"]);
+    const inherited = { ...source, GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z", GIT_AUTHOR_NAME: "Fixture Author", GIT_AUTHOR_EMAIL: ["fixture", "example.invalid"].join("@"), ...Object.fromEntries(Object.entries(controllerCommitIdentityEnv()).filter(([key]) => key.startsWith("GIT_COMMITTER"))) };
+    ok(["commit", "--allow-empty", "-m", "inherited work"], inherited);
+    if (worktree) {
+      const linked = path.join(root, "linked");
+      ok(["worktree", "add", "-q", "-b", "agent", linked]);
+      cwd = linked;
+    }
+    const before = ok(["rev-parse", "HEAD"]);
+    const env = withAgentConfigSandbox({ ...source }, source);
+    if (engine === "claude") {
+      const home = path.join(root, "claude");
+      fs.mkdirSync(home);
+      const policy = applyClaudeSpawnPolicy(home, { publicationEnv: source });
+      Object.assign(env, JSON.parse(fs.readFileSync(policy.settingsPath, "utf8")).env);
+    } else Object.assign(env, agentCodexPublicationPolicy({ include_only: ["PATH", "HOME"] }, source).set);
+    for (const extra of [[], ["--reset-author"], ["--no-verify", "-m", "replacement"]]) {
+      const result = run(["commit", "--amend", "--allow-empty", "--no-edit", ...extra], env);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("add a new commit on top");
+      expect(ok(["rev-parse", "HEAD"])).toBe(before);
+    }
+    const trailer = "Co-Authored-By: Tool <" + ["noreply", "example.invalid"].join("@") + ">";
+    ok(["commit", "--allow-empty", "-m", "agent work\n\n" + trailer], env);
+    const machineBefore = ok(["rev-parse", "HEAD"]);
+    ok(["commit", "--amend", "--allow-empty", "-m", "amended agent work\n\n" + trailer], env);
+    expect(ok(["rev-parse", "HEAD"])).not.toBe(machineBefore);
+    expect(ok(["log", "-1", "--format=%B"])).toContain(trailer);
+    expect(ok(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(Object.values(controllerCommitIdentityEnv()).join("\n"));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("publication settings override inherited Git identities before environment filtering", () => {
   const email = ["no-reply", "build.example.invalid"].join("@");

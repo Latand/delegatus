@@ -254,6 +254,21 @@ export class MergeBatch {
     }
   }
 
+  private async assertMachineForgePrincipal(repository: string): Promise<void> {
+    // GitHub's rebase merge replaces the committer on the server. Local Git
+    // identity and hooks cannot protect that write. This endpoint authenticates
+    // an App installation; PATs and App user tokens cannot use it. /user cannot
+    // prove this because installation tokens cannot access that endpoint.
+    try {
+      const accessible = await this.gh([
+        "api", "installation/repositories?per_page=100", "--hostname", "github.com", "--paginate",
+        "--jq", `.repositories[] | select(.full_name == "${repository}") | .full_name`,
+      ]);
+      if (accessible.trim() === repository) return;
+    } catch { /* An unreadable principal must refuse the server-side write. */ }
+    throw new Error("Forge rebase merge requires a verified machine principal; personal or unverified credentials refused");
+  }
+
   private async view(number: number): Promise<PrView> {
     const view = JSON.parse(await this.gh(["pr", "view", String(number), "--json", PR_FIELDS])) as PrView;
     if (view.number !== number || !/^[a-f0-9]{40}$/.test(view.headRefOid)) throw new Error("Invalid PR response");
@@ -566,6 +581,7 @@ export class MergeBatch {
       if (moved) { await this.rebuild(state); state = await this.gate(); continue; }
       git(state.work, ["fetch", "origin", "main"]);
       if (git(state.work, ["rev-parse", "origin/main"]) !== state.base) { state = await this.refresh(state); continue; }
+      await this.assertMachineForgePrincipal(repository);
       if (state.published !== state.tip || !state.batch) await this.publish(state);
       const view = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", BATCH_FIELDS])) as {
         state: string; headRefOid: string; mergeStateStatus: string; statusCheckRollup: Check[];
@@ -581,8 +597,9 @@ export class MergeBatch {
         // Last read of originals immediately precedes the exact-head merge.
         for (const row of clean) if (!await this.unchanged(row)) { row.status = "head-moved"; moved = true; }
         if (moved) { await this.rebuild(state); state = await this.gate(); continue; }
+        await this.assertMachineForgePrincipal(repository);
         state.mergeIntent = state.tip; this.save(state);
-        try { await this.gh(["pr", "merge", String(state.batch!.number), "--rebase", "--match-head-commit", state.tip]); }
+        try { await this.gh(["pr", "merge", String(state.batch!.number), "--repo", `https://github.com/${repository}`, "--rebase", "--match-head-commit", state.tip]); }
         catch (error) {
           const outcome = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", BATCH_FIELDS])) as { state: string; headRefOid: string };
           if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) return this.recordLanding(state);

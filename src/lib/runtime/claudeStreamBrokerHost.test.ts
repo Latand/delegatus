@@ -1,3 +1,4 @@
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
@@ -15,7 +16,6 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
-import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import {
@@ -48,6 +48,7 @@ function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
   return {
+    ...agentPublicationIdentityEnv({}),
     GIT_AUTHOR_NAME: "Delegatus",
     GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
     GIT_COMMITTER_NAME: "Delegatus",
@@ -642,10 +643,7 @@ describe("ClaudeStreamBrokerHost", () => {
       });
       const settingsArg = captured.args![captured.args!.indexOf("--settings") + 1]!;
       const settings = JSON.parse(accountSettings ? fs.readFileSync(settingsArg, "utf8") : settingsArg);
-      expect(settings.env).toEqual({
-        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
-        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
-      });
+      expect(settings.env).toEqual(agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email }));
     } finally { await host.release(); fs.rmSync(configDir, { recursive: true, force: true }); }
   });
 
@@ -996,7 +994,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcpPath = adoptedCapture.args![adoptedCapture.args!.indexOf("--mcp-config") + 1]!;
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
-    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...controllerCommitIdentityEnv() });
+    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({}) });
     expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     expect(adoptedSettings).toEqual(freshSettings);
     expect(freshCapture.args).toContain("--strict-mcp-config");
