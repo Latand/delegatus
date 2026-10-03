@@ -614,7 +614,8 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
 function isReviewPending(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pending = value as Record<string, unknown>;
-  return typeof pending.stageId === "string" && pending.stageId.length > 0
+  return (pending.terminalRecheck === undefined || pending.terminalRecheck === true)
+    && typeof pending.stageId === "string" && pending.stageId.length > 0
     && Number.isSafeInteger(pending.attempt) && (pending.attempt as number) >= 0
     && typeof pending.fixStageId === "string" && pending.fixStageId.length > 0
     && Number.isSafeInteger(pending.fixAttempt) && (pending.fixAttempt as number) > 0
@@ -631,6 +632,7 @@ function isReviewGrant(value: unknown): boolean {
   return typeof grant.clientRequestId === "string" && grant.clientRequestId.length > 0 && grant.clientRequestId.length <= 200
     && typeof grant.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(grant.expectedRevision)
     && typeof grant.stageId === "string" && grant.stageId.length > 0
+    && (grant.terminalAttempt === undefined || Number.isSafeInteger(grant.terminalAttempt) && (grant.terminalAttempt as number) > 0)
     && Number.isSafeInteger(grant.rounds) && (grant.rounds as number) >= 1 && (grant.rounds as number) <= MAX_FAIL_EDGE_ROUNDS
     && isNullableString(grant.reviewedHead)
     && typeof grant.currentHead === "string"
