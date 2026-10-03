@@ -97,12 +97,13 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
       }
       // A legitimate build already captured its prior pointer before B was
       // published. Preserve that transaction rather than starting another.
-      let intent: { target?: string; rollbackPointer?: string | null; requestId?: string } | null = null;
+      let intent: { target?: string; rollbackPointer?: string | null; requestId?: string; state?: string } | null = null;
       try { intent = JSON.parse(read(join(dirname(record.requestFile), "apply.json"))); } catch { /* legacy no-intent */ }
-      if (intent?.target === next.sha && typeof intent.requestId === "string"
+      if (intent?.target === next.sha && ["ready", "switching"].includes(intent.state ?? "") && typeof intent.requestId === "string"
         && (intent.rollbackPointer === null || typeof intent.rollbackPointer === "string")) rollbackPointer = intent.rollbackPointer;
       const metadata = Buffer.from(JSON.stringify({ target: next.sha, root, requestFile: record.requestFile, releasePointer: record.releasePointer,
-        rollbackPointer, priorRevision: record.runtimeHost.revision, priorVersion: !record.checkout ? JSON.parse(read(join(root, "package.json"))).version : null,
+        rollbackPointer, priorRevision: record.runtimeHost.revision,
+        priorVersion: !record.checkout ? JSON.parse(read(join(typeof rollbackPointer === "string" ? JSON.parse(rollbackPointer).dir : root, "package.json"))).version : null,
         checkout: !!record.checkout })).toString("base64");
       const invocation = (windows ? "& " : "") + [process.execPath, terminalEntry, "--terminal", metadata, join(next.dir, "bin", "cli.mjs"), ...args, "--no-open"]
         .map(shellQuote).join(" ");

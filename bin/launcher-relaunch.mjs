@@ -45,7 +45,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
     if (head.status !== 0 || head.stdout.trim().slice(0, 7) !== plan.priorRevision) throw new Error("The prior release identity changed; no launcher was started.");
   } else if (read(join(prior, "package.json"))?.version !== plan.priorVersion) throw new Error("The prior package identity changed; no launcher was started.");
   let apply = read(applyFile);
-  const owned = apply?.target === plan.target && ["ready", "switching"].includes(apply.state)
+  const owned = apply?.target === plan.target && apply.releasePointer === plan.releasePointer && ["ready", "switching"].includes(apply.state)
     && apply.rollbackPointer === plan.rollbackPointer;
   if (apply && ["building", "ready", "switching"].includes(apply.state) && !owned) throw new Error("Another apply owns this installation.");
   const existing = read(trialFile);
@@ -180,8 +180,11 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     try {
       const request = JSON.parse(readFileSync(paths.request, "utf8"));
       const apply = JSON.parse(readFileSync(join(dirname(paths.request), "apply.json"), "utf8"));
+      const owner = JSON.parse(readFileSync(paths.record, "utf8"))?.launcher;
       if (request.role === "relaunch" && apply.state === "switching" && request.requestId === apply.requestId
         && request.target === apply.target && request.target === release.sha && request.rollbackPointer === apply.rollbackPointer
+        && apply.releasePointer === paths.releasePointer && request.requestedAt === apply.startedAt
+        && owner?.pid === apply.launcherPid && owner.startIdentity === apply.launcherIdentity
         && (request.rollbackPointer === null || typeof request.rollbackPointer === "string")) {
         const prior = request.rollbackPointer === null ? installRoot : JSON.parse(request.rollbackPointer).dir;
         if (typeof prior !== "string" || !existsSync(join(prior, "bin", "cli.mjs"))) throw new Error("Missing prior launcher");
