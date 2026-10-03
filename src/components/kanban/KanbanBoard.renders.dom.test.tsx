@@ -8,6 +8,7 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
 import type { KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 
 /* How many cards render when the catalog answers (#2218). Every runtime event
    that touches the catalog ends in one answer, and each answer used to render
@@ -168,6 +169,53 @@ function countCardMeasures() {
   };
   return { measured, restore: () => { proto.getBoundingClientRect = original; } };
 }
+
+test("presence waits through column motion and measures the settled cards", async () => {
+  const tasks = [task(0), task(1)];
+  const spy = countCardMeasures();
+  try {
+    const { host, render } = mount(tasks);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const board = host.querySelector<HTMLElement>(".kb")!;
+    spy.measured.length = 0;
+    board.dataset.columnLayout = "running";
+    const next = answer(tasks);
+    next[0] = { ...next[0]!, text: "A live update during column motion" };
+    render(next);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(spy.measured).toEqual([]);
+    board.removeAttribute("data-column-layout");
+    board.dispatchEvent(new Event(COLUMN_LAYOUT_END));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(new Set(spy.measured)).toEqual(new Set(["task:t0", "task:t1"]));
+  } finally { spy.restore(); }
+});
+
+test("column width changes keep the mounted seat view", async () => {
+  const original = dom.HTMLElement.prototype.getBoundingClientRect;
+  dom.HTMLElement.prototype.getBoundingClientRect = function () {
+    const rect = original.call(this);
+    rect.width = this.classList.contains("kb") ? 1440 : 0;
+    return rect;
+  };
+  try {
+    const tasks = [task(0), task(1)];
+    let seatRenders = 0;
+    const seat = () => { seatRenders += 1; return <section data-test-seat="" />; };
+    const { host, render } = mount(tasks);
+    render(tasks, { seat });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const mountedSeat = host.querySelector("[data-test-seat]");
+    const before = seatRenders;
+    flushSync(() => host.querySelector<HTMLElement>('[data-col-width="inbox"]')!.click());
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(host.querySelector('.column[data-status="inbox"]')?.getAttribute("data-wide")).toBe("1");
+    expect(seatRenders).toBe(before);
+    expect(host.querySelector("[data-test-seat]")).toBe(mountedSeat);
+    render(tasks, { seat: () => <section data-test-seat="replacement" /> });
+    expect(host.querySelector("[data-test-seat]")?.getAttribute("data-test-seat")).toBe("replacement");
+  } finally { dom.HTMLElement.prototype.getBoundingClientRect = original; }
+});
 
 test("a catalog answer that moves no card measures no card", () => {
   const tasks = Array.from({ length: 40 }, (_, index) => task(index));

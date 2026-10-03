@@ -6,7 +6,9 @@ export const COLUMN_LAYOUT_MS = 240;
 export const COLUMN_LAYOUT_END = "columnlayoutend";
 const EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
 const COLUMN = ".board > .column[data-wide]";
+const CONTENT_SURFACE = ".card, .col-head, .divider, .empty, .remote-unbound";
 const FADE_MS = 80;
+const MIN_REVEAL_MS = 80;
 interface Shot {
   node: HTMLElement; column: HTMLElement; rect: DOMRect;
   width: string; height: string; widthAsNumber: number; visible: boolean; opacity: number;
@@ -29,30 +31,82 @@ function ease(t: number): number {
 }
 // Reuse the same curve across content effects instead of solving the cubic
 // separately for every glyph layer during activation.
-const CONTENT_CURVE = Array.from({ length: 17 }, (_, i) => {
-  const offset = (i / 16) ** 2;
+const CONTENT_CURVE = Array.from({ length: 13 }, (_, i) => {
+  const offset = (i / 12) ** 2;
   return { offset, q: ease(offset), reveal: ease(Math.min(1, offset * 2)), fade: 1 - ease(Math.min(1, offset * COLUMN_LAYOUT_MS / FADE_MS)) };
 });
-export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): void; dispose(): void } {
+const widthChanges = new WeakMap<HTMLElement, (update: () => void, allowed?: () => boolean) => void>();
+/** Align source capture and the width commit with the start of a frame. */
+export function changeColumnWidth(node: HTMLElement, update: () => void): void {
+  const root = node.closest<HTMLElement>(".kb");
+  const change = root && widthChanges.get(root);
+  if (change) change(update);
+  else update();
+}
+export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): void; change(update: () => void, allowed?: () => boolean): void; dispose(): void } {
   let pending: Snapshot | null = null;
   let expiry: ReturnType<typeof setTimeout> | null = null;
   let finishTimer: ReturnType<typeof setTimeout> | null = null;
   let wrapTimer: ReturnType<typeof setTimeout> | null = null;
   let paintFrame = 0;
+  const changeFrames = new Set<number>();
   let started = 0;
+  let wrapping = false;
+  let motionDeadline = 0;
   let active: Snapshot | null = null;
   let promoting: Snapshot | null = null;
+  let resumePromotion: (() => void) | null = null;
   let released = false;
   const projected = new Map<HTMLElement, (q: number) => DOMRect>();
   const wrapped = new Set<HTMLElement>();
   const invalidated = new Set<HTMLElement>();
   const animations = new Map<HTMLElement, Animation>();
-  const paintAnimations = new Set<Animation>();
   let activeColumns: HTMLElement[] = [];
   const marked = new Set<HTMLElement>();
   const inlinePose = new Map<HTMLElement, { transform: string; opacity: string; origin: string }>();
   const frozen = new Map<HTMLElement, { width: string; height: string; margin: string }>();
   const contentBase = new Map<HTMLElement, string>();
+  // A neutral slot wrapper preserves React's light-DOM parents and gives
+  // each surface one text layer. Its layout exists before source capture.
+  const groups = new WeakMap<HTMLElement, HTMLElement>();
+  const textGroups = new WeakSet<HTMLElement>();
+  const groupHosts = new WeakMap<HTMLElement, HTMLElement>();
+  const groupText = typeof window.CSSAnimation === "function" && typeof root.attachShadow === "function";
+  const groupFor = (node: HTMLElement) => {
+    if (!groupText || !node.matches(CONTENT_SURFACE)) return null;
+    let group = groups.get(node) ?? node.shadowRoot?.querySelector<HTMLElement>("[data-column-text-group]");
+    if (!group) {
+      if (node.shadowRoot) return null;
+      const shadow = node.attachShadow({ mode: "open" });
+      group = document.createElement("div"); group.dataset.columnTextGroup = "";
+      group.style.cssText = `display:inherit;flex-direction:inherit;flex-wrap:inherit;align-items:inherit;align-content:inherit;justify-content:inherit;gap:inherit;min-width:0;min-height:0;flex:${node.matches(".divider") ? "0 1 auto" : "1 1 auto"};transform-origin:top left`;
+      group.append(document.createElement("slot"));
+      const overlays = document.createElement("slot"); overlays.name = "column-layout-overlay";
+      shadow.append(overlays, group);
+    }
+    for (const child of node.children) if (child.matches(".label, .saving")) child.setAttribute("slot", "column-layout-overlay");
+    groups.set(node, group); textGroups.add(group); groupHosts.set(group, node);
+    return group;
+  };
+  const groupSurfaces = () => {
+    for (const column of root.querySelectorAll<HTMLElement>(COLUMN)) column.querySelectorAll<HTMLElement>(".col-head, .col-body > .card, .col-body > .divider, .col-body > .empty, .col-body > .remote-unbound").forEach(groupFor);
+  };
+  groupSurfaces();
+  const mark = (node: HTMLElement, role: string) => {
+    if (node.dataset.layoutAnimating !== role) node.dataset.layoutAnimating = role;
+    if (textGroups.has(node)) {
+      node.style.willChange = "transform, opacity";
+      groupHosts.get(node)?.setAttribute("data-column-text-held", "");
+    }
+    marked.add(node);
+  };
+  const unmark = (node: HTMLElement) => {
+    node.removeAttribute("data-layout-animating");
+    if (textGroups.has(node)) {
+      node.style.willChange = "";
+      groupHosts.get(node)?.removeAttribute("data-column-text-held");
+    }
+  };
   let frozenGrid: { node: HTMLElement; template: string } | null = null;
   const thawGrid = () => {
     if (frozenGrid) frozenGrid.node.style.gridTemplateColumns = frozenGrid.template;
@@ -89,10 +143,11 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     if (finishTimer) clearTimeout(finishTimer);
     if (wrapTimer) clearTimeout(wrapTimer);
     finishTimer = wrapTimer = null;
+    wrapping = false; motionDeadline = 0;
   };
   const clearAnimations = (keepPromotion = false) => {
     animations.forEach((animation) => animation.cancel()); animations.clear();
-    if (!keepPromotion) { marked.forEach((node) => node.removeAttribute("data-layout-animating")); marked.clear(); }
+    if (!keepPromotion) { marked.forEach(unmark); marked.clear(); }
   };
   const restoreInline = () => {
     inlinePose.forEach((style, node) => { node.style.transform = style.transform; node.style.opacity = style.opacity; node.style.transformOrigin = style.origin; }); inlinePose.clear();
@@ -100,33 +155,34 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   const finish = () => {
     clearPending(); stopClock(); clearAnimations(); plans.length = 0;
     restoreInline();
-    active = promoting = null; activeColumns = []; released = false; projected.clear(); wrapped.clear(); invalidated.clear();
-    if (!motion?.matches) paintAnimations.forEach((animation) => animation.play());
-    paintAnimations.clear();
+    active = promoting = null; resumePromotion = null; activeColumns = []; released = false; projected.clear(); wrapped.clear(); invalidated.clear();
     thawGrid(); [...frozen.keys()].forEach(thaw); contentBase.clear(); scrollPositions.clear();
     const wasActive = root.hasAttribute("data-column-layout");
     root.removeAttribute("data-column-layout");
+    root.removeAttribute("data-column-layout-active");
     if (wasActive) root.dispatchEvent(new window.Event(COLUMN_LAYOUT_END));
   };
   const settle = () => {
+    // A slow frame or retarget can leave later columns queued at 240ms.
+    // Keep their source wrapping until each has its own completed reveal.
+    if (finishTimer) clearTimeout(finishTimer);
+    finishTimer = null;
+    if (wrapping) return;
+    const remaining = motionDeadline - performance.now();
+    if (remaining > 0) { finishTimer = setTimeout(settle, remaining); return; }
     // Every effect has reached its final pose. Release the temporary layers
     // in bounded batches too; destroying all text layers stalled cleanup.
     stopClock();
     root.dataset.columnLayout = "settling";
     const queue = [...marked];
-    const resumes = [...paintAnimations];
     const release = () => {
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
-        for (const node of queue.splice(0, 8)) {
+        for (const node of queue.splice(0, 4)) {
           animations.get(node)?.cancel(); animations.delete(node);
-          node.removeAttribute("data-layout-animating"); marked.delete(node);
+          unmark(node); marked.delete(node);
         }
-        for (const animation of resumes.splice(0, 8)) {
-          if (!motion?.matches) animation.play();
-          paintAnimations.delete(animation);
-        }
-        if (queue.length || resumes.length) release();
+        if (queue.length) release();
         else finish();
       });
     };
@@ -140,7 +196,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     // Setting promotion and creating an effect alternately makes animate()
     // resolve the preceding style write on every node. Promote in one batch.
     for (const { node } of plans) animations.get(node)?.cancel();
-    for (const { node, role } of plans) { if (node.dataset.layoutAnimating !== role) node.dataset.layoutAnimating = role; marked.add(node); }
+    for (const { node, role } of plans) mark(node, role);
     for (const { node, frames, duration, role, paused } of plans) {
       const animation = node.animate(typeof frames === "function" ? frames() : frames, { duration, fill: "both", easing: role === "content" ? "linear" : EASING });
       if (paused) animation.pause();
@@ -156,7 +212,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     return { dx, dy, sx: rect.width / next.width / px, sy: rect.height / next.height / py, px, py };
   };
   const transform = (dx: number, dy: number, sx: number, sy: number) => `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
-  const contentFrames = (node: HTMLElement, startOpacity: number, sx: number, sy: number, ex: number, ey: number, px: number, py: number, reveal: boolean, parentEnd = 1, sourceX = 1, sourceY = 1, count = 17): Keyframe[] => {
+  const contentFrames = (node: HTMLElement, startOpacity: number, sx: number, sy: number, ex: number, ey: number, px: number, py: number, reveal: boolean, parentEnd = 1, sourceX = 1, sourceY = 1, count = 13): Keyframe[] => {
     const base = contentBase.get(node) ?? "";
     return (count === 1 ? CONTENT_CURVE.slice(0, 1) : CONTENT_CURVE).map(({ offset, q, reveal: shown, fade }) => {
       const x = (px + (parentEnd - px) * q) * (sx + (ex - sx) * q);
@@ -191,9 +247,11 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   };
   const wrapColumns = (snapshot: Snapshot, columns: Map<HTMLElement, DOMRect>) => {
     const queue = [...columns.keys()];
+    wrapping = true;
     const nextColumn = () => {
       const column = queue.shift();
-      if (!column || !active) return;
+      if (!active) return;
+      if (!column) { wrapping = false; settle(); return; }
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
         if (!column.isConnected) { nextColumn(); return; }
@@ -204,19 +262,23 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         // The source is the cached FLIP geometry sampled at compositor time.
         // Reading live transformed overflow here forced a second board layout.
         const sources = shots.map((shot) => ({ ...shot, rect: sourceRect(shot.node) }));
-        const scroll = [...scrollContainers()].map((node) => ({ node, top: node.scrollTop, left: node.scrollLeft }));
         wrapped.add(column);
         animations.get(column)?.cancel();
         thaw(column);
         for (const shot of shots) {
           animations.get(shot.node)?.cancel();
-          for (const { node } of shot.contents) animations.get(node)?.cancel();
           thaw(shot.node);
         }
-        // This preserves the viewport just observed, including navigation.
-        for (const { node, top, left } of scroll) { node.scrollTop = top; node.scrollLeft = left; }
-        recordScroll();
+        // Anchoring is disabled; the browser retains the current viewport.
+        // Read scroll only after the required destination layout. A navigation
+        // earlier in this RAF must reveal its live pose instead of restoring
+        // or inverting from coordinates captured before that navigation.
         const finalColumn = column.getBoundingClientRect();
+        for (const node of scrollContainers()) {
+          const before = scrollPositions.get(node);
+          if (before && (before.top !== node.scrollTop || before.left !== node.scrollLeft)) { finish(); return; }
+        }
+        recordScroll();
         const viewport = column.querySelector(".col-body")?.getBoundingClientRect();
         const destinations = sources.map((shot) => {
           const visible = shot.node.getBoundingClientRect();
@@ -229,7 +291,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
           content.opacity = Number(style.opacity || "1");
           contentBase.set(content.node, style.transform === "none" ? "" : style.transform);
         }
-        const duration = Math.max(1, COLUMN_LAYOUT_MS - (performance.now() - started));
+        const duration = Math.max(MIN_REVEAL_MS, COLUMN_LAYOUT_MS - (performance.now() - started));
         const parent = { rect: columnRect, next: finalColumn };
         const pose = inverse(columnRect, finalColumn);
         play(column, [{ transform: transform(pose.dx, pose.dy, pose.sx, pose.sy) }, { transform: "none" }], duration, "frame");
@@ -238,8 +300,11 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         // in the same frame as wrapping made the frame miss its CPU budget.
         const batch = plans.splice(0);
         for (const { node, first, role } of batch) {
-          if (node.dataset.layoutAnimating !== role) node.dataset.layoutAnimating = role;
-          marked.add(node);
+          // The old fade already holds this promoted text invisible. Retain
+          // that effect through reflow; replacing it with an inline inverse
+          // here rebuilt and painted every glyph layer in the wrapping frame.
+          if (role === "content" && animations.has(node)) continue;
+          mark(node, role);
           if (!inlinePose.has(node)) inlinePose.set(node, { transform: node.style.transform, opacity: node.style.opacity, origin: node.style.transformOrigin });
           node.style.transformOrigin = "top left";
           node.style.transform = String(first.transform);
@@ -247,9 +312,10 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         }
         paintFrame = window.requestAnimationFrame(() => {
           paintFrame = 0;
-          const remaining = Math.max(1, COLUMN_LAYOUT_MS - (performance.now() - started));
+          const remaining = Math.max(MIN_REVEAL_MS, COLUMN_LAYOUT_MS - (performance.now() - started));
           batch.forEach((plan) => { plan.duration = remaining; });
           plans.push(...batch); flush(); restoreInline();
+          motionDeadline = Math.max(motionDeadline, performance.now() + remaining);
           nextColumn();
         });
       });
@@ -264,6 +330,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       snapshot = { ...snapshot, shots: [...snapshot.shots.filter((shot) => !invalidated.has(shot.column)), ...fresh.filter((shot) => invalidated.has(shot.column))] };
     }
     promoting = null;
+    resumePromotion = null;
     const retargeting = active !== null;
     clearAnimations(true); restoreInline();
     root.dataset.columnLayout = "inverted";
@@ -324,7 +391,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     }
     const initial = plans.splice(0);
     for (const { node, first, role } of initial) {
-      if (role !== "content") { node.dataset.layoutAnimating = role; marked.add(node); }
+      if (role !== "content") mark(node, role);
       // Before the first release, the frozen column already preserves the
       // natural text pose. Identity transforms would create every text layer
       // together instead of letting the promotion batches prepare them.
@@ -338,12 +405,13 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     // Text layers already own their raster before promoting the column.
     // Construct effects from cached source styles, then release on the next frame.
     const activate = () => {
-      plans.push(...initial.splice(0, 8)); flush();
+      plans.push(...initial.splice(0, 4)); flush();
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
         if (initial.length) { activate(); return; }
         restoreInline();
         started = performance.now(); released = true; root.dataset.columnLayout = "running";
+        motionDeadline = started + COLUMN_LAYOUT_MS;
         animations.forEach((animation) => animation.play());
         wrapTimer = setTimeout(() => wrapColumns(snapshot, resizing), FADE_MS);
         finishTimer = setTimeout(settle, COLUMN_LAYOUT_MS);
@@ -355,21 +423,32 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     const shots: Shot[] = [];
     for (const column of root.querySelectorAll<HTMLElement>(COLUMN)) {
       const viewport = column.querySelector(".col-body")?.getBoundingClientRect();
-      for (const node of [column, ...column.querySelectorAll<HTMLElement>(".col-head, .col-body > .card, .col-body > .divider, .col-body > .empty")]) {
+      for (const node of [column, ...column.querySelectorAll<HTMLElement>(".col-head, .col-body > .card, .col-body > .divider, .col-body > .empty, .col-body > .remote-unbound")]) {
         const rect = node.getBoundingClientRect();
         if (!rect.width || !rect.height) continue;
         const visible = node === column || node.matches(".col-head") || !(rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth || (viewport && (rect.bottom < viewport.top || rect.top > viewport.bottom)));
-        const style = window.getComputedStyle(node);
-        const contents = node.matches(".card, .col-head, .divider, .empty") ? [...node.children].filter((node): node is HTMLElement => node instanceof window.HTMLElement && !node.matches(".label, .saving, .spacer")) : [];
+        const style = visible ? window.getComputedStyle(node) : null;
+        const group = groups.get(node);
+        const contents = group ? [group] : node.matches(CONTENT_SURFACE) ? [...node.children].filter((node): node is HTMLElement => node instanceof window.HTMLElement && !node.matches(".label, .saving, .spacer")) : [];
         const scale = (transform: string) => {
           const values = transform.match(/^matrix(3d)?\((.+)\)$/);
           if (!values) return { x: 1, y: 1 };
           const matrix = values[2]!.split(",").map(Number);
           return { x: matrix[0] || 1, y: matrix[values[1] ? 5 : 3] || 1 };
         };
-        const width = parseFloat(style.width) || rect.width, height = parseFloat(style.height) || rect.height;
+        // Idle surfaces have no FLIP scale: their border-box rect is already
+        // the used size. Resolving width/height again wakes skipped card
+        // contents (content-visibility:auto) during the activation frame.
+        const width = active && style ? parseFloat(style.width) || rect.width : rect.width;
+        const height = active && style ? parseFloat(style.height) || rect.height : rect.height;
         const children = contents.map((node) => {
-          if (!active && !visible) return { node, opacity: 1, scaleX: 1, scaleY: 1 };
+          // The neutral wrapper is ours: idle opacity/transform are known.
+          // Resolving its transform can wake skipped slotted card contents.
+          if (textGroups.has(node) && (!active || !contentBase.has(node))) {
+            contentBase.set(node, "");
+            return { node, opacity: 1, scaleX: 1, scaleY: 1 };
+          }
+          if (!visible) return { node, opacity: 1, scaleX: 1, scaleY: 1 };
           const current = window.getComputedStyle(node);
           const known = contentBase.has(node);
           if (!known) contentBase.set(node, current.transform === "none" ? "" : current.transform);
@@ -377,7 +456,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
           const own = scale(current.transform), base = scale(contentBase.get(node)!);
           return { node, opacity: Number(current.opacity || "1"), scaleX: active ? rect.width / width * own.x / base.x : 1, scaleY: active ? rect.height / height * own.y / base.y : 1 };
         });
-        shots.push({ node, column, rect, visible, opacity: Number(style.opacity || "1"), widthAsNumber: width, width: style.width || `${rect.width}px`, height: style.height || `${rect.height}px`, contents: children });
+        shots.push({ node, column, rect, visible, opacity: Number(style?.opacity || "1"), widthAsNumber: width, width: `${width}px`, height: `${height}px`, contents: children });
       }
     }
     return shots;
@@ -390,14 +469,6 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     recordScroll();
     const board = root.querySelector<HTMLElement>(".board");
     const grid = board && !board.classList.contains("scroll") && !board.classList.contains("tabs") ? window.getComputedStyle(board).gridTemplateColumns : null;
-    // Live SVG glyphs also invalidate overflow/layout outside the viewport.
-    // Hold their progress for the entire activation-through-cleanup window.
-    for (const animation of root.getAnimations?.({ subtree: true }) ?? []) {
-      const name = (animation as CSSAnimation).animationName;
-      if ((name?.startsWith("mg-") || ["kb-edge-flow", "kb-node-pulse", "pb-live"].includes(name)) && animation.playState === "running") {
-        paintAnimations.add(animation); animation.pause();
-      }
-    }
     // Hold the grid through React's commit, so its mutation observer need not
     // force final layout in the same task. The next frame reads all targets.
     if (board && grid && !frozenGrid) {
@@ -409,13 +480,18 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       if (!frozen.has(shot.node)) frozen.set(shot.node, { width: shot.node.style.width, height: shot.node.style.height, margin: shot.node.style.marginRight });
       shot.node.style.width = shot.width;
     }
-    pending = { key: keyOf(root), shots }; root.dataset.columnLayout = "pending";
+    pending = { key: keyOf(root), shots };
+    // Keep the styling marker stable while diagnostic phases change. A CSS
+    // selector on that attribute invalidated descendant styles at every phase.
+    root.setAttribute("data-column-layout-active", "");
+    root.dataset.columnLayout = "pending";
     expiry = setTimeout(finish, 1000);
     paintFrame = window.requestAnimationFrame(() => {
       paintFrame = 0;
       if (!pending || pending.key !== keyOf(root)) return;
       if (!released) {
         if (active) { const snapshot = pending; clearPending(); start(snapshot); }
+        else if (promoting && resumePromotion) { clearPending(); resumePromotion(); }
         else {
           // Give React its commit frame, then release an idle no-op control.
           paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; if (pending?.key === keyOf(root) && !active) finish(); });
@@ -425,12 +501,23 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       root.dataset.columnLayout = "running";
       animations.forEach((animation) => animation.play());
       const remaining = Math.max(1, COLUMN_LAYOUT_MS - Number(animations.values().next().value?.currentTime ?? 0));
+      motionDeadline = performance.now() + remaining;
       if (active) wrapTimer = setTimeout(() => wrapColumns(active!, new Map(activeColumns.map((node) => [node, node.getBoundingClientRect()]))), Math.min(FADE_MS, remaining));
       finishTimer = setTimeout(settle, remaining);
     });
   };
   const layoutStyle = (style: string | null) => (style ?? "").split(";").map((part) => part.trim()).filter((part) => part && !/^(transform(?:-origin)?|opacity)\s*:/.test(part)).sort().join(";");
+  const change = (update: () => void, allowed = () => true) => {
+    const apply = () => { if (allowed()) { prepare(); update(); } };
+    // Retargets capture their current compositor pose synchronously, before
+    // another frame can advance it. Only a fresh activation needs alignment.
+    if (active || promoting || motion?.matches || typeof root.animate !== "function") { apply(); return; }
+    const frame = window.requestAnimationFrame(() => { changeFrames.delete(frame); apply(); });
+    changeFrames.add(frame);
+  };
+  widthChanges.set(root, change);
   const observer = new window.MutationObserver((records) => {
+    if (records.some((record) => record.type === "childList")) groupSurfaces();
     // Live content can change between capture and wrapping. Such a column
     // must use its current DOM pose rather than the original projection.
     if (active || promoting) for (const record of records) if (record.attributeName !== "data-wide") {
@@ -446,8 +533,8 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     // paint. Retarget from the current boxes so their text never inherits
     // an untreated wrapper scale or reflows in plain sight.
     const newSurfaces = records.some((record) => record.type === "childList" && record.target instanceof window.Element && (
-      record.target.matches(".col-body") && [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof window.Element && node.matches(".card, .divider, .empty")) ||
-      record.target.matches(".card, .col-head, .divider, .empty") && [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof window.HTMLElement)
+      record.target.matches(".col-body") && [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof window.Element && node.matches(CONTENT_SURFACE)) ||
+      record.target.matches(CONTENT_SURFACE) && [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof window.HTMLElement)
     ));
     if (active && newSurfaces && !pending) {
       prepare();
@@ -466,25 +553,27 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     // Promote text before transforming a wrapper: promoting the wrapper first
     // rasterizes all its live glyphs into that layer again.
     const changed = new Set(snapshot.key.split("|").filter((entry) => !keyOf(root).split("|").includes(entry)).map((entry) => entry.split(":")[0]));
-    const contents = snapshot.shots.filter((shot) => shot.visible && changed.has(shot.column.dataset.status!)).flatMap((shot) => shot.contents.map(({ node }) => node));
+    const grid = !root.querySelector(".board.scroll");
+    const contents = snapshot.shots.filter((shot) => shot.visible && (grid || changed.has(shot.column.dataset.status!))).flatMap((shot) => shot.contents.map(({ node }) => node));
     let firstPromotion = true;
     const promote = () => {
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
         // React has just changed the shelf paint; its first raster shares
         // this frame with promotion. Leave room for that one-time work.
-        for (const node of contents.splice(0, firstPromotion ? 4 : 8)) { node.dataset.layoutAnimating = "content"; marked.add(node); }
+        for (const node of contents.splice(0, firstPromotion ? 0 : 8)) mark(node, "content");
         firstPromotion = false;
         if (contents.length) promote();
         else paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
       });
     };
+    resumePromotion = promote;
     promote();
   });
   observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ["data-wide", "class", "style"] });
   const onClick = (event: Event) => {
     const target = event.target as Element | null;
-    if (target?.closest?.("[data-col-width], [data-open-agent-jump]")) prepare();
+    if (target?.closest?.("[data-open-agent-jump]")) prepare();
   };
   const onWork = (event: Event) => {
     const target = event.target as Element | null;
@@ -518,7 +607,10 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   motion?.addEventListener("change", interrupted);
   return {
     prepare,
+    change,
     dispose() {
+      changeFrames.forEach((frame) => window.cancelAnimationFrame(frame)); changeFrames.clear();
+      widthChanges.delete(root);
       clearPending(); finish(); observer.disconnect();
       root.removeEventListener("click", onClick, true);
       root.removeEventListener("pointerdown", onWork, true);

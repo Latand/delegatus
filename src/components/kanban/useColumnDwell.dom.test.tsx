@@ -114,6 +114,31 @@ test("movement throughout the column keeps counting from its first entry", () =>
   expect(widened).toEqual(["blocked"]);
 });
 
+test("leaving after the dwell deadline cancels a width commit queued for the next frame", () => {
+  const originalRAF = dom.requestAnimationFrame;
+  const originalCancel = dom.cancelAnimationFrame;
+  const frames = new Map<ReturnType<typeof dom.requestAnimationFrame>, FrameRequestCallback>();
+  dom.requestAnimationFrame = (callback) => { const id = setImmediate(() => {}); frames.set(id, callback); return id; };
+  dom.cancelAnimationFrame = (id) => { frames.delete(id); clearImmediate(id); };
+  try {
+    const { host, widened } = mount();
+    const root = host.querySelector<HTMLElement>(".kb")!;
+    root.animate = (() => { throw new Error("a canceled dwell must not animate"); }) as typeof root.animate;
+    move(inside(host, "done"), 500, 300);
+    wait(DWELL_MS);
+    expect(widened).toEqual([]);
+    expect(frames.size).toBe(1);
+    pointer(root, "pointerleave", 800, 300);
+    const callbacks = [...frames.values()]; frames.clear();
+    callbacks.forEach((callback) => callback(0));
+    expect(widened).toEqual([]);
+    expect(root.hasAttribute("data-column-layout")).toBe(false);
+  } finally {
+    frames.forEach((_, id) => clearImmediate(id));
+    dom.requestAnimationFrame = originalRAF; dom.cancelAnimationFrame = originalCancel;
+  }
+});
+
 test("a brief gap pauses presence without resetting it or counting time outside", () => {
   const { host, widened } = mount();
   move(inside(host, "blocked"), 500, 300);

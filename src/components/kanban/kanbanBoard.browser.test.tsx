@@ -11160,6 +11160,64 @@ describe("the board scrolls on the compositor at a device pixel ratio of 1", () 
 });
 
 describe("column dwell smooth", () => {
+  const inspectColumnAnimations = async (page: Page) => {
+    const install = () => {
+      const nativeAnimations = document.getAnimations.bind(document);
+      // Document's getter omits the slot wrappers' own shadow-tree effects.
+      // Include the real effects so scrubbing and cleanup inspect every layer.
+      document.getAnimations = () => [...new Set([
+        ...nativeAnimations(),
+        ...[...document.querySelectorAll<HTMLElement>(".card, .col-head, .divider, .empty, .remote-unbound")].flatMap((node) => node.shadowRoot?.querySelector<HTMLElement>("[data-column-text-group]")?.getAnimations() ?? []),
+      ])];
+    };
+    await page.context().addInitScript(install);
+    await page.evaluate(install);
+  };
+  browserTest("unbound remote agent glyphs retain their natural size during a column resize", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/remote");
+    fs.mkdirSync(out, { recursive: true });
+    const now = Date.now();
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [{ k: `a:${"2".repeat(16)}`, p: `repo-${"a".repeat(32)}`, t: "Remote worker", e: "codex", m: "gpt-6-sol", st: "working", at: now, peer: "Machine B", stale: false, asOf: now }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await page.locator(".remote-unbound summary").waitFor();
+        if (await page.locator("[data-rail-hide]").count()) await page.locator("[data-rail-hide]").click();
+        await page.locator(".remote-unbound summary").scrollIntoViewIfNeeded();
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(400);
+        const sample = await page.evaluate(async () => {
+          const root = document.querySelector<HTMLElement>(".kb")!;
+          const column = document.querySelector<HTMLElement>('.column[data-status="inbox"]')!;
+          const summary = column.querySelector<HTMLElement>(".remote-unbound summary")!;
+          const glyph = () => {
+            const text = [...summary.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())!;
+            const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 2);
+            const box = range.getBoundingClientRect(); return { width: box.width, height: box.height };
+          };
+          const before = glyph();
+          column.querySelector<HTMLButtonElement>("[data-col-width]")!.click();
+          await Promise.resolve();
+          while (root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          for (const animation of document.getAnimations()) {
+            const target = (animation.effect as KeyframeEffect).target;
+            if (target instanceof HTMLElement && target.hasAttribute("data-layout-animating")) { animation.pause(); animation.currentTime = 50; }
+          }
+          return { before, during: glyph(), promoted: !!summary.closest("[data-layout-animating=content], [data-column-text-held]") };
+        });
+        expect(sample.promoted).toBe(true);
+        expect(Math.abs(sample.during.width / sample.before.width - 1)).toBeLessThanOrEqual(0.01);
+        expect(Math.abs(sample.during.height - sample.before.height)).toBeLessThanOrEqual(1);
+        expect(pageErrors).toEqual([]);
+        fs.writeFileSync("evidence/column-dwell-smooth/remote.json", JSON.stringify({ viewport: VIEWPORT, sample }, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+
   browserTest("scroll-mode width controls keep source wrapping until the fade", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth/scroll-width");
     fs.mkdirSync(out, { recursive: true });
@@ -11168,6 +11226,7 @@ describe("column dwell smooth", () => {
     const readings: Record<string, unknown>[] = [];
     try {
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 1000, height: 900 }, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
         await page.reload();
@@ -11214,6 +11273,7 @@ describe("column dwell smooth", () => {
     try {
       // At 1440, both agent columns stay at their minimum width on every jump.
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 3840, height: 2160 }, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => {
           localStorage.setItem("llv:kanban-readers:v1:atlas", JSON.stringify(["search-ver-2", "rounds-review", "pending-worker", "upload-plan", "export-impl"].map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))));
@@ -11274,6 +11334,7 @@ describe("column dwell smooth", () => {
     const browser = await chromium.launch(LAUNCH);
     try {
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => {
           localStorage.setItem("llv:kanban-readers:v1:atlas", JSON.stringify([{ key: "conversation_search-ver-2", path: "/repo/search-ver-2.jsonl", folded: false }]));
@@ -11331,6 +11392,7 @@ describe("column dwell smooth", () => {
     const readings: Record<string, unknown>[] = [];
     try {
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
         const reset = async () => {
@@ -11456,6 +11518,7 @@ describe("column dwell smooth", () => {
     const readings: Record<string, unknown>[] = [];
     try {
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
         for (const phase of ["staging", 10, 20, 40, "after-wrap"] as const) {
@@ -11550,6 +11613,7 @@ describe("column dwell smooth", () => {
     const browser = await chromium.launch(LAUNCH);
     try {
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
         await page.reload();
@@ -11594,7 +11658,7 @@ describe("column dwell smooth", () => {
               animation.pause(); animation.currentTime = Number(animation.effect!.getTiming().duration) * 0.6;
             }
           }
-          const readings = clipped.filter(({ node }) => node.getBoundingClientRect().top < viewport.bottom).map(({ node, height }) => ({ before: height, after: glyph(node), contents: node.querySelectorAll('[data-layout-animating="content"]').length }));
+          const readings = clipped.filter(({ node }) => node.getBoundingClientRect().top < viewport.bottom).map(({ node, height }) => ({ before: height, after: glyph(node), contents: node.querySelectorAll('[data-layout-animating="content"]').length + (node.shadowRoot?.querySelectorAll('[data-layout-animating="content"]').length ?? 0) }));
           return { readings, clipped: clipped.length, titleFound: !!title, viewport: { top: viewport.top, bottom: viewport.bottom }, boxes: cards.map((node) => ({ top: node.getBoundingClientRect().top, height: node.offsetHeight })), width: column.offsetWidth };
         });
         expect(sample.readings.length, JSON.stringify(sample)).toBeGreaterThan(0);
@@ -11621,6 +11685,7 @@ describe("column dwell smooth", () => {
     try {
       for (const motion of ["no-preference", "reduce"] as const) for (const locale of ["en", "uk"] as const) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", locale, motion);
+        await inspectColumnAnimations(page);
         const frames: { data: string; time: number }[] = [];
         const cdp = await context.newCDPSession(page);
         const record = motion === "no-preference" && locale === "en";
@@ -11703,7 +11768,8 @@ describe("column dwell smooth", () => {
             const video = (window as unknown as { dwellVideo: { samples: { at: number; gap: number; wide: string; animated: boolean; active: boolean; scroll: number }[]; marks: { name: string; at: number }[]; stop(): void } }).dwellVideo;
             video.stop();
             const windows = video.samples.filter((sample, i) => sample.active || video.samples[i - 1]?.active || video.samples[i - 2]?.active);
-            return { samples: video.samples, marks: video.marks, maxAnimationFrameMs: Math.max(0, ...windows.map((sample) => sample.gap)), animationFrames: windows.length, scrollValues: [...new Set(video.samples.map((sample) => sample.scroll))], copiesLeft: document.querySelectorAll('.kb-layout-copy').length };
+            const groups = [...document.querySelectorAll<HTMLElement>(".card, .col-head, .divider, .empty, .remote-unbound")].flatMap((node) => node.shadowRoot?.querySelector<HTMLElement>("[data-column-text-group]") ?? []);
+            return { samples: video.samples, marks: video.marks, maxAnimationFrameMs: Math.max(0, ...windows.map((sample) => sample.gap)), animationFrames: windows.length, scrollValues: [...new Set(video.samples.map((sample) => sample.scroll))], copiesLeft: document.querySelectorAll('.kb-layout-copy').length, heldTextLeft: document.querySelectorAll("[data-column-text-held]").length, textLayersLeft: groups.filter((node) => node.style.willChange || node.hasAttribute("data-layout-animating") || node.getAnimations().length).length };
           });
           if (record) {
             await cdp.send("Page.stopScreencast");
@@ -11717,9 +11783,10 @@ describe("column dwell smooth", () => {
             const ends = measurement.samples.filter((sample, i) => !sample.active && !measurement.samples[i - 1]?.active && measurement.samples[i - 2]?.active);
             const transitions = starts.map((sample, i) => ({ name: i === 0 ? "hover-widen" : "button-narrow", start: sample.at - sample.gap, end: ends[i]!.at }));
             expect(transitions).toHaveLength(2);
-            const frameWindows = transitions.map((transition) => ({ name: transition.name, maxRAFFrameMs: Math.max(0, ...measurement.samples.filter((sample) => sample.at >= transition.start && sample.at <= transition.end).map((sample) => sample.gap)), frames: frames.flatMap((frame, i) => frame.time >= transition.start - 50 && frame.time <= transition.end + 50 ? [i] : []), maxCaptureFrameMs: Math.max(0, ...frames.flatMap((frame, i) => i > 0 && frame.time >= transition.start && frame.time <= transition.end ? [frame.time - frames[i - 1]!.time] : [])) }));
+            const frameWindows = transitions.map((transition) => ({ name: transition.name, motionFrames: measurement.samples.filter((sample) => sample.at >= transition.start && sample.at <= transition.end && sample.animated).length, maxRAFFrameMs: Math.max(0, ...measurement.samples.filter((sample) => sample.at >= transition.start && sample.at <= transition.end).map((sample) => sample.gap)), frames: frames.flatMap((frame, i) => frame.time >= transition.start - 50 && frame.time <= transition.end + 50 ? [i] : []), maxCaptureFrameMs: Math.max(0, ...frames.flatMap((frame, i) => i > 0 && frame.time >= transition.start && frame.time <= transition.end ? [frame.time - frames[i - 1]!.time] : [])) }));
             for (const window of frameWindows) {
               expect(window.frames.length).toBeGreaterThan(5);
+              expect(window.motionFrames).toBeGreaterThan(5);
               if (window.maxCaptureFrameMs > 50) timingFailures.push({ locale, motion, phase: window.name, milliseconds: window.maxCaptureFrameMs });
             }
             const decodedFrames = Number(execFileSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", path.resolve(videoPath)], { encoding: "utf8" }).trim());
@@ -11728,6 +11795,8 @@ describe("column dwell smooth", () => {
           } else cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement });
           if (measurement.maxAnimationFrameMs > 50) timingFailures.push({ locale, motion, phase: "activation-through-cleanup", milliseconds: measurement.maxAnimationFrameMs });
           expect(measurement.copiesLeft).toBe(0);
+          expect(measurement.heldTextLeft).toBe(0);
+          expect(measurement.textLayersLeft).toBe(0);
           expect(measurement.scrollValues).toHaveLength(1);
           expect(motion === "reduce" ? measurement.animationFrames === 0 : measurement.animationFrames > 5).toBe(true);
           const firstWide = measurement.samples.find((sample) => sample.wide === "1")!;

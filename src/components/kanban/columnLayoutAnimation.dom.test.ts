@@ -83,6 +83,23 @@ test("reduced motion does not capture or animate and disposal leaves no pixels",
   layout.dispose();
 });
 
+test("idle capture uses the measured border boxes without resolving skipped card sizes", () => {
+  const { column, card, layout } = mount();
+  card.getBoundingClientRect = () => new dom.DOMRect(812, 1200, 196, 132) as unknown as DOMRect;
+  const original = dom.getComputedStyle;
+  dom.getComputedStyle = (node: Parameters<typeof dom.getComputedStyle>[0]) => {
+    const style = original.call(dom, node);
+    return (node as unknown) === card ? new Proxy(style, { get(target, key) {
+      if (key === "width" || key === "height") throw new Error("resolved a skipped card's layout size");
+      return Reflect.get(target, key, target);
+    } }) : style;
+  };
+  try {
+    layout.prepare();
+    expect(column.style.width).toBe("220px");
+  } finally { dom.getComputedStyle = original; }
+});
+
 test("an unrelated render does not animate; interrupted motion cleans up immediately", async () => {
   const { root, column, calls, layout } = mount();
   layout.prepare();
@@ -239,7 +256,7 @@ test("a neighbour whose width stays fixed slides as one wrapper without text eff
 
 
 test("wrapping preserves a programmatic scroll before its scroll event is delivered", async () => {
-  const { column, body, layout } = mount();
+  const { root, column, body, layout } = mount();
   body.scrollTop = 75;
   layout.prepare();
   column.dataset.wide = "1";
@@ -248,6 +265,8 @@ test("wrapping preserves a programmatic scroll before its scroll event is delive
   // No scroll event yet: a caller may run earlier in the same RAF batch.
   await new Promise((resolve) => dom.setTimeout(resolve, 140));
   expect(body.scrollTop).toBe(125);
+  expect(root.hasAttribute("data-column-layout")).toBe(false);
+  expect(column.style.width).toBe("");
 });
 
 test("live height changes invalidate the projected pose before wrapping", async () => {
@@ -334,4 +353,106 @@ test("cards and content added during motion receive counter-scales and wrapping 
   expect(calls.some((call) => call.node === added)).toBe(true);
   expect(root.hasAttribute("data-column-layout")).toBe(false);
   expect(added.querySelector("[data-layout-animating]")).toBeNull();
+});
+
+test("a no-op control during promotion resumes motion instead of releasing frozen widths", async () => {
+  const originalRAF = dom.requestAnimationFrame;
+  const originalCancel = dom.cancelAnimationFrame;
+  const frames = new Map<ReturnType<typeof dom.requestAnimationFrame>, FrameRequestCallback>();
+  dom.requestAnimationFrame = (callback) => { const id = setImmediate(() => {}); frames.set(id, callback); return id; };
+  dom.cancelAnimationFrame = (id) => { frames.delete(id); clearImmediate(id); };
+  const { root, column, card, layout } = mount();
+  card.insertAdjacentHTML("beforeend", '<span>Visible content</span>'.repeat(16));
+  const frame = () => {
+    const batch = [...frames.values()]; frames.clear();
+    batch.forEach((callback) => callback(0));
+  };
+  try {
+    layout.prepare(); column.dataset.wide = "1";
+    await mutations(); frame();
+    expect(root.dataset.columnLayout).toBe("pending");
+    layout.prepare();
+    for (let i = 0; i < 30 && root.dataset.columnLayout !== "running"; i++) frame();
+    expect(root.dataset.columnLayout).toBe("running");
+    expect(column.style.width).toBe("220px");
+  } finally {
+    layout.dispose();
+    dom.requestAnimationFrame = originalRAF; dom.cancelAnimationFrame = originalCancel;
+  }
+});
+
+test("a four-column retarget at 32ms RAF cadence completes every reveal before cleanup", async () => {
+  const originalRAF = dom.requestAnimationFrame;
+  const originalCancel = dom.cancelAnimationFrame;
+  const originalStyle = dom.getComputedStyle;
+  dom.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 32) as unknown as ReturnType<typeof dom.requestAnimationFrame>;
+  dom.cancelAnimationFrame = (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+  Object.defineProperty(dom, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+  type Effect = { frames: Keyframe[]; timing: KeyframeAnimationOptions; currentTime: number };
+  const effects = new Map<HTMLElement, Effect>();
+  const calls: { node: HTMLElement; effect: Effect }[] = [];
+  Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, value(this: HTMLElement, frames: Keyframe[], timing: KeyframeAnimationOptions) {
+    let started = performance.now(), paused: number | null = null;
+    const effect = { frames, timing, get currentTime() { return (paused ?? performance.now()) - started; } };
+    effects.set(this, effect); calls.push({ node: this, effect });
+    return { get currentTime() { return effect.currentTime; }, pause() { paused = performance.now(); }, play() {
+      if (paused !== null) { started += performance.now() - paused; paused = null; }
+    }, cancel: () => { if (effects.get(this) === effect) effects.delete(this); } };
+  } });
+  const root = document.createElement("div"); root.className = "kb";
+  root.innerHTML = '<div class="board"></div>'; document.body.append(root);
+  const board = root.firstElementChild as HTMLElement;
+  const statuses = ["inbox", "assigned", "blocked", "done"];
+  let wide = "assigned";
+  const tracks = () => board.style.gridTemplateColumns ? board.style.gridTemplateColumns.split(" ").map(Number.parseFloat) : statuses.map((status) => status === wide ? 420 : 220);
+  dom.getComputedStyle = (node: Parameters<typeof dom.getComputedStyle>[0]) => {
+    const style = originalStyle.call(dom, node);
+    return (node as unknown) === board ? new Proxy(style, { get(target, key) {
+      if (key === "gridTemplateColumns") return tracks().map((width) => `${width}px`).join(" ");
+      return Reflect.get(target, key, target);
+    } }) : style;
+  };
+  const pose = (node: HTMLElement) => {
+    const effect = effects.get(node);
+    const parse = (value: Keyframe["transform"]) => {
+      const transform = String(value), translate = transform.match(/translate\(([-.\d]+)px, ([-.\d]+)px\)/), scale = transform.match(/scale\(([-.\d]+), ([-.\d]+)\)/);
+      return { dx: Number(translate?.[1] ?? 0), dy: Number(translate?.[2] ?? 0), sx: Number(scale?.[1] ?? 1), sy: Number(scale?.[2] ?? 1) };
+    };
+    if (!effect) return parse("none");
+    const q = Math.max(0, Math.min(1, effect.currentTime / Number(effect.timing.duration)));
+    const before = parse(effect.frames[0]!.transform), after = parse(effect.frames.at(-1)!.transform);
+    return { dx: before.dx + (after.dx - before.dx) * q, dy: before.dy + (after.dy - before.dy) * q, sx: before.sx + (after.sx - before.sx) * q, sy: before.sy + (after.sy - before.sy) * q };
+  };
+  for (const [index, status] of statuses.entries()) {
+    const column = document.createElement("section"); column.className = "column"; column.dataset.status = status; column.dataset.wide = status === wide ? "1" : "0";
+    column.innerHTML = `<div class="col-body"><article class="card"><button data-owner="${status}">Sample</button></article></div>`; board.append(column);
+    const layoutBox = () => { const sizes = tracks(); return new dom.DOMRect(sizes.slice(0, index).reduce((a, b) => a + b, 0) + index * 12, 100, parseFloat(column.style.width) || sizes[index], 600); };
+    const rect = () => { const box = layoutBox(), p = pose(column); return new dom.DOMRect(box.left + p.dx, box.top + p.dy, box.width * p.sx, box.height * p.sy) as unknown as DOMRect; };
+    column.getBoundingClientRect = rect; column.querySelector<HTMLElement>(".col-body")!.getBoundingClientRect = rect;
+    const card = column.querySelector<HTMLElement>(".card")!;
+    card.getBoundingClientRect = () => {
+      const natural = layoutBox(), paint = rect(), own = pose(card), px = paint.width / natural.width, py = paint.height / natural.height;
+      return new dom.DOMRect(paint.left + (12 + own.dx) * px, paint.top + (60 + own.dy) * py, (natural.width - 24) * px * own.sx, (natural.width < 300 ? 180 : 120) * py * own.sy) as unknown as DOMRect;
+    };
+  }
+  const update = (next: string) => { wide = next; for (const column of board.children) (column as HTMLElement).dataset.wide = (column as HTMLElement).dataset.status === next ? "1" : "0"; };
+  const layout = installColumnLayoutAnimation(root); disposers.push(layout.dispose);
+  try {
+    layout.prepare(); update("inbox");
+    for (let i = 0; i < 200 && root.dataset.columnLayout !== "running"; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(root.dataset.columnLayout).toBe("running");
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    const cut = calls.length;
+    layout.prepare(); update("done");
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    const retarget = calls.slice(cut);
+    expect(new Set(retarget.filter(({ node }) => node.matches(".column")).map(({ node }) => node.dataset.status))).toEqual(new Set(statuses));
+    const reveals = retarget.filter(({ node, effect }) => node.hasAttribute("data-owner") && effect.frames.at(-1)!.opacity === 1);
+    expect(new Set(reveals.map(({ node }) => node.dataset.owner))).toEqual(new Set(statuses));
+    expect(reveals.every(({ effect }) => Number(effect.timing.duration) >= 80)).toBe(true);
+    expect(root.hasAttribute("data-column-layout")).toBe(false);
+    expect([...board.children].map((node) => (node as HTMLElement).style.width)).toEqual(["", "", "", ""]);
+  } finally {
+    layout.dispose(); dom.requestAnimationFrame = originalRAF; dom.cancelAnimationFrame = originalCancel; dom.getComputedStyle = originalStyle;
+  }
 });

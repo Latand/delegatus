@@ -1235,7 +1235,7 @@
       "action": "narrow",
       "how": "keyboard",
       "scroll": {
-        "top": 6,
+        "top": 7,
         "pageTop": 0,
         "boardLeft": 0,
         "windowTop": 0,

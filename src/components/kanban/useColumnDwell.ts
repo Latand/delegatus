@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { flushSync } from "react-dom";
 
 import { installColumnLayoutAnimation } from "./columnLayoutAnimation";
 
@@ -116,13 +117,16 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
       widenTimer = setTimeout(() => {
         widenTimer = null;
         if (armed !== column || !present) return;
-        const widen = may(column);
-        /* Read the old pose before removing the cue invalidates its styles. */
-        if (widen) layout.prepare();
-        cancel();
-        if (!widen) return;
-        latched = column;
-        optionsRef.current.widen(statusOf(column));
+        layout.change(() => {
+          cancel();
+          latched = column;
+          // Commit before the helper's next-frame no-op check.
+          flushSync(() => optionsRef.current.widen(statusOf(column)));
+        }, () => {
+          if (armed !== column || !present) return false;
+          if (may(column)) return true;
+          cancel(); return false;
+        });
       }, DWELL_MS - elapsed);
     };
     const arm = (column: HTMLElement) => {

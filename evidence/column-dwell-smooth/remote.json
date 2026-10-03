@@ -1,0 +1,17 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "sample": {
+    "before": {
+      "width": 16.015625,
+      "height": 14
+    },
+    "during": {
+      "width": 16.11040496826172,
+      "height": 14
+    },
+    "promoted": true
+  }
+}

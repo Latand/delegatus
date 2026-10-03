@@ -16,28 +16,28 @@
       "target": "done",
       "visibleGlyphs": 52,
       "maxLayerDelta": 0,
-      "maxGlyphDelta": 0.00042724609375
+      "maxGlyphDelta": 0.00048828125
     },
     {
       "phase": 20,
       "target": "done",
       "visibleGlyphs": 52,
       "maxLayerDelta": 0,
-      "maxGlyphDelta": 0.0013427734375
+      "maxGlyphDelta": 0.00164794921875
     },
     {
       "phase": 40,
       "target": "assigned",
       "visibleGlyphs": 52,
       "maxLayerDelta": 0,
-      "maxGlyphDelta": 0.0009765625
+      "maxGlyphDelta": 0.000396728515625
     },
     {
       "phase": "after-wrap",
       "target": "inbox",
-      "visibleGlyphs": 47,
-      "maxLayerDelta": 0,
-      "maxGlyphDelta": 0.0020751953125
+      "visibleGlyphs": 52,
+      "maxLayerDelta": 0.00006103515625,
+      "maxGlyphDelta": 0.0009765625
     }
   ]
 }

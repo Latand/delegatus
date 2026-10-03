@@ -2,6 +2,7 @@
 
 import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
@@ -28,6 +29,7 @@ import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
+import { changeColumnWidth, COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
@@ -423,7 +425,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       root.removeEventListener("focusin", onWork);
     };
   }, []);
-  const seatView = props.seat ? props.seat(boardId) : null;
+  const renderSeat = props.seat;
+  const seatView = useMemo(() => renderSeat?.(boardId) ?? null, [renderSeat, boardId]);
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
@@ -642,6 +645,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const aside = asideRef.current;
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
     const apply = () => {
+      // The helper owns intermediate widths; measure the settled layout.
+      if (element.hasAttribute("data-column-layout")) return;
       const barWidth = element.getBoundingClientRect().width;
       const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
       const seatWidth = seat?.getBoundingClientRect().width ?? 0;
@@ -653,12 +658,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
     apply();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(apply);
-    observer.observe(element);
-    if (aside) observer.observe(aside);
-    if (seat) observer.observe(seat);
-    return () => observer.disconnect();
+    element.addEventListener(COLUMN_LAYOUT_END, apply);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(apply) : null;
+    observer?.observe(element);
+    if (aside) observer?.observe(aside);
+    if (seat) observer?.observe(seat);
+    return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, apply); };
   }, [hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
@@ -2143,6 +2148,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     let measuredAt = 0;
     const measure = () => {
       frame = 0;
+      // The final visibility scan runs after the helper releases its layers.
+      if (root.hasAttribute("data-column-layout")) return;
       measuredAt = performance.now();
       const rootRect = root.getBoundingClientRect();
       const ids: string[] = [];
@@ -2193,6 +2200,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (performance.now() - measuredAt >= SCROLL_MEASURE_MS) schedule();
     };
     schedule();
+    root.addEventListener(COLUMN_LAYOUT_END, schedule);
     root.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", schedule);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
@@ -2200,6 +2208,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return () => {
       if (frame) cancelAnimationFrame(frame);
       if (timer) window.clearTimeout(timer);
+      root.removeEventListener(COLUMN_LAYOUT_END, schedule);
       root.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", schedule);
       observer?.disconnect();
@@ -3119,7 +3128,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
             title={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
             data-col-width={status}
             data-col-width-action={isWide ? "narrow" : "widen"}
-            onClick={() => (isWide ? widths.state.narrow() : widths.state.widen(status))}
+            onClick={(event) => changeColumnWidth(event.currentTarget, () => flushSync(() => (isWide ? widths.state.narrow() : widths.state.widen(status))))}
           >
             {isWide ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
           </button>
