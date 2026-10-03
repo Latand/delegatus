@@ -27,7 +27,9 @@ import type { FileEntry } from "@/lib/types";
 const dom = new HappyWindow({ innerWidth: 390, innerHeight: 844 });
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 Object.assign(globalThis, {
-  window: dom, document: dom.document, navigator: dom.navigator,
+  window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom), document: dom.document, navigator: dom.navigator,
   Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
   HTMLSelectElement: dom.HTMLSelectElement, HTMLTextAreaElement: dom.HTMLTextAreaElement,
   Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,

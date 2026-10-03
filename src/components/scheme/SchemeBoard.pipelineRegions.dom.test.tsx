@@ -12,19 +12,23 @@ import { compactPipelineArtifactPaths, excludeCompactPipelineArtifacts } from "@
 import { buildBranchGroups } from "@/components/projectModel";
 
 import { SchemeBoard } from "./SchemeBoard";
-import { taskBoxHeight } from "./taskGeometry";
 
 /*
  * DOM regressions for issue #531: on the rendered production board every
  * pipeline's colored region (the dashed halo) contains ALL of its conversation
  * surfaces — live panes, placeholder/completed stage shells, and attached review
- * decks — and two regions never intersect. The camera (62% lite zoom, Fit All)
- * must never perturb that world geometry.
+ * decks — and two regions never intersect. Fit All changes the board to its
+ * overview chips; returning to the intermediate view restores every surface
+ * inside the same owning region.
  */
 
 const dom = new Window();
 class TestResizeObserver {
-  observe() {}
+  constructor(private callback: (entries: Array<{ target: HTMLElement; contentRect: DOMRect }>) => void) {}
+  observe(element: HTMLElement) {
+    Object.defineProperty(element, "getBoundingClientRect", { configurable: true, value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 2400, bottom: 1600, width: 2400, height: 1600, toJSON() {} }) });
+    queueMicrotask(() => this.callback([{ target: element, contentRect: element.getBoundingClientRect() }]));
+  }
   unobserve() {}
   disconnect() {}
 }
@@ -33,6 +37,8 @@ class TestResizeObserver {
 });
 Object.assign(globalThis, {
   window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   document: dom.document,
   navigator: dom.navigator,
   Node: dom.Node,
@@ -79,7 +85,7 @@ const pipe = (id: string, agentPath: string, attemptState = "running", taskIds: 
   ({
     id, task: `Region ${id}`, project: "demo", repoDir: "/r", worktreeDir: "/w", branch: "b",
     baseBranch: "main", baseRef: "a", lastPassedCommit: "a", stages, taskIds,
-    runs: [{ stageId: "build", attempts: [{ n: 1, state: attemptState, agentPath, flowId: null }] }],
+    runs: [{ stageId: "build", attempts: [{ n: 1, effectiveRole: stageRole("read-write"), state: attemptState, agentPath, flowId: null }] }],
     cursor: { stageId: "build", state: attemptState, input: null, activatedBy: null },
     state: attemptState === "needs_decision" ? "needs_decision" : "running",
     pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
@@ -120,9 +126,9 @@ function haloRects(host: HTMLElement): Map<string, DomRect> {
 }
 
 function cardRect(host: HTMLElement, key: string): DomRect {
-  const card = host.querySelector(`[data-scheme-node="${key}"]`) as HTMLElement | null;
-  expect(card, `board card ${key} must render`).toBeTruthy();
-  return rectOf(card!);
+  const cards = host.querySelectorAll<HTMLElement>(`[data-scheme-node="${key}"]`);
+  expect(cards, `board card ${key} must render exactly once`).toHaveLength(1);
+  return rectOf(cards[0]!);
 }
 
 function expectSceneGeometry(host: HTMLElement, surfacesByPipeline: Map<string, string[]>) {
@@ -151,6 +157,46 @@ function expectSceneGeometry(host: HTMLElement, surfacesByPipeline: Map<string, 
         `surface ${key} ${JSON.stringify(rect)} escapes region ${id} ${JSON.stringify(halo)}`,
       ).toBe(true);
     }
+  }
+}
+
+/** Fit All deliberately changes presentation: slots and decks leave the
+    overview, while each conversation remains a chip in its pipeline section.
+    Re-entering the intermediate view must restore the complete scene. */
+async function expectFitRoundTrip(host: HTMLElement, surfaces: Map<string, string[]>, task?: { value: BoardTask; pipeline: string; neighbor: string }) {
+  expect(host.querySelector("[data-scheme-bands]")?.getAttribute("data-scheme-bands")).toBe("intermediate");
+  expectSceneGeometry(host, surfaces);
+  const before = new Map([...surfaces].flatMap(([, keys]) => keys.map(key => [key, cardRect(host, key)] as const)));
+  const beforeHalos = haloRects(host);
+  const bandBefore = task ? linkedTaskBandRect(host, task.value) : null;
+  const fit = host.querySelector<HTMLButtonElement>('button[title^="Fit all content"]');
+  expect(fit).toBeTruthy();
+  flushSync(() => fit!.click());
+  await settle();
+
+  expect(host.querySelector("[data-scheme-bands]")?.getAttribute("data-scheme-bands")).toBe("overview");
+  const overview = new Map([...surfaces].map(([id, keys]) => [id, keys.filter(key => !key.startsWith("slot::") && !key.startsWith("deck::"))]));
+  expectSceneGeometry(host, overview);
+  for (const keys of surfaces.values()) {
+    for (const key of keys) {
+      const card = host.querySelector(`[data-scheme-node="${key}"]`);
+      if (key.startsWith("slot::") || key.startsWith("deck::")) expect(card).toBeNull();
+      else expect(card?.getAttribute("data-scheme-node-presentation")).toBe("chip");
+    }
+  }
+  if (task) expectTaskBandOwnership(host, task.value, task.pipeline, task.neighbor);
+
+  const current = host.querySelector<HTMLButtonElement>('button[title="Fit current work (0)"]');
+  expect(current).toBeTruthy();
+  flushSync(() => current!.click());
+  await settle();
+  expect(host.querySelector("[data-scheme-bands]")?.getAttribute("data-scheme-bands")).toBe("intermediate");
+  expectSceneGeometry(host, surfaces);
+  for (const [key, rect] of before) expect(cardRect(host, key)).toEqual(rect);
+  expect(haloRects(host)).toEqual(beforeHalos);
+  if (task) {
+    expectTaskBandOwnership(host, task.value, task.pipeline, task.neighbor);
+    expect(linkedTaskBandRect(host, task.value)).toEqual(bandBefore!);
   }
 }
 
@@ -211,8 +257,8 @@ const directReviewer = entry({
   },
 });
 
-/* The pipeline's board task — a pinned sticky note whose lattice position is far
-   outside the region; region ownership must pull the card inside. */
+/* The task's old authored pin is far outside the scene. The current board
+   projects that task as a band enclosing its pipeline section. */
 const linkedTask = (id: string): BoardTask =>
   ({
     id,
@@ -226,19 +272,26 @@ const linkedTask = (id: string): BoardTask =>
     updatedAt: "2026-07-05T00:00:00Z",
   }) as unknown as BoardTask;
 
-function linkedTaskRect(host: HTMLElement, task: BoardTask): DomRect {
-  const card = host.querySelector(`[data-scheme-task="${task.id}"]`) as HTMLElement | null;
-  expect(card, `task card ${task.id} must render`).toBeTruthy();
-  const rect = rectOf(card!);
-  /* TaskCard's root carries transform + width; the card's world height is the
-     shared geometry estimate every placement consumer uses. */
-  return { ...rect, h: taskBoxHeight(task, false) };
+function linkedTaskBandRect(host: HTMLElement, task: BoardTask): DomRect {
+  const bands = host.querySelectorAll<HTMLElement>(`[data-scheme-band-task="${task.id}"]`);
+  expect(bands, `task ${task.id} must own exactly one band`).toHaveLength(1);
+  expect(bands[0]!.querySelector("[data-scheme-band-title]")?.textContent).toBe(task.text);
+  expect(host.querySelector(`[data-scheme-task="${task.id}"]`)).toBeNull();
+  return rectOf(bands[0]!);
 }
 
-test("at 62% lite zoom every pipeline surface stays inside its region and neighboring regions keep their gap", async () => {
-  /* The user parked the desktop camera at 62% — the lite far-zoom band where the
-     production overlap was captured. World geometry must be identical to any
-     other zoom: regions disjoint, every surface contained. */
+function expectTaskBandOwnership(host: HTMLElement, task: BoardTask, pipeline: string, neighbor: string) {
+  const halos = haloRects(host);
+  const band = linkedTaskBandRect(host, task);
+  expect(halos.has(pipeline)).toBe(true);
+  expect(halos.has(neighbor)).toBe(true);
+  expect(contains(band, halos.get(pipeline)!), `pipeline ${pipeline} escapes task ${task.id}'s band`).toBe(true);
+  expect(disjointWithGap(halos.get(neighbor)!, band, 0), `task ${task.id}'s band overlaps pipeline ${neighbor}`).toBe(true);
+}
+
+test("at 62% intermediate zoom every pipeline surface stays inside its region and neighboring regions keep their gap", async () => {
+  /* The camera starts at the reported 62% zoom. Every intermediate surface
+     stays contained; Fit All also checks the overview's smaller projections. */
   dom.sessionStorage.setItem("llvCam:demo", JSON.stringify({ x: 0, y: 0, z: 0.62 }));
   const files = [origin, builderA, builderB, directReviewer];
   const taskA = linkedTask("t-a");
@@ -256,23 +309,8 @@ test("at 62% lite zoom every pipeline surface stays inside its region and neighb
     ["pb", ["/origin/b", "slot::pb::review", "slot::pb::polish"]],
   ]);
   expectSceneGeometry(host, surfaces);
-  /* The pipeline's linked task card is owned by pa's region — inside pa, clear
-     of pb. */
-  const halos = haloRects(host);
-  const taskCard = linkedTaskRect(host, taskA);
-  expect(contains(halos.get("pa")!, taskCard), "the linked task card escapes its pipeline region").toBe(true);
-  expect(disjointWithGap(halos.get("pb")!, taskCard, 0), "the linked task card leaks into the neighbor region").toBe(true);
-
-  /* Fit All reframes the camera only — the world rects must not move. */
-  const before = [...host.querySelectorAll("[data-scheme-node], [data-scheme-task]")].map((card) => (card as HTMLElement).style.transform);
-  const fit = [...host.querySelectorAll("button")].find((button) => button.title.startsWith("Fit all")) as HTMLButtonElement;
-  expect(fit).toBeTruthy();
-  flushSync(() => fit.click());
-  await settle();
-  const after = [...host.querySelectorAll("[data-scheme-node], [data-scheme-task]")].map((card) => (card as HTMLElement).style.transform);
-  expect(after).toEqual(before);
-  expectSceneGeometry(host, surfaces);
-  expect(contains(haloRects(host).get("pa")!, linkedTaskRect(host, taskA))).toBe(true);
+  expectTaskBandOwnership(host, taskA, "pa", "pb");
+  await expectFitRoundTrip(host, surfaces, { value: taskA, pipeline: "pa", neighbor: "pb" });
 });
 
 test("host loss / delayed materialization: unscanned published transcripts keep two separated shell regions", async () => {
@@ -294,11 +332,8 @@ test("host loss / delayed materialization: unscanned published transcripts keep 
   for (const halo of haloRects(host).values()) {
     expect(disjointWithGap(halo, originRect, 0), "a pipeline region covers a foreign conversation").toBe(true);
   }
-  /* The linked task rides the shell region through the publish-to-scan gap. */
-  const halos = haloRects(host);
-  const taskCard = linkedTaskRect(host, taskA);
-  expect(contains(halos.get("pa")!, taskCard), "the linked task card escapes its host-lost pipeline region").toBe(true);
-  expect(disjointWithGap(halos.get("pb")!, taskCard, 0)).toBe(true);
+  /* The linked task still owns the shell region through the publish-to-scan gap. */
+  expectTaskBandOwnership(host, taskA, "pa", "pb");
 });
 
 test("a live pipeline beside a delayed-materialization pipeline keeps 24px of visible halo separation", async () => {
@@ -323,13 +358,7 @@ test("a live pipeline beside a delayed-materialization pipeline keeps 24px of vi
   ]);
   expectSceneGeometry(host, surfaces);
 
-  const before = [...host.querySelectorAll("[data-scheme-node]")].map((card) => (card as HTMLElement).style.transform);
-  const fit = [...host.querySelectorAll("button")].find((button) => button.title.startsWith("Fit all")) as HTMLButtonElement;
-  expect(fit).toBeTruthy();
-  flushSync(() => fit.click());
-  await settle();
-  expect([...host.querySelectorAll("[data-scheme-node]")].map((card) => (card as HTMLElement).style.transform)).toEqual(before);
-  expectSceneGeometry(host, surfaces);
+  await expectFitRoundTrip(host, surfaces);
 });
 
 test("parked and completed stage cards stay inside their regions beside a live neighbor", async () => {
@@ -393,8 +422,8 @@ test("managed fixing and closed-hidden/restored lifecycle panes stay inside thei
       { id: "review", kind: "review-loop", prompt: "", next: null, onFail: { to: "build", maxRounds: 5 }, effectiveRole: stageRole("read-only") },
     ],
     runs: [
-      { stageId: "build", attempts: [{ n: 1, state: "passed", agentPath: fixingBuilder.path, conversationId: fixingBuilder.conversationId, flowId: null }] },
-      { stageId: "review", attempts: [{ n: 1, state: "reviewing", agentPath: fixingReviewer.path, conversationId: fixingReviewer.conversationId, flowId: fixingFlow.id }] },
+      { stageId: "build", attempts: [{ n: 1, effectiveRole: stageRole("read-write"), state: "passed", agentPath: fixingBuilder.path, conversationId: fixingBuilder.conversationId, flowId: null }] },
+      { stageId: "review", attempts: [{ n: 1, effectiveRole: stageRole("read-only"), state: "reviewing", agentPath: fixingReviewer.path, conversationId: fixingReviewer.conversationId, flowId: fixingFlow.id }] },
     ],
     cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
   } as unknown as Pipeline;
@@ -432,6 +461,9 @@ test("managed fixing and closed-hidden/restored lifecycle panes stay inside thei
   expect(hiddenHost.querySelectorAll("[data-scheme-node]")).toHaveLength(0);
   expect(hiddenHost.querySelectorAll('[data-scheme-group="pipeline"]')).toHaveLength(0);
 
+  // Restore into the single board that owns window-level keyboard navigation.
+  for (const root of roots) flushSync(() => root.unmount());
+  roots.clear();
   const restored = { ...closed, restored: true } as Pipeline;
   const restoredFlow = { ...closedFlow, restored: true } as Flow;
   const restoredReviewer = fullCatalog[1]!;
@@ -452,12 +484,12 @@ test("managed fixing and closed-hidden/restored lifecycle panes stay inside thei
   const restoredWorld = Array.from(restoredViewport.children).find((child) => (child as HTMLElement).style.transform.includes("scale(")) as HTMLElement;
   expect(restoredWorld.style.transform).toContain("scale(0.62)");
 
-  const before = cardRect(restoredHost, fixingReviewer.path);
-  const fit = [...restoredHost.querySelectorAll("button")].find((button) => button.title.startsWith("Fit all")) as HTMLButtonElement;
-  flushSync(() => fit.click());
-  await settle();
-  expect(cardRect(restoredHost, fixingReviewer.path)).toEqual(before);
+  await expectFitRoundTrip(restoredHost, new Map([["fix-pipeline", [fixingReviewer.path]]]));
+  restoredViewport.focus();
   flushSync(() => window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }) as unknown as Event));
+  await settle();
+  expect(restoredHost.querySelector('[role="status"]')?.textContent).toBe("group::pipeline::fix-pipeline");
+  flushSync(() => window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) as unknown as Event));
   await settle();
   expect(restoredHost.querySelector('[data-scheme-node="/fix/review"] .ring-2')).toBeTruthy();
   expectSceneGeometry(restoredHost, new Map([["fix-pipeline", [fixingReviewer.path]]]));

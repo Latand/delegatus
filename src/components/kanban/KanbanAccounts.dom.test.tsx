@@ -418,7 +418,7 @@ test("a conversation switches with the header's reconfigure; an account outside 
   update({ files: [build, { ...verify, path: "/fixture/accounts/claude/account-g/verify-1.jsonl" }] });
   await tick();
   expect(chipText(conversationChip(host))).toBe("Account G");
-  expect(receiptTexts(host).at(-1)).toBe("Verifier now runs on Account G");
+  expect(receiptTexts(host).at(-1)).toBe("Verify now runs on Account G");
 });
 
 test("a switch the migration record reports shows for every page: waiting with messages held, then failed with its reason; nothing is sent", async () => {

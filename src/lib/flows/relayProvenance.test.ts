@@ -101,3 +101,15 @@ test("a failing flow store degrades to absence, never an error", () => {
     flows: () => { throw new Error("store unavailable"); },
   })).toEqual([]);
 });
+
+test("live canonical-project relays retain attribution while archive projection stays pure", async () => {
+  const { flowRelayedMessageOccurrences: liveOccurrences } = await import("./relayProvenance");
+  const { projectInfoFromCwd } = await import("@/lib/scanner/describe");
+  const cwd = "/repos/relay-fixture";
+  const project = projectInfoFromCwd(cwd)!.project;
+  expect(project).toMatch(/^(repo|dir)-[0-9a-f]{16,}$/);
+  const flow = { ...flowWith([settledRound("findings.md")]), project, cwd };
+  const dependencies = { flows: () => [flow], findings: () => FINDINGS };
+  expect(flowRelayedMessageOccurrences(IMPLEMENTER_PATH, dependencies)[0]).not.toHaveProperty("senderProject");
+  expect(liveOccurrences(IMPLEMENTER_PATH, dependencies)[0]).toMatchObject({ senderProject: "relay-fixture", senderRole: "reviewer" });
+});

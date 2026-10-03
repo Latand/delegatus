@@ -191,7 +191,7 @@ test("the card's ⋯ names the task's Attach and each lane's apart, and a lane's
   const attach = laneAttach(host, "A lane with nothing published");
   const labels = menuRows().map((row) => `${row.classList.contains("head") ? "head" : "item"}:${row.querySelector(".lbl")?.firstChild?.textContent ?? row.textContent}`);
   expect(labels.filter((label) => label.includes("Attach PR or issue") || label.startsWith("head:"))).toEqual([
-    "head:Move to", "head:Colour", "item:Attach PR or issue…",
+    "head:Move to", "head:Priority", "head:Colour", "item:Attach PR or issue…",
     "head:Header chips", "item:Attach PR or issue to the pipeline…",
     "head:A lane with nothing published", "item:Attach PR or issue to the pipeline…",
   ]);

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 
 import { bridgeChannelScopeForConversation } from "./routing";
@@ -20,6 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });

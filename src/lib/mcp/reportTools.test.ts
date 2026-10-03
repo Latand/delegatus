@@ -1,3 +1,4 @@
+import { normalizeRegistry } from "@/lib/agent/registry";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +49,7 @@ const CONTROL = {
 
 function bindings(over: Record<string, unknown> = {}) {
   return viewerMcpBindings(undefined, CONTROL, {
-    registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
+    registrySnapshot: () => normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
     attentionAuthority: () => ({ kind: "worker", conversationId: SEAT, role: "orchestrator" }),
     callerAttribution: () => MANAGER,
     callerProject: () => PROJECT,

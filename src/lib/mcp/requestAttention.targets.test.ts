@@ -1,3 +1,4 @@
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,6 +38,7 @@ beforeEach(() => {
   resetPresenceForTest();
 });
 afterEach(() => {
+  closeAgentRegistryForTests();
   resetPresenceForTest();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;

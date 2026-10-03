@@ -87,6 +87,7 @@ function engineWithReceipts(spawnReceipt: (launchId: string) => PipelineSpawnRec
      sandbox leaves empty; the claim is the engine's and succeeds here. */
   const ports = { ...defaultPipelinePorts(), spawnReceipt, claimSpawnRetry: () => "claimed" as const };
   return protocol({
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
     readPipelineRecord: getPipeline,
     patchPipeline: (id: string, request: never) => patchPipeline(id, request, ports),
     ...extra,

@@ -59,7 +59,7 @@ test("pipeline collection route mirrors flow GET and POST shapes", async () => {
   expect(body.pipeline.baseRef).toMatch(/^[0-9a-f]{40}$/);
   expect(body.pipeline.lastPassedCommit).toBe(body.pipeline.baseRef);
   expect(body.pipeline.stages.map((stage) => stage.id)).toEqual(["build", "verify"]);
-  expect(body.pipeline.stages[0]!.effectiveRole.effort).toBe("medium");
+  expect(body.pipeline.stages[0]!.effectiveRole.effort).toBe("high");
   await Promise.resolve();
   expect(ticks).toBe(1);
   unregister();
