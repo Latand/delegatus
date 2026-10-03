@@ -429,8 +429,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   useLayoutEffect(() => { visibleCountRef.current = visibleCount; }, [visibleCount]);
   const rampTargetRef = useRef<number | null>(null);
   const rampHandleRef = useRef<number | null>(null);
-  /* How many rows the feed holds, read by a ramp that outlives its render. */
-  const itemCountRef = useRef(0);
   /* Moves the rendered count toward `target` REVEAL_RAMP_ROWS per animation
      frame, instead of mounting every row in one commit. */
   const rampVisibleTo = useCallback((target: number) => {
@@ -446,7 +444,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const next = Math.min(goal, visibleCountRef.current + REVEAL_RAMP_ROWS);
       visibleCountRef.current = next;
       setVisibleCount(next);
-      if (next >= goal || (itemCountRef.current > 0 && next >= itemCountRef.current)) {
+      /* A load may resolve before its enlarged feed commits. The previous
+         committed item count cannot stop a requested reveal here. */
+      if (next >= goal) {
         rampTargetRef.current = null;
       } else {
         rampHandleRef.current = typeof requestAnimationFrame === "function"
@@ -746,7 +746,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     feed.items,
     awaitingSubmissions,
   );
-  useLayoutEffect(() => { itemCountRef.current = feed.items.length; }, [feed.items.length]);
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;

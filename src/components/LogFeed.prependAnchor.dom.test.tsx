@@ -158,6 +158,26 @@ test("repeated request triggers share a pending load and an empty result permits
   expect(scroller.scrollTop).toBe(540);
 });
 
+test("an older response before the enlarged feed commits completes its reveal ramp", async () => {
+  compactPane = true;
+  try {
+    const records = Array.from({ length: 1123 }, (_, i) => message(`ramp-${i}`, i % 2 ? "assistant" : "user"));
+    const scroller = await mount(records.slice(1000));
+    scroller.scrollTop = 500;
+    expect(host.querySelectorAll("[data-feed-key]").length).toBe(120);
+    request();
+    /* useLogTail enqueues its enlarged window and resolves loadOlder in the
+       same microtask. The request callback runs before its layout commit. */
+    tail = { ...tail, lines: records.slice(3), linesStart: 0, prependGen: 1, hasMore: false };
+    finish(1000);
+    await wait(); render();
+    for (let frames = 0; frames < 15 && host.querySelectorAll("[data-feed-key]").length < 620; frames += 1) {
+      await wait(); render();
+    }
+    expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThanOrEqual(620);
+  } finally { compactPane = false; }
+});
+
 test("a previous conversation response cannot reveal more rows in the new project", async () => {
   await mount(); request(); const oldFinish = finish;
   file = { ...file, path: file.path + "-other", project: "other-project" };
