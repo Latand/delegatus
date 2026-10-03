@@ -76,6 +76,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     const transcript = generation?.path ?? receipt?.artifactPath ?? undefined;
     if (!requestId) {
       if (receipt?.transport !== "tmux") return "";
+      if (engine === "claude" && input.source !== undefined && input.source !== "user") return "";
       const nativeId = engine === "claude" ? input.prompt_id : input.turn_id;
       if (typeof nativeId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(nativeId)) return "";
       requestId = `native:${nativeId}`;

@@ -194,7 +194,7 @@ test("real controller joins queued operator authorship, calls grounded Jev once,
     return Response.json({ answers: Object.fromEntries(Object.keys(request.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
   }) as typeof fetch;
   const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
-  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt };
+  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, source: "sdk" };
   setSharedMemoryEnabled(project, false);
   expect(await offerForHook(request, { ...input, delegatus_delivery_id: "operator" })).toBe("");
   setSharedMemoryEnabled(project, true);
@@ -289,7 +289,14 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
     ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Earlier queued input" } }
     : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Earlier queued input" }] } }) + "\n");
+  if (engine === "claude") for (const source of ["sdk", "system", "loop_wakeup", "schedule_wakeup", "poll_event"]) {
+    expect(await offerForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+      prompt_id: `synthetic-${source}`, prompt: "Update widget parser background wakeup", source })).toBe("");
+    expect(calls).toBe(0);
+    expect(memoryIndex().turnOffers(receipt.conversationId)).toEqual([]);
+  }
   const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+    ...(engine === "claude" ? { source: "user" } : {}),
     prompt_id: "synthetic-machine", turn_id: "synthetic-machine", prompt: wire };
   expect(await offerForHook(request, input)).toBe("");
   expect(calls).toBe(0);
