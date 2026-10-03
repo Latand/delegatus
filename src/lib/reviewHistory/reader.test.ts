@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { GET as list } from "@/app/api/review-history/route";
@@ -526,32 +527,45 @@ test("GET refuses unimported JSON and never creates or seeds state", async () =>
 });
 
 test("fresh unowned production process imports GETs without claiming ownership or initializing state", () => {
-  // Keep this outside every temp root even when the checkout is under /var/tmp.
-  // The production child must classify the synthetic XDG root as operator-owned
-  // and refuse it before creating any part of that path.
-  const config = path.join(path.parse(process.cwd()).root, `unowned-archive-probe-${process.pid}`);
+  // Keep this outside every temp root, independent of the checkout location,
+  // while using a writable synthetic path so EACCES cannot impersonate refusal.
+  // This is not an operator state directory and must remain absent throughout.
+  const uid = process.getuid?.();
+  const passwdHome = process.platform === "linux" && uid !== undefined
+    ? fs.readFileSync("/etc/passwd", "utf8").split("\n").map(line => line.split(":"))
+      .find(fields => fields[2] === String(uid))?.[5] ?? os.homedir()
+    : os.homedir();
+  const config = path.join(passwdHome, ".cache", `unowned-archive-probe-${process.pid}`);
   expect(fs.existsSync(config)).toBe(false);
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: directory, XDG_CONFIG_HOME: config, NODE_ENV: "production", TMPDIR: directory };
-  for (const key of ["LLV_STATE_DIR", "LLV_STATE_OWNER", "NEXT_PHASE", "NEXT_RUNTIME", "LLV_MODE"]) delete env[key as keyof typeof env];
-  const stateDirectory = path.join(config, "delegatus", "state");
-  expect(isOperatorOwnedDirectory(stateDirectory, env)).toBe(true);
-  expect(fs.existsSync(stateDirectory)).toBe(false);
-  const probe = Bun.spawnSync({ cmd: [process.execPath, "-e", `
-    const { NextRequest } = await import("next/server");
-    const modules = await Promise.all([
-      import("./src/app/api/review-history/route"),
-      import("./src/app/api/review-history/[id]/route"),
-      import("./src/app/api/review-history/[id]/export/route"),
-    ]);
-    const request = new NextRequest("http://localhost/api/review-history?project=demo", { headers: { host: "localhost" } });
-    const results = [];
-    for (const route of modules) results.push((await route.GET(request, {params: Promise.resolve({id: "review-a"})})).status);
-    console.log(JSON.stringify({ results, owner: process.env.LLV_STATE_OWNER ?? null }));
-  `], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-  expect(probe.exitCode).toBe(0);
-  expect(JSON.parse(probe.stdout.toString())).toEqual({ results: [503, 503, 503], owner: null });
-  expect(fs.existsSync(config)).toBe(false);
-  expect(fs.existsSync(stateDirectory)).toBe(false);
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: directory, XDG_CONFIG_HOME: config, NODE_ENV: "production", TMPDIR: directory };
+    for (const key of ["LLV_STATE_DIR", "LLV_STATE_OWNER", "NEXT_PHASE", "NEXT_RUNTIME", "LLV_MODE"]) delete env[key as keyof typeof env];
+    const stateDirectory = path.join(config, "delegatus", "state");
+    expect(isOperatorOwnedDirectory(stateDirectory, env)).toBe(true);
+    expect(fs.existsSync(stateDirectory)).toBe(false);
+    const probe = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      const { UnownedStateAccessError } = await import("./src/lib/stateOwnership");
+      const { archiveDirectory } = await import("./src/lib/reviewHistory/reader");
+      let refusal = false;
+      try { archiveDirectory(); } catch (error) { refusal = error instanceof UnownedStateAccessError; }
+      const { NextRequest } = await import("next/server");
+      const modules = await Promise.all([
+        import("./src/app/api/review-history/route"),
+        import("./src/app/api/review-history/[id]/route"),
+        import("./src/app/api/review-history/[id]/export/route"),
+      ]);
+      const request = new NextRequest("http://localhost/api/review-history?project=demo", { headers: { host: "localhost" } });
+      const results = [];
+      for (const route of modules) results.push((await route.GET(request, {params: Promise.resolve({id: "review-a"})})).status);
+      console.log(JSON.stringify({ refusal, results, owner: process.env.LLV_STATE_OWNER ?? null }));
+    `], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    expect(probe.exitCode).toBe(0);
+    expect(JSON.parse(probe.stdout.toString())).toEqual({ refusal: true, results: [503, 503, 503], owner: null });
+    expect(fs.existsSync(config)).toBe(false);
+    expect(fs.existsSync(stateDirectory)).toBe(false);
+  } finally {
+    fs.rmSync(config, { recursive: true, force: true });
+  }
 });
 
 
