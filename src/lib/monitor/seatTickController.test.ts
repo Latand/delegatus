@@ -793,9 +793,8 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
-  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs"]) {
-    fs.copyFileSync(path.join(import.meta.dir, "../../../bin", name), path.join(bin, name));
-  }
+  // Keep the same transitive module set as the published MCP launcher.
+  fs.cpSync(path.join(import.meta.dir, "../../../bin"), bin, { recursive: true });
   const crashFlag = path.join(packageRoot, "crash.flag");
   fs.writeFileSync(crashFlag, "crash");
   fs.writeFileSync(path.join(dist, "mcp-server.mjs"), `
