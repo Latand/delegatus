@@ -52,6 +52,17 @@ test("Viewer route and layout inputs select build and served-runtime verificatio
   const doc = ["CONTRIBUTING.md"] as const;
   expect(plan("pre-push", doc, discover(root, "HEAD", doc)).some(step => step.pinned)).toBeFalse();
 });
+test("deleting the built root route or layout still selects runtime verification", () => {
+  const deletedRoot = mkdtempSync(path.join(tmpdir(), "deleted-viewer-input-")); roots.push(deletedRoot);
+  symlinkSync(path.join(root, ".github"), path.join(deletedRoot, ".github"), "dir");
+  symlinkSync(path.join(root, "scripts"), path.join(deletedRoot, "scripts"), "dir");
+  for (const file of ["src/app/page.tsx", "src/app/layout.tsx"]) {
+    const discovered = discover(deletedRoot, "HEAD", [file]);
+    expect(discovered.existing.has(file)).toBeFalse();
+    expect(discovered.runtime).toBeTrue();
+    expect(plan("pre-push", [file], discovered).some(step => step.name === "Viewer runtime")).toBeTrue();
+  }
+});
 test("dependency candidate installs the frozen graph before later verification", () => {
   const steps = plan("pre-push", ["package.json"], context());
   expect(steps[0]?.name).toBe("frozen install");
@@ -97,7 +108,7 @@ function hookFixture() {
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
-  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync } from "node:fs"; appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
+  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
   for (const name of ["bun", "bunx"]) {
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
@@ -124,7 +135,8 @@ test("real pre-commit hook checks staged source, stops failures, and supports th
 });
 test("linked-worktree pre-commit clears Git selectors and preserves the complete shared config", () => {
   const f = hookFixture();
-  const worktree = path.join(path.dirname(f.dir), "linked commit");
+  const linkedRoot = mkdtempSync(path.join(tmpdir(), "linked-commit-")); roots.push(linkedRoot);
+  const worktree = path.join(linkedRoot, "checkout");
   f.git("config", "core.bare", "false"); f.git("config", "core.worktree", f.dir); f.git("config", "core.hooksPath", ".githooks");
   f.git("worktree", "add", "-b", "linked-commit", worktree);
   const configPath = path.join(f.dir, ".git", "config");
@@ -144,8 +156,8 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   const f = hookFixture(); writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n"); f.git("add", "example.ts"); f.git("commit", "-m", "change");
   expect(changedSinceBase(f.dir, "origin/main")).toEqual(["example.ts"]);
   const remote = mkdtempSync(path.join(tmpdir(), "hook-remote-")); roots.push(remote);
-  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe" });
-  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "origin/main:main"], { stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe", env: f.env });
+  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "origin/main:main"], { stdio: "pipe", env: f.env });
   f.git("remote", "add", "origin", remote);
   const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(result.status).toBe(0);
@@ -160,12 +172,13 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
 });
 test("linked-worktree pre-push clears Git selectors and preserves the complete shared config", () => {
   const f = hookFixture();
-  const worktree = path.join(path.dirname(f.dir), "linked push");
+  const linkedRoot = mkdtempSync(path.join(tmpdir(), "linked-push-")); roots.push(linkedRoot);
+  const worktree = path.join(linkedRoot, "checkout");
   f.git("config", "core.bare", "false"); f.git("config", "core.worktree", f.dir); f.git("config", "core.hooksPath", ".githooks");
   f.git("worktree", "add", "-b", "linked-push", worktree);
   const remote = mkdtempSync(path.join(tmpdir(), "linked-hook-remote-")); roots.push(remote);
-  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe" });
-  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "refs/heads/main:refs/heads/main"], { stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe", env: f.env });
+  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "refs/heads/main:refs/heads/main"], { stdio: "pipe", env: f.env });
   f.git("remote", "add", "origin", remote);
   const configPath = path.join(f.dir, ".git", "config");
   const before = readFileSync(configPath);
