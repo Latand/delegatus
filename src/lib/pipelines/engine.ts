@@ -2803,6 +2803,15 @@ function parkForReview(
   writeParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
+/** A retry or a decision resolution can leave budget metadata as history.
+    Only the parked attempt it describes may spend a continuation grant. */
+function currentTerminalReviewPending(pipeline: Pipeline): boolean {
+  const pending = pipeline.reviewPending;
+  return pending?.terminalRecheck === true
+    && pipeline.cursor?.stageId === pending.stageId
+    && currentAttempt(pipeline, pending.stageId)?.n === pending.attempt;
+}
+
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
   const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
   if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check. continue-review with addRounds sends retained findings to fix, then fresh review`;
@@ -8080,7 +8089,7 @@ function continueReview(
     return { error: "the pipeline changed since it was read; read it again before continuing review", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const pending = pipeline.reviewPending;
-  const terminalRecheck = pipeline.state === "needs_decision" && pending?.terminalRecheck === true;
+  const terminalRecheck = pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline);
   if (!pending || (pipeline.state !== "needs_review" && !terminalRecheck)) {
     return { error: `continue-review requires needs_review or a failed terminal budget re-check; this one is ${pipeline.state}`, status: 409 };
   }
@@ -8787,7 +8796,7 @@ export async function patchPipeline(
       pipeline.pausedState = null;
       pipeline.resumedAt = ports.now();
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
-      pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && pipeline.reviewPending?.terminalRecheck) && pipeline.reviewPending
+      pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline)) && pipeline.reviewPending
         ? reviewPendingDetail(pipeline.reviewPending)
         : pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);

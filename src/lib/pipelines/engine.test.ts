@@ -18777,3 +18777,24 @@ test("terminal review continuation returns each fix to review even when the fix 
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
 });
+
+
+test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const { pipeline: parked } = await driveWithController(h);
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(review.agentPath!, { text: 'Blocked review\n\n```json\n{"status":"fail","findings":["P1 review blocked"],"blocked":true,"blockedReason":"Review environment unavailable"}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.stateDetail).toBe("Review environment unavailable");
+  expect((await continueReview(blocked, "stale-budget", 2)).status).toBe(409);
+  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
+  await patchPipeline(blocked.id, { action: "pause" }, h.ports);
+  const resumed = await patchPipeline(blocked.id, { action: "resume" }, h.ports);
+  expect(resumed.pipeline!.stateDetail).not.toContain("continue-review");
+});
