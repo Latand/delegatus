@@ -156,6 +156,20 @@ type HandoffResult = McpToolResult & {
   handoff?: { deviceId: string; viewSessionId?: string | null; state: string; resolution: string | null; arrivedAt: string };
 };
 
+test("accepted-only attention records the handoff without waiting for browser arrival", async () => {
+  upsertPresence(openView());
+  let waits = 0;
+  const result = await service({ awaitAttentionArrival: async () => {
+    waits += 1;
+    return { kind: "failed", code: "HANDOFF_TIMEOUT", request: null };
+  } }).callTool("request_attention", ask({ waitFor: "accepted" }));
+  expect(result.ok).toBe(true);
+  expect(waits).toBe(0);
+  expect(result).toMatchObject({ accepted: true, arrival: "pending", handoff: null });
+  expect(readAttentionFile().requests[0]!.state).toBe("accepted");
+  expect(readAttentionFile().requests[0]!.returnPoints).toEqual([]);
+});
+
 test("success is reported only after the chosen view arrived — never as a pending offer", async () => {
   upsertPresence(openView());
   const browser = browserStandIn("device-desktop");

@@ -280,8 +280,11 @@ body {
   animation-play-state: paused !important;
 }
 
-/* Feed rows inside compact scheme panes: off-screen messages skip layout and
-   paint entirely; the placeholder height keeps scroll geometry sane. */
+/* Feed rows, on the canvas and in the desktop reader (never on the phone,
+   see `rowsSkipOffscreen` in LogFeed): off-screen messages skip layout and
+   paint entirely; the placeholder height keeps scroll geometry sane. The
+   skipped text stays reachable to find-in-page and to a selection that
+   crosses rows, which is why this is not a JS virtualizer. */
 .feed-cv {
   content-visibility: auto;
   contain-intrinsic-size: auto 44px;

@@ -1,0 +1,353 @@
+{
+  "rule": "Mark helpful only when the candidate summary or its bounded indexed body supplies a specific, applicable fact, rule or source pointer that changes a necessary next action for this prompt. Reject generic topic overlap, a pointer explicitly required by the prompt already, unrelated projects, unsupported environment assumptions, and instructions superseded by the prompt. Judge replay against the current index, not historical availability. Borderline relevance is false; references may be true when they locate required evidence. Labels were frozen before viewing Jev scores.",
+  "cases": [
+    {
+      "id": "p01",
+      "prompt": "Research the available cost and sales data, keeping the business calculation rules unresolved until their owner confirms them.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Sales analytics access and schema skill.",
+          "helpful": false,
+          "reason": "The request already names this exact skill and requires reading it; this summary adds no new direction."
+        },
+        {
+          "id": "c2",
+          "summary": "Hosted general research workflow.",
+          "helpful": false,
+          "reason": "The task needs local schema evidence; the generic web research pointer adds no specific fact."
+        },
+        {
+          "id": "c3",
+          "summary": "Read-only production-system SQL access skill.",
+          "helpful": false,
+          "reason": "The request already names this exact skill and its database scope."
+        },
+        {
+          "id": "c4",
+          "summary": "VPN and file-share connection skill.",
+          "helpful": false,
+          "reason": "The request already explicitly names this connection skill."
+        },
+        {
+          "id": "c5",
+          "summary": "General research coordination workflow.",
+          "helpful": false,
+          "reason": "Generic orchestration offers no task-specific evidence and can add unnecessary delegation."
+        },
+        {
+          "id": "c6",
+          "summary": "Tariff requirements, workbook and seed source locations.",
+          "helpful": false,
+          "reason": "Building-cost feasibility and sales joins differ from the tariff-calculator requirements referenced here."
+        },
+        {
+          "id": "c7",
+          "summary": "Build a disposable prototype.",
+          "helpful": false,
+          "reason": "The requested output is a research document; no prototype question is specified."
+        },
+        {
+          "id": "c8",
+          "summary": "Review test coverage for a code change.",
+          "helpful": false,
+          "reason": "There is no implementation diff to review."
+        }
+      ]
+    },
+    {
+      "id": "p02",
+      "prompt": "Reverse-engineer tariff spreadsheets into a calculation map, preserving formulas, periods, source provenance and unresolved inputs.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Locations of tariff requirements, workbook references and source decisions.",
+          "helpful": true,
+          "reason": "Adds the requirements and provenance trail needed to interpret spreadsheet formulas."
+        },
+        {
+          "id": "c2",
+          "summary": "Remote access route for external UI testers.",
+          "helpful": false,
+          "reason": "The request is an offline spreadsheet analysis."
+        },
+        {
+          "id": "c3",
+          "summary": "Project status pointer identifying newer workbooks with half-year totals.",
+          "helpful": true,
+          "reason": "The period warning and newer-workbook pointer affect interpretation of monthly amounts; verify dates before use."
+        },
+        {
+          "id": "c4",
+          "summary": "Search old agent conversations before reporting an access blocker.",
+          "helpful": false,
+          "reason": "No access blocker is established; the supplied workbooks are local."
+        },
+        {
+          "id": "c5",
+          "summary": "Unrelated Bluetooth-device prototype.",
+          "helpful": false,
+          "reason": "Different project and task."
+        },
+        {
+          "id": "c6",
+          "summary": "PDF header rendering repair.",
+          "helpful": false,
+          "reason": "Spreadsheet formulas do not depend on PDF rendering."
+        },
+        {
+          "id": "c7",
+          "summary": "Keep existing test-user passwords unchanged.",
+          "helpful": false,
+          "reason": "No test accounts are being managed."
+        },
+        {
+          "id": "c8",
+          "summary": "Connect to a corporate file share.",
+          "helpful": false,
+          "reason": "The input directory is already local; no remote share is required."
+        }
+      ]
+    },
+    {
+      "id": "p03",
+      "prompt": "Compare parking-space sale prices per area, payment arrangements and the effect of larger units.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Tariff requirements and calculation-source locations.",
+          "helpful": false,
+          "reason": "Maintenance tariffs are a different quantity from property sale prices."
+        },
+        {
+          "id": "c2",
+          "summary": "Search previous agent work when access fails.",
+          "helpful": false,
+          "reason": "Generic fallback guidance gives no price data, query or source for this request."
+        },
+        {
+          "id": "c3",
+          "summary": "Personal messaging connector.",
+          "helpful": false,
+          "reason": "The quoted conversation already supplies the request; no additional messages are needed."
+        },
+        {
+          "id": "c4",
+          "summary": "PDF rendering dependency repair.",
+          "helpful": false,
+          "reason": "Unrelated to the price analysis."
+        },
+        {
+          "id": "c5",
+          "summary": "Distinguish application development and production SSH destinations.",
+          "helpful": false,
+          "reason": "These application hosts do not identify the sales database needed here."
+        },
+        {
+          "id": "c6",
+          "summary": "Tariff project status and recent calculation workbooks.",
+          "helpful": false,
+          "reason": "The workbooks concern maintenance charges, not parking sales."
+        },
+        {
+          "id": "c7",
+          "summary": "Inspect the remote main branch instead of a stale checkout.",
+          "helpful": false,
+          "reason": "No source-code investigation is requested."
+        },
+        {
+          "id": "c8",
+          "summary": "Messaging digest for another product.",
+          "helpful": false,
+          "reason": "Different project and task."
+        }
+      ]
+    },
+    {
+      "id": "p04",
+      "prompt": "Create an orchestrator, review the tariff project and access, and prepare a stakeholder discussion of known data, gaps and proposed work.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Locations of requirements, stakeholder transcript, workbooks and seeds.",
+          "helpful": true,
+          "reason": "Directly identifies the background and original discussion requested by the operator."
+        },
+        {
+          "id": "c2",
+          "summary": "Current tariff work pointer, including workbook revisions and reconciliation status.",
+          "helpful": true,
+          "reason": "Provides the project-state trail needed for the status discussion; recheck its freshness."
+        },
+        {
+          "id": "c3",
+          "summary": "PDF header repair and deployment status.",
+          "helpful": false,
+          "reason": "A specific rendering incident is not material to this data-and-scope briefing."
+        },
+        {
+          "id": "c4",
+          "summary": "Preserve existing development test-user passwords.",
+          "helpful": false,
+          "reason": "Checking access does not require creating or changing users; the summary adds no needed access route."
+        },
+        {
+          "id": "c5",
+          "summary": "Avoid opening a new-record form in read-only UI walkthroughs.",
+          "helpful": false,
+          "reason": "No UI walkthrough is requested."
+        },
+        {
+          "id": "c6",
+          "summary": "Send each stakeholder question as a separate group message.",
+          "helpful": false,
+          "reason": "The prompt asks for a discussion, not messages to that particular group."
+        },
+        {
+          "id": "c7",
+          "summary": "Repository CI is local.",
+          "helpful": false,
+          "reason": "This is an orientation task without code changes or CI."
+        },
+        {
+          "id": "c8",
+          "summary": "Orchestrator bridge reports are mirrored to an external client group.",
+          "helpful": true,
+          "reason": "Creating an orchestrator can expose internal planning; the destination warning changes what may safely be reported."
+        }
+      ]
+    },
+    {
+      "id": "p05",
+      "prompt": "Resolve a blocked application update and investigate excessive disk usage while preserving the live installation and active agents.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Old default-model and account policy.",
+          "helpful": false,
+          "reason": "Duplicates the explicitly chosen model and includes account restrictions conflicting with this request."
+        },
+        {
+          "id": "c2",
+          "summary": "Effort and model guidance from an earlier policy.",
+          "helpful": false,
+          "reason": "The operator already chose the model and effort for this task."
+        },
+        {
+          "id": "c3",
+          "summary": "Older restriction on which accounts can run work.",
+          "helpful": false,
+          "reason": "Conflicts with the explicit account authorization in the current request."
+        },
+        {
+          "id": "c4",
+          "summary": "Issue commands also accept pull-request numbers.",
+          "helpful": false,
+          "reason": "The task neither closes nor comments on forge items."
+        },
+        {
+          "id": "c5",
+          "summary": "Select builder and reviewer models by work type.",
+          "helpful": false,
+          "reason": "No model selection decision remains."
+        },
+        {
+          "id": "c6",
+          "summary": "Configuration defaults should preserve operator control.",
+          "helpful": false,
+          "reason": "This is a design preference, not a diagnosis of the update failure."
+        },
+        {
+          "id": "c7",
+          "summary": "Daily messaging report requirements.",
+          "helpful": false,
+          "reason": "Different feature."
+        },
+        {
+          "id": "c8",
+          "summary": "Use a particular engine for prose work.",
+          "helpful": false,
+          "reason": "The request is a live update investigation."
+        }
+      ]
+    },
+    {
+      "id": "p06",
+      "prompt": "Diagnose a stale web process after updates, distinguish it from the runtime host, and recover safely without interrupting active agents.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "Use the application management surface to inspect and manage agents.",
+          "helpful": true,
+          "reason": "Points to the managed API for verifying board and agent state during recovery."
+        },
+        {
+          "id": "c2",
+          "summary": "Container-era deployment procedure through the runtime host.",
+          "helpful": false,
+          "reason": "The observed installation uses launcher and self-update processes; blindly applying the older container recipe is unsafe."
+        },
+        {
+          "id": "c3",
+          "summary": "Restart of a separate stage host kills its agent process group.",
+          "helpful": false,
+          "reason": "The note names another host; its topology is not established for this installation."
+        },
+        {
+          "id": "c4",
+          "summary": "An earlier decision prefers container-only installation.",
+          "helpful": false,
+          "reason": "A past target architecture does not describe the running launcher topology to be diagnosed."
+        },
+        {
+          "id": "c5",
+          "summary": "Deployment working directory for another product stage.",
+          "helpful": false,
+          "reason": "Different product and environment."
+        },
+        {
+          "id": "c6",
+          "summary": "Read-only host-tree memory census.",
+          "helpful": false,
+          "reason": "The task is update succession and serving-code identity, not measuring process-tree memory."
+        },
+        {
+          "id": "c7",
+          "summary": "Production deployment workflow for another product.",
+          "helpful": false,
+          "reason": "Different product and environment."
+        },
+        {
+          "id": "c8",
+          "summary": "Bootstrap the incumbent container host to update its readiness checks.",
+          "helpful": false,
+          "reason": "The symptom concerns launcher self-update; this container-specific intervention is not justified by the prompt."
+        }
+      ]
+    },
+    {
+      "id": "p07",
+      "prompt": "Explain the repository to a newcomer and inspect it for private data and unused code.",
+      "candidates": [
+        {
+          "id": "c1",
+          "summary": "A past seed import required verified input files.",
+          "helpful": false,
+          "reason": "An isolated historical loader pitfall does not answer the requested repository overview or privacy audit."
+        },
+        {
+          "id": "c2",
+          "summary": "A previous release needed updated manifest test assertions.",
+          "helpful": false,
+          "reason": "A past test-fix note provides no current architecture or dead-code evidence."
+        },
+        {
+          "id": "c3",
+          "summary": "General advice for clearer writing.",
+          "helpful": false,
+          "reason": "No specific repository fact or audit method is added."
+        }
+      ]
+    }
+  ]
+}

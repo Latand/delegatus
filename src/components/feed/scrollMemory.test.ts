@@ -121,3 +121,60 @@ describe("readingRows", () => {
     expect(picks).toContain(false);
   });
 });
+
+describe("readingRows cache", () => {
+  const setup = () => {
+    const window = new Window();
+    const document = window.document;
+    const scroller = document.createElement("div") as unknown as HTMLElement;
+    document.body.appendChild(scroller as never);
+    const row = (key: string) => {
+      const element = document.createElement("div") as unknown as HTMLElement;
+      element.setAttribute("data-feed-key", key);
+      return element;
+    };
+    return { scroller, row, window };
+  };
+
+  test("a repeated read returns the same rows without scanning again", () => {
+    const { scroller, row } = setup();
+    scroller.append(row("a"), row("b"));
+    let scans = 0;
+    const query = scroller.querySelectorAll.bind(scroller);
+    scroller.querySelectorAll = ((selector: string) => { scans += 1; return query(selector); }) as typeof scroller.querySelectorAll;
+    const first = readingRows(scroller);
+    const scansAfterFirst = scans;
+    expect(readingRows(scroller)).toBe(first);
+    expect(scans).toBe(scansAfterFirst);
+  });
+
+  test("a row added or removed is seen by the very next read, before any observer callback runs", () => {
+    const { scroller, row } = setup();
+    const a = row("a");
+    scroller.append(a);
+    expect(readingRows(scroller).map((entry) => entry.dataset.feedKey)).toEqual(["a"]);
+    scroller.prepend(row("older"));
+    expect(readingRows(scroller).map((entry) => entry.dataset.feedKey)).toEqual(["older", "a"]);
+    a.remove();
+    expect(readingRows(scroller).map((entry) => entry.dataset.feedKey)).toEqual(["older"]);
+  });
+
+  test("an anchor that moves inside another row stops being a reading row", () => {
+    const { scroller, row } = setup();
+    const a = row("a");
+    const b = row("b");
+    scroller.append(a, b);
+    expect(readingRows(scroller)).toHaveLength(2);
+    a.append(b);
+    expect(readingRows(scroller).map((entry) => entry.dataset.feedKey)).toEqual(["a"]);
+  });
+
+  test("a changed key attribute is seen too", () => {
+    const { scroller, row } = setup();
+    const a = row("a");
+    scroller.append(a);
+    readingRows(scroller);
+    a.removeAttribute("data-feed-key");
+    expect(readingRows(scroller)).toHaveLength(0);
+  });
+});
