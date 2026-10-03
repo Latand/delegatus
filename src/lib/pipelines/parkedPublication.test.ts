@@ -130,17 +130,19 @@ function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   return h.git("rev-parse", "HEAD");
 }
 
-for (const privacyFails of [false, true]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails})`, async () => {
+for (const [privacyFails, partial] of [[false, false], [true, false], [false, true]]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails}, partial installation: ${partial})`, async () => {
   const h = fixture();
   try {
     const head = missingDependencyFixture(h);
+    if (partial) fs.mkdirSync(path.join(h.repo, "node_modules"));
     const source = path.join(h.root, "source");
     for (let n = 0; n < 2; n++) h.git("-C", source, "commit", "--allow-empty", "-q", "-m", `later main ${n}`);
     h.git("-C", source, "push", "-q", "origin", "main"); h.git("fetch", "-q", "origin", "main");
+    expect(h.git("rev-list", "--count", "HEAD..origin/main")).toBe("2");
     const marker = path.join(h.root, "privacy-ran");
     fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\nbehind=$(git rev-list --count HEAD..origin/main)\necho "pre-push: branch is $behind commit(s) behind origin/main" >&2\necho pre-push: privacy >&2\ntouch '${marker}'\n${privacyFails ? "exit 9" : "test -d node_modules/publication-fixture-dependency\necho pre-push: types >&2"}\n`, { mode: 0o700 });
     savePipelines([h.lane]);
-    expect(fs.existsSync(path.join(h.repo, "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(h.repo, "node_modules/publication-fixture-dependency"))).toBe(false);
     expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, h.ports)).error).toBeUndefined();
     await h.tick();
     expect(fs.existsSync(marker)).toBe(true);
@@ -154,6 +156,28 @@ for (const privacyFails of [false, true]) test(`read-only publication provisions
       expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
       expect(h.pushes()).toBe(1);
     }
+  } finally { h.cleanup(); }
+});
+
+test("a slow owned publisher keeps its progress evidence fresh while the hook runs", async () => {
+  const h = fixture();
+  try {
+    const { pipelinePublicationInFlight } = await import("./git");
+    let progressWasFresh = false;
+    const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
+      if (args[0] === "git" && args[1][0] === "push") {
+        const stale = new Date(Date.now() - 120_000);
+        const lock = h.current().delivery!.operation!.executor!.lock;
+        fs.utimesSync(lock, stale, stale);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        progressWasFresh = pipelinePublicationInFlight(h.current()).ok;
+      }
+      return h.ports.exec(...args);
+    } };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(progressWasFresh).toBe(true);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: h.head });
   } finally { h.cleanup(); }
 });
 

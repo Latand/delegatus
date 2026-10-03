@@ -1313,7 +1313,16 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
         detail: "publication superseded after a remote write began; reconcile its outcome" }
       : { ok: false, error: "publication superseded before a remote write" };
-    watch = setInterval(revalidate, 50);
+    let progressAt = performance.now();
+    watch = setInterval(() => {
+      revalidate();
+      // A live controller can be waiting on a long repository hook. Keep its
+      // lock progress fresh; a dead controller stops touching it immediately.
+      if (!abort.signal.aborted && performance.now() - progressAt >= 1000) {
+        try { fs.futimesSync(descriptor, new Date(), new Date()); progressAt = performance.now(); }
+        catch { abort.abort(); }
+      }
+    }, 50);
     let failureEvidence: PipelinePublicationFailure | undefined;
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
@@ -1505,8 +1514,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // its full repository hook runs, keeping privacy and every other gate active.
   // Frozen installation cannot upgrade the accepted lockfile. The same bounded,
   // fenced executor retains setup failures and cancels them on supersession.
-  if (!fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))
-    && fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
+  // Verify even an existing installation: an interrupted install may have
+  // left node_modules incomplete, or a merged lockfile may have moved on.
+  if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
     const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, undefined, { timeoutMs: 180_000 });
     if (installed.code !== 0) return failure("preparing publication dependencies", installed);
@@ -1515,7 +1525,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     if (!prepared.ok) return prepared;
     if (prepared.sha !== acceptedSha) return { ok: false, error: "dependency preparation changed the accepted pipeline revision; nothing was published" };
   }
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir));
+  // Full repository hooks exceed the generic command budget. Publication
+  // remains finite and the ownership watcher can cancel it throughout.
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, undefined, { timeoutMs: 900_000 }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
