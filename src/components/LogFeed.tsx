@@ -19,7 +19,7 @@ import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 import { LaunchChips } from "./conversation/LaunchChips";
 import { MandateCard, MandateConversationContext } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
-import { mergeAssistantRows, useAssistantHandoff } from "./conversation/assistantRows";
+import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from "./conversation/assistantRows";
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
@@ -1116,7 +1116,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     [runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn],
   );
   const liveTail = useMemo(() => {
-    const ordered = [...assistantHandoff.pending.map(answer => answer.live), ...visibleLiveTurnItems].sort((a, b) => {
+    const ordered = retainedAssistantItems(assistantHandoff, runtimeLiveTurn, visibleLiveTurnItems).sort((a, b) => {
       const time = Date.parse(a.startedAt ?? a.completedAt ?? "") - Date.parse(b.startedAt ?? b.completedAt ?? "");
       if (Number.isFinite(time) && time) return time;
       const order = (item: RuntimeLiveTurnItem) => item.itemId ? assistantHandoff.liveOrder.get(item.itemId) ?? Infinity
@@ -1125,7 +1125,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     });
     const tail = liveTurnTail(ordered);
     return { ...tail, handoff: { ...assistantHandoff, pending: assistantHandoff.pending.filter(answer => tail.rows.includes(answer.live)) } };
-  }, [assistantHandoff, visibleLiveTurnItems]);
+  }, [assistantHandoff, visibleLiveTurnItems, runtimeLiveTurn]);
   /* The status bar names the tool that is running NOW: a live tool row from the
      structured host (issue #1100) is newer than anything the transcript window
      shows, so it wins over the transcript's last row while it is still running.

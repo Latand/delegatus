@@ -140,6 +140,26 @@ export function useAssistantHandoff(identity: string | null, live: RuntimeLiveTu
   return snapshot.value;
 }
 
+/** Transport omissions count only replies this pane has not retained. Cached
+ * replies stay owned until canonical adoption, even when descriptors rotate.
+ */
+export function retainedAssistantItems(handoff: AssistantHandoff, liveTurn: RuntimeLiveTurn | null,
+  visible: readonly RuntimeLiveTurnItem[]): RuntimeLiveTurnItem[] {
+  const pending = handoff.pending.map(answer => answer.live);
+  const sameReply = (a: RuntimeLiveTurnItem, b: RuntimeLiveTurnItem) => a.itemId && a.itemId === b.itemId
+    || !a.itemId && !b.itemId && a.startedAt !== null && a.startedAt === b.startedAt;
+  const descriptors = runtimeLiveTurnItems(liveTurn);
+  const foldedButRetained = pending.filter(answer => !descriptors.some(item => sameReply(answer, item))).length;
+  return [...pending, ...visible.flatMap(item => {
+    if (!item.tool && pending.some(answer => sameReply(answer, item))) return [];
+    if (item.omittedItems) {
+      const omittedItems = Math.max(0, item.omittedItems - foldedButRetained);
+      return omittedItems ? [{ ...item, omittedItems }] : [];
+    }
+    return [item];
+  })];
+}
+
 /** Splice answers at their original instant. The canonical echo takes the same
  * keyed outer row and slot, including when its file record arrives out of order.
  */

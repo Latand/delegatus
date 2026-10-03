@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { createFeedSession, type FeedEntry } from "../feed/parse";
 import type { RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
 import { appendRuntimeLiveTurnDelta, projectRuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
-import { mergeAssistantRows, projectAssistantHandoff } from "./assistantRows";
+import { mergeAssistantRows, projectAssistantHandoff, retainedAssistantItems } from "./assistantRows";
+import { runtimeLiveTurnItems } from "@/lib/runtime/liveTurn";
+import { liveTurnTail } from "./LiveTurnRows";
 
 const later: FeedEntry = { key: "later", anchorKey: "row:1:0", item: {
   kind: "user", ts: "2026-10-02T10:00:05Z", text: "Next request",
@@ -205,4 +207,17 @@ test("idle turns fence stranded streaming drafts while completed replies await t
   expect(projectAssistantHandoff(state, null, [later], claims, "unknown").pending).toHaveLength(1);
   expect(projectAssistantHandoff(state, null, [later], claims, "idle").pending).toEqual([]);
   expect(projectAssistantHandoff(null, live("awaiting-echo"), [later], claims, "idle").pending).toHaveLength(1);
+});
+
+test("folded transport descriptors count retained replies once during prolonged transcript lag", () => {
+  let live: RuntimeLiveTurn | null = null;
+  let state = projectAssistantHandoff(null, null, [], claims);
+  for (let index = 0; index < 550; index++) {
+    live = projectRuntimeLiveTurnItem(live, "lagging-turn", { type: "agentMessage", id: `answer-${index}`, text: `Answer ${index}` }, "completed", new Date(1760000000000 + index).toISOString());
+    state = projectAssistantHandoff(state, live, [], claims);
+  }
+  const descriptors = runtimeLiveTurnItems(live);
+  const tail = liveTurnTail(retainedAssistantItems(state, live, descriptors.filter(item => item.tool || !item.text.trim())));
+  expect(tail.rows).toHaveLength(8);
+  expect(tail.earlier).toBe(542);
 });

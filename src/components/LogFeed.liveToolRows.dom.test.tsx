@@ -564,6 +564,21 @@ test("a pending seat reply keeps the live speaker lead while a deputy is active"
   expect(host.querySelector('[data-live-turn] [data-seat-speaker="live"]')).not.toBeNull();
 });
 
+test("runtime text omission does not duplicate an answer already retained by this pane", () => {
+  const firstText = "First answer. " + "readable context ".repeat(4000);
+  const secondText = "Second answer. " + "more context ".repeat(6000);
+  const first = projectRuntimeLiveTurnItem(null, "large-turn", { type: "agentMessage", id: "first-large", text: firstText }, "completed", AT(0));
+  sessionState.session = { ...session, liveTurn: first };
+  const { host, paint } = render();
+  const original = host.querySelector("[data-live-turn]");
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(first, "large-turn",
+    { type: "agentMessage", id: "second-large", text: secondText }, "completed", AT(1)) };
+  paint();
+  expect(host.querySelector('[data-live-turn-item-id="first-large"]')).toBe(original);
+  expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(2);
+  expect(host.textContent).not.toContain("earlier step");
+});
+
 test("a missed completion adopts a citation-bearing streamed answer", () => {
   file.engine = "codex"; file.fmt = "codex";
   try {
