@@ -15477,3 +15477,178 @@ describe("passive task status note", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("orchestrator arrows design variants", () => {
+  /* docs/design/orchestrator-arrows.md: three prototypes of the orchestrator's
+     links to the tasks it runs and of the motion its actions make, laid over the
+     real board by `orchestratorArrows.prototype.ts`. The fixture's seat owns
+     five lanes and spawned one agent; `orchestratorAct` changes the record the
+     way the seat's own write would and lets the board reload it. Each frame is
+     printed with its variant number in a band above the board, so no frame
+     covers the board itself. */
+  const out = path.resolve("docs/design/orchestrator-arrows");
+  const seatAt = (placement: "top" | "side", folded: boolean) => `try {
+    localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: ${folded ? "{ atlas: true }" : "{}"}, placement: "${placement}", width: null, topWidths: {}, sideWidths: {}, heightV: 2 }));
+    ${placement === "side" ? 'localStorage.setItem("llv:rail-hidden:v1", "hidden");' : ""}
+  } catch {}`;
+  /* Variant 2 is the n8n reading, the seat a node on the left; 1 and 3 keep the folded seat on top. */
+  const SEATS = { 1: seatAt("top", true), 2: seatAt("side", false), 3: seatAt("top", true) } as const;
+  const FORMS = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } } as const;
+
+  async function printed(browser: Browser, shot: Buffer, variant: number, caption: string, file: string) {
+    const page = await browser.newPage();
+    try {
+      const data = await page.evaluate(async ({ source, variant, caption }) => {
+        const image = new Image();
+        image.src = source;
+        await image.decode();
+        const band = 90;
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        const probe = canvas.getContext("2d")!;
+        probe.font = "500 16px sans-serif";
+        const wrapped = probe.measureText(caption).width > image.width - 32 ? 1 : 0;
+        canvas.height = image.height + band + wrapped * 20;
+        const g = canvas.getContext("2d")!;
+        g.fillStyle = "#262a36";
+        g.fillRect(0, 0, canvas.width, band + wrapped * 20);
+        g.fillStyle = "#fbebdd";
+        g.textBaseline = "alphabetic";
+        g.font = "800 44px sans-serif";
+        g.fillText(`Variant ${variant}`, 16, 50);
+        g.font = "500 16px sans-serif";
+        g.globalAlpha = 0.85;
+        const lines = [""];
+        for (const word of caption.split(" ")) {
+          const line = `${lines.at(-1)} ${word}`.trim();
+          if (g.measureText(line).width > canvas.width - 32 && lines.at(-1)) lines.push(word);
+          else lines[lines.length - 1] = line;
+        }
+        lines.forEach((line, index) => g.fillText(line, 16, 76 + index * 20));
+        g.globalAlpha = 1;
+        g.drawImage(image, 0, band + (lines.length - 1) * 20);
+        return canvas.toDataURL("image/png").split(",")[1]!;
+      }, { source: `data:image/png;base64,${shot.toString("base64")}`, variant, caption });
+      fs.writeFileSync(path.join(out, file), Buffer.from(data, "base64"));
+    } finally { await page.close(); }
+  }
+
+  browserTest("three variants at desktop and 390 px: at rest, on a move, a new pipeline and a launched stage", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/orchestrator-arrows"));
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown>[] = [];
+    const cost: Record<string, unknown>[] = [];
+    type Layer = { freeze(ms: number): void; settle(): void; stats(reset?: boolean): Record<string, number> };
+    const layer = (page: Page) => page.evaluate(() => (window as unknown as { orchestratorArrows: () => Layer }).orchestratorArrows().stats());
+    const act = (page: Page, action: Record<string, string>) => page.evaluate((action) => (window as unknown as { orchestratorAct: (a: unknown) => Promise<{ landed: boolean }> }).orchestratorAct(action), action);
+    const freeze = (page: Page, ms: number) => page.evaluate((ms) => (window as unknown as { orchestratorArrows: () => Layer }).orchestratorArrows().freeze(ms), ms);
+    const settle = (page: Page) => page.evaluate(() => (window as unknown as { orchestratorArrows: () => Layer }).orchestratorArrows().settle());
+    try {
+      for (const variant of [1, 2, 3] as const) for (const form of ["desktop", "phone"] as const) {
+        const phone = form === "phone";
+        const context = await browser.newContext({ viewport: FORMS[form], colorScheme: "light", reducedMotion: "no-preference", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        await context.addInitScript(`try { localStorage.setItem("llv_lang", "en"); } catch {}`);
+        await context.addInitScript(SEATS[variant]);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const shoot = async (frame: string, caption: string) => {
+          const file = `v${variant}-${form}-${frame}.png`;
+          await printed(browser, await page.screenshot(), variant, `${phone ? "Phone 390 px" : "Desktop 1440 px"} · ${caption}`, file);
+          frames.push({ variant, form, frame, file: `docs/design/orchestrator-arrows/${file}`, ...(await layer(page)) });
+        };
+        const tab = async (status: string) => { if (phone) { await page.locator(`[data-phone-kanban-tab="${status}"]`).click(); await page.waitForTimeout(450); } };
+        try {
+          await page.goto(`${server.base}?scenario=orchestrator-arrows&arrows=${variant}${phone ? "&kanban=1" : ""}`);
+          await page.locator("[data-oa-layer]").waitFor({ state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(600);
+          await tab("assigned");
+          if (variant === 1 && !phone) {
+            await page.hover("[data-kanban-seat]");
+            await page.waitForTimeout(150);
+            expect((await layer(page)).wires).toBeGreaterThan(3);
+            await shoot("rest", "pointer on the seat: a wire to every open task it runs, behind the other cards");
+            await page.mouse.move(FORMS[form].width - 4, FORMS[form].height - 4);
+          }
+          if (variant === 1 && phone) await shoot("rest", "at rest: a port on each card the seat runs; wires draw only while the seat acts");
+          if (variant === 2) {
+            expect((await layer(page)).wires).toBeGreaterThan(3);
+            await shoot("rest", "always on: the seat's links through the column gutters, running lanes flowing");
+          }
+          expect((await act(page, { kind: "move", taskId: "t-rounds", to: "blocked" })).landed).toBe(true);
+          await freeze(page, 700);
+          await shoot("move", "the orchestrator moved «Rework the retry banner» Assigned → Blocked");
+          await settle(page);
+          await tab("inbox");
+          expect((await act(page, { kind: "pipeline", taskId: "t-onboarding" })).landed).toBe(true);
+          await freeze(page, 700);
+          await shoot("pipeline", "the orchestrator started a pipeline on «Write the first-run walkthrough»");
+          await settle(page);
+          await tab("assigned");
+          /* Only the column scrolls, so the seat stays where it was. */
+          await page.locator(phone ? '[data-phone-card="task:t-upload"]' : '[data-kanban-board] .card[data-id="task:t-upload"]').evaluate((card) => {
+            const body = card.closest<HTMLElement>(".col-body, [data-phone-kanban-column]")!;
+            body.scrollTop += card.getBoundingClientRect().top - body.getBoundingClientRect().top - 60;
+          });
+          await page.waitForTimeout(200);
+          expect((await act(page, { kind: "stage", taskId: "t-upload" })).landed).toBe(true);
+          await freeze(page, 700);
+          await shoot("stage", "the orchestrator launched «Review ui» on the upload lane");
+          await settle(page);
+          if (variant === 3) {
+            await page.waitForTimeout(300);
+            expect((await layer(page)).wires).toBe(0);
+            if (!phone) {
+              await page.hover("[data-oa-feed]:last-child");
+              await page.waitForTimeout(120);
+              await freeze(page, 700);
+              await shoot("rest", "nothing drawn at rest; the operations line beside the seat, pointer on its oldest entry");
+            } else await shoot("rest", "nothing drawn at rest; the newest action replaces the seat's status line");
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+
+      /* About a hundred cards, a third of them the seat's: what a full board draws, and what the layer costs. */
+      for (const [variant, form] of [[1, "desktop"], [2, "desktop"], [2, "phone"]] as const) {
+        const phone = form === "phone";
+        const context = await browser.newContext({ viewport: FORMS[form], colorScheme: "light", reducedMotion: "no-preference", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        await context.addInitScript(`try { localStorage.setItem("llv_lang", "en"); } catch {}`);
+        await context.addInitScript(SEATS[variant]);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await page.goto(`${server.base}?scenario=orchestrator-arrows&many=1&arrows=${variant}${phone ? "&kanban=1" : ""}`);
+          await page.locator("[data-oa-layer]").waitFor({ state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(800);
+          if (phone) { await page.locator('[data-phone-kanban-tab="assigned"]').click(); await page.waitForTimeout(450); }
+          if (variant === 1) await page.hover("[data-kanban-seat]");
+          await page.waitForTimeout(200);
+          const board = await page.evaluate(() => ({
+            cards: document.querySelectorAll("[data-kanban-board] .card[data-id], [data-phone-card]").length,
+            links: (window as unknown as { orchestratorLinksCost: () => { links: number; ms: number } }).orchestratorLinksCost(),
+          }));
+          const file = `v${variant}-${form}-many.png`;
+          await printed(browser, await page.screenshot(), variant, `${phone ? "Phone 390 px" : "Desktop 1440 px"} · ${board.cards} cards, ${board.links.links} run by the seat${variant === 1 ? ", pointer on the seat" : ""}`, file);
+          frames.push({ variant, form, frame: "many", file: `docs/design/orchestrator-arrows/${file}`, ...(await layer(page)) });
+          /* Thirty scroll frames of the busiest column: one geometry pass each. */
+          await page.evaluate(() => (window as unknown as { orchestratorArrows: () => Layer }).orchestratorArrows().stats(true));
+          await page.evaluate(async (phone) => {
+            const scroller = document.querySelector<HTMLElement>(phone ? '[data-phone-kanban-column="assigned"]' : '[data-kanban-board] section.column[data-status="assigned"] .col-body')!;
+            for (let step = 0; step < 30; step++) {
+              scroller.scrollTop += 40;
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            }
+          }, phone);
+          const scrolled = await layer(page);
+          expect(scrolled.updates).toBeGreaterThan(10);
+          cost.push({ variant, form, cards: board.cards, links: board.links.links, linksMs: board.links.ms, scrollFrames: 30, ...scrolled, msPerUpdate: scrolled.updates ? scrolled.totalMs / scrolled.updates : null, rectReadsPerUpdate: scrolled.updates ? scrolled.rectReads / scrolled.updates : null });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", prototype: "src/components/kanban/orchestratorArrows.prototype.ts", frames, cost }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 400_000);
+});

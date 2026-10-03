@@ -17,6 +17,7 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
+import { mountOrchestratorArrows, orchestratorLinks, type ArrowVariant, type ArrowsOverlay } from "./orchestratorArrows.prototype";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -85,7 +86,10 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
+/* The orchestrator arrows design (docs/design/orchestrator-arrows.md): the pipelines board, with the
+   seat owning some of its lanes. */
+const ARROWS = SCENARIO === "orchestrator-arrows";
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || ARROWS;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -1853,6 +1857,104 @@ function transcriptOf(pathname: string): string {
 }
 
 const params = new URLSearchParams(location.search);
+
+/* The orchestrator arrows prototypes (docs/design/orchestrator-arrows.md). The seat made the lanes on
+   five open tasks and spawned the export implementer; `&many=1` fills the board to about a hundred
+   cards, a third of them the seat's. `&arrows=N` lays variant N's layer over the board, and
+   `orchestratorAct` makes the seat act: the record changes the way the seat's own write changes it,
+   the board reloads it as it reloads any change, and the layer draws the action once the card has
+   landed. */
+let arrowsLayer: ArrowsOverlay | null = null;
+if (ARROWS) {
+  const seatId = orchestrator.conversationId!;
+  for (const lane of pipelines) if (["p-search", "p-upload", "p-links", "p-limits", "p-rounds"].includes(lane.id)) lane.srcConversationId = seatId;
+  Object.assign(exportImpl, { durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: seatId, reviewsConversationId: null, memberships: [] } });
+  if (params.get("many") === "1") {
+    const areas = ["export", "search", "upload", "billing", "sign-in", "settings", "release notes", "webhooks", "invoices", "the importer", "the audit log", "notifications"];
+    const verbs = ["Tidy", "Speed up", "Document", "Harden", "Retire the old", "Translate", "Test"];
+    const spread: TaskStatus[] = [...Array(26).fill("inbox"), ...Array(34).fill("assigned"), ...Array(10).fill("blocked"), ...Array(14).fill("done")];
+    spread.forEach((status, index) => {
+      const id = `t-bulk-${index}`;
+      const title = `${verbs[index % verbs.length]} ${areas[index % areas.length]} (${index + 1})`;
+      tasks.push(task(id, status, title, "", (index + 20) * MIN));
+      const seats = (status === "assigned" && index % 3 !== 0) || (status === "blocked" && index % 2 === 0);
+      if (!seats) return;
+      const lane = status === "blocked" ? "needs_decision" : index % 4 === 0 ? "completed" : "running";
+      pipelines.push(pipeline(`p-bulk-${index}`, title, id, lane,
+        [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+        [{ stageId: "build", attempts: [attempt(1, lane === "running" ? "running" : lane === "completed" ? "passed" : "needs_decision", null)] }],
+        lane === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null },
+        { srcConversationId: seatId }));
+    });
+  }
+}
+const arrowLinks = () => orchestratorLinks({ seatConversationIds: [orchestrator.conversationId], pipelines, tasks, files });
+const arrowTitles = () => Object.fromEntries(tasks.map((entry) => [entry.id, entry.text.split("\n")[0] ?? entry.id]));
+type SeatAct = { kind: "move"; taskId: string; to: TaskStatus } | { kind: "pipeline"; taskId: string } | { kind: "stage"; taskId: string };
+const arrowCard = (taskId: string) => document.querySelector<HTMLElement>(`[data-kanban-board] .card[data-id="task:${CSS.escape(taskId)}"], [data-phone-card="task:${CSS.escape(taskId)}"]`);
+async function arrowsSettle(done: () => boolean) {
+  for (let waited = 0; waited < 4_000 && !done(); waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+async function orchestratorAct(act: SeatAct): Promise<{ landed: boolean }> {
+  const before = arrowCard(act.taskId)?.getBoundingClientRect() ?? null;
+  const at = new Date().toISOString();
+  const index = tasks.findIndex((entry) => entry.id === act.taskId);
+  let landed = () => true;
+  let stageName = "";
+  let laneId = `p-seat-${act.taskId}`;
+  if (act.kind === "move") {
+    const from = tasks[index]!.status;
+    evidence.setTaskStatus(act.taskId, act.to);
+    landed = () => {
+      const card = arrowCard(act.taskId);
+      return (card?.closest<HTMLElement>("section.column[data-status]")?.dataset.status ?? card?.closest<HTMLElement>("[data-phone-kanban-column]")?.dataset.phoneKanbanColumn) === act.to;
+    };
+    await arrowsSettle(landed);
+    /* The board flies the card on its own (420 ms); the seat's mark lands with it. */
+    await new Promise((resolve) => setTimeout(resolve, 480));
+    arrowsLayer?.setLinks(arrowLinks());
+    void arrowsLayer?.play({ kind: "move", taskId: act.taskId, from, to: act.to, before });
+    return { landed: landed() };
+  }
+  if (act.kind === "pipeline") {
+    pipelines.push(pipeline(`p-seat-${act.taskId}`, tasks[index]!.text.split("\n")[0]!, act.taskId, "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "build", attempts: [attempt(1, "running", null, { startedAt: at })] }],
+      { stageId: "build", state: "running", input: null, activatedBy: null },
+      { srcConversationId: orchestrator.conversationId, createdAt: at }));
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+    landed = () => !!arrowCard(act.taskId)?.querySelector(`[data-pipeline="p-seat-${act.taskId}"]`) || !!document.querySelector(`[data-phone-card="task:${CSS.escape(act.taskId)}"][data-phone-card-pipeline="p-seat-${act.taskId}"]`);
+  } else {
+    /* The upload lane's UI build passed, and the seat launched the UI review. */
+    const lane = pipelines.find((entry) => entry.taskIds.includes(act.taskId) && entry.cursor)!;
+    laneId = lane.id;
+    const current = lane.cursor!.stageId;
+    const next = lane.stages.find((entry) => entry.id === current)!.next as string;
+    const runs = lane.runs as unknown as { stageId: string; attempts: Record<string, unknown>[] }[];
+    for (const run of runs) if (run.stageId === current) run.attempts = run.attempts.map((entry) => entry.state === "running" ? { ...entry, state: "passed", completedAt: at } : entry);
+    runs.push({ stageId: next, attempts: [attempt(1, "running", null, { startedAt: at })] });
+    lane.cursor = { stageId: next, state: "running", input: null, activatedBy: null };
+    stageName = next.split("-").map((word, position) => position ? word : word[0]!.toUpperCase() + word.slice(1)).join(" ");
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+  }
+  await arrowsSettle(landed);
+  arrowsLayer?.setLinks(arrowLinks());
+  void arrowsLayer?.play(act.kind === "pipeline" ? { kind: "pipeline", taskId: act.taskId, pipelineId: laneId } : { kind: "stage", taskId: act.taskId, pipelineId: laneId, stage: stageName });
+  return { landed: landed() };
+}
+if (ARROWS) Object.assign(window, {
+  orchestratorAct,
+  orchestratorArrows: () => arrowsLayer,
+  /* What deriving the links costs on this board: one pass over the tasks, the lanes and the conversations. */
+  orchestratorLinksCost() {
+    const started = performance.now();
+    let links = 0;
+    for (let run = 0; run < 200; run++) links = arrowLinks().length;
+    return { links, ms: (performance.now() - started) / 200 };
+  },
+});
+
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: {
@@ -2876,3 +2978,11 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-pre
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
 ) : <Viewer />);
+if (ARROWS && params.get("arrows")) {
+  const variant = Number(params.get("arrows")) as ArrowVariant;
+  const mount = () => {
+    if (!document.querySelector("[data-kanban-seat], [data-mobile2-seat-card]") || !document.querySelector("[data-kanban-board] .card, [data-phone-card]")) return void setTimeout(mount, 100);
+    arrowsLayer = mountOrchestratorArrows({ variant, links: arrowLinks(), titles: arrowTitles(), locale: UK ? "uk" : "en" });
+  };
+  mount();
+}
