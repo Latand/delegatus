@@ -221,11 +221,11 @@ test("idle turns fence stranded streaming drafts while completed replies await t
   expect(projectAssistantHandoff(null, live("awaiting-echo"), [later], claims, "idle").pending).toHaveLength(1);
 });
 
-test("folded transport descriptors count retained replies once during prolonged transcript lag", () => {
+test.each([true, false])("folded transport descriptors count retained replies once during prolonged transcript lag (identified=%s)", (identified) => {
   let live: RuntimeLiveTurn | null = null;
   let state = projectAssistantHandoff(null, null, [], claims);
   for (let index = 0; index < 550; index++) {
-    live = projectRuntimeLiveTurnItem(live, "lagging-turn", { type: "agentMessage", id: `answer-${index}`, text: `Answer ${index}` }, "completed", new Date(1760000000000 + index).toISOString());
+    live = projectRuntimeLiveTurnItem(live, "lagging-turn", { type: "agentMessage", ...(identified ? { id: `answer-${index}` } : {}), text: `Answer ${index}` }, "completed", new Date(1760000000000 + index).toISOString());
     state = projectAssistantHandoff(state, live, [], claims);
   }
   const descriptors = runtimeLiveTurnItems(live);
