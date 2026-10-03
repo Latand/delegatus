@@ -71,9 +71,11 @@ const FILTER_SKIP = 3;
 /* A row's readable text is measured node by node, once per frame. One answer
    can be thousands of inline spans and text nodes (long links, emphasis, a
    table-less wall of tokens), and a frame spent on one answer was 200-600 ms
-   at 4x CPU. The area only ranks the answers on screen, so a row past this
-   many text nodes ranks on the part counted. */
+   at 4x CPU. Reserve a few reads for visible-point hits when the initial
+   bounded scan finds only offscreen text. */
 const MAX_TEXT_NODES = 400;
+const HIT_GRID = 3;
+const SCAN_TEXT_NODES = MAX_TEXT_NODES - HIT_GRID * HIT_GRID;
 
 /** The area of a prose row's readable text inside `clip`. Code, tables and
  * hidden text are not read aloud and do not count. The walk rejects those
@@ -97,11 +99,33 @@ export function visibleRowArea(row: HTMLElement, clip: ScreenClip): number {
   let area = 0;
   let counted = 0;
   const range = document.createRange();
-  for (let node = walker.nextNode(); node && counted < MAX_TEXT_NODES; node = walker.nextNode()) {
-    counted += 1;
+  const textArea = (node: Node) => {
     range.selectNodeContents(node);
     const rects = typeof range.getClientRects === "function" ? Array.from(range.getClientRects()) : [];
-    area += rects.reduce((sum, rect) => sum + Math.max(0, Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left)) * Math.max(0, Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top)), 0);
+    return rects.reduce((sum, rect) => sum + Math.max(0, Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left)) * Math.max(0, Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top)), 0);
+  };
+  let node = walker.nextNode();
+  for (; node && counted < SCAN_TEXT_NODES; node = walker.nextNode()) {
+    counted += 1;
+    area += textArea(node);
+  }
+  if (area > 0 || !node) return area;
+  /* A single tall paragraph can contain hundreds of plain text siblings above
+     the screen. Seek text under visible points instead of exhausting the
+     budget on that prefix and declaring the visible answer absent. */
+  const box = body.getBoundingClientRect();
+  const left = Math.max(box.left, clip.left), right = Math.min(box.right, clip.right);
+  const top = Math.max(box.top, clip.top), bottom = Math.min(box.bottom, clip.bottom);
+  if (right <= left || bottom <= top) return 0;
+  const measured = new Set<Node>();
+  for (let y = 0; y < HIT_GRID; y++) for (let x = 0; x < HIT_GRID; x++) {
+    const px = left + (x + 0.5) * (right - left) / HIT_GRID;
+    const py = top + (y + 0.5) * (bottom - top) / HIT_GRID;
+    const hit = document.caretRangeFromPoint?.(px, py)?.startContainer
+      ?? document.caretPositionFromPoint?.(px, py)?.offsetNode;
+    if (!hit || hit.nodeType !== 3 || !body.contains(hit) || hit.parentElement?.closest(UNSPOKEN) || measured.has(hit)) continue;
+    measured.add(hit);
+    area += textArea(hit);
   }
   return area;
 }

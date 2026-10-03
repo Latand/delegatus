@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
-import { measureVisibleAnswerRows, trackVisibleAnswerRows } from "./visibleAnswerRows";
+import { measureVisibleAnswerRows, trackVisibleAnswerRows, visibleRowArea } from "./visibleAnswerRows";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, Node: dom.Node, HTMLElement: dom.HTMLElement });
@@ -20,6 +20,7 @@ class FakeIntersectionObserver {
 const CLIP = { left: 0, top: 0, right: 100, bottom: 100 };
 let rectReads = 0;
 const nativeRects = dom.Range.prototype.getClientRects;
+const nativeCaret = document.caretRangeFromPoint;
 let viewport: HTMLElement;
 
 function proseRow(index: number): HTMLElement {
@@ -54,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   dom.Range.prototype.getClientRects = nativeRects;
+  document.caretRangeFromPoint = nativeCaret;
   Object.assign(globalThis, { IntersectionObserver: undefined });
   document.body.replaceChildren();
 });
@@ -172,3 +174,34 @@ test("one answer of thousands of text nodes costs a bounded number of reads", ()
   expect(rectReads).toBeLessThanOrEqual(400);
   tracked.disconnect();
 });
+
+for (const unspoken of [false, true]) {
+  test(`a tall paragraph finds visible text past the read budget (unspoken=${unspoken})`, () => {
+    const prose = proseRow(9);
+    const body = prose.querySelector<HTMLElement>("[data-tts-body]")!;
+    body.replaceChildren();
+    body.getBoundingClientRect = () => ({ left: 0, right: 100, top: -10_000, bottom: 100,
+      width: 100, height: 10_100 }) as DOMRect;
+    for (let i = 0; i < 450; i++) {
+      body.append(document.createTextNode(`offscreen ${i}`));
+      const emphasis = document.createElement("strong");
+      emphasis.textContent = "offscreen emphasis";
+      emphasis.getBoundingClientRect = () => ({ left: 0, right: 100, top: -20, bottom: -10,
+        width: 100, height: 10 }) as DOMRect;
+      body.append(emphasis);
+    }
+    const tail = document.createElement(unspoken ? "code" : "span");
+    const text = document.createTextNode("visible tail");
+    tail.append(text); body.append(tail); viewport.append(prose);
+    document.caretRangeFromPoint = () => {
+      const caret = document.createRange(); caret.setStart(text, 0); return caret;
+    };
+    dom.Range.prototype.getClientRects = function () {
+      rectReads++;
+      return [{ left: 0, right: 100, top: this.startContainer === text ? 10 : -20,
+        bottom: this.startContainer === text ? 30 : -10 }] as unknown as DOMRectList;
+    };
+    expect(visibleRowArea(prose, CLIP)).toBe(unspoken ? 0 : 2000);
+    expect(rectReads).toBeLessThanOrEqual(400);
+  });
+}
