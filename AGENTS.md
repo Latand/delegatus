@@ -94,9 +94,10 @@ describe ancestry and test name, and retains between-tests errors. An incomplete
 baseline blocks as a gate error; an incomplete head names its file and blocks.
 Baseline results are cached by commit, sorted file set, Bun version, dependency
 graph and execution environment under the private temp directory
-`delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). Deleting
-that cache is safe. Both runs report elapsed time; a warm baseline needs no
-checkout or test rerun. Budgets are five minutes per file and fifteen minutes
+`delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). A SHA-256
+digest covers each cached baseline payload; missing or mismatched integrity
+rebuilds the baseline. Deleting that cache is safe. Both runs report elapsed
+time; a warm baseline needs no checkout or test rerun. Budgets are five minutes per file and fifteen minutes
 per baseline/head test run. Privacy, types and ESLint retain their own checks.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media

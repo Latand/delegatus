@@ -153,6 +153,25 @@ test("an incomplete cached baseline is rebuilt before it can certify a compariso
   expect(f.logs.join("\n")).toContain("baseline run");
 });
 
+test.each(["changed failure identity", "missing integrity"])("a cached baseline with %s cannot hide a newly failing test", corruption => {
+  const cases = (a: boolean, b: boolean) => `import { test, expect } from "bun:test"; test("case A", () => expect(${a}).toBe(true)); test("case B", () => expect(${b}).toBe(true));`;
+  const f = fixture(cases(false, true));
+  expect(f.run().preexisting.map(site => site.name)).toEqual(["case A"]);
+  const entry = path.join(f.cache, readdirSync(f.cache)[0]!);
+  const contents = JSON.parse(readFileSync(entry, "utf8"));
+  if (corruption === "changed failure identity") contents.run.failures[0].name = "case B";
+  else delete contents.integrity;
+  writeFileSync(entry, JSON.stringify(contents));
+  writeFileSync(path.join(f.dir, "example.test.ts"), cases(true, false));
+  f.logs.length = 0;
+  const result = f.run();
+  expect(result.introduced.map(site => site.name)).toEqual(["case B"]);
+  expect(result.preexisting).toHaveLength(0);
+  expect(result.fixed.map(site => site.name)).toEqual(["case A"]);
+  expect(f.logs.join("\n")).toContain("baseline run");
+  expect(f.logs.at(-1)).toContain("1 new failures, 0 pre-existing failures, 1 fixed");
+});
+
 test("shared cache pruning tolerates six simultaneous gate processes", async () => {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-race-")); roots.push(dir);
   const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });

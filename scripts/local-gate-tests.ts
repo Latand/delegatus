@@ -184,7 +184,8 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     if (existsSync(entry)) {
       try {
         const value = JSON.parse(readFileSync(entry, "utf8"));
-        if (value.identity === identity && validRun(value.run) && JSON.stringify(value.run.completed) === JSON.stringify(oldFiles) && [...value.run.failures, ...value.run.passed].every((site: TestSite) => baseFiles.has(site.file))) baseline = value.run;
+        if (value.identity !== identity || !validRun(value.run) || value.integrity !== digest(JSON.stringify({ identity, run: value.run })) || JSON.stringify(value.run.completed) !== JSON.stringify(oldFiles) || ![...value.run.failures, ...value.run.passed].every((site: TestSite) => baseFiles.has(site.file))) throw new Error("invalid baseline cache payload");
+        baseline = value.run;
       } catch { log("touched-tests: invalid baseline cache; rebuilding"); }
     }
     const cached = !!baseline;
@@ -204,7 +205,8 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
         else if (existsSync(path.join(checkout, "bun.lock"))) command([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], checkout, env);
         baseline = runFiles(checkout, oldFiles, sandbox, inherited, "baseline");
       }
-      const serialized = JSON.stringify({ identity, run: baseline });
+      const payload = { identity, run: baseline };
+      const serialized = JSON.stringify({ ...payload, integrity: digest(JSON.stringify(payload)) });
       if (Buffer.byteLength(serialized) <= MAX_CACHE_BYTES) {
         const pending = path.join(cache, `${identity}.${randomUUID()}.pending`);
         try { writeFileSync(pending, serialized, { mode: 0o600, flag: "wx" }); renameSync(pending, entry); }
