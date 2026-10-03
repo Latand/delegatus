@@ -2882,6 +2882,18 @@ function currentTerminalReviewPending(pipeline: Pipeline): boolean {
     && currentAttempt(pipeline, pending.stageId)?.n === pending.attempt;
 }
 
+/** A settled terminal re-check spent its round. Only a revision-checked
+    continuation grant can send its findings through another fix and review.
+    A transport failure without a verdict still retries the same activation. */
+function terminalBudgetDecisionRefusal(attempt: PipelineStageAttempt | null): PipelinePatchResult | null {
+  if (attempt?.activatedBy?.budgetRecheck && attempt.verdict
+    && ["failed", "needs_decision"].includes(attempt.state)
+    && attempt.verdict.status !== "pass") {
+    return { error: "terminal review budget is spent; use continue-review with addRounds and expectedRevision", status: 409 };
+  }
+  return null;
+}
+
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
   const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
   if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check. continue-review with addRounds sends retained findings to fix, then fresh review`;
@@ -8871,6 +8883,8 @@ export async function patchPipeline(
         : pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
+      const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
+      if (budgetRefusal) return budgetRefusal;
       if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }
@@ -9081,6 +9095,8 @@ export async function patchPipeline(
       pipeline.pausedState = null;
       pipeline.stateDetail = null;
     } else if (req.action === "skip-stage") {
+      const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
+      if (budgetRefusal) return budgetRefusal;
       if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }

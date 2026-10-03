@@ -18816,21 +18816,48 @@ test.each([1, 2] as const)("terminal review continuation carries its reviewer re
 });
 
 
+test.each(["retry-stage", "skip-stage"] as const)("a failed terminal budget park refuses %s until a bounded grant", async (action) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  const revision = pipelineRevision(parked);
+  const spawned = h.spawnInputs.length;
+  for (let n = 0; n < 3; n++) {
+    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+    await tickPipelines([], h.ports);
+    expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  }
+  expect(h.spawnInputs).toHaveLength(spawned);
+  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
+  expect((await continueReview(parked, `fenced-${action}`, 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  await buildRound(h, "granted fix");
+  await critiqueRound(h, "pass", "independent approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
 test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
   const h = movingHeadHarness();
   movingHeadPorts = h.ports;
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   const { pipeline: parked } = await driveWithController(h);
   expect(parked.reviewPending?.terminalRecheck).toBe(true);
-  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  expect((await continueReview(parked, "granted-before-block", 2)).error).toBeUndefined();
+  await buildRound(h, "fix before blocked review");
   await tickPipelines([], h.ports);
-  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  // Old persisted metadata must not authorize a newer attempt.
+  const newer = loadPipelines()[0]!;
+  newer.reviewPending = parked.reviewPending;
+  savePipelines([newer]);
+  const review = newer.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
   h.messages.set(review.agentPath!, { text: 'Blocked review\n\n```json\n{"status":"fail","findings":["P1 review blocked"],"blocked":true,"blockedReason":"Review environment unavailable"}\n```', ts: Date.now() + 100_000_000 });
   await tickPipelines([entry(review.agentPath!)], h.ports);
   const blocked = loadPipelines()[0]!;
   expect(blocked.stateDetail).toBe("Review environment unavailable");
   expect((await continueReview(blocked, "stale-budget", 2)).status).toBe(409);
-  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
+  expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
   await patchPipeline(blocked.id, { action: "pause" }, h.ports);
   const resumed = await patchPipeline(blocked.id, { action: "resume" }, h.ports);
   expect(resumed.pipeline!.stateDetail).not.toContain("continue-review");
