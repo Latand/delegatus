@@ -2759,7 +2759,14 @@ function passSuccessor(
   const source = activation?.edge === "fail" && activation.budgetSpent
     ? pipeline.stages.find((candidate) => candidate.id === activation.stageId) ?? null
     : null;
-  if (!source || !activation) return { next: stage.next, handoff: null };
+  if (!source || !activation) {
+    // A terminal continuation owns the return path even when the fix's
+    // configured pass edge would leave this reviewer (or complete the lane).
+    const continued = activation?.edge === "fail" && (pipeline.reviewGrants ?? []).some(grant =>
+      grant.stageId === activation.stageId && grant.terminalAttempt !== undefined && activation.attempt >= grant.terminalAttempt);
+    if (continued) return { next: activation.stageId, handoff: null };
+    return { next: stage.next, handoff: null };
+  }
   const sourceAttempt = pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null;
   const recheck = source.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance";
   return { next: recheck ? source.id : source.next, handoff: { source, attempt: sourceAttempt }, recheck: !!recheck };
@@ -2798,6 +2805,7 @@ function parkForReview(
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
   const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
+  if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check. continue-review with addRounds sends retained findings to fix, then fresh review`;
   return `review budget spent (onExhausted: stop-after-fix): last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. continue-review adds rounds`;
 }
 
@@ -2941,7 +2949,25 @@ function routeFailedAttempt(
 ): boolean {
   if (!stage.onFail) return false;
   if (attempt.activatedBy?.budgetRecheck) {
-    park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
+    const activation = attempt.activatedBy;
+    const fix = runFor(pipeline, activation.stageId)?.attempts.find((candidate) => candidate.n === activation.attempt);
+    if (reviewed && attempt.verdict && fix?.state === "passed") {
+      pipeline.reviewPending = {
+        terminalRecheck: true,
+        stageId: stage.id,
+        attempt: attempt.n,
+        fixStageId: activation.stageId,
+        fixAttempt: fix.n,
+        reviewedHead: attempt.reviewHeadSha ?? pipeline.lastPassedCommit,
+        currentHead: pipeline.lastPassedCommit,
+        verdict: attempt.verdict.status,
+        findings: attempt.verdict.findings?.length ?? 0,
+        at: attempt.completedAt!,
+      };
+      park(pipeline, reviewPendingDetail(pipeline.reviewPending), attempt, { kind: "review-budget" });
+    } else {
+      park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
+    }
     return true;
   }
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
@@ -8024,8 +8050,9 @@ export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResum
 }
 
 /** Continue a lane parked in needs_review (#1938): append a grant of explicit
-    extra rounds to the review stage's fail edge and activate that review on
-    the current head, as the fix's pass would have. No host or Git work here. */
+    extra rounds to the review stage's fail edge. A failed terminal re-check
+    fixes retained findings first; an unreviewed head goes straight to review.
+    No host or Git work here. */
 function continueReview(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
@@ -8053,8 +8080,9 @@ function continueReview(
     return { error: "the pipeline changed since it was read; read it again before continuing review", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const pending = pipeline.reviewPending;
-  if (pipeline.state !== "needs_review" || !pending) {
-    return { error: `continue-review requires a pipeline in needs_review; this one is ${pipeline.state}`, status: 409 };
+  const terminalRecheck = pipeline.state === "needs_decision" && pending?.terminalRecheck === true;
+  if (!pending || (pipeline.state !== "needs_review" && !terminalRecheck)) {
+    return { error: `continue-review requires needs_review or a failed terminal budget re-check; this one is ${pipeline.state}`, status: 409 };
   }
   const review = pipeline.stages.find((stage) => stage.id === pending.stageId);
   const fix = runFor(pipeline, pending.fixStageId)?.attempts.find((attempt) => attempt.n === pending.fixAttempt);
@@ -8064,10 +8092,20 @@ function continueReview(
   if (pipeline.lastPassedCommit !== pending.currentHead) {
     return { error: `the pipeline head moved from ${pending.currentHead} to ${pipeline.lastPassedCommit}; read it again`, status: 409, code: "STAGE_CHANGED" };
   }
+  const failedReview = terminalRecheck
+    ? runFor(pipeline, pending.stageId)?.attempts.find((attempt) => attempt.n === pending.attempt)
+    : null;
+  if (terminalRecheck && (!failedReview?.activatedBy?.budgetRecheck || !failedReview.verdict
+    || !verdictRoutesAsFail({ verdict: failedReview.verdict, output: failedReview.output ?? "" })
+    || !["failed", "needs_decision"].includes(failedReview.state)
+    || review.next !== null || review.onFail.to !== pending.fixStageId)) {
+    return { error: "the failed terminal review or its fix edge is no longer in this pipeline", status: 409 };
+  }
   const grant: PipelineReviewGrant = {
     clientRequestId: req.clientRequestId,
     expectedRevision: req.expectedRevision,
     stageId: review.id,
+    ...(failedReview ? { terminalAttempt: failedReview.n } : {}),
     rounds: req.addRounds!,
     reviewedHead: pending.reviewedHead,
     currentHead: pending.currentHead,
@@ -8076,12 +8114,25 @@ function continueReview(
   };
   pipeline.reviewGrants = [...(pipeline.reviewGrants ?? []), grant];
   delete pipeline.reviewPending;
-  pipeline.cursor = {
-    stageId: review.id,
-    state: "pending",
-    input: fix.output ?? null,
-    activatedBy: { stageId: pending.fixStageId, attempt: fix.n, edge: "pass" },
-  };
+  if (failedReview) {
+    // The first fix spends one granted traversal. A one-round grant returns
+    // directly to the terminal re-check, so it cannot buy an extra review.
+    const lastRound = req.addRounds === 1;
+    if (lastRound) failedReview.budgetSpent = true;
+    pipeline.cursor = {
+      stageId: pending.fixStageId,
+      state: "pending",
+      input: failEdgeInput({ verdict: failedReview.verdict!, output: failedReview.output ?? "" }),
+      activatedBy: { stageId: review.id, attempt: failedReview.n, edge: "fail", ...(lastRound ? { budgetSpent: true as const } : {}) },
+    };
+  } else {
+    pipeline.cursor = {
+      stageId: review.id,
+      state: "pending",
+      input: fix.output ?? null,
+      activatedBy: { stageId: pending.fixStageId, attempt: fix.n, edge: "pass" },
+    };
+  }
   pipeline.state = "running";
   pipeline.pausedState = null;
   pipeline.stateDetail = null;
@@ -8736,7 +8787,7 @@ export async function patchPipeline(
       pipeline.pausedState = null;
       pipeline.resumedAt = ports.now();
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
-      pipeline.stateDetail = pipeline.state === "needs_review" && pipeline.reviewPending
+      pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && pipeline.reviewPending?.terminalRecheck) && pipeline.reviewPending
         ? reviewPendingDetail(pipeline.reviewPending)
         : pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);

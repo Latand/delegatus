@@ -3,7 +3,7 @@ import { patchTask } from "@/lib/tasks/commands";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
-export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" };
+export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
 export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason): string {
@@ -17,6 +17,9 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
   if (reason?.kind === "quota-reset") return uk
     ? "Вичерпано ліміт використання. Очікуємо на його оновлення для повторної спроби."
     : "The usage limit was reached. Waiting for it to reset before retrying.";
+  if (reason?.kind === "review-budget") return uk
+    ? "Бюджет рев’ю вичерпано. continue-review з addRounds продовжить цей пайплайн: виправлення зауважень, потім нове рев’ю."
+    : "The review budget is spent. continue-review with addRounds continues this pipeline: fix findings, then fresh review.";
   if (/budget|round limit|exhausted/i.test(detail)) return uk
     ? "Бюджет спроб вичерпано. Очікує рішення про продовження."
     : "The attempt budget is spent. Waiting for a decision on continuing.";
