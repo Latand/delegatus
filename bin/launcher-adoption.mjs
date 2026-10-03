@@ -1,11 +1,31 @@
 /* Recovery processes are taken over only by their recorded identity and the
    install socket in their own environment. An occupied port alone owns no PID. */
 import { spawnSync } from "node:child_process";
-import { readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import net from "node:net";
 import { installedRelease, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+function ownsListeningPort(pid, port) {
+  try {
+    if (process.platform === "darwin") {
+      const result = spawnSync("lsof", ["-a", "-p", String(pid), `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpn"], { encoding: "utf8", timeout: 2_000 });
+      return result.status === 0 && result.stdout.split("\n").includes(`p${pid}`)
+        && result.stdout.split("\n").some(line => line.startsWith("n") && line.endsWith(`:${port}`));
+    }
+    if (process.platform !== "linux") return false;
+    const inodes = new Set();
+    for (const table of ["tcp", "tcp6"]) {
+      for (const row of readFileSync(`/proc/${pid}/net/${table}`, "utf8").trim().split("\n").slice(1)) {
+        const fields = row.trim().split(/\s+/);
+        if (fields[3] === "0A" && parseInt(fields[1].split(":")[1], 16) === port) inodes.add(`socket:[${fields[9]}]`);
+      }
+    }
+    return readdirSync(`/proc/${pid}/fd`).some(fd => {
+      try { return inodes.has(readlinkSync(`/proc/${pid}/fd/${fd}`)); } catch { return false; }
+    });
+  } catch { return false; }
+}
 function alive(pid, identity) {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -23,7 +43,9 @@ function matchingProcess(candidate, socket, port = null, installRoot = null, rel
     const env = process.platform === "darwin"
       ? spawnSync("ps", ["eww", "-p", String(candidate.pid), "-o", "command="], { encoding: "utf8", timeout: 2_000 }).stdout.trim().split(/\s+/)
       : readFileSync(`/proc/${candidate.pid}/environ`, "utf8").split("\0");
-    if (port !== null && !env.includes(`PORT=${port}`)) return false;
+    // Next may set PORT after exec, so the initial environment cannot prove
+    // listener custody. Match a listening socket to this exact process instead.
+    if (port !== null && !ownsListeningPort(candidate.pid, port)) return false;
     if (env.includes(`LLV_RUNTIME_HOST_SOCKET=${socket}`)) return true;
     // A manually started first-party Viewer has no host socket marker. Its
     // declared owner, recorded root and kernel cwd provide the missing proof.

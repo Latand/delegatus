@@ -60,7 +60,7 @@ const gateKey = () => {
 };
 const server = Bun.serve({
   hostname: "127.0.0.1",
-  port: Number(process.env.PORT),
+  port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
   fetch(request) {
     const pathname = new URL(request.url).pathname;
     if (${tokenProtected} && (pathname === "/" || pathname === "/api/self-update/launcher-admission")) {
@@ -431,15 +431,15 @@ test("rollback retains the cold-restart readiness budget for the previous releas
   expect(child.exitCode).toBeNull();
 }, 30_000);
 
-for (const shape of ["socket", "manual-port", "foreign-port"] as const) for (const matchingIdentity of [true, false]) {
+for (const shape of ["socket", "manual-port", "manual-no-port", "foreign-port"] as const) for (const matchingIdentity of [true, false]) {
 test(`a recovery Viewer takeover requires its start identity, shape=${shape}, matching=${matchingIdentity}`, async () => {
   const fixture = install();
   const port = await availablePort();
   const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
   const socket = path.join(fixture.state, `runtime-host-${installId}.sock`);
-  const orphan = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "node_modules", ".bin", "next")], {
+  const orphan = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "node_modules", ".bin", "next"), "--port", String(port)], {
     cwd: shape === "foreign-port" ? fixture.root : fixture.checkout,
-    env: { ...fixture.env, PORT: String(port), ...(shape === "socket" ? { LLV_RUNTIME_HOST_SOCKET: socket } : { LLV_STATE_OWNER: "viewer" }) }, stdio: "ignore",
+    env: { ...fixture.env, PORT: shape === "manual-no-port" ? undefined : String(port), ...(shape === "socket" ? { LLV_RUNTIME_HOST_SOCKET: socket } : { LLV_STATE_OWNER: "viewer" }) }, stdio: "ignore",
   });
   children.add(orphan);
   await until(() => orphan.pid && existsSync(`/proc/${orphan.pid}/stat`));
@@ -1231,7 +1231,7 @@ test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions
   const exited = new Promise(resolve => running.child.once("exit", resolve));
   running.child.kill("SIGTERM"); await exited;
   const manual = spawn(process.execPath, ["--bun", path.join(nextDir, "node_modules", "next", "dist", "bin", "next"), "start", "--hostname", "127.0.0.1", "--port", String(running.port)], {
-    cwd: nextDir, env: { ...env, PORT: String(running.port), HOSTNAME: "127.0.0.1", LLV_STATE_OWNER: "viewer" }, stdio: "ignore",
+    cwd: nextDir, env: { ...env, PORT: undefined, HOSTNAME: "127.0.0.1", LLV_STATE_OWNER: "viewer" }, stdio: "ignore",
   }); children.add(manual);
   const manualDeadline = Date.now() + 60_000;
   while (Date.now() < manualDeadline) {
