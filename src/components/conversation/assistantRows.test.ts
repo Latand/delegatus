@@ -100,6 +100,11 @@ test("a missed completion after reconnect replaces an idless streaming prefix", 
   expect(rows([echo], state).map(row => row.key)).toEqual([key]);
   state = projectAssistantHandoff(state, streaming, [later], new Set(["answer"]));
   expect(state.pending).toEqual([]);
+  const expandedReplay = { ...streaming, items: [{ ...streaming.items![0], text: "The answer" }] };
+  state = projectAssistantHandoff(state, expandedReplay, [later], new Set(["answer"]), "unknown");
+  expect(state.pending).toEqual([]);
+  const nextTurn = projectAssistantHandoff(state, { ...expandedReplay, turnId: "next-turn" }, [], claims, "running");
+  expect(nextTurn.pending).toHaveLength(1);
 });
 
 test("idless echoes own a single occurrence even when a later answer repeats the text", () => {
