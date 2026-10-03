@@ -540,7 +540,7 @@ export async function executeSpawnRequest(
     try {
       /* Materialization changes files and the index, so admit the caller and
          task first. Compose before receipts, digests, or deferred delivery. */
-      prompt = composeStructuredFirstMessage(prompt, cwd);
+      prompt = await composeStructuredFirstMessage(prompt, cwd);
       assertStructuredTextEnvelope(prompt);
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });

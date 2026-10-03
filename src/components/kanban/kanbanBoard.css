@@ -1345,13 +1345,16 @@
 .kb .card .history .hopen { font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 0 6px; min-height: 22px; border-radius: 4px; }
 .kb .card .history .hopen:hover { background: var(--color-accent-soft); }
 .kb .card .history .hnone { font-size: var(--text-caption); color: var(--color-muted); }
+.kb .card .history .helsewhere { align-self: flex-start; max-width: 100%; margin-left: 4px; font-size: var(--text-label); color: var(--color-muted); padding: 0 4px; min-height: 22px; border-radius: 4px; text-align: left; }
+.kb .card .history .helsewhere:hover { background: var(--surface-well); color: var(--color-secondary); }
+.kb .card .history ul[data-elsewhere] { max-height: 160px; overflow-y: auto; }
 .kb .card .history .hsub { margin: 4px 0 0 16px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 @media (prefers-reduced-motion: reduce) {
   .kb .pedge.live, .kb .pnode.pulse .pdot, .kb .pstrip.pulse .pmark::before { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
 }
 @media (pointer: coarse) {
-  .kb .card .history summary, .kb .card .history .hopen { min-height: 44px; }
+  .kb .card .history summary, .kb .card .history .hopen, .kb .card .history .helsewhere { min-height: 44px; }
 }
 
 /* ── Stages (K5b, prototype `renderSheet`, `renderPane`, `renderStageDraft`, `renderDraftMessage`) ─ */

@@ -259,6 +259,11 @@ const GHOSTS = SCENARIO === "ghost-tasks";
    Beside them, a card with launches of its own that did not start: three rows
    from before launches reserved a conversation, and one whose receipt failed. */
 const UNSTARTED = SCENARIO === "unstarted-regression";
+/* The wall of «conversation outside this board» rows (#2459): a finished task
+   whose lanes left nine past attempts and whose orchestrator and helper agents
+   linked two dozen more conversations by transcript path, none loaded here; and
+   a finished task holding only such conversations. */
+const WALL = SCENARIO === "elsewhere-wall";
 /* Board order: working cards first, then recently worked, then idle. */
 const BOARD_ORDER = SCENARIO === "board-order";
 /* Task priority: an Inbox of high, normal and low tasks read in its order,
@@ -1202,6 +1207,23 @@ const unstartedPipelines: Pipeline[] = UNSTARTED ? [
   ownLane("s5", L("Retire flows, slice 5: freeze flows", "Прибрати флоу, зріз 5: заморозити флоу"), "t-lanes-flows", "closed", flowsRows, 2),
 ] : [];
 
+const wallRows = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({
+  path: `/elsewhere/${prefix}-${index + 1}.jsonl`, conversationId: `conversation_${prefix}-${index + 1}`, panePid: null, state: "linked", error: null, at: iso((3 * 60 + (count - index) * 12) * MIN),
+}));
+const wallPipelines: Pipeline[] = WALL ? (() => {
+  const run = (stageId: string, count: number, offset: number, via: string | null) => ({
+    stageId,
+    attempts: Array.from({ length: count }, (_, index) => attempt(index + 1, "passed", null, {
+      startedAt: iso((offset + index * 30) * MIN), completedAt: iso((offset + index * 30 - 20) * MIN), verdict: { status: "pass", findings: [] },
+      ...(via ? { activatedBy: { stageId: via, attempt: index + 1, edge: "pass" } } : {}),
+    })),
+  });
+  return [pipeline("p-wall", L("The privacy gate admits the sanctioned relay address", "Шлюз приватності пропускає дозволену адресу ретранслятора"), "t-wall", "completed",
+    [stage("build", "builder", "verify"), stage("verify", "verifier", "fix"), stage("fix", "builder", null)],
+    [run("build", 3, 600, null), run("verify", 3, 580, "build"), run("fix", 3, 560, "verify")],
+    null, { closedAt: iso(150 * MIN) })];
+})() : [];
+
 const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   const done = (at: number) => ({ startedAt: iso(at * MIN), completedAt: iso((at - 6) * MIN) });
   const passVia = (stageId: string) => ({ activatedBy: { stageId, attempt: 1, edge: "pass" } });
@@ -1243,6 +1265,7 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
 })() : [];
 
 const pipelines: Pipeline[] = [
+  ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
   ...flatPipelines,
@@ -1527,6 +1550,14 @@ const tasks: BoardTask[] = [
     } as Partial<BoardTask>),
     task("t-ghost-elsewhere", "assigned", L("Tune the upload retries", "Налаштувати повтори завантаження"), "", 26 * 60 * MIN, [], {
       assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],
+    } as Partial<BoardTask>),
+  ] : []),
+  ...(WALL ? [
+    task("t-wall", "done", L("The privacy gate admits the sanctioned relay address", "Шлюз приватності пропускає дозволену адресу ретранслятора"), L("A narrow allowlist of public addresses, masked before the known-value match.", "Вузький список дозволених публічних адрес, що маскуються перед перевіркою відомих значень."), 150 * MIN, [], {
+      assignments: wallRows("wall", 24) as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-wall-only", "done", L("Retire the old relay catalog entries", "Прибрати старі записи каталогу ретрансляторів"), "", 200 * MIN, [], {
+      assignments: wallRows("only", 12) as unknown as BoardTask["assignments"],
     } as Partial<BoardTask>),
   ] : []),
   ...(UNSTARTED ? [
