@@ -172,7 +172,7 @@ test("same-instant prose and tools preserve the host's source order", () => {
 
 test("a clipped idless stream adopts its complete canonical answer after missed completion", () => {
   const text = "Opening context. " + "The response continues with readable prose. ".repeat(1800) + "Final answer.";
-  const stream = appendRuntimeLiveTurnDelta(null, "clipped-turn", text, "2026-10-02T10:00:00Z");
+  const stream = appendRuntimeLiveTurnDelta(null, "clipped-turn", text, "2026-10-02T10:00:00Z")!;
   expect(stream.items![0].omittedChars).toBeGreaterThan(0);
   expect(text.endsWith(stream.items![0].text)).toBe(true);
   const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
@@ -188,7 +188,7 @@ test("a clipped idless stream adopts its complete canonical answer after missed 
 
 test("a clipped identified completion suppresses its event-first full-text mirror", () => {
   const text = "Opening context. " + "The response continues with readable prose. ".repeat(1800) + "Final answer.";
-  const completed = projectRuntimeLiveTurnItem(null, "clipped-turn", { type: "agentMessage", id: "clipped-answer", text }, "completed", "2026-10-02T10:00:01Z");
+  const completed = projectRuntimeLiveTurnItem(null, "clipped-turn", { type: "agentMessage", id: "clipped-answer", text }, "completed", "2026-10-02T10:00:01Z")!;
   expect(completed.items![0].omittedChars).toBeGreaterThan(0);
   const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
   const feed = session.feed([JSON.stringify({ type: "event_msg", timestamp: "2026-10-02T10:00:01Z",
