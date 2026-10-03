@@ -30,6 +30,15 @@ const echoTextMatches = (text: string, live: RuntimeLiveTurnItem): boolean => {
     // The producer keeps the suffix when the bounded text buffer fills.
     || Boolean(live.omittedChars) && (live.phase === "streaming" ? canonical.includes(streamed) : canonical.endsWith(streamed));
 };
+// Omission counts describe Unicode code points removed from the beginning.
+// Their overlap proves a clipped delta still belongs to the observed stream.
+const clippedContinuation = (observed: RuntimeLiveTurnItem, live: RuntimeLiveTurnItem): string | null => {
+  if (observed.phase !== "streaming" || live.phase !== "streaming") return null;
+  const dropped = (live.omittedChars ?? 0) - (observed.omittedChars ?? 0);
+  if (dropped <= 0) return null;
+  const overlap = Array.from(observed.text).slice(dropped).join("");
+  return overlap && live.text.startsWith(overlap) ? observed.text + live.text.slice(overlap.length) : null;
+};
 // Deltas keep their original start even when carried into a newer turn. A
 // legacy descriptor without that identity is fenced by its consumed text.
 const streamKey = (live: RuntimeLiveTurnItem, turnId: string) => JSON.stringify([
@@ -64,15 +73,17 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     if (live.tool || live.omittedItems || !live.itemId && retiredStreams.has(stream)) continue;
     const index = pending.findIndex((entry) => live.itemId && entry.live.itemId === live.itemId
       || !entry.live.itemId && entry.live.startedAt === live.startedAt
-        && (live.startedAt !== null || entry.turnId === liveTurn!.turnId && live.text.startsWith(entry.live.text)));
+        && (live.startedAt !== null || entry.turnId === liveTurn!.turnId && (live.text.startsWith(entry.live.text) || clippedContinuation(entry.live, live) !== null)));
     if (index >= 0) {
       const observed = pending[index].live;
       // Transport budgeting can remove a prefix after the pane read it. Keep
       // that observed body while adopting current identity and lifecycle fields.
       // A changed completion with no matching omitted suffix remains authority.
-      const retained = live.omittedChars && live.text.length < observed.text.length && observed.text.endsWith(live.text)
-        ? { ...live, text: observed.text, omittedChars: observed.omittedChars } : live;
-      pending[index] = { ...pending[index], live: retained, order };
+      const continued = clippedContinuation(observed, live);
+      const retained = continued !== null || live.omittedChars && live.text.length < observed.text.length && observed.text.endsWith(live.text)
+        ? { ...live, text: continued ?? observed.text, omittedChars: observed.omittedChars } : live;
+      if (pending[index].stream !== stream) retiredStreams.add(pending[index].stream);
+      pending[index] = { ...pending[index], live: retained, order, stream };
     } else if (live.text.trim()) pending.push({ key: `assistant-pending:${sequence++}`, live, order, stream, turnId: liveTurn!.turnId });
   }
   const bindings = new Map<string, Binding>();
@@ -97,7 +108,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     text: rows.map(row => projectedText(row.item)).join("\n\n"),
     at: rows.map(row => transcriptInstant(row.item)).find(value => value !== null) ?? null,
   }));
-  for (const entry of pending) {
+  for (let entry of pending) {
     const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
       && echoTextMatches(echo.text, entry.live)
       && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
@@ -112,7 +123,12 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
         && echo.rows.some(({ item }) => item.kind === "prose" && item.engine === "codex" || item.kind === "review")
         && echoTextMatches(echo.text, entry.live) && Number.isFinite(completedAt)
         && echo.at !== null && Math.abs(echo.at - completedAt) <= 1000);
-      if (mirror) for (const row of mirror.rows) { hiddenEchoes.add(row.key); claimedRows.add(row.key); }
+      if (mirror) {
+        // The canonical event may contain a prefix the transport never sent.
+        // Hydrate the same live node while the identified mirror is pending.
+        entry = { ...entry, live: { ...entry.live, text: mirror.text, omittedChars: 0 } };
+        for (const row of mirror.rows) { hiddenEchoes.add(row.key); claimedRows.add(row.key); }
+      }
     }
     if (matches.length) {
       if (!entry.live.itemId) {

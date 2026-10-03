@@ -210,6 +210,8 @@ test("a clipped identified completion suppresses its event-first full-text mirro
   const state = projectAssistantHandoff(null, completed, feed, claims);
   expect(state.pending).toHaveLength(1);
   expect(state.hiddenEchoes.size).toBe(1);
+  expect(state.pending[0].live.text).toBe(text);
+  expect(state.pending[0].live.omittedChars ?? 0).toBe(0);
   expect(rows(feed, state)).toHaveLength(1);
 });
 
@@ -273,4 +275,51 @@ test("a fresh runtime window keeps old cached replies separate from its own unse
   const tail = liveTurnTail(retained);
   expect(tail.rows).toHaveLength(8);
   expect(tail.earlier).toBe(552);
+});
+
+
+test.each([null, "2026-10-02T10:00:00Z"])("a growing clipped stream keeps its observed prefix and occurrence (start=%s)", (startedAt) => {
+  const opening = "Observed opening: " + "a".repeat(65500);
+  const suffix = "New suffix: " + "😀".repeat(500);
+  const first = appendRuntimeLiveTurnDelta(null, "growing-turn", opening, startedAt)!;
+  let state = projectAssistantHandoff(null, first, [], claims);
+  const original = state.pending[0].key;
+  const next = appendRuntimeLiveTurnDelta(first, "growing-turn", suffix, startedAt)!;
+  expect(runtimeLiveTurnItems(next)).toHaveLength(1);
+  expect(next.items![0].omittedChars).toBeGreaterThan(0);
+  state = projectAssistantHandoff(state, next, [], claims);
+  expect(state.pending).toHaveLength(1);
+  expect(state.pending[0].key).toBe(original);
+  expect(state.pending[0].live.text).toBe(opening + suffix);
+  const final = appendRuntimeLiveTurnDelta(next, "growing-turn", " Still continuing.", startedAt)!;
+  state = projectAssistantHandoff(state, final, [], claims);
+  expect(state.pending).toHaveLength(1);
+  expect(state.pending[0].live.text).toBe(opening + suffix + " Still continuing.");
+  const canonical = { ...echo, item: { ...echo.item, text: opening + suffix + " Still continuing." } } as FeedEntry;
+  state = projectAssistantHandoff(state, null, [canonical], claims);
+  expect(state.pending).toEqual([]);
+  expect(rows([canonical], state)[0].key).toBe(original);
+  state = projectAssistantHandoff(state, final, [], claims, "unknown");
+  expect(state.pending).toEqual([]);
+  state = projectAssistantHandoff(state, first, [], claims, "unknown");
+  expect(state.pending).toEqual([]);
+  const nextTurn = appendRuntimeLiveTurnDelta(null, "distinct-turn", opening, startedAt === null ? null : "2026-10-02T10:01:00Z")!;
+  state = projectAssistantHandoff(state, nextTurn, [], claims, "running");
+  expect(state.pending).toHaveLength(1);
+});
+
+test.each(["message-only", "envelope-id"])("Claude assistant identifiers adopt canonical echoes (%s)", (identity) => {
+  const timestamp = "2026-10-02T10:00:01Z";
+  const record = { type: "assistant", timestamp, ...(identity === "envelope-id" ? { id: "outer-id", uuid: "envelope-uuid" } : {}),
+    message: { id: "message-only-id", content: [{ type: "text", text: "The answer" }] } };
+  const completed = projectRuntimeLiveTurnItem(null, "claude-turn", record, "completed", timestamp)!;
+  const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+  const feed = session.feed([JSON.stringify(record)], 0, false).items;
+  let state = projectAssistantHandoff(null, completed, [], claims);
+  const original = state.pending[0].key;
+  state = projectAssistantHandoff(state, completed, [...feed, later], claims);
+  expect(state.pending).toEqual([]);
+  expect(rows([...feed, later], state).map(row => row.key)).toEqual([original, "later"]);
+  state = projectAssistantHandoff(state, null, [...feed, later], claims);
+  expect(rows([...feed, later], state)).toHaveLength(2);
 });

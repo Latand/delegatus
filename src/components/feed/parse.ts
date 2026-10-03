@@ -3166,7 +3166,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       for (const part of arr(message.content)) {
         if (counted && part.type === "tool_use" && textPart(part.id)) ledger.member(textPart(part.id));
         if (part.type === "text" && textPart(part.text).trim()) {
-          addProse(ts, textPart(part.text), textPart(obj.uuid) || undefined);
+          addProse(ts, textPart(part.text), textPart(obj.id) || textPart(obj.uuid) || textPart(message.id) || undefined);
         }
         else if (part.type === "thinking" && textPart(part.thinking).trim()) {
           push({ kind: "think", text: textPart(part.thinking).replace(/\s+/g, " ").trim() });
