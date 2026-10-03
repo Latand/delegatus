@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +59,66 @@ test("the real MCP binding searches both engines via the Viewer route, filters s
   } finally {
     index.close();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("an unavailable memory index returns one bounded failure through MCP and can be retried after repair", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-unavailable-"));
+  const previous = process.env.LLV_STATE_DIR;
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_STATE_DIR = root;
+  const filename = path.join(root, "memory-index.sqlite");
+  fs.writeFileSync(filename, "invalid database fixture");
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const { productionViewerControlDependencies, productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests++;
+    try { return request.method === "POST" ? await POST(request) : await GET(request); }
+    catch { return new Response("<html>Internal server error</html>", { status: 500 }); }
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), { ...productionDomainDependencies, callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }) }), new MemoryMcpReceiptStore());
+    const result = await service.callTool("search_memory", { clientRequestId: "unavailable-search", query: "widget" }, { deadlineAt: Date.now() + 30_000 });
+    expect(result).toMatchObject({ ok: false, error: "Memory search is unavailable; retry later or check index diagnostics." });
+    expect(requests).toBe(1);
+    const opened = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id: "m_fixture", requestId: "unavailable-open" }) }));
+    expect(opened.status).toBe(503);
+    expect(await opened.json()).toEqual({ code: "MEMORY_SEARCH_UNAVAILABLE", error: "Memory search is unavailable; retry later or check index diagnostics." });
+    memoryIndex().close();
+    fs.unlinkSync(filename);
+    const repaired = await service.callTool("search_memory", { clientRequestId: "repaired-search", query: "widget" }, { deadlineAt: Date.now() + 30_000 });
+    expect(repaired).toMatchObject({ ok: true, items: [] });
+    expect(requests).toBe(2);
+  } finally {
+    server.stop(true);
+    memoryIndex().close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("index failures emit a safe diagnostic without database paths or query text", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-diagnostic-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  fs.writeFileSync(path.join(root, "memory-index.sqlite"), "invalid database fixture");
+  const diagnostic = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const response = await GET(new Request("http://localhost/api/search/memory?q=private-query-fixture"));
+    expect(response.status).toBe(503);
+    expect(diagnostic).toHaveBeenCalledWith("[search unavailable]", "memory", "SQLITE_NOTADB");
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(root);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private-query-fixture");
+  } finally {
+    diagnostic.mockRestore();
+    memoryIndex().close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
