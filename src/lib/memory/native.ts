@@ -38,10 +38,16 @@ export function nativeHookCursor(filename: string, engine: "claude" | "codex", n
     const size = fs.fstatSync(fd).size, start = Math.max(0, size - 256000);
     const bytes = Buffer.alloc(size - start);
     fs.readSync(fd, bytes, 0, bytes.length, start);
-    const text = bytes.toString("utf8");
-    let offset = start;
     let activeTurn: string | undefined;
-    for (const line of text.slice(0, text.lastIndexOf("\n")).split("\n")) {
+    // Tail boundaries can split UTF-8 characters. Keep offsets in the original
+    // byte buffer rather than re-encoding replacement characters from its text.
+    let position = 0;
+    for (;;) {
+      const end = bytes.indexOf(10, position);
+      if (end < 0) break;
+      const offset = start + position;
+      const line = bytes.subarray(position, end).toString("utf8");
+      position = end + 1;
       try {
         const row = JSON.parse(line);
         const user = normalizeSessionLine(engine, row).find(({ record }) => record.kind === "message" && record.role === "user");
@@ -49,7 +55,6 @@ export function nativeHookCursor(filename: string, engine: "claude" | "codex", n
         const id = engine === "claude" ? row.uuid : row.payload?.turn_id ?? activeTurn;
         if (id === nativeId && user?.record.kind === "message") return { offset, key: `native:${messageTextDigest(line)}`, digest: messageTextDigest(user.record.text) };
       } catch { /* Skip the partial first or last line in a bounded tail. */ }
-      offset += Buffer.byteLength(line) + 1;
     }
     return { offset: size, key: undefined, digest: undefined };
   } catch (error) {
