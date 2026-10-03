@@ -5665,7 +5665,7 @@ async function selfUpdateAutoMain(): Promise<void> {
   states["install-available"] = { ...base, installed: revision(old), available: revision(next),
     check: { ...base.check, state: "update-available" }, auto: idleAuto };
   states["install-package"] = { ...states["install-available"]!, mode: "package",
-    installed: { ...revision(old), version: "1.0.0" }, available: { ...revision(next), version: "1.0.1" },
+    installed: revision(old), available: { ...revision(next), version: "1.6.2" },
     update: idleUpdate(["fetch", "install", "ready"]), auto: { ...idleAuto, availability: "packaged" } };
   // Commands contain invented install context and exercise wrapping at phone width.
   const command = "env LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/Projects/example install/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open";
@@ -5678,7 +5678,7 @@ async function selfUpdateAutoMain(): Promise<void> {
         ...(id === "docker-deployments" ? { command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" } : {}) } };
   }
   for (const rollback of [false, true]) {
-    states[rollback ? "install-rollback" : "install-failed"] = { ...base, auto: { ...idleAuto,
+    states[rollback ? "install-rollback" : "install-failed"] = { ...base, installed: revision(old), auto: { ...idleAuto,
       off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } },
       update: { ...idleUpdate(), state: "failed", rolledBack: rollback, target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
         steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "failed", startedAt: "2026-01-02T00:00:00Z", durationMs: 60_000, exitCode: null, tail: [], failure: { kind: "error", text: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } }] } };

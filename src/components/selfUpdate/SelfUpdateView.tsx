@@ -345,7 +345,8 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   const cause = stepFailureText(failed, t);
   const copy = managed
     ? t(update.rolledBack ? "selfUpdate.update.rolledBack" : "selfUpdate.update.failedManaged", { step: failedName, duration: duration(elapsed, t) })
-    : t("selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });
+    : t(failed.name === "switch" ? update.rolledBack ? "selfUpdate.update.rolledBackApply" : "selfUpdate.update.failedApply"
+      : "selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });
   return (
     <section data-section="update" data-update="failed" className={`${CARD} ${EDGE.danger}`}>
       {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}

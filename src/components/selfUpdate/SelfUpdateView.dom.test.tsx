@@ -811,3 +811,18 @@ test.each(["en", "uk"] as const)("every install prerequisite is actionable and l
     flushSync(() => root!.unmount()); root = null; host?.remove();
   }
 });
+
+for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
+  `apply failure copy preserves serving facts in ${mode}/${locale}, rollback=%s`, rolledBack => {
+    setLocale(locale);
+    const update = { ...idleUpdate(), state: "failed" as const, rolledBack, target: NEW, targetShort: NEW.slice(0, 7),
+      startedAt: new Date(NOW - 60_000).toISOString(), finishedAt: new Date(NOW).toISOString(),
+      steps: [...pendingSteps(CHECKOUT_STEPS).map(step => ({ ...step, state: "done" as const })),
+        { ...pendingSteps(["switch"])[0]!, state: "failed" as const, failure: { kind: "error" as const, text: "candidate health failed" } }] };
+    const el = render(snapshot({ mode, update }));
+    const copy = text(el.querySelector('[data-outcome="failed"]'));
+    expect(copy).not.toContain(locale === "en" ? "running processes were not touched" : "Запущені процеси не зачеплено");
+    expect(copy).toContain(locale === "en" ? "Update stopped" : "Оновлення зупинилося");
+    if (rolledBack) expect(copy).toContain(locale === "en" ? "The previous release serves again" : "знову працює попередній реліз");
+  },
+);

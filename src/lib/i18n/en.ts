@@ -5023,6 +5023,8 @@ export const en = {
   "selfUpdate.applied.none": "The running processes still serve the previous release. Restart web, then the runtime host, to run it.",
   "selfUpdate.applied.managedHostBehind": "Web runs it; the runtime host still runs {host}.",
   "selfUpdate.update.failed": "Update stopped at {step} after {duration}. The running processes were not touched; the build happens in its own release directory.",
+  "selfUpdate.update.failedApply": "Update stopped at {step} after {duration}.",
+  "selfUpdate.update.rolledBackApply": "Update stopped at {step} after {duration} and rolled back. The previous release serves again.",
   "selfUpdate.update.failedManaged": "Deployment stopped at {step} after {duration}.",
   "selfUpdate.update.rolledBack": "Deployment stopped at {step} after {duration} and was rolled back: the previous release serves again.",
   "selfUpdate.update.retryFrom": "Retry from {step}",
