@@ -21,10 +21,10 @@ const at = (live: RuntimeLiveTurnItem) => {
   const value = Date.parse(live.startedAt ?? live.completedAt ?? "");
   return Number.isFinite(value) ? value : null;
 };
-// Deltas extend text while keeping their start and turn identity. A replay of
-// that consumed stream stays retired even if it now contains a longer suffix.
-const streamKey = (live: RuntimeLiveTurnItem, turnId: string) => JSON.stringify([
-  turnId, live.startedAt, live.startedAt === null ? live.text : null,
+// Deltas keep their original start even when carried into a newer turn. A
+// legacy descriptor without that identity is fenced by its consumed text.
+const streamKey = (live: RuntimeLiveTurnItem) => JSON.stringify([
+  live.startedAt, live.startedAt === null ? live.text : null,
 ]);
 const source = (item: Item) => "sourceId" in item ? item.sourceId : undefined;
 // Parser sequence keys restart on a new filter or locale. Bind the original
@@ -49,7 +49,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   const current = runtimeLiveTurnItems(liveTurn);
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
   for (const [order, live] of current.entries()) {
-    const stream = streamKey(live, liveTurn!.turnId);
+    const stream = streamKey(live);
     if (live.tool || !live.text.trim() || !live.itemId && retiredStreams.has(stream)) continue;
     const index = pending.findIndex((entry) => live.itemId && entry.live.itemId === live.itemId
       || !entry.live.itemId && entry.live.startedAt === live.startedAt
@@ -85,7 +85,14 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       if (mirror) { hiddenEchoes.add(mirror.key); claimedRows.add(mirror.key); }
     }
     if (matches.length) {
-      if (!entry.live.itemId) retiredStreams.add(entry.stream);
+      if (!entry.live.itemId) {
+        retiredStreams.add(entry.stream);
+        for (const match of matches) if (match.item.kind === "prose") {
+          // Legacy reconnects can contain the full reply rather than the prefix
+          // that this pane consumed. Both are already represented canonically.
+          retiredStreams.add(streamKey({ ...entry.live, text: match.item.text }));
+        }
+      }
       matches.forEach((match, index) => {
         claimedRows.add(match.key);
         // A structured answer can expand into several cards; each keeps a unique key.

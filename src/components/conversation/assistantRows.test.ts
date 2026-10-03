@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createFeedSession, type FeedEntry } from "../feed/parse";
 import type { RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
+import { appendRuntimeLiveTurnDelta } from "@/lib/runtime/liveTurn";
 import { mergeAssistantRows, projectAssistantHandoff } from "./assistantRows";
 
 const later: FeedEntry = { key: "later", anchorKey: "row:1:0", item: {
@@ -103,8 +104,28 @@ test("a missed completion after reconnect replaces an idless streaming prefix", 
   const expandedReplay = { ...streaming, items: [{ ...streaming.items![0], text: "The answer" }] };
   state = projectAssistantHandoff(state, expandedReplay, [later], new Set(["answer"]), "unknown");
   expect(state.pending).toEqual([]);
-  const nextTurn = projectAssistantHandoff(state, { ...expandedReplay, turnId: "next-turn" }, [], claims, "running");
+  const nextTurn = projectAssistantHandoff(state, { ...expandedReplay, turnId: "next-turn",
+    items: [{ ...expandedReplay.items[0], startedAt: "2026-10-02T10:01:00Z" }] }, [], claims, "running");
   expect(nextTurn.pending).toHaveLength(1);
+});
+
+test("a consumed stream stays retired when the producer carries it into the next turn", () => {
+  const first = appendRuntimeLiveTurnDelta(null, "first-turn", "The answer", "2026-10-02T10:00:00Z");
+  let state = projectAssistantHandoff(null, first, [], claims);
+  state = projectAssistantHandoff(state, first, [echo], new Set(["answer"]));
+  expect(state.pending).toEqual([]);
+  const second = appendRuntimeLiveTurnDelta(first, "second-turn", "New reply", "2026-10-02T10:01:00Z");
+  state = projectAssistantHandoff(state, second, [], new Set(["answer"]), "unknown");
+  expect(state.pending.map(entry => entry.live.text)).toEqual(["New reply"]);
+});
+
+test("a legacy stream without timestamps remembers its complete canonical echo", () => {
+  const legacy = { turnId: "legacy", text: "The ans" };
+  let state = projectAssistantHandoff(null, legacy, [], claims);
+  state = projectAssistantHandoff(state, null, [echo], new Set(["answer"]));
+  expect(state.pending).toEqual([]);
+  state = projectAssistantHandoff(state, { ...legacy, text: "The answer" }, [], new Set(["answer"]), "unknown");
+  expect(state.pending).toEqual([]);
 });
 
 test("idless echoes own a single occurrence even when a later answer repeats the text", () => {
