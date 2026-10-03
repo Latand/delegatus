@@ -33,7 +33,7 @@ afterEach(() => {
   setSystemTime();
 });
 
-/** The sentence the lock's synchronous acquire refuses with (#1716). */
+/** Synthetic busy sentence for injected outcomes; real locks include owner details. */
 const BUSY = "account mutation is busy in this process; retry shortly";
 const TEXT = "carry this through the handover";
 /** When each contended recovery attempt is due, from the first: 1s, 2s, 4s, 8s
@@ -403,8 +403,11 @@ test("the reservation refusal is marked where the reservation is made, with the 
       await release();
     }
     expect(refusal).toBeInstanceOf(StructuredRecoveryContendedError);
-    expect((refusal as StructuredRecoveryContendedError).message).toBe(BUSY);
-    expect((refusal as StructuredRecoveryContendedError).contention).toBeInstanceOf(AccountMutationBusyError);
+    const marked = refusal as StructuredRecoveryContendedError;
+    expect(marked.contention).toBeInstanceOf(AccountMutationBusyError);
+    expect(marked.message).toBe(marked.contention.message);
+    expect(marked.contention.owner).toMatchObject({ operation: "holdAccountMutation", pid: process.pid });
+    expect(marked.message).toContain("account mutation is busy; held by holdAccountMutation");
     expect(fixture.successorReceipts()).toBe(0);
     expect(fixture.spawns).toEqual([]);
   } finally {

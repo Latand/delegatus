@@ -1,5 +1,6 @@
 import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { orchestratorSeatForOrUnknown } from "@/lib/orchestrator/seats";
 
 import { firstRunsElsewhere } from "@/lib/links/linked";
 
@@ -82,6 +83,7 @@ export function launchMembershipInput(
   receipt: ReservedReceipt,
   pipelineTaskIds: (pipelineId: string) => readonly string[] | null,
   projectForCwd: (cwd: string) => string | null,
+  seatIdentity?: (project: string) => MembershipIdentity | null,
 ): MembershipInput {
   const identity = { launchId: receipt.launchId, conversationId: receipt.conversationId, clientAttemptId: launch.clientAttemptId ?? null, engine: engineOf(launch.engine) };
   const project = launch.explicitProject?.trim() || projectForCwd(launch.cwd ?? "") || "other";
@@ -99,12 +101,19 @@ export function launchMembershipInput(
       reviewed.push({ conversationId, path: conversationId === launch.parentConversationId ? launch.parentArtifactPath ?? null : null });
     }
   }
+  /* Rotation keeps the seat's work on its existing card. This is task
+     membership only: making the incumbent a launch parent would change the
+     successor's delegation depth and connector grants. */
+  if (launch.role === "orchestrator") {
+    const incumbent = seatIdentity?.(project);
+    if (incumbent) reviewed.push(incumbent);
+  }
   if (launch.origin?.kind === "container" && launch.origin.containerId) {
     const containerId = launch.origin.containerId;
     if (launch.origin.container === "pipeline") {
       const taskIds = (pipelineTaskIds(containerId) ?? []).filter((id) => id.trim());
       if (taskIds.length) return { project, origin: launchOrigin, title, identity, explicitTaskIds: taskIds };
-      return { project, origin: { kind: "pipeline", key: containerId }, title, identity };
+      return { project, origin: { kind: "pipeline", key: containerId }, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}) };
     }
     return { project, origin: { kind: "flow", key: containerId }, title, identity, inherit: reviewed };
   }
@@ -116,6 +125,7 @@ export interface LaunchMembershipPorts {
   commit: (input: MembershipInput) => MembershipResult;
   pipelineTaskIds: (pipelineId: string) => readonly string[] | null;
   projectForCwd: (cwd: string) => string | null;
+  seatIdentity?: (project: string) => MembershipIdentity | null;
 }
 
 export const productionLaunchMembershipPorts: LaunchMembershipPorts = {
@@ -128,6 +138,11 @@ export const productionLaunchMembershipPorts: LaunchMembershipPorts = {
     }
   },
   projectForCwd: (cwd) => projectInfoFromCwd(cwd)?.project ?? null,
+  seatIdentity: (project) => {
+    const seat = orchestratorSeatForOrUnknown(project);
+    if (!seat) throw new Error("orchestrator task owner could not be read");
+    return seat.active?.conversationId ? { conversationId: seat.active.conversationId, path: seat.active.path } : null;
+  },
 };
 
 /**
@@ -142,9 +157,9 @@ export function admitReservedLaunch(
   fail: (reason: string) => void,
   ports: LaunchMembershipPorts = productionLaunchMembershipPorts,
 ): MembershipResult {
-  let input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineTaskIds, ports.projectForCwd), admit: launchAdmission };
   let result: MembershipResult;
   try {
+    let input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineTaskIds, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
     result = ports.commit(input);
     /* A pipeline whose recorded task no longer exists falls back to its
        container task rather than refusing the stage. */
