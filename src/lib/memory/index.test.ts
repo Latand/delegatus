@@ -122,6 +122,25 @@ test("citation accounting stays inside the hook budget for a large source and lo
     expect(index.offers(first.id)[0].outcome).toBe("cited");
   } finally { index.close(); }
 }, 20000);
+test("turn provenance retains the latest offers after the bounded ledger window fills", async () => {
+  const index = new MemoryIndex();
+  try {
+    await index.refresh([{ path: fixture("offers.md", "v1\n## User preferences\n" + Array.from({ length: 1001 }, (_, i) => `- Widget offer key${i} requires delimiter verification.\n`).join("")), engine: "codex", sourceKind: "codex_summary" }]);
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+    let entries: Candidate[];
+    try {
+      entries = db.query<Candidate, []>("SELECT * FROM memory_entries ORDER BY id").all();
+      db.transaction(() => {
+        for (const entry of entries.slice(0, 1000))
+          db.query("INSERT INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, "older-turn", "offers-conversation", "2026-01-01T00:00:00.000Z", .8);
+      })();
+    } finally { db.close(); }
+    index.recordInjection([{ ...entries[1000], score: .9 }], "latest-turn", "offers-conversation");
+    const offers = index.turnOffers("offers-conversation");
+    expect(offers).toHaveLength(1000);
+    expect(offers.at(-1)).toMatchObject({ id: entries[1000].id, requestId: "latest-turn", score: .9 });
+  } finally { index.close(); }
+});
 beforeEach(() => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "memory-state-"));
   roots.push(state);

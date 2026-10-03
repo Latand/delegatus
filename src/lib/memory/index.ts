@@ -284,7 +284,8 @@ export class MemoryIndex {
 
   turnOffers(conversation: string) {
     return this.database().query<{ id: string; title: string; requestId: string; score: number }, [string]>(`SELECT e.id, e.title, o.request_id AS requestId, o.score
-      FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject' ORDER BY o.at LIMIT 1000`).all(conversation);
+      FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'
+      ORDER BY o.at DESC, o.request_id DESC, o.memory_id DESC LIMIT 1000`).all(conversation).reverse();
   }
 
   recordCitations(conversation: string, assistantText: string) {
