@@ -35,7 +35,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
     process.chdir(dirname(dirname(nextEntry)));
     process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
-      ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot,
+      ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
       LLV_LAUNCHER_TRIAL: requestId,
     });
     throw new Error("launcher exec returned without replacing the process");

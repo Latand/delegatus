@@ -1,5 +1,6 @@
 /* Recovery processes are taken over only by their recorded identity and the
    install socket in their own environment. An occupied port alone owns no PID. */
+import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import net from "node:net";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
@@ -10,13 +11,18 @@ function alive(pid, identity) {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return fields[0] !== "Z" && fields[0] !== "X" && fields[19] === identity;
-  } catch { return false; }
+  } catch {
+    if (process.platform === "darwin" && readStartIdentity(pid) === identity) { try { process.kill(pid, 0); return true; } catch { return false; } }
+    return false;
+  }
 }
 function matchingProcess(candidate, socket, port = null) {
   if (!Number.isSafeInteger(candidate?.pid) || candidate.pid <= 1 || candidate.pid === process.pid
     || typeof candidate.startIdentity !== "string" || !alive(candidate.pid, candidate.startIdentity)) return false;
   try {
-    const env = readFileSync(`/proc/${candidate.pid}/environ`, "utf8").split("\0");
+    const env = process.platform === "darwin"
+      ? spawnSync("ps", ["eww", "-p", String(candidate.pid), "-o", "command="], { encoding: "utf8", timeout: 2_000 }).stdout.trim().split(/\s+/)
+      : readFileSync(`/proc/${candidate.pid}/environ`, "utf8").split("\0");
     return env.includes(`LLV_RUNTIME_HOST_SOCKET=${socket}`) && (port === null || env.includes(`PORT=${port}`));
   } catch { return false; }
 }

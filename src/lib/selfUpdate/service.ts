@@ -29,7 +29,7 @@ import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeployment
 
 import { applyCheck, initialCheck, type CheckSlice } from "./checkState";
 import { CheckError, targetOnCurrentBranch, type CheckInput, type CheckOutcome } from "./git";
-import { readLauncherRecord, type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
+import { type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
 import {
   DeploymentBusyError,
   managedActive,
@@ -42,7 +42,13 @@ import {
   writeManagedRecord,
   type ManagedRecord,
 } from "./managed";
-import { LAUNCHER_RECORD_ENV, type ModeDecision } from "./mode";
+import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
+import { runGit } from "./git";
+import { PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
+import { installAction, runInstallAction, userUnit } from "./actions";
+import { ApplyController, writeAtomic } from "./apply";
+import { readStartIdentity } from "./pid";
+import { type ModeDecision } from "./mode";
 import { ReleasePointer, type Release } from "./release";
 import type { RunnerConfig } from "./steps";
 import {
@@ -64,7 +70,7 @@ import {
 
 export interface RunnerPort {
   state: UpdateState;
-  start(target: string, meta?: { short?: string; version?: string; trigger?: "operator" | "auto" }): Promise<void>;
+  start(target: string, meta?: { short?: string; version?: string; trigger?: "operator" | "seat" | "auto" }): Promise<void>;
   retry(): Promise<void>;
   restore(saved: UpdateState): void;
   logPath(step: CheckoutStepName): string;
@@ -150,6 +156,8 @@ class Changes {
 
 export class SelfUpdateService {
   readonly changes = new Changes();
+  private readonly apply: ApplyController;
+  private deploying: Promise<unknown> | null = null;
   private slice: CheckSlice = initialCheck();
   private savedUpdate: UpdateState | null = null;
   private checking: Promise<void> | null = null;
@@ -173,6 +181,7 @@ export class SelfUpdateService {
   private readonly greenReader: GreenReader;
 
   constructor(private readonly deps: ServiceDeps) {
+    this.apply = new ApplyController(deps.dir);
     this.auto = readAuto(join(deps.dir, "auto.json"));
     this.greenReader = deps.green ?? new GreenReader();
     const persisted = this.readPersisted();
@@ -316,7 +325,7 @@ export class SelfUpdateService {
       try { if (!this.deps.releaseTarget()?.revision) return "no-release-target"; }
       catch { return "no-release-target"; }
     } else {
-      if (decision.mode !== "checkout" || !decision.record?.checkout) return "packaged";
+      if (decision.mode !== "checkout" || !decision.record?.checkout) return decision.mode === "package" ? "packaged" : "launcher-upgrade";
       if (decision.record.launcher.autoAdmission !== 1) return "launcher-upgrade";
       try {
         const raw = JSON.parse(readFileSync(decision.record.releasePointer, "utf8")) as { checkoutHead?: string };
@@ -371,6 +380,10 @@ export class SelfUpdateService {
   }
 
   private async runAutoTick(): Promise<void> {
+    if (this.apply.current?.state === "switching") {
+      await this.snapshot();
+      if (this.apply.current?.state === "switching") return;
+    }
     // Recover a switch-off persisted before its lease cleanup during a crash.
     if (!this.auto.enabled && !this.hasAutoCustody()) this.endDrain();
     if (!this.auto.enabled && !this.hasAutoCustody()) return;
@@ -530,6 +543,15 @@ export class SelfUpdateService {
       }
       this.beginAutoCustody(target);
       this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
+      if (record.launcher.relaunch === 1) {
+        this.apply.begin(record, target.sha, "auto");
+        this.apply.patch({ rollbackPointer });
+        this.apply.send(record, gateId);
+        requested = true;
+        this.changes.emit();
+        return;
+      }
+      if (decision.supervision === "adopted" || this.deps.env.LLV_TOKEN) return;
       requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
         this.auto = { ...this.auto, pending: request };
         this.persistNow();
@@ -817,6 +839,15 @@ export class SelfUpdateService {
     const pending = this.auto.pending;
     const decision = await this.decide();
     const record = decision.record;
+    const apply = this.apply.current;
+    if (apply?.state === "switching" && apply.trigger === "auto" && apply.requestId === requestId && record?.checkout) {
+      if (activeRestartGate(restartGateFile(record.requestFile)) !== gateId || record.launcher.pid !== apply.launcherPid
+        || record.launcher.startIdentity !== apply.launcherIdentity) return false;
+      const green = await this.refreshGreen(apply.target, record.checkout, this.auto.green[apply.target] ?? { state: "unknown" });
+      const snapshot = await this.snapshot();
+      const quiet = this.deps.quiet ? await probeQuiet({ ...snapshot, busy: null }, this.deps.quiet, this.deps.now(), true) : null;
+      return green.state === "green" && await this.targetOnBranch(record.checkout, apply.target) && this.quietAdmits(quiet);
+    }
     if (!pending || pending.requestId !== requestId || !record || decision.mode !== "checkout"
       || activeRestartGate(restartGateFile(record.requestFile)) !== gateId) return false;
     const green = await this.refreshGreen(pending.target, record.checkout!, this.auto.green[pending.target] ?? { state: "unknown" });
@@ -978,17 +1009,20 @@ export class SelfUpdateService {
 
   async decide(): Promise<ModeDecision> {
     const now = this.deps.now();
-    if (this.decision && now - this.decision.at < MODE_TTL_MS) {
-      const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
-      /* The record is re-read on every decision: it is the live state of both
-         processes. */
-      if (this.decision.value.mode === "checkout" && file) {
-        const record = readLauncherRecord(file);
-        if (record) return { ...this.decision.value, record };
-      }
-      return this.decision.value;
-    }
+    if (this.decision?.value.mode === "managed" && now - this.decision.at < MODE_TTL_MS) return this.decision.value;
     const value = await this.deps.mode();
+    if (!value.record && this.deps.env.LLV_RUNTIME_HOST_SOCKET && this.deps.web.port) {
+      const socket = this.deps.env.LLV_RUNTIME_HOST_SOCKET;
+      const id = /runtime-host-([a-f0-9]+)\.sock$/.exec(socket)?.[1];
+      const identity = readStartIdentity(this.deps.web.pid);
+      if (id && identity) writeAtomic(join(dirname(socket), "self-update", `adopt-${id}.json`),
+        { pid: this.deps.web.pid, startIdentity: identity, port: this.deps.web.port, socket });
+    }
+    if (value.supervision === "adopted" && value.record) {
+      const identity = readStartIdentity(this.deps.web.pid);
+      if (identity) writeAtomic(value.record.requestFile.replace(/request-([^/]+)\.json$/, "adopt-$1.json"),
+        { pid: this.deps.web.pid, startIdentity: identity, port: value.record.port, socket: value.record.socket });
+    }
     /* A host that does not answer is a moment, never a fact about the
        install: a deployment's own handover replaces the host, and a web
        process promoted mid-deployment asks before the host is back. So that
@@ -1012,6 +1046,15 @@ export class SelfUpdateService {
     this.checking = (async () => {
       try {
         const decision = await this.decide();
+        if (decision.mode === "package" && decision.record) {
+          const root = packageRoot(decision.record);
+          const pointer = new ReleasePointer(decision.record.releasePointer, root).current();
+          const installed = await registryRevision(packageVersion(pointer.dir));
+          const available = await registryRevision();
+          this.slice = applyCheck(this.slice, { ok: true, installed, available: available.version === installed.version ? null : available,
+            relation: available.version === installed.version ? "equal" : "behind", ahead: 0, behind: available.version === installed.version ? 0 : 1, delta: { commits: [], summary: { commitCount: 0, entryCount: 0, counts: [], groups: [] } } }, new Date(this.deps.now()), this.deps.pollMinutes);
+          return;
+        }
         const input = await this.checkInput(decision);
         const outcome: CheckOutcome = input
           ? await this.deps.check(input)
@@ -1074,6 +1117,12 @@ export class SelfUpdateService {
 
   private runnerFor(record: LauncherRecord): RunnerPort {
     if (this.runner && this.runnerRecord === record.releasePointer) return this.runner;
+    if (!record.checkout) {
+      this.runner = new PackageRunner(record, this.deps.bun, this.deps.buildEnv(join(this.deps.dir, "work")), join(this.deps.dir, "steps"), () => this.changed());
+      this.runnerRecord = record.releasePointer;
+      if (this.savedUpdate) this.runner.restore(this.savedUpdate);
+      return this.runner;
+    }
     const pointer = new ReleasePointer(record.releasePointer, record.checkout!);
     const scratch = join(this.deps.dir, "work");
     this.runner = this.deps.createRunner({
@@ -1106,14 +1155,16 @@ export class SelfUpdateService {
     const available = this.slice.available;
     if (!available && decision.mode === "checkout" && decision.record && this.autoAvailability(decision) === "hand-managed"
       && this.slice.check.relation === "equal" && snapshot.installed.sha) {
-      const runner = this.runnerFor(decision.record);
-      void runner.start(snapshot.installed.sha, { short: snapshot.installed.short, version: snapshot.installed.version, trigger: "operator" }).catch(() => {}).finally(() => this.afterUpdate());
+      this.startCheckout(decision.record, snapshot.installed);
       return { ok: true };
     }
     if (this.slice.check.state !== "update-available" || !available) return refuse(409, "no-update", "No update is available; run a check first");
-    if (decision.mode === "checkout" && decision.record) {
-      const runner = this.runnerFor(decision.record);
-      void runner.start(available.sha, { short: available.short, version: available.version, trigger: "operator" }).catch(() => {}).finally(() => this.afterUpdate());
+    if (decision.mode === "checkout" && decision.record?.checkout && githubRepositoryOfRemote(this.deps.remote)) {
+      const green = await this.greenReader.read(this.deps.remote, this.deps.branch, available.sha, decision.record.checkout);
+      if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+    }
+    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
+      this.startCheckout(decision.record, available);
       return { ok: true };
     }
     if (decision.mode === "managed") return this.deploy(available, clientKey);
@@ -1122,12 +1173,13 @@ export class SelfUpdateService {
 
   async retry(clientKey: string): Promise<ActionResult> {
     const decision = await this.decide();
-    if (decision.mode === "checkout" && decision.record) {
+    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
       const runner = this.runnerFor(decision.record);
       const snapshot = await this.snapshot();
       if (snapshot.busy) return busy(snapshot.busy);
       if (runner.state.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
-      void runner.retry().catch(() => {}).finally(() => this.afterUpdate());
+      this.apply.begin(decision.record, runner.state.target!, "operator");
+      void runner.retry().then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
       return { ok: true };
     }
     if (decision.mode === "managed") {
@@ -1137,6 +1189,103 @@ export class SelfUpdateService {
       return this.deploy(described ?? { version: record.targetVersion ?? "", sha: record.target, short: record.targetShort, date: "" }, clientKey);
     }
     return refuse(409, "cannot-update", "This install cannot update itself");
+  }
+
+  private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): void {
+    this.apply.begin(record, target.sha, trigger, deploymentId);
+    const runner = this.runnerFor(record);
+    void runner.start(target.sha, { short: target.short, version: target.version, trigger })
+      .then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
+  }
+
+  private failApply(error: unknown): void {
+    this.apply.patch({ state: "failed", detail: error instanceof Error ? error.message : String(error) });
+    this.changes.emit();
+  }
+
+  private async applyBuilt(): Promise<void> {
+    if (this.runner?.state.state !== "done") { this.failApply("The release build failed"); return; }
+    if (this.slice.available?.sha === this.runner.state.target) this.slice = { ...this.slice, installed: this.slice.available, available: null,
+      check: { ...this.slice.check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
+    this.saveNow();
+    this.apply.patch({ state: "ready" });
+    const current = await this.decide();
+    if (!current.record) throw new Error("The launcher is unavailable");
+    if (current.record.launcher.relaunch === 1) this.apply.send(current.record);
+    else if (installAction(current)?.id === "restart-service") {
+      const result = await this.performInstallAction();
+      if (!result.ok) throw new Error(result.error);
+    }
+    // Terminal upgrades remain ready, with the single command on the card.
+    this.changes.emit();
+  }
+
+  async performInstallAction(): Promise<ActionResult> {
+    const decision = await this.decide();
+    const action = installAction(decision);
+    if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
+    const record = decision.record;
+    if (record && action.id === "restart-service") {
+      const intent = this.apply.current;
+      if (!intent || intent.state !== "ready") return refuse(409, "cannot-restart", "Build the launcher upgrade first");
+      const argv = readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0");
+      const previousEntry = argv.find(arg => arg.endsWith("/bin/cli.mjs"));
+      if (!previousEntry || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity!)) return refuse(409, "cannot-restart", "The launcher identity changed");
+      writeAtomic(record.requestFile.replace(/request-([^/]+)\.json$/, "trial-$1.json"), {
+        requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
+      });
+      this.apply.patch({ state: "switching", externalRestart: true });
+    }
+    try { runInstallAction(action); } catch (error) { this.failApply(error); return refuse(503, "cannot-restart", "The user service manager did not accept the action"); }
+    return { ok: true };
+  }
+
+  async deployRevision(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
+    // Serialize target resolution with admission so two exact requests cannot build together.
+    const preceding = this.deploying;
+    const run = (async () => {
+      if (preceding) await preceding.catch(() => {});
+      if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
+      const rows = checkoutDeployments(this.deps.dir);
+      const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey);
+      if (previous) {
+        if ((request.revision && previous.requestedRevision !== request.revision) || (request.ref && previous.requestedRevision !== request.ref)) throw new Error("idempotency-conflict");
+        return { state: "accepted" as const, deploymentId: previous.deploymentId, revision: previous.revision, replayed: true };
+      }
+      const decision = await this.decide();
+      const record = decision.record;
+      const action = installAction(decision);
+      if (!record || (!record.launcher.relaunch && action?.id !== "restart-service" && !(action?.id === "update-first" && userUnit(readFileSync(`/proc/${record.launcher.pid}/cgroup`, "utf8")))))
+        return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
+      const snapshot = await this.snapshot();
+      const active = rows.find(row => !row.terminal);
+      if (snapshot.busy || active) return { state: "busy" as const, deploymentId: active?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: active?.revision ?? snapshot.update.target ?? "" };
+      let target = request.revision ?? "";
+      if (request.ref) {
+        const resolved = await runGit(["ls-remote", this.deps.remote, request.ref], record.checkout ?? this.deps.dir);
+        target = resolved.stdout.trim().split(/\s/)[0] ?? "";
+      }
+      if (!/^[a-f0-9]{40}$/.test(target)) throw new Error("The requested revision was not found on the tracked branch");
+      let revision: Revision;
+      if (record.checkout) {
+        if (!await targetOnCurrentBranch(record.checkout, this.deps.remote, this.deps.branch, target)) throw new Error("The requested revision was not found on the tracked branch");
+        revision = await this.deps.describe(record.checkout, target);
+      } else {
+        revision = await registryRevision();
+        if (revision.sha !== target) throw new Error("The requested revision has no published package; deploy its published revision");
+      }
+      const green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, record.checkout ?? await this.deps.prepareCheckRepo());
+      if (green.state !== "green") throw new Error(`The requested revision is not green (${green.state})`);
+      const deploymentId = `checkout-${randomUUID()}`;
+      const at = new Date(this.deps.now()).toISOString();
+      saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
+        phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+        health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
+      this.startCheckout(record, revision, "seat", deploymentId);
+      return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
+    })();
+    this.deploying = run;
+    try { return await run; } finally { if (this.deploying === run) this.deploying = null; }
   }
 
   private async deploy(target: Revision, clientKey: string, trigger: "operator" | "auto" = "operator"): Promise<DeploymentResult> {
@@ -1178,18 +1327,20 @@ export class SelfUpdateService {
       }
     }
     this.saveNow();
-    if (this.runner?.state.state === "done" || (this.runner?.state.state === "failed" && ["remote-moved", "memory", "interrupted"].includes(this.runner.state.steps.find((step) => step.state === "failed")?.failure?.kind ?? ""))) void this.check();
+    if ((this.runner?.state.state === "done" && this.runner.state.trigger === "auto") || (this.runner?.state.state === "failed" && ["remote-moved", "memory", "interrupted"].includes(this.runner.state.steps.find((step) => step.state === "failed")?.failure?.kind ?? ""))) void this.check();
     this.changes.emit();
     if (this.auto.enabled) void this.autoTick();
   }
 
   async restart(role: LauncherRole): Promise<ActionResult> {
     const decision = await this.decide();
-    if (decision.mode !== "checkout" || !decision.record) {
+    if ((decision.mode !== "checkout" && decision.mode !== "package") || !decision.record) {
       return decision.mode === "managed"
         ? refuse(409, "managed-restart", "A managed install restarts its processes through a deployment")
         : refuse(409, "cannot-restart", "This install cannot restart its processes");
     }
+    if (decision.record.launcher.relaunch !== 1 && (decision.supervision === "adopted" || this.deps.env.LLV_TOKEN))
+      return refuse(409, "cannot-restart", "Upgrade the launcher using the install action first");
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
     const requestId = this.deps.requestRestart(decision.record, role);
@@ -1265,6 +1416,7 @@ export class SelfUpdateService {
     const decision = await this.decide();
     const now = this.deps.now();
     const base = {
+      action: installAction(decision),
       mode: decision.mode,
       unsupportedReason: decision.reason,
       available: this.slice.available,
@@ -1277,7 +1429,7 @@ export class SelfUpdateService {
         serverTime: new Date(now).toISOString(),
       },
     };
-    const snapshot: Snapshot = decision.mode === "checkout" && decision.record ? { ...base, ...await this.checkoutPart(decision.record, now) }
+    const snapshot: Snapshot = (decision.mode === "checkout" || decision.mode === "package") && decision.record ? { ...base, ...await this.checkoutPart(decision.record, now) }
       : decision.mode === "managed" ? { ...base, ...await this.managedPart(now) } : {
       ...base,
       installed: this.slice.installed ?? UNKNOWN_REVISION,
@@ -1299,8 +1451,26 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    const pointer = new ReleasePointer(record.releasePointer, record.checkout!).current();
-    const installed = pointer.sha ? await this.describe(record.checkout!, pointer.sha) : (this.slice.installed ?? UNKNOWN_REVISION);
+    const settled = this.apply.observe(record);
+    if (settled) {
+      const intent = this.apply.current!;
+      appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
+        outcome: intent.rolledBack ? "fell-back" : settled, detail: intent.detail });
+      if (intent.trigger === "auto" && settled === "failed") {
+        this.auto = { ...this.auto, enabled: false, off: { at: new Date(now).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
+        this.saveAuto(); this.endDrain();
+      }
+    }
+    let installed: Revision;
+    if (record.checkout) {
+      const pointer = new ReleasePointer(record.releasePointer, record.checkout).current();
+      installed = pointer.sha ? await this.describe(record.checkout, pointer.sha) : (this.slice.installed ?? UNKNOWN_REVISION);
+    } else {
+      try { const pointer = JSON.parse(readFileSync(record.releasePointer, "utf8"));
+        installed = { version: pointer.version, sha: pointer.sha, short: pointer.sha.slice(0, 7), date: "" };
+      } catch { installed = this.slice.installed ?? { ...UNKNOWN_REVISION, version: packageVersion(packageRoot(record)) }; }
+      if (installed.sha) this.described.set(installed.sha, installed);
+    }
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
@@ -1354,13 +1524,22 @@ export class SelfUpdateService {
       }
       else busy = busy ?? (pending.role === "web" ? "restart-web" : "restart-runtime-host");
     }
+    const intent = this.apply.current;
+    const applyState = intent && intent.target === runner.state.target ? intent : null;
+    const update = applyState ? { ...runner.state,
+      state: applyState.state === "switching" ? "running" as const : applyState.state === "failed" ? "failed" as const : applyState.state === "done" ? "done" as const : runner.state.state,
+      rolledBack: applyState.rolledBack,
+      steps: [...runner.state.steps, { name: "switch" as const, state: applyState.state === "done" ? "done" as const : applyState.state === "failed" ? "failed" as const : applyState.state === "switching" ? "running" as const : "pending" as const,
+        startedAt: applyState.startedAt, durationMs: null, exitCode: null, tail: [], failure: applyState.detail ? { kind: "error" as const, text: applyState.detail } : null }],
+    } : runner.state;
+    if (applyState?.state === "switching") busy = "update";
     return {
       installed,
       serving: {
         web: web.pid !== null ? await this.describeShort(record.checkout, web.revision) : null,
         runtimeHost: host.pid !== null ? await this.describeShort(record.checkout, host.revision) : null,
       },
-      update: runner.state,
+      update,
       processes: { web, runtimeHost: host },
       busy,
     };

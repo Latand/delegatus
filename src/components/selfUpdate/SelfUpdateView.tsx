@@ -48,6 +48,7 @@ export interface ViewState {
 }
 
 export interface ViewActions {
+  installAction?(): void;
   toggleAuto(): void;
   check(): void;
   update(): void;
@@ -655,6 +656,17 @@ function Footer({ s, live, t }: { s: Snapshot; live: Live; t: TFunction }) {
   );
 }
 
+function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: ViewActions; state: ViewState; t: TFunction }) {
+  const action = s.action;
+  if (!action) return null;
+  return <section data-section="install-action" className={CARD}>
+    <p className="m-0 text-ui text-secondary">{t(`selfUpdate.action.${action.id}`)}</p>
+    {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
+    {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
+      label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}
+  </section>;
+}
+
 export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot: Snapshot; live: Live; state: ViewState; actions: ViewActions }) {
   const { t, locale } = useLocale();
   const banner = state.waitingForWeb
@@ -673,6 +685,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
         <section data-section="header" className={CARD}>
           <p data-unsupported={s.unsupportedReason ?? ""} className="m-0 text-ui text-secondary">{t(`selfUpdate.unsupported.${s.unsupportedReason ?? "no-launcher"}`)}</p>
         </section>
+        <InstallActionCard s={s} actions={actions} state={state} t={t} />
         <Footer s={s} live={live} t={t} />
       </div>
     );
@@ -680,6 +693,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
   return (
     <div data-mode={s.mode} className="flex flex-col gap-4 max-sm:gap-3">
       {banner}
+      <InstallActionCard s={s} actions={actions} state={state} t={t} />
       <Header s={s} state={state} actions={actions} t={t} locale={locale} />
       <AutoSection s={s} state={state} actions={actions} t={t} locale={locale} />
       {/* Two columns from 900 px; below that the restart blocks come first,

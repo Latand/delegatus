@@ -2,6 +2,7 @@
    else (#2007). `startIdentity` is field 22 of /proc/<pid>/stat (the start
    time in clock ticks), the same identity `bin/self-update-supervisor.mjs`
    records, so a PID reused after an exit never matches its record. */
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 export interface RecordedPid { pid: number; startIdentity: string }
@@ -17,13 +18,21 @@ function statFields(pid: number): string[] | null {
 }
 
 export function readStartIdentity(pid: number): string | null {
-  return statFields(pid)?.[19] ?? null;
+  const identity = statFields(pid)?.[19];
+  if (identity) return identity;
+  if (process.platform === "darwin") {
+    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+    return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
+  }
+  return null;
 }
 
 /** Alive means present and not a zombie. */
 export function isAlive(pid: number): boolean {
   const state = statFields(pid)?.[0];
-  return state !== undefined && state !== "Z" && state !== "X";
+  if (state !== undefined) return state !== "Z" && state !== "X";
+  if (process.platform !== "linux") { try { process.kill(pid, 0); return true; } catch { return false; } }
+  return false;
 }
 
 export function sameProcess(record: RecordedPid): boolean {

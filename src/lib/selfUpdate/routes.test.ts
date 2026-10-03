@@ -1,3 +1,5 @@
+import { POST as deployPost } from "@/app/api/runtime/deployments/route";
+import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +20,7 @@ import { checkForUpdate, readRevision, runGit } from "./git";
 import { readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
-import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate } from "./routes";
+import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { UpdateRunner, type StepPorts } from "./steps";
@@ -147,6 +149,7 @@ describe("the operator gate", () => {
     setCallerConversationResolverForTests(() => "conversation_some_worker");
     const agent = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
     for (const response of [
+      await postInstallAction(post("/action", undefined, agent)),
       await postCheck(post("/check", undefined, agent)),
       await postUpdate(post("/update", { key: "press-1" }, agent)),
       await postRestart(post("/restart", { role: "runtime-host", confirm: true }, agent)),
@@ -548,6 +551,44 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  test("a checkout exact deploy is idempotent, applies once and settles its seat receipt", async () => {
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const body = { revision: tipSha, idempotencyKey: "checkout-exact-press" };
+    const response = await deployPost(post("/runtime/deployments", body));
+    expect(response.status).toBe(202);
+    const receipt = await response.json();
+    const deploymentId = receipt.deploymentId;
+    expect(deploymentId).toMatch(/^checkout-/);
+    expect(receipt).toMatchObject({ state: "accepted", revision: tipSha });
+    const replay = await deployPost(post("/runtime/deployments", body));
+    expect(await replay.json()).toMatchObject({ deploymentId: receipt.deploymentId, replayed: true });
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    const request = JSON.parse(readFileSync(record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: tipSha, rollbackPointer: null });
+    const moved = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    moved.launcher = { ...moved.launcher, requestId: request.requestId, state: "healthy", error: null };
+    moved.web.revision = moved.runtimeHost.revision = tipSha.slice(0, 7);
+    writeFileSync(h.recordFile, JSON.stringify(moved));
+    h.service.saveNow(); setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
+    expect((await snapshot()).update).toMatchObject({ state: "done", rolledBack: false });
+    const ledger = ledgerDeployment(deploymentId, { NODE_ENV: "test", LLV_STATE_DIR: h.deps.dir.replace(/self-update$/, "") });
+    expect(ledger).toMatchObject({ state: "ok", value: { phase: "succeeded", terminal: true } });
+  });
+
+  test("a legacy terminal deploy returns the dialog prerequisite and sends no restart", async () => {
+    const h = harness(); setSelfUpdateServiceForTests(h.service);
+    const response = await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "old-launcher" }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ state: "action-required", code: "self-update-action-required", action: { id: "update-first", button: true } });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    expect(existsSync(record.requestFile)).toBe(false);
+  });
+
   test("the operator can enable auto-apply for checkout and managed installs", async () => {
     const h = harness({ remote: "https://github.com/example/project.git" });
     h.deps.check = async () => ({ ok: false, error: "fixture", installed: null });
@@ -659,7 +700,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
 
     expect((await postUpdate(post("/update", { key: "press-1" }))).status).toBe(202);
     s = await until((next) => next.update.state === "done");
-    expect(s.update.steps.map((step) => step.state)).toEqual(["done", "done", "done", "done", "done"]);
+    expect(s.update.steps.map((step) => step.state)).toEqual(["done", "done", "done", "done", "done", "pending"]);
     const releaseDir = s.update.releaseDir!;
     expect(releaseDir.startsWith(join(root))).toBe(true);
     expect(h.spawned.map((command) => command.slice(0, 3).join(" "))).toEqual([

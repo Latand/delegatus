@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, expect, test } from "bun:test";
@@ -786,7 +786,7 @@ for (const invalidCharacter of ["\n", "\r", "\u0100"] as const) {
   test(`malformed Viewer tokens are omitted from restart headers and diagnostics (${JSON.stringify(invalidCharacter)})`, async () => {
     const fixture = install({ tokenProtected: true });
     const token = `fixture-prefix${invalidCharacter}fixture-suffix`;
-    fixture.env.LLV_TOKEN = token;
+    Object.assign(fixture.env, { LLV_TOKEN: token });
     const running = await start(fixture);
     const before = await until(() => {
       const record = readRecord(fixture.state);
@@ -798,10 +798,10 @@ for (const invalidCharacter of ["\n", "\r", "\u0100"] as const) {
 
     const after = await until(() => {
       const record = readRecord(fixture.state);
-      return record.web.requestId === "restart-malformed-token" && record.web.state === "failed" ? record : null;
+      return record.web.requestId === "restart-malformed-token" && record.web.state === "healthy" && record.web.error?.kind === "fell-back" ? record : null;
     });
     const persistedState = stateText(fixture.state);
-    expect(after.web.error).toMatchObject({ kind: "message", text: "GET / answered 401" });
+    expect(after.web.error).toMatchObject({ kind: "fell-back", detail: "GET / answered 401" });
     expect(persistedState).not.toContain(token);
     expect(running.output()).not.toContain(token);
     expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
@@ -1004,3 +1004,28 @@ test("a host restart whose new and previous releases both fail is retried by the
   expect(readlinkSync(`/proc/${back.runtimeHost.pid}/cwd`)).toBe(fixture.checkout);
   expect(child.exitCode).toBeNull();
 }, 60_000);
+
+for (const broken of [false, true]) {
+  test(`a packaged install relaunches all processes and rolls back=${broken}`, async () => {
+    const fixture = install();
+    const next = release(fixture, "npm-package", { broken });
+    writeFileSync(path.join(next.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "0.0.1" }));
+    mkdirSync(path.join(next.dir, "dist", "standalone"), { recursive: true });
+    writeFileSync(path.join(next.dir, "dist", "standalone", "server.js"), STUB_NEXT(broken));
+    renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
+    const running = await start(fixture);
+    const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" ? r : null; });
+    expect(before.checkout).toBeNull();
+    writeFileSync(before.releasePointer, JSON.stringify({ kind: "package", version: "0.0.1", baseVersion: "0.0.0", dir: next.dir, sha: next.sha }));
+    writeFileSync(before.requestFile, JSON.stringify({ requestId: "package-relaunch", role: "relaunch", target: next.sha, rollbackPointer: null }));
+    const after = await until(() => { const r = readRecord(fixture.state);
+      return r.launcher.requestId === "package-relaunch" && r.launcher.state === "healthy" && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null;
+    }, 100_000);
+    expect(after.launcher.pid).toBe(before.launcher.pid);
+    expect(after.web.pid).not.toBe(before.web.pid);
+    expect(after.runtimeHost.pid).not.toBe(before.runtimeHost.pid);
+    expect(await served(running.port)).toBe(broken ? fixture.checkout : next.dir + "/dist/standalone");
+    if (broken) { expect(after.launcher.error.kind).toBe("fell-back"); expect(existsSync(before.releasePointer)).toBe(false); }
+    else expect(after.launcher.revision).toBe(next.sha);
+  }, 120_000);
+}

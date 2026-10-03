@@ -33,6 +33,12 @@ export class ReleasePointer {
     const checkoutHead = headOf(this.checkout);
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8")) as Partial<Release> & { checkoutHead?: unknown };
+      const packaged = parsed as Partial<Release> & { kind?: string; version?: string; baseVersion?: string };
+      if (packaged.kind === "package" && packaged.dir && packaged.sha && /^[a-f0-9]{40}$/.test(packaged.sha)
+        && JSON.parse(readFileSync(join(this.checkout, "package.json"), "utf8")).version === packaged.baseVersion
+        && JSON.parse(readFileSync(join(packaged.dir, "package.json"), "utf8")).version === packaged.version
+        && existsSync(join(packaged.dir, "dist", "standalone", "server.js")) && existsSync(join(packaged.dir, "dist", "runtime-host.mjs")))
+        return { sha: packaged.sha, dir: packaged.dir };
       const unmoved = typeof parsed.checkoutHead !== "string" || parsed.checkoutHead === checkoutHead;
       if (typeof parsed.sha === "string" && /^[0-9a-f]{40}$/.test(parsed.sha) && typeof parsed.dir === "string"
         && unmoved && existsSync(join(parsed.dir, ".next", "BUILD_ID")) && headOf(parsed.dir) === parsed.sha) {

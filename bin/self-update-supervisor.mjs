@@ -63,6 +63,10 @@ export function readStartIdentity(pid) {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
   } catch {
+    if (process.platform === "darwin") {
+      const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+      return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
+    }
     return null;
   }
 }
@@ -90,6 +94,13 @@ export function installedRelease(pointerFile, packageRoot) {
   const rootHead = headRevision(packageRoot);
   try {
     const parsed = JSON.parse(readFileSync(pointerFile, "utf8"));
+    if (parsed.kind === "package" && typeof parsed.dir === "string" && /^[0-9a-f]{40}$/.test(parsed.sha)) {
+      const base = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+      const next = JSON.parse(readFileSync(join(parsed.dir, "package.json"), "utf8"));
+      if (base.version === parsed.baseVersion && next.version === parsed.version
+        && existsSync(join(parsed.dir, "dist", "standalone", "server.js")) && existsSync(join(parsed.dir, "dist", "runtime-host.mjs")))
+        return { dir: parsed.dir, sha: parsed.sha, published: true };
+    }
     const sha = typeof parsed?.sha === "string" && /^[0-9a-f]{40}$/.test(parsed.sha) ? parsed.sha : null;
     const dir = typeof parsed?.dir === "string" ? parsed.dir : null;
     const rootUnmoved = typeof parsed?.checkoutHead !== "string" || parsed.checkoutHead === rootHead;

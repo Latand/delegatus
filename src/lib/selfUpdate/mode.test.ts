@@ -43,7 +43,7 @@ describe("detectMode", () => {
 
   test("a live launcher record without a checkout is a packaged install", async () => {
     const decision = await detectMode(ports({ env: { [LAUNCHER_RECORD_ENV]: "/s/launcher.json" }, readRecord: () => record(null) }));
-    expect(decision).toMatchObject({ mode: "unsupported", reason: "not-a-checkout" });
+    expect(decision).toMatchObject({ mode: "package", reason: null });
   });
 
   test("a record left by a launcher that is gone is ignored, and the runtime host decides", async () => {
@@ -83,4 +83,25 @@ describe("deploymentsEnabled asks the host for a deployment that cannot exist", 
     expect(await deploymentsEnabled(client(async () => { throw new Error("connect ENOENT /s/runtime-host.sock"); }))).toBeNull();
     expect(await deploymentsEnabled(null)).toBeNull();
   });
+});
+
+// Each supported install shape decides through the public detector.
+test.each([
+  ["terminal checkout", { LLV_SELF_UPDATE_RECORD: "/s/launcher.json" }, "checkout", "launcher"],
+  ["systemd checkout", { LLV_SELF_UPDATE_RECORD: "/s/launcher.json" }, "checkout", "launcher"],
+  ["recovery host environment", { LLV_RUNTIME_HOST_SOCKET: "/s/runtime-host.sock", PORT: "45123", LLV_STATE_OWNER: "viewer" }, "checkout", "adopted"],
+  ["manual port match", { PORT: "45123" }, "checkout", "adopted"],
+  ["hand managed checkout", { LLV_SELF_UPDATE_RECORD: "/s/launcher.json" }, "checkout", "launcher"],
+  ["Windows checkout", { LLV_SELF_UPDATE_RECORD: "/s/launcher.json" }, "checkout", "launcher"],
+] as const)("%s stays updatable", async (_shape, env, mode, supervision) => {
+  expect(await detectMode(ports({ env, readRecord: () => record("/srv/viewer-checkout"),
+    records: () => [record("/srv/viewer-checkout")] }))).toMatchObject({ mode, supervision });
+});
+test("a stale recovery record cannot be adopted", async () => {
+  expect(await detectMode(ports({ env: { PORT: "45123" }, records: () => [record("/srv/viewer-checkout")], alive: () => false })))
+    .toMatchObject({ mode: "unsupported", reason: "no-launcher" });
+});
+test("Docker without deployments has its specific prerequisite", async () => {
+  expect(await detectMode(ports({ env: { LLV_DOCKER_NSENTER_SHIMS: "1" } })))
+    .toMatchObject({ mode: "unsupported", reason: "docker-deployments" });
 });

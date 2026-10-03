@@ -1065,3 +1065,17 @@ test("timer ticks renew the drain while an earlier observation is still waiting"
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
   } finally { resume(); await firstTick; service.stop(); }
 });
+
+test("a capable launcher receives a single relaunch under automatic drain custody", async () => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: TARGET, rollbackPointer: null });
+    expect(typeof request.autoGateId).toBe("string");
+    expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(true);
+    await service.autoTick();
+    expect(JSON.parse(readFileSync(h.record.requestFile, "utf8")).requestId).toBe(request.requestId);
+  } finally { service.stop(); }
+});

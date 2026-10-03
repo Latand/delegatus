@@ -65,7 +65,7 @@ const cliDir = dirname(cliPath);
 const LAUNCHER_HANDOFF_PROTOCOL = "delegatus-checkout-launcher-v2";
 // Viewer can inspect a release before loading its first capable launcher.
 const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
-const launcherCheckout = process.env.LLV_LAUNCHER_REEXEC === "1" ? process.env.LLV_LAUNCHER_CHECKOUT : undefined;
+const launcherCheckout = process.env.LLV_LAUNCHER_REEXEC === "1" ? (process.env.LLV_LAUNCHER_INSTALL_ROOT || process.env.LLV_LAUNCHER_CHECKOUT) : undefined;
 
 /* Dependency-free CLI localization: English by default, Ukrainian when
    LLV_LANG=uk or the locale (LC_ALL/LANG) is a uk_* / uk.* variant. */
@@ -1013,9 +1013,7 @@ async function main() {
     installId: runtimeHostConfig.installId,
   });
   const checkout = isGitCheckout(packageRoot);
-  const releaseNow = () => (checkout
-    ? installedRelease(selfUpdate.releasePointer, packageRoot)
-    : { dir: packageRoot, sha: null, published: false });
+  const releaseNow = () => installedRelease(selfUpdate.releasePointer, packageRoot);
   // A rejected competing startup must never load or roll back the owner's
   // shared trial. Claim startup custody before creating its controller.
   const startupLock = lockLauncherStartup(selfUpdate.record);
@@ -1100,11 +1098,12 @@ async function main() {
      A packaged install records its children too, and the surface reads the
      record's missing checkout as "updates come from the package manager". */
   await takeOverOrphanHost(selfUpdate, runtimeHostConfig);
-  const launcherRevision = headRevision(dirname(cliDir));
+  const launcherRevision = headRevision(dirname(cliDir)) ?? releaseNow().sha;
   // Adoption and bind checks yielded: verify custody once more before writing.
   assertLauncherAvailable(selfUpdate);
   record = createLauncherRecord(selfUpdate.record, {
     checkout: checkout ? packageRoot : null,
+    installRoot: packageRoot,
     releasesDir: selfUpdate.releasesDir,
     releasePointer: selfUpdate.releasePointer,
     requestFile: selfUpdate.request,
@@ -1238,7 +1237,7 @@ async function main() {
 
   /* Restart requests are taken only once startup has finished, and only from
      a checkout: a packaged install is updated by its package manager. */
-  if (checkout) {
+  {
     const attemptWeb = async (release, verifyPage = true) => {
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
         return "port-in-use";
@@ -1412,7 +1411,7 @@ function stateDirectory() {
 function releaseLauncher() {
   if (process.env.LLV_LAUNCHER_REEXEC === "1") return null;
   const checkout = findPackageRoot(cliDir);
-  if (!existsSync(join(checkout, ".git"))) return null;
+
   const installId = createHash("sha256").update(resolve(checkout)).digest("hex").slice(0, 16);
   const state = stateDirectory();
   const record = join(state, "self-update", `launcher-${installId}.json`);
@@ -1420,12 +1419,16 @@ function releaseLauncher() {
   let entry;
   try {
     const parsed = JSON.parse(readFileSync(pointer, "utf8"));
-    const rootHead = headRevision(checkout);
-    if (typeof parsed?.sha !== "string" || !/^[0-9a-f]{40}$/.test(parsed.sha)
-      || typeof parsed?.dir !== "string"
-      || (typeof parsed.checkoutHead === "string" && parsed.checkoutHead !== rootHead)
-      || !existsSync(join(parsed.dir, ".next", "BUILD_ID"))
-      || headRevision(parsed.dir) !== parsed.sha) return null;
+    if (typeof parsed.dir !== "string" || !/^[a-f0-9]{40}$/.test(parsed.sha)) return null;
+    if (parsed.kind === "package") {
+      if (JSON.parse(readFileSync(join(checkout, "package.json"), "utf8")).version !== parsed.baseVersion
+        || JSON.parse(readFileSync(join(parsed.dir, "package.json"), "utf8")).version !== parsed.version
+        || !existsSync(join(parsed.dir, "dist", "standalone", "server.js")) || !existsSync(join(parsed.dir, "dist", "runtime-host.mjs"))) return null;
+    } else {
+      const rootHead = headRevision(checkout);
+      if ((typeof parsed.checkoutHead === "string" && parsed.checkoutHead !== rootHead)
+        || !existsSync(join(parsed.dir, ".next", "BUILD_ID")) || headRevision(parsed.dir) !== parsed.sha) return null;
+    }
     entry = join(parsed.dir, "bin", "cli.mjs");
   } catch { return null; }
   if (entry === cliPath || !existsSync(entry)) return null;

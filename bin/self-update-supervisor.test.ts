@@ -283,3 +283,21 @@ describe("probePageAndChunk", () => {
     expect(error).not.toContain(token);
   });
 });
+
+test("a packaged pointer survives bootstrap until a manual package upgrade", () => {
+  const root = mkdtempSync(join(tmpdir(), "package-pointer-"));
+  try {
+    const base = join(root, "base"); const release = join(root, "release");
+    mkdirSync(join(base, "dist"), { recursive: true });
+    mkdirSync(join(release, "dist", "standalone"), { recursive: true });
+    writeFileSync(join(base, "package.json"), JSON.stringify({ version: "1.0.0" }));
+    writeFileSync(join(release, "package.json"), JSON.stringify({ version: "1.0.1" }));
+    writeFileSync(join(release, "dist", "standalone", "server.js"), "");
+    writeFileSync(join(release, "dist", "runtime-host.mjs"), "");
+    const pointer = join(root, "pointer.json"); const sha = "a".repeat(40);
+    writeFileSync(pointer, JSON.stringify({ kind: "package", version: "1.0.1", baseVersion: "1.0.0", dir: release, sha }));
+    expect(installedRelease(pointer, base)).toMatchObject({ dir: release, sha, published: true });
+    writeFileSync(join(base, "package.json"), JSON.stringify({ version: "1.0.2" }));
+    expect(installedRelease(pointer, base)).toMatchObject({ dir: base, published: false });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

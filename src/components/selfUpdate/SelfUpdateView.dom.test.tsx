@@ -789,3 +789,13 @@ describe("the rest of the surface", () => {
     expect(text(button(el, "restart-web"))).toBe("Перезапустити веб");
   });
 });
+
+for (const locale of ["en", "uk"] as const) {
+  test(`install prerequisite renders a single service button in ${locale}`, () => {
+    setLocale(locale);
+    const container = render(snapshot({ action: { id: "restart-service", button: true, unit: "delegatus.service" } }));
+    expect(container.querySelector('[data-action="install-action"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Update it the way");
+    expect(container.textContent).not.toContain("Оновіть її так");
+  });
+}

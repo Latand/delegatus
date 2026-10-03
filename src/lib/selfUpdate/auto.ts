@@ -138,7 +138,7 @@ export async function pruneReleaseWorktrees(record: LauncherRecord, rollbackPoin
   });
   let rollbackDir: string | null = null;
   try { rollbackDir = (JSON.parse(rollbackPointer ?? "null") as { dir?: string } | null)?.dir ?? null; } catch { /* checkout rollback */ }
-  const current = [record.web.revision, record.runtimeHost.revision];
+  const current = [record.web.revision, record.runtimeHost.revision, record.launcher.revision];
   let pointerDir: string | null = null;
   try { pointerDir = (JSON.parse(readFileSync(record.releasePointer, "utf8")) as { dir?: string }).dir ?? null; } catch { /* no pointer */ }
   const protectedDirs = new Set([pointerDir, rollbackDir].filter((part): part is string => !!part).map((part) => resolve(part)));

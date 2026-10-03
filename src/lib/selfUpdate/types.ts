@@ -11,9 +11,10 @@
     web process and the runtime host by recorded PID.
     `unsupported`: neither; the surface explains why and offers nothing it
     cannot carry out. */
-export type InstallMode = "managed" | "checkout" | "unsupported";
+export type InstallMode = "managed" | "checkout" | "package" | "unsupported";
 
 export type UnsupportedReason =
+  | "docker-deployments"
   /** Deployments are off and no launcher record names this process. */
   | "no-launcher"
   /** No runtime host answered, so neither mode could be confirmed. */
@@ -64,7 +65,7 @@ export interface CheckState {
     the phases the runtime host journals for one deployment. */
 export type CheckoutStepName = "fetch" | "checkout" | "install" | "build" | "ready";
 export type ManagedStepName = "admit" | "image" | "candidate" | "health" | "promote" | "handoff";
-export type StepName = CheckoutStepName | ManagedStepName;
+export type StepName = CheckoutStepName | ManagedStepName | "switch";
 
 export const CHECKOUT_STEPS: readonly CheckoutStepName[] = ["fetch", "checkout", "install", "build", "ready"];
 export const MANAGED_STEPS: readonly ManagedStepName[] = ["admit", "image", "candidate", "health", "promote", "handoff"];
@@ -113,7 +114,7 @@ export interface UpdateState {
   startedAt: string | null;
   finishedAt: string | null;
   /** Who initiated this checkout build. Older records default to operator. */
-  trigger?: "operator" | "auto" | null;
+  trigger?: "operator" | "seat" | "auto" | null;
 }
 
 export type ProcessStateName = "stopped" | "stopping" | "starting" | "healthy" | "failed";
@@ -173,6 +174,7 @@ export const REFUSAL_CODES: readonly RefusalCode[] = [
 ];
 
 export interface Snapshot {
+  action?: InstallAction | null;
   mode: InstallMode;
   unsupportedReason: UnsupportedReason | null;
   /** Checkout: the newest built release (what the next restart runs).
@@ -195,6 +197,13 @@ export interface Snapshot {
     pollMinutes: number;
     serverTime: string;
   };
+}
+
+export interface InstallAction {
+  id: "restart-service" | "restart-terminal" | "start-service" | "start-launcher" | "update-first" | "docker-deployments";
+  button: boolean;
+  unit?: string;
+  command?: string;
 }
 
 export const UNKNOWN_REVISION: Revision = { version: "", sha: "", short: "", date: "" };
