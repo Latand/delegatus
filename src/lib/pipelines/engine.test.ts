@@ -19076,3 +19076,81 @@ test.each([1, 2] as const)("an inner terminal grant retains the outer review obl
   expect(completed.state).toBe("completed");
   expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.verdict?.status).toBe("pass");
 });
+
+
+test.each([0, 2] as const)("automatic reviewer host retries preserve a three-round grant (round %i)", async (retryRound) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "automatic-retry-grant", 3)).error).toBeUndefined();
+  for (let round = 0; round < retryRound; round++) {
+    await buildRound(h, `fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed review ${round + 1}`);
+  }
+  await buildRound(h, "fix before automatic host retries");
+  await tickPipelines([], h.ports);
+  const activation = loadPipelines()[0]!.cursor!.activatedBy;
+  for (let lost = 0; lost < 3; lost++) {
+    structuredLatest(1);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    if (lost < 2) await tickPipelines([], h.ports);
+  }
+  const interruptedLane = loadPipelines()[0]!;
+  expect(interruptedLane.state).toBe("needs_decision");
+  expect(interruptedLane.cursor).toMatchObject({ stageId: "critique", activatedBy: activation });
+  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(interrupted.verdict).toBeNull();
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(null);
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await critiqueRound(h, "fail", "review completes after host recovery");
+  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
+  for (let round = retryRound + 1; round < 3; round++) {
+    await buildRound(h, `fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed review ${round + 1}`);
+    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
+  }
+  const final = loadPipelines()[0]!;
+  expect(final.runs.find(run => run.stageId === "critique")!.attempts.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
+  expect(final.reviewPending?.terminalRecheck).toBe(true);
+});
+
+
+test("transport traversals before a terminal park cannot shorten a later grant", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await tickPipelines([], h.ports);
+  for (let lost = 0; lost < 3; lost++) {
+    structuredLatest(1);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    if (lost < 2) await tickPipelines([], h.ports);
+  }
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(null);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  expect(failEdgeRoundsUsed(parked, parked.stages[1]!)).toBe(2);
+  const completedBefore = parked.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict).length;
+  expect((await continueReview(parked, "after-transport-grant", 3)).error).toBeUndefined();
+  const continued = (await driveWithController(h)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
+});

@@ -2765,7 +2765,7 @@ function passSuccessor(
   const recheck = Boolean(source?.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance");
   /* A spent edge's terminal re-check remains authoritative. The lineage return
      applies between granted rounds and after nested repairs before exhaustion. */
-  const terminalGrant = !recheck && attempt ? terminalReviewGrantForFix(pipeline, stage, attempt) : null;
+  const terminalGrant = !recheck && attempt ? terminalReviewGrantForAttempt(pipeline, stage, attempt) : null;
   if (terminalGrant && (stage.id === pipeline.stages.find((candidate) => candidate.id === terminalGrant.stageId)?.onFail?.to
     || stage.next === null)) {
     return {
@@ -2782,14 +2782,14 @@ function passSuccessor(
 /** A terminal continuation owns one return to its reviewer after the complete
     granted fix. Trace durable attempt activations so repair stages inside that
     fix cannot consume the return obligation or complete the lane themselves. */
-function terminalReviewGrantForFix(
+function terminalReviewGrantForAttempt(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
 ): PipelineReviewGrant | null {
   let current: PipelineStageAttempt | undefined = attempt;
   const visited = new Set<string>();
-  const fulfilledReviews = new Set<string>([stage.id]);
+  const fulfilledReviews = new Set<string>(attempt.state === "passed" ? [stage.id] : []);
   while (current?.activatedBy) {
     const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
     // The nearest continuation root owns this work. Never trace through it
@@ -3091,6 +3091,10 @@ function routeFailedAttempt(
   reviewed = true,
 ): boolean {
   if (!stage.onFail) return false;
+  const terminalGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
+  // Exhausting host recovery is still an uncompleted review of this fix.
+  // Park on the same activation so retry can finish that granted round.
+  if (!reviewed && terminalGrant?.stageId === stage.id) return false;
   if (attempt.activatedBy?.budgetRecheck) {
     const pending = reviewed ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
     if (pending) {
@@ -3113,7 +3117,9 @@ function routeFailedAttempt(
   const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) !== "park";
   const maxRounds = failEdgeMaxRounds(pipeline, stage);
   const loopRounds = advancesWhenSpent ? maxRounds - 1 : maxRounds;
-  if (targetStage && used < loopRounds) {
+  // Terminal grants are bounded by completed reviews on their own lineage.
+  // Historical transport traversals must not shorten a new explicit grant.
+  if (targetStage && (terminalGrant?.stageId === stage.id || used < loopRounds)) {
     pipeline.cursor = {
       stageId: targetStage.id,
       state: "pending",
