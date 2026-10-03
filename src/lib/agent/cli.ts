@@ -10,6 +10,7 @@ import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, 
 import { homeDirectory } from "@/lib/platformHome";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
+import { codexTerminalMemorySetup } from "@/lib/memory/hook";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
 import { TELEGRAM_CONNECTOR_TOKEN_ENV, telegramSessionPath } from "@/lib/telegram/sessionStore";
@@ -143,6 +144,7 @@ export interface ResumeSpec {
   launchProfile?: LaunchProfile;
   /** Only legacy launches probe native policy; structured hosts read it themselves. */
   codexPublication?: { home: string; command: string; mcpServers: string[] };
+  claudeTerminalPolicy?: { home: string; options: Parameters<typeof applyClaudeSpawnPolicy>[1] };
 }
 
 export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<ResumeSpec> {
@@ -158,9 +160,18 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
   if (!/^[A-Za-z0-9_-]{43}$/.test(capability)) throw new Error("Viewer spawn capability is invalid");
   const identity = Object.entries(agentPublicationIdentityEnv(source))
     .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
+  const publicationEnv = { ...source, LLV_SPAWN_CAPABILITY: capability };
+  let memorySetup = "";
+  try {
+    if (spec.claudeTerminalPolicy) {
+      const policy = spec.claudeTerminalPolicy;
+      applyClaudeSpawnPolicy(policy.home, { ...policy.options, publicationEnv });
+    }
+    if (spec.codexPublication) memorySetup = codexTerminalMemorySetup(spec.codexPublication.home, spec.cwd, resolveHostBinary("codex"), publicationEnv);
+  } catch { /* optional memory setup cannot stop terminal launch */ }
   return {
     ...spec,
-    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${spec.command} )`,
+    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${memorySetup} ${spec.command} )`,
   };
 }
 
@@ -366,6 +377,11 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       cwd,
       windowName: "claude-new",
       engine: "claude",
+      claudeTerminalPolicy: options.claudeConfigDir ? { home: options.claudeConfigDir, options: {
+        providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)), allowSubagents: options.allowSubagents,
+        cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: sid,
+        mcpStatePath: managed ? path.join(options.claudeConfigDir, ".claude.json") : path.join(path.dirname(options.claudeConfigDir), ".claude.json"),
+      } } : undefined,
       ["transcript"]: claudeTranscriptPath(cwd, sid, options.claudeProjectsDir ?? path.join(legacyClaudeHome(), "projects")),
       launchProfile: {
         cwd,
@@ -565,6 +581,11 @@ export function resumeSpecForSession(
       cwd,
       windowName: "claude-resume",
       engine: "claude",
+      claudeTerminalPolicy: { home, options: {
+        providerAccount: Boolean(claudeProviderForHome(home)), allowSubagents: options.allowSubagents,
+        cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: `resume-${sessionId}`,
+        mcpStatePath: managed ? path.join(home, ".claude.json") : path.join(path.dirname(home), ".claude.json"),
+      } },
       launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), readOnly: options.readOnly ?? null, permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
     };
   }

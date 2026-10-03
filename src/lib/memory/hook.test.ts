@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { installCodexMemoryHook, memoryHookOutput, memoryHookSource } from "./hook";
+import { codexTerminalMemorySetup, installCodexMemoryHook, memoryHookOutput, memoryHookSource } from "./hook";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,7 +23,9 @@ test("hook crosses the real bearer perimeter and consumes exact FIFO receipts ev
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
     const gate = proxy(new NextRequest(request));
     if (gate.status !== 200) return gate;
-    received.push((await request.json()).delegatus_delivery_id);
+    const input = await request.json();
+    if (input.delegatus_confirm) return Response.json({ block: "" });
+    received.push(input.delegatus_delivery_id);
     return Response.json({ block: received.length === 1 ? "" : "Synthetic additional context" });
   } });
   try {
@@ -125,7 +127,9 @@ test("Next production compilation preserves the standalone Claude receipt hook",
   const webpack = require("next/dist/compiled/webpack/webpack").webpack;
   let calls = 0;
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
-    expect((await request.json()).delegatus_delivery_id).toBe("synthetic-turn"); calls++;
+    const input = await request.json();
+    if (input.delegatus_confirm) return Response.json({ block: "" });
+    expect(input.delegatus_delivery_id).toBe("synthetic-turn"); calls++;
     return Response.json({ block: "Synthetic compiled context" });
   } });
   try {
@@ -163,5 +167,38 @@ test("managed Codex config keeps native hooks and reserves enough tokens for ten
     installCodexMemoryHook(root, env);
     const config = JSON.parse(fs.readFileSync(path.join(root, "hooks.json"), "utf8"));
     expect(config.hooks.UserPromptSubmit).toEqual([{ hooks: [native] }, { hooks: [installed] }]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("terminal Codex setup trusts only its exact native-discovered handler without opening a thread", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-trust-"));
+  try {
+    const binary = path.join(root, "fake-codex");
+    fs.writeFileSync(binary, `#!/usr/bin/env bun
+import fs from "node:fs";
+import path from "node:path";
+import readline from "node:readline";
+for await (const line of readline.createInterface({ input: process.stdin })) {
+  const r = JSON.parse(line);
+  if (!r.id) continue;
+  fs.appendFileSync(path.join(process.env.CODEX_HOME, "methods"), r.method + "\\n");
+  let result = {};
+  if (r.method === "hooks/list") {
+    const own = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "hooks.json"), "utf8")).hooks.UserPromptSubmit[0].hooks[0];
+    result = { data: [{ hooks: [
+      { key: "own-hook", command: own.command, currentHash: "sha256:" + "a".repeat(64) },
+      { key: "native-hook", command: "native-command", currentHash: "sha256:" + "b".repeat(64) }
+    ] }] };
+  }
+  if (r.method === "config/value/write") fs.appendFileSync(path.join(process.env.CODEX_HOME, "writes"), JSON.stringify(r.params) + "\\n");
+  process.stdout.write(JSON.stringify({ id: r.id, result }) + "\\n");
+}
+`, { mode: 0o700 });
+    const setup = codexTerminalMemorySetup(root, root, binary, { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" });
+    const proc = Bun.spawn(["bash", "-c", setup], { stdout: "pipe", stderr: "pipe" });
+    expect(await proc.exited).toBe(0);
+    const writes = fs.readFileSync(path.join(root, "writes"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(writes).toEqual([{ keyPath: 'hooks.state."own-hook".trusted_hash', value: "sha256:" + "a".repeat(64), mergeStrategy: "replace" }]);
+    expect(fs.readFileSync(path.join(root, "methods"), "utf8").trim().split("\n")).toEqual(["initialize", "hooks/list", "config/value/write"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

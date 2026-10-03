@@ -146,6 +146,9 @@ class FakeAppServer extends EventEmitter {
   readonly pid = 4242;
   readonly requests: Array<Record<string, unknown>> = [];
   readonly signals: NodeJS.Signals[] = [];
+  hookHome: string | null = null;
+  hookDelayMs: number | null = 0;
+  hookTrustDelayMs: number | null = 0;
   autoResolveServerRequests = true;
   autoCompleteUserMessage = true;
   steerError: { code: number; message: string; data?: unknown } | null = null;
@@ -247,6 +250,16 @@ class FakeAppServer extends EventEmitter {
     const method = message.method;
     if (typeof method === "string" && this.ignoredMethods.includes(method)) return;
     if (method === "initialize") return this.respond(message.id, { userAgent: this.userAgent });
+    if (method === "hooks/list" && this.hookHome) {
+      if (this.hookDelayMs === null) return;
+      const command = JSON.parse(fs.readFileSync(path.join(this.hookHome, "hooks.json"), "utf8")).hooks.UserPromptSubmit[0].hooks[0].command;
+      setTimeout(() => this.respond(message.id as number, { data: [{ hooks: [{ key: "fixture-hook", command, currentHash: "sha256:" + "a".repeat(64) }] }] }), this.hookDelayMs);
+      return;
+    }
+    if (method === "config/value/write" && this.hookHome) {
+      if (this.hookTrustDelayMs !== null) setTimeout(() => this.respond(message.id as number, {}), this.hookTrustDelayMs);
+      return;
+    }
     if (method === "thread/queue/list") {
       if (!this.paginatedHistory) return this.respondError(message.id, "method not found");
       if (this.nativeQueueListNotification) this.notify(this.nativeQueueListNotification.method, this.nativeQueueListNotification.params);
@@ -517,6 +530,28 @@ async function nextEvent(iterable: AsyncIterable<unknown>): Promise<unknown> {
 }
 
 describe("CodexAppServerHost", () => {
+  for (const phase of ["discovery", "trust"] as const) for (const mode of ["late", "hung"] as const) test(`optional memory hook ${phase} ${mode} preserves the host and operator delivery`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "memory-optional-rpc-"));
+    const server = new FakeAppServer(); server.hookHome = home;
+    if (phase === "discovery") server.hookDelayMs = mode === "late" ? 120 : null;
+    else server.hookTrustDelayMs = mode === "late" ? 120 : null;
+    const host = await CodexAppServerHost.start({ cwd: home, codexHome: home, env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" }, requestTimeoutMs: 30, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await Bun.sleep(150);
+      expect((await host.health()).status).not.toBe("dead");
+      expect(await host.send({ id: "operator-after-hook", text: "Synthetic operator prompt", origin: { kind: "operator" } })).toMatchObject({ outcome: "turn-started" });
+      const turn = server.requests.find(r => r.method === "turn/start")!.params as { input: Array<{ text: string }> };
+      expect(decodeCodexStructuredUserText(turn.input[0].text).text).toBe("Synthetic operator prompt");
+    } finally { await host.release(); fs.rmSync(home, { recursive: true, force: true }); }
+  });
+  test("optional memory hook discovery and trust share one short setup deadline", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "memory-setup-budget-"));
+    const server = new FakeAppServer(); server.hookHome = home; server.hookDelayMs = 150; server.hookTrustDelayMs = 150;
+    const started = performance.now();
+    const host = await CodexAppServerHost.start({ cwd: home, codexHome: home, env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" }, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try { expect(performance.now() - started).toBeLessThan(290); await Bun.sleep(180); expect((await host.health()).status).not.toBe("dead"); }
+    finally { await host.release(); fs.rmSync(home, { recursive: true, force: true }); }
+  });
   test("structured Codex loads Telegram auth only for the granted root host", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-codex-telegram-grant-"));
     const previousState = process.env.LLV_STATE_DIR;

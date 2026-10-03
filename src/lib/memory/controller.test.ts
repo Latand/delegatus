@@ -7,7 +7,8 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { memoryIndex } from "./service";
 import { setSharedMemoryEnabled } from "./settings";
-import { offerForHook } from "./controller";
+import { offerForHook as prepareForHook } from "./controller";
+import { memoryHookSource } from "./hook";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
@@ -17,6 +18,15 @@ import type { groundedRequest } from "./selection";
 const previous = { ...process.env };
 const originalFetch = globalThis.fetch;
 const roots: string[] = [];
+async function offerForHook(request: Request, input: Record<string, unknown>) {
+  const headers = new Headers(request.headers);
+  headers.set("x-llv-memory-deadline", String(Date.now() + 1500));
+  headers.set("x-llv-memory-hook", crypto.randomUUID());
+  const admitted = new Request(request.url, { headers });
+  const block = await prepareForHook(admitted, input);
+  if (block) await prepareForHook(admitted, { delegatus_confirm: true });
+  return block;
+}
 afterEach(() => {
   memoryIndex().close(); setAgentRegistryForTests(null); globalThis.fetch = originalFetch;
   for (const key of ["LLV_STATE_DIR", "OPENROUTER_API_KEY", "PORT"]) {
@@ -24,6 +34,51 @@ afterEach(() => {
   }
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+for (const mode of ["delayed input", "delayed body", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only output confirmed before expiry`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-output-boundary-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  const receipt = registry.beginSpawn("codex", root, { cwd: root, title: "Synthetic boundary conversation" });
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const project = projectInfoFromCwd(root)!.project; setSharedMemoryEnabled(project, true);
+  const source = path.join(root, "cross.md");
+  fs.writeFileSync(source, "---\nname: Widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n");
+  await memoryIndex().refresh([{ path: source, engine: "claude", sourceKind: "claude_memory", project }]);
+  globalThis.fetch = (async () => {
+    if (mode === "delayed input") await Bun.sleep(1100);
+    const id = memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)[0].id;
+    return Response.json({ answers: { [id]: { noul: .8 } }, usage: { cost: .0001 } });
+  }) as typeof fetch;
+  let finished: Promise<string> = Promise.resolve("");
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    const input = await request.json();
+    finished = prepareForHook(request, input);
+    const block = await finished;
+    if (mode === "delayed body" && block) return new Response(new ReadableStream({ async start(c) {
+      await Bun.sleep(1650); c.enqueue(new TextEncoder().encode(JSON.stringify({ block }))); c.close();
+    } }));
+    return Response.json({ block });
+  } });
+  const prompt = encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind: "operator" }, crypto.createHash("sha256").update("output-boundary").digest("hex"));
+  const input = { hook_event_name: "UserPromptSubmit", session_id: crypto.randomUUID(), cwd: root, prompt };
+  try {
+    if (mode === "unconfirmed") {
+      await prepareForHook(new Request("http://localhost", { headers: { "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) } }), input);
+    } else {
+      const proc = Bun.spawn(["bun", "-e", memoryHookSource(`http://127.0.0.1:${server.port}`)], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: capability } });
+      try {
+        if (mode === "delayed input") await Bun.sleep(600);
+        proc.stdin.write(JSON.stringify(input)); proc.stdin.end();
+        expect(await proc.exited).toBe(0);
+        expect((await new Response(proc.stdout).text()).length > 0).toBe(mode === "successful");
+        await finished;
+      } finally { proc.kill(); await proc.exited; }
+    }
+    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe(mode === "successful" ? 1 : 0);
+    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe(mode === "successful" ? 0 : 1);
+  } finally { server.stop(true); }
+}, 5000);
 
 for (const engine of ["claude", "codex"] as const) for (const prompt of ["Proceed", "Так"]) {
   test(`${engine} short follow-up ${prompt} recalls preceding task terms and keeps the Jev prompt unchanged`, async () => {
