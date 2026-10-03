@@ -59,12 +59,19 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
   for (const [order, live] of current.entries()) {
     const stream = streamKey(live, liveTurn!.turnId);
-    if (live.tool || !live.text.trim() || !live.itemId && retiredStreams.has(stream)) continue;
+    if (live.tool || !live.itemId && retiredStreams.has(stream)) continue;
     const index = pending.findIndex((entry) => live.itemId && entry.live.itemId === live.itemId
       || !entry.live.itemId && entry.live.startedAt === live.startedAt
         && (live.startedAt !== null || live.text.startsWith(entry.live.text)));
-    if (index >= 0) pending[index] = { ...pending[index], live, order };
-    else pending.push({ key: `assistant-pending:${sequence++}`, live, order, stream, turnId: liveTurn!.turnId });
+    if (index >= 0) {
+      const observed = pending[index].live;
+      // Transport budgeting can remove a prefix after the pane read it. Keep
+      // that observed body while adopting current identity and lifecycle fields.
+      // A changed completion with no matching omitted suffix remains authority.
+      const retained = live.omittedChars && live.text.length < observed.text.length && observed.text.endsWith(live.text)
+        ? { ...live, text: observed.text, omittedChars: observed.omittedChars } : live;
+      pending[index] = { ...pending[index], live: retained, order };
+    } else if (live.text.trim()) pending.push({ key: `assistant-pending:${sequence++}`, live, order, stream, turnId: liveTurn!.turnId });
   }
   const bindings = new Map<string, Binding>();
   const priorBindings = new Map([...state.bindings.values()].map(binding => [binding.identity, binding]));

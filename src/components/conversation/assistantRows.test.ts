@@ -221,3 +221,17 @@ test("folded transport descriptors count retained replies once during prolonged 
   expect(tail.rows).toHaveLength(8);
   expect(tail.earlier).toBe(542);
 });
+
+test("a later clipped descriptor preserves the reply already observed by this pane", () => {
+  const firstText = "Already read prefix: " + "a".repeat(30000);
+  const first = projectRuntimeLiveTurnItem(null, "budget-turn", { type: "agentMessage", id: "first", text: firstText }, "completed", "2026-10-02T10:00:00Z")!;
+  let state = projectAssistantHandoff(null, first, [], claims);
+  const second = projectRuntimeLiveTurnItem(first, "budget-turn", { type: "agentMessage", id: "second", text: "b".repeat(40000) }, "completed", "2026-10-02T10:00:01Z")!;
+  expect(second.items![0].text.length).toBeLessThan(firstText.length);
+  state = projectAssistantHandoff(state, second, [], claims);
+  expect(state.pending[0].live.text).toBe(firstText);
+  expect(state.pending[0].live.omittedChars ?? 0).toBe(0);
+  const rewritten = { ...second, items: [{ ...second.items![0], text: "Corrected answer", omittedChars: 0 }] };
+  state = projectAssistantHandoff(state, rewritten, [], claims);
+  expect(state.pending[0].live.text).toBe("Corrected answer");
+});
