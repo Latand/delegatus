@@ -2797,10 +2797,12 @@ function terminalReviewGrantForFix(
       ? pipeline.reviewGrants?.find((candidate) => candidate.stageId === activation.stageId
         && candidate.terminalAttempt === activation.attempt)
       : null;
-    if (grant) {
+    if (grant && grant.stageId !== stage.id) {
       const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
-      return review?.onFail && stage.id !== review.id ? grant : null;
+      return review?.onFail ? grant : null;
     }
+    // Passing this grant's own reviewer fulfills its inner obligation. Keep
+    // tracing so an outer granted fix still returns to its original reviewer.
     const key = `${activation.stageId}:${activation.attempt}`;
     if (visited.has(key)) break;
     visited.add(key);
@@ -2837,7 +2839,8 @@ function terminalGrantIsLastRound(pipeline: Pipeline, grant: PipelineReviewGrant
           break;
         }
         if (activation.edge === "fail" && pipeline.reviewGrants?.some((newer) =>
-          newer.stageId === activation.stageId && newer.terminalAttempt === activation.attempt)) break;
+          newer.stageId === grant.stageId && newer.stageId === activation.stageId
+          && newer.terminalAttempt === activation.attempt)) break;
         const key = `${activation.stageId}:${activation.attempt}`;
         if (visited.has(key)) break;
         visited.add(key);

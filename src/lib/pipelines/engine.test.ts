@@ -19048,3 +19048,31 @@ test.each(["tick", "direct"] as const)("an older failed terminal park regains sa
   expect(continued.state).toBe("needs_decision");
   expect(continued.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
 });
+
+
+test.each([1, 2] as const)("an inner terminal grant retains the outer review obligation (%i outer rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "outer-grant", rounds)).error).toBeUndefined();
+  const innerPark = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && (n === 2 || n === 3))).pipeline;
+  expect(innerPark.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "fix", fixStageId: "repair" });
+  expect((await continueReview(innerPark, "inner-grant", 1)).error).toBeUndefined();
+  const returned = (await driveWithController(h)).pipeline;
+  expect(returned.state).toBe("needs_decision");
+  expect(returned.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique" });
+  const reviews = returned.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(2 + rounds);
+  expect(reviews[2]!.activatedBy).toMatchObject({ stageId: "fix", attempt: 4, edge: "pass" });
+  expect(returned.reviewGrants).toMatchObject([{ stageId: "critique", rounds }, { stageId: "fix", rounds: 1 }]);
+  expect((await continueReview(returned, "outer-final-grant", 1)).error).toBeUndefined();
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.verdict?.status).toBe("pass");
+});
