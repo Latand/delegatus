@@ -165,8 +165,9 @@ export async function drainReportReplies(store: TelegramBotStore, botId: string,
   for (const pending of store.pendingReportReplies()) {
     if (pending.botId !== botId || pending.senderId !== ports.operatorId()) continue;
     await withLiveReplyAdmission(pending.key, async () => {
-      let row = store.pendingReportReplies().find(candidate => candidate.key === pending.key);
-      if (!row) return;
+      const found = store.pendingReportReplies().find(candidate => candidate.key === pending.key);
+      if (!found) return;
+      let row: ReportReplyRow = found;
       const save = (next: ReportReplyRow): boolean => {
         if (!store.updateReportReply(row, next)) return false;
         row = { ...next, revision: row.revision + 1 };

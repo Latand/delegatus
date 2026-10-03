@@ -433,6 +433,124 @@ test("Telegram intake reaches the real durable seat reservation and runtime jour
   } finally { registry.close(); journal.close(); }
 });
 
+test("a journal withdrawal racing delivery preserves the binding, while a queued withdrawal reaches the successor once", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
+  const { FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
+  const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const { withdrawRuntimeWake } = await import("@/lib/monitor/seatTickSources");
+  const registryFile = path.join(directory, "registry.json");
+  const journalFile = path.join(directory, "runtime.sqlite");
+  const registry = new AgentRegistry(registryFile);
+  const journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+  try {
+    const firstPath = path.join(directory, "fixture-withdraw-first.jsonl");
+    const successorPath = path.join(directory, "fixture-withdraw-successor.jsonl");
+    const launchProfile = emptyLaunchProfile({ cwd: directory });
+    registry.reconcileConversations([firstPath, successorPath].map(artifactPath => ({
+      engine: "codex", path: artifactPath, accountId: "fixture-account", launchProfile,
+      turn: { state: "idle" as const, source: "empty" as const, terminalAt: null }, observedAt: now.toISOString(),
+    })));
+    const first = registry.conversationForPath(firstPath)!;
+    const successor = registry.conversationForPath(successorPath)!;
+    for (const [conversation, artifactPath] of [[first, firstPath], [successor, successorPath]] as const) {
+      const generation = conversation.generations.at(-1)!;
+      journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server",
+        host: "hosted", turn: "idle", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+      } });
+    }
+    recipient = first.id;
+    report.origin!.conversationId = first.id;
+    report.targetSeatConversationId = first.id;
+    transport.script("sendMessage", ok({ message_id: 10, date }));
+    await service.send({ conversationId: first.id, clientRequestId: `bridge-report:${report.id}`, chat: "fixture-reports", text: "Proceed?" });
+
+    const client = {
+      readSession: async ({ conversationId }: { conversationId: string }) => journal.snapshot().sessions.find(session => session.conversationId === conversationId) ?? null,
+      command: async (command: Parameters<InstanceType<typeof RuntimeJournal>["executeOperation"]>[0]) => journal.executeOperation(command),
+      operationStatus: async (id: string) => journal.operationResult(id),
+      transitionOperation: async (...args: Parameters<import("@/lib/runtime/client").RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+    ports.deliver = binding => deliverReportReply(binding, { enabled: () => true, registry: () => registry, client: () => client, kick: () => {} });
+    ports.original = binding => resolveOriginalSend(binding, { registry, client });
+    ports.withdraw = (operationId, _deliveryId) => withdrawRuntimeWake(operationId, "fixture seat rotation", client);
+    await poll([reply()]);
+    const firstReply = store.pendingReportReplies()[0]!;
+    expect(firstReply.operationId).toBeTruthy();
+
+    let statusRead!: () => void;
+    const statusReadReached = new Promise<void>(resolve => { statusRead = resolve; });
+    let resumeWithdrawal!: () => void;
+    const withdrawalBarrier = new Promise<void>(resolve => { resumeWithdrawal = resolve; });
+    let pauseStatusRead = true;
+    const racingClient = {
+      ...client,
+      operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) => {
+        const result = await client.operationStatus(operationId, options);
+        if (pauseStatusRead && operationId === firstReply.operationId) {
+          pauseStatusRead = false;
+          statusRead();
+          await withdrawalBarrier;
+        }
+        return result;
+      },
+    } as import("@/lib/runtime/client").RuntimeHostClient;
+    let engineEntered!: () => void;
+    const engineSendEntered = new Promise<void>(resolve => { engineEntered = resolve; });
+    let resumeEngineSend!: () => void;
+    const engineSendBarrier = new Promise<void>(resolve => { resumeEngineSend = resolve; });
+    const engineSends: string[] = [];
+    const host = new FakeEngineHost();
+    host.send = async entry => {
+      engineSends.push(entry.id);
+      engineEntered();
+      await engineSendBarrier;
+      return { outcome: "turn-started", turnId: `turn:${entry.id}` };
+    };
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+      transition: async (operationId, status, details) => { journal.transitionOperation(operationId, status, details); },
+      status: async operationId => journal.operationResult(operationId)?.receipt ?? null,
+    }, () => host);
+
+    const withdrawal = withdrawRuntimeWake(firstReply.operationId!, "fixture seat rotation", racingClient);
+    await statusReadReached;
+    const oldSeatDrain = queue.drain();
+    await engineSendEntered;
+    expect(journal.operationResult(firstReply.operationId!)?.receipt.status).toBe("delivering");
+    resumeWithdrawal();
+    expect(await withdrawal).toBe("too-late");
+    expect(store.pendingReportReplies()[0]).toMatchObject({ recipient: first.id, attempt: 0 });
+    resumeEngineSend();
+    await oldSeatDrain;
+    expect(journal.operationResult(firstReply.operationId!)?.receipt.status).toBe("delivered");
+
+    recipient = successor.id;
+    await poll([]);
+    expect(store.pendingReportReplies()).toHaveLength(0);
+    expect(engineSends).toHaveLength(1);
+
+    recipient = first.id;
+    await poll([reply({ message_id: 21 })]);
+    const queuedReply = store.pendingReportReplies()[0]!;
+    expect(journal.operationResult(queuedReply.operationId!)?.receipt.status).toBe("queued");
+    recipient = successor.id;
+    await poll([]);
+    const successorReply = store.pendingReportReplies()[0]!;
+    expect(successorReply).toMatchObject({ recipient: successor.id, attempt: 1 });
+    expect(journal.operationResult(successorReply.operationId!)?.receipt.status).toBe("queued");
+    await queue.drain();
+    expect(engineSends).toHaveLength(2);
+    expect(journal.operationResult(successorReply.operationId!)?.receipt.status).toBe("delivered");
+    await poll([]);
+    expect(store.pendingReportReplies()).toHaveLength(0);
+    expect(engineSends).toHaveLength(2);
+  } finally { registry.close(); journal.close(); }
+});
+
 test("a live reply dispatch rechecks designation under reservation lock and serializes overlapping drains", async () => {
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");

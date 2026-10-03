@@ -432,13 +432,13 @@ export async function withdrawRuntimeWake(
   if (status === "failed" || status === "rejected") return "withdrawn";
   if (!RUNTIME_QUEUED.has(status)) return "unknown";
   try {
-    const settled = await client.transitionOperation(current.operationId, "failed", { reason });
+    const settled = await client.transitionOperation(current.operationId, "failed", { reason }, { fromStatuses: ["pending", "queued"] });
     return settled.receipt.status === "failed" ? "withdrawn" : "too-late";
   } catch {
     /* The host refuses the transition exactly when the operation left the queue
        between the read and the write — which is the drain taking it. */
     const after = await client.operationStatus(current.operationId, { currentRetryLeaf: true });
-    return after && RUNTIME_LANDED.has(after.receipt.status) ? "too-late" : "unknown";
+    return after && (RUNTIME_LANDED.has(after.receipt.status) || RUNTIME_IN_FLIGHT.has(after.receipt.status)) ? "too-late" : "unknown";
   }
 }
 
