@@ -361,6 +361,7 @@ interface SynchronizationImageAdmission {
   storeImages?: StructuredMessageDependencies["storeImages"];
   previewImageRefs?: StructuredMessageDependencies["previewImageRefs"];
   withImageAdmissionLock?: StructuredMessageDependencies["withImageAdmissionLock"];
+  admissionGuard?: StructuredMessageDependencies["admissionGuard"];
 }
 
 async function holdDuringRuntimeSynchronization(
@@ -498,9 +499,9 @@ async function holdDuringRuntimeSynchronization(
     const admissionKey = request.clientMessageId?.trim()
       ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
       : null;
-    const reservation = await withAdmissionSection(admissionKey, async () => {
-      if (rawImages.length === 0) return place();
-      return (admission.withImageAdmissionLock ?? withAccountMutationLockAsync)(async () => {
+    const reservation = await withAdmissionSection(admissionKey, () => withAccountMutationLockAsync(async () => {
+      if (admission.admissionGuard && !admission.admissionGuard()) throw new AdmissionGuardRejectedError();
+      const reserve = async () => {
         const raced = registry.preflightDeliveryReservation(
           conversation.id,
           deliveryText,
@@ -511,10 +512,15 @@ async function holdDuringRuntimeSynchronization(
           commandInput(request),
         );
         if (raced) return raced;
-        (admission.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
+        if (rawImages.length > 0) {
+          (admission.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
+        }
         return place();
-      });
-    });
+      };
+      return rawImages.length === 0
+        ? reserve()
+        : (admission.withImageAdmissionLock ?? (operation => operation()))(reserve);
+    }, { holder: "send admission", caller: "send admission" }));
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(reservation, idempotencyKey, conversation.id, false);
     }
@@ -551,6 +557,7 @@ function synchronizationImageAdmission(
     ...(dependencies.storeImages ? { storeImages: dependencies.storeImages } : {}),
     ...(dependencies.previewImageRefs ? { previewImageRefs: dependencies.previewImageRefs } : {}),
     ...(dependencies.withImageAdmissionLock ? { withImageAdmissionLock: dependencies.withImageAdmissionLock } : {}),
+    ...(dependencies.admissionGuard ? { admissionGuard: dependencies.admissionGuard } : {}),
   };
 }
 

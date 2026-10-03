@@ -509,3 +509,131 @@ test("a live reply dispatch rechecks designation under reservation lock and seri
     expect(store.pendingReportReplies()[0]).toMatchObject({ recipient: successor.id, operationId: expect.any(String) });
   } finally { registry.close(); journal.close(); }
 });
+
+test.each(["failed read", "missing session", "missing runtime client"] as const)(
+  "a %s during rotation leaves no retired-seat reservation and replays to the successor after reopening",
+  async readOutcome => {
+    const { AgentRegistry } = await import("@/lib/agent/registry");
+    const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+    const { RuntimeJournal } = await import("@/runtime-host/journal");
+    const { resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+    const registryFile = path.join(directory, "registry.json");
+    const journalFile = path.join(directory, "runtime.sqlite");
+    let registry = new AgentRegistry(registryFile);
+    let journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+    try {
+      const firstPath = path.join(directory, "fixture-read-failure-first.jsonl");
+      const successorPath = path.join(directory, "fixture-read-failure-successor.jsonl");
+      const launchProfile = emptyLaunchProfile({ cwd: directory });
+      registry.reconcileConversations([firstPath, successorPath].map(artifactPath => ({
+        engine: "codex", path: artifactPath, accountId: "fixture-account", launchProfile,
+        turn: { state: "idle" as const, source: "empty" as const, terminalAt: null }, observedAt: now.toISOString(),
+      })));
+      const first = registry.conversationForPath(firstPath)!;
+      const successor = registry.conversationForPath(successorPath)!;
+      for (const [conversation, artifactPath] of [[first, firstPath], [successor, successorPath]] as const) {
+        const generation = conversation.generations.at(-1)!;
+        registry.upsert({
+          key: { engine: conversation.engine, sessionId: generation.id },
+          artifactPath: generation.path,
+          cwd: generation.launchProfile.cwd,
+          accountId: generation.accountId,
+          launchProfile: generation.launchProfile,
+          status: "idle",
+          host: null,
+          structuredHost: {
+            kind: "codex-app-server",
+            endpoint: "stdio:fixture-runtime",
+            process: { pid: 101, startIdentity: `fixture-${conversation.id}` },
+            eventCursor: 1,
+            protocolVersion: "v2",
+            writerClaimEpoch: 1,
+            activeTurnRef: null,
+            pendingAttention: [],
+            activeFlags: [],
+          },
+          claimEpoch: 1,
+          claimOwner: `structured-host:fixture-${conversation.id}`,
+          pendingAction: null,
+        });
+        journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+          conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server",
+          host: "hosted", turn: "idle", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+        } });
+      }
+      const seatIntent = (key: string, conversationId: string) => {
+        beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "Fixture mandate", clientRequestId: key, mode: "spawn" });
+        completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: key, conversationId, path: null });
+      };
+      seatIntent("fixture-read-failure-first", first.id);
+      recipient = first.id;
+      report.origin!.conversationId = first.id;
+      report.targetSeatConversationId = first.id;
+      transport.script("sendMessage", ok({ message_id: 10, date }));
+      await service.send({ conversationId: first.id, clientRequestId: `bridge-report:${report.id}`, chat: "fixture-reports", text: "Proceed?" });
+      ports.seat = productionReportReplyPorts.seat;
+
+      let entered!: () => void;
+      const reachedReadSession = new Promise<void>(resolve => { entered = resolve; });
+      let resumeRead!: () => void;
+      const readSessionBarrier = new Promise<void>(resolve => { resumeRead = resolve; });
+      let paused = false;
+      const client = {
+        readSession: async ({ conversationId }: { conversationId: string }) => {
+          if (conversationId === first.id && !paused) {
+            paused = true;
+            entered();
+            await readSessionBarrier;
+            if (readOutcome === "failed read") throw new Error("fixture runtime read failed");
+            return null;
+          }
+          return journal.snapshot().sessions.find(session => session.conversationId === conversationId) ?? null;
+        },
+        command: async (command: Parameters<InstanceType<typeof RuntimeJournal>["executeOperation"]>[0]) => journal.executeOperation(command),
+        operationStatus: async (id: string) => journal.operationResult(id),
+      } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+      let missingRuntimeClient = readOutcome === "missing runtime client";
+      ports.deliver = binding => missingRuntimeClient
+        ? (async () => {
+            entered();
+            await readSessionBarrier;
+            return deliverReportReply(binding, {
+              enabled: () => true, registry: () => registry, client: () => null, kick: () => {},
+            });
+          })()
+        : deliverReportReply(binding, {
+            enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+          });
+      ports.original = binding => resolveOriginalSend(binding, { registry, client });
+      const firstDrain = poll([reply()]);
+      await reachedReadSession;
+      seatIntent("fixture-read-failure-successor", successor.id);
+      recipient = successor.id;
+      resumeRead();
+      await firstDrain;
+      missingRuntimeClient = false;
+
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      expect(journal.effectBatch(20, ["runtime.send"])).toHaveLength(0);
+      expect(store.pendingReportReplies()).toHaveLength(1);
+      expect(store.pendingReportReplies()[0]).toMatchObject({ recipient: first.id, operationId: null });
+
+      registry.close();
+      journal.close();
+      store.close();
+      registry = new AgentRegistry(registryFile);
+      journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+      store = new TelegramBotStore(path.join(directory, "bot.sqlite"));
+      service = createService();
+      await poll([reply({}, 99)]);
+
+      const effects = journal.effectBatch(20, ["runtime.send"]);
+      expect(effects).toHaveLength(1);
+      expect(effects[0].payload).toMatchObject({ conversationId: successor.id });
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+      expect(store.pendingReportReplies()).toHaveLength(1);
+      expect(store.pendingReportReplies()[0]).toMatchObject({ recipient: successor.id, operationId: expect.any(String) });
+    } finally { registry.close(); journal.close(); }
+  },
+);
