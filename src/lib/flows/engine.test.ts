@@ -1521,7 +1521,7 @@ test("fresh auto reviewer rechecks admission after waiting for the account mutat
   const mutation = await import("@/lib/accounts/accountMutation");
   const exec = await import("./exec");
   const account = { engine: "claude" as const, accountId: "account-a", kind: "managed" as const, home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
-  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account });
+  const resolve = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account });
   const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "admitted-review", reviewerPath: null });
   const nativeStatus = exec.headlessReviewStatus;
   const status = spyOn(exec, "headlessReviewStatus").mockImplementation((...args) => launch.mock.calls.length

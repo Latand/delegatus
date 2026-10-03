@@ -599,6 +599,39 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ role: "relaunch", target: tipSha });
   });
 
+  test("an exact deploy of the healthy serving revision settles without restarting it", async () => {
+    const h = harness({ holdBuild: true }); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    record.launcher = { ...record.launcher, relaunch: 1, revision: firstSha, state: "healthy" };
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const response = await deployPost(post("/runtime/deployments", { revision: firstSha, idempotencyKey: "already-serving" }));
+    expect(response.status).toBe(202);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "succeeded", terminal: true });
+    expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false); expect(existsSync(record.requestFile)).toBe(false);
+  });
+
+  test.each(["missing", "done"] as const)("cold exact deployment reconciles a receipt with %s apply persistence", async completion => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    const at = new Date().toISOString();
+    const row = { deploymentId: "checkout-orphan", idempotencyKey: "crashed-before-apply", requestedRevision: tipSha, revision: tipSha,
+      phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+      health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 };
+    mkdirSync(h.deps.dir, { recursive: true });
+    writeFileSync(join(h.deps.dir, "deployments.json"), JSON.stringify([row]));
+    if (completion === "done") writeFileSync(join(h.deps.dir, "apply.json"), JSON.stringify({
+      requestId: "completed-before-ledger", target: tipSha, rollbackPointer: null, launcherPid: record.launcher.pid,
+      launcherIdentity: record.launcher.startIdentity, trigger: "seat", deploymentId: row.deploymentId, startedAt: at, state: "done", rolledBack: false,
+    }));
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: completion === "done" ? "succeeded" : "failed", terminal: true });
+    expect((await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "crashed-before-apply" }))).status).toBe(202);
+    expect((await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "after-crash" }))).status).toBe(202);
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+  });
+
   test("cold ready checkpoint resumes one launcher request", async () => {
     const h = harness(); const r = JSON.parse(readFileSync(h.recordFile, "utf8")); r.launcher.relaunch = 1;
     writeFileSync(h.recordFile, JSON.stringify(r));

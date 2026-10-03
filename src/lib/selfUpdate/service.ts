@@ -1342,17 +1342,24 @@ export class SelfUpdateService {
       }
       const green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, record.checkout ?? await this.deps.prepareCheckRepo());
       if (green.state !== "green") throw new Error(`The requested revision is not green (${green.state})`);
+      const health = await this.deps.hostHealth().catch(() => null);
       const current = await this.decide();
       if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
       const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
       if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state) || admitted)
         return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
+      const serving = current.record!;
+      const alreadyServing = serving.launcher.state === "healthy" && !serving.launcher.error && serving.launcher.revision === target
+        && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
+        && serving.web.revision === target.slice(0, 7) && serving.runtimeHost.revision === target.slice(0, 7)
+        && serving.web.pid !== null && serving.web.startIdentity !== null && this.deps.processAlive(serving.web.pid, serving.web.startIdentity)
+        && health?.pid === serving.runtimeHost.pid && health?.startIdentity === serving.runtimeHost.startIdentity;
       const deploymentId = `checkout-${randomUUID()}`;
       const at = new Date(this.deps.now()).toISOString();
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
-        phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+        phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
         health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
-      try { this.startCheckout(record, revision, "seat", deploymentId); }
+      try { if (!alreadyServing) this.startCheckout(record, revision, "seat", deploymentId); }
       catch (error) {
         const row = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === deploymentId)!;
         saveCheckoutDeployment(this.deps.dir, { ...row, phase: "failed", terminal: true, error: error instanceof Error ? error.message : String(error), updatedAt: new Date(this.deps.now()).toISOString(), revisionNumber: row.revisionNumber + 1 });

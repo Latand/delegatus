@@ -1,4 +1,4 @@
-import { settleCheckoutDeployment } from "./deployments";
+import { recoverCheckoutDeployments, settleCheckoutDeployment } from "./deployments";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,6 +22,7 @@ export class ApplyController {
       this.current = value;
       if (value.state === "building") { this.restoreUntaken(); this.patch({ state: "failed", detail: "The Viewer stopped during the build" }); }
     } catch (error) { if (existsSync(join(directory, "apply.json"))) throw error; }
+    recoverCheckoutDeployments(directory, this.current);
   }
   begin(record: LauncherRecord, target: string, trigger: ApplyIntent["trigger"], deploymentId?: string, options: { rollbackPointer?: string | null; state?: "building" | "ready"; autoGateId?: string } = {}): void {
     if (this.current && ["building", "ready", "switching"].includes(this.current.state)) throw new Error("An apply is already active");
@@ -80,6 +81,12 @@ export class ApplyController {
     const error = record.launcher.error;
     if (error?.kind === "fell-back") {
       this.patch({ state: "failed", rolledBack: true, detail: error.detail });
+      releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
+    }
+    if (error && record.launcher.state === "healthy") {
+      this.restoreUntaken(record);
+      const detail = error.kind === "message" ? error.text : "The launcher refused the replacement";
+      this.patch({ state: "failed", detail });
       releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
     }
     if (!hostHealthy || record.launcher.state !== "healthy" || error || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy"

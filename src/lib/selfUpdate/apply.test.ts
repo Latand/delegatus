@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ApplyController } from "./apply";
+import { activeDrain } from "./drain";
 import type { LauncherRecord } from "./launcher";
 const root = mkdtempSync("/var/tmp/install-apply-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -65,4 +66,20 @@ test("request publication failure restores the previous pointer before Retry cap
   expect(readFileSync(r.releasePointer, "utf8")).toBe(old);
   const recovered = new ApplyController(dir); recovered.begin(r, "a".repeat(40), "operator");
   expect(recovered.current?.rollbackPointer).toBe(old);
+});
+
+
+test.each(["Relaunch target is not the installed release.", "trial persistence refused"])("cold apply settles terminal launcher rejection: %s", detail => {
+  const dir = mkdtempSync(join(root, "terminal-rejection-")); const r = record(dir); const c = new ApplyController(dir);
+  const previous = JSON.stringify({ sha: "b".repeat(40) }) + "\n"; writeFileSync(r.releasePointer, previous);
+  c.begin(r, "a".repeat(40), "seat"); writeFileSync(r.releasePointer, JSON.stringify({ sha: "a".repeat(40) })); c.send(r);
+  const cold = new ApplyController(dir);
+  const failed = { ...r, launcher: { ...r.launcher, state: "healthy", requestId: "unrelated", error: { kind: "message" as const, text: detail } } };
+  expect(cold.observe(failed)).toBeNull(); expect(activeDrain(join(dir, "auto-drain.json"))).not.toBeNull();
+  failed.launcher.requestId = c.current!.requestId;
+  expect(cold.observe(failed)).toBe("failed");
+  expect(cold.current).toMatchObject({ state: "failed", rolledBack: false, detail });
+  expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull();
+  expect(readFileSync(r.releasePointer, "utf8")).toBe(previous);
+  expect(new ApplyController(dir).current?.state).toBe("failed");
 });

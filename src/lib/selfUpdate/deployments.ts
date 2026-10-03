@@ -22,6 +22,18 @@ export function settleCheckoutDeployment(directory: string, intent: ApplyIntent)
   if (!status) throw new Error("The admitted checkout deployment is missing");
   const phase = intent.state === "done" ? "succeeded" : intent.state === "failed" ? intent.rolledBack ? "rolled-back" : "failed"
     : intent.state === "switching" ? "host-handoff" : "building";
-  saveCheckoutDeployment(directory, { ...status, phase, terminal: ["done", "failed"].includes(intent.state), error: intent.detail ?? null,
+  const terminal = ["done", "failed"].includes(intent.state);
+  if (status.phase === phase && status.terminal === terminal && status.error === (intent.detail ?? null)) return;
+  saveCheckoutDeployment(directory, { ...status, phase, terminal, error: intent.detail ?? null,
     updatedAt: new Date().toISOString(), revisionNumber: status.revisionNumber + 1 });
+}
+
+/** A cold Viewer reconciles both sides of the receipt/apply persistence boundary. */
+export function recoverCheckoutDeployments(directory: string, intent: ApplyIntent | null): void {
+  if (intent?.deploymentId) settleCheckoutDeployment(directory, intent);
+  for (const status of checkoutDeployments(directory)) {
+    if (status.terminal || status.deploymentId === intent?.deploymentId) continue;
+    saveCheckoutDeployment(directory, { ...status, phase: "failed", terminal: true,
+      error: "The Viewer stopped before persisting deployment ownership", updatedAt: new Date().toISOString(), revisionNumber: status.revisionNumber + 1 });
+  }
 }
