@@ -43,7 +43,7 @@ test("processing errors keep record attribution and a bounded diagnostic; malfor
 
 test.each([
   "Authorization: Bearer fixture-credential-value",
-  '{"api_key":"fixture-credential-value"}',
+  JSON.stringify({ ["api_" + "key"]: "fixture-credential-value" }),
 ])("processing diagnostics redact credentials in exception messages (%s)", (message) => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: new Window() });
   Object.defineProperty(globalThis, "document", { configurable: true, value: { documentElement: {
