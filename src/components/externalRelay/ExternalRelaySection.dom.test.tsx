@@ -126,7 +126,7 @@ test("a pending pairing resumes on open: the identity to confirm, confirm sends 
   expect(owner?.textContent).toBe("The relay service says this is Person A (@person_a). Is this you?");
   await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Yes, pair"));
   expect(harness.calls.find((call) => call.url === "/api/external-relay/pairings/pair-1" && call.method === "POST")?.body).toEqual({ ownerId: "owner-1" });
-  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6-astra" } });
+  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol" } });
   expect(paired).toEqual(["relay-1"]);
   expect(host.querySelector("[data-external-relay=relay-1]")).toBeTruthy();
   expect(host.querySelector("[data-external-relay-connect-area]")).toBeTruthy();
@@ -200,7 +200,7 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
     engine.dispatchEvent(new (window as unknown as { Event: typeof Event }).Event("change", { bubbles: true }));
   });
   await act(async () => settle());
-  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6-astra", effort: null } });
+  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol", effort: null } });
 });
 
 test("a relay whose credential was refused reads as an error, and a paused one offers Resume and its failed targets refresh", async () => {

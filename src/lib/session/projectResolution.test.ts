@@ -21,12 +21,13 @@ afterAll(() => {
 });
 
 const LLV_PROJECT = "-agents-tools-live-log-viewer-next";
-const LLV_CANONICAL_PROJECT = projectInfoFromCwd(process.cwd())!.project;
+const REPOSITORY = path.join(SANDBOX, "repository");
+fs.mkdirSync(path.join(REPOSITORY, ".git"), { recursive: true });
+fs.writeFileSync(path.join(REPOSITORY, ".git", "HEAD"), "ref: refs/heads/main\n");
+fs.writeFileSync(path.join(REPOSITORY, ".git", "config"), '[remote "origin"]\n\turl = https://example.invalid/team/fixture.git\n');
+const LLV_CANONICAL_PROJECT = projectInfoFromCwd(REPOSITORY)!.project;
 const LLV_WORKTREE_CWD = path.join(
-  os.homedir(),
-  ".agents",
-  "tools",
-  "live-log-viewer-next",
+  REPOSITORY,
   ".claude",
   "worktrees",
   "pipeline-315-explicit-ownership",
@@ -40,7 +41,7 @@ test("explicit conversation ownership outranks canonical cwd, profile hint, and 
   const attribution = resolveProjectAttribution({
     projectOwnership: operatorOwnership(LLV_PROJECT),
     cwd: os.homedir(),
-    launchProfileProject: "latand",
+    launchProfileProject: "selected-project",
     fallbackProject: "other",
   });
   expect(attribution).toMatchObject({ project: LLV_PROJECT, source: "ownership" });
@@ -61,7 +62,7 @@ test("ownership keeps the worktree evidence its cwd proves", () => {
 test("canonical worktree cwd identity outranks a selected-project launch hint", () => {
   const attribution = resolveProjectAttribution({
     cwd: LLV_WORKTREE_CWD,
-    launchProfileProject: "latand",
+    launchProfileProject: "selected-project",
     fallbackProject: "other",
   });
   expect(attribution).toEqual({
@@ -98,9 +99,9 @@ test("a source-project fallback names a cross-project lineage stub", () => {
 test("blank ownership records never blank the attribution", () => {
   const attribution = resolveProjectAttribution({
     projectOwnership: { project: "   ", source: "operator", setAt: "2026-07-16T12:00:00.000Z", operationId: "x" },
-    launchProfileProject: "latand",
+    launchProfileProject: "selected-project",
   });
-  expect(attribution).toEqual({ project: "latand", source: "launch-profile" });
+  expect(attribution).toEqual({ project: "selected-project", source: "launch-profile" });
 });
 
 test("placeholder ownership never overrides a concrete cwd project", () => {
@@ -131,8 +132,8 @@ test("a legacy display-name ownership collapses into the cwd repository identity
 
 test("explicit project validation rejects ambiguous aliases", () => {
   expect(validExplicitProject(LLV_PROJECT)).toBe(LLV_PROJECT);
-  expect(validExplicitProject("latand")).toBe("latand");
-  expect(validExplicitProject("  latand  ")).toBe("latand");
+  expect(validExplicitProject("selected-project")).toBe("selected-project");
+  expect(validExplicitProject("  selected-project  ")).toBe("selected-project");
   expect(validExplicitProject("")).toBeNull();
   expect(validExplicitProject("   ")).toBeNull();
   expect(validExplicitProject("has space")).toBeNull();
@@ -147,7 +148,7 @@ test("ownership normalization fails closed on malformed durable records", () => 
   expect(normalizeProjectOwnership(valid)).toEqual(valid);
   expect(normalizeProjectOwnership(null)).toBeNull();
   expect(normalizeProjectOwnership(undefined)).toBeNull();
-  expect(normalizeProjectOwnership("latand")).toBeNull();
+  expect(normalizeProjectOwnership("selected-project")).toBeNull();
   expect(normalizeProjectOwnership({ ...valid, source: "scanner" })).toBeNull();
   expect(normalizeProjectOwnership({ ...valid, project: "" })).toBeNull();
   expect(normalizeProjectOwnership({ project: LLV_PROJECT, source: "relocation" }))

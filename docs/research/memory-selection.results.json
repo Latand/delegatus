@@ -1,0 +1,332 @@
+{
+  "version": 1,
+  "collectedAt": "2026-10-02T17:32:32.348Z",
+  "counts": {
+    "messages": 4459,
+    "conversations": 1049,
+    "duplicate": 1,
+    "machine": 1035,
+    "continuation": 5,
+    "attachment": 1,
+    "eligible": 7,
+    "requested": 100,
+    "engineStrata": 2,
+    "projectStrata": 2,
+    "sampled": 7,
+    "memoryEntries": 7673
+  },
+  "protocol": {
+    "seed": "memory-selection-v1",
+    "sampling": "equal engine then project allocation; seeded hash within strata",
+    "threshold": 0.7,
+    "capUsd": 2,
+    "candidates": 8,
+    "slots": 3,
+    "model": "typesafe/jev-1.13"
+  },
+  "strictNonempty": 0,
+  "fts": {
+    "prompts": 7,
+    "offered": 21,
+    "helpful": 5,
+    "available": 6,
+    "precisionAt3": 0.23809523809523808,
+    "precisionWhenOffered": 0.23809523809523808,
+    "recall": 0.8333333333333334,
+    "promptCoverage": 1,
+    "latencyMs": {
+      "median": 4.263814000000025,
+      "p99": 12.644326000000007
+    }
+  },
+  "none": {
+    "prompts": 7,
+    "offered": 0,
+    "helpful": 0,
+    "available": 6,
+    "precisionAt3": 0,
+    "precisionWhenOffered": null,
+    "recall": 0,
+    "promptCoverage": 0,
+    "latencyMs": {
+      "median": 0.000064000000000064,
+      "p99": 0.00010600000000060561
+    }
+  },
+  "jev": {
+    "prompts": 7,
+    "offered": 7,
+    "helpful": 1,
+    "available": 6,
+    "precisionAt3": 0.047619047619047616,
+    "precisionWhenOffered": 0.14285714285714285,
+    "recall": 0.16666666666666666,
+    "promptCoverage": 0.7142857142857143,
+    "latencyMs": {
+      "median": 244.98346399999997,
+      "p99": 429.495161
+    }
+  },
+  "confidenceIntervals": {
+    "method": "prompt-cluster percentile bootstrap",
+    "confidence": 0.95,
+    "resamples": 20000,
+    "seed": 2475,
+    "fts": [
+      0.047619047619047616,
+      0.47619047619047616
+    ],
+    "jev": [
+      0,
+      0.14285714285714285
+    ],
+    "none": [
+      0,
+      0
+    ],
+    "pairedJevMinusFts": {
+      "estimate": -0.1904761904761905,
+      "interval": [
+        -0.38095238095238093,
+        -0.047619047619047616
+      ]
+    }
+  },
+  "spendUsd": 0.000558516,
+  "calls": [
+    {
+      "id": "probe",
+      "status": "complete",
+      "reservedUsd": 0.01,
+      "costUsd": 0.000015414,
+      "latencyMs": 416.417496,
+      "inputTokens": 367
+    },
+    {
+      "id": "p01",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000037044,
+      "inputTokens": 882,
+      "scores": {
+        "c1": 0.58,
+        "c2": 0.44,
+        "c3": 0.48
+      },
+      "latencyMs": 427.30401
+    },
+    {
+      "id": "p02",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000085302,
+      "inputTokens": 2031,
+      "scores": {
+        "c1": 0.44,
+        "c2": 0.17,
+        "c3": 0.74,
+        "c4": 0.53,
+        "c5": 0.27,
+        "c6": 0.12,
+        "c7": 0.16,
+        "c8": 0.05
+      },
+      "latencyMs": 231.351272
+    },
+    {
+      "id": "p03",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000095886,
+      "inputTokens": 2283,
+      "scores": {
+        "c1": 0.69,
+        "c2": 0.87,
+        "c3": 0.91,
+        "c4": 0.45,
+        "c5": 0.58,
+        "c6": 0.52,
+        "c7": 0.11,
+        "c8": 0.33
+      },
+      "latencyMs": 235.383875
+    },
+    {
+      "id": "p04",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.00008211,
+      "inputTokens": 1955,
+      "scores": {
+        "c1": 0.49,
+        "c2": 0.13,
+        "c3": 0.68,
+        "c4": 0.67,
+        "c5": 0.05,
+        "c6": 0.08,
+        "c7": 0.31,
+        "c8": 0.13
+      },
+      "latencyMs": 367.413404
+    },
+    {
+      "id": "p05",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000086142,
+      "inputTokens": 2051,
+      "scores": {
+        "c1": 0.4,
+        "c2": 0.65,
+        "c3": 0.79,
+        "c4": 0.64,
+        "c5": 0.27,
+        "c6": 0.63,
+        "c7": 0.26,
+        "c8": 0.7
+      },
+      "latencyMs": 224.56486300000006
+    },
+    {
+      "id": "p06",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000078666,
+      "inputTokens": 1873,
+      "scores": {
+        "c1": 0.37,
+        "c2": 0.79,
+        "c3": 0.31,
+        "c4": 0.12,
+        "c5": 0.29,
+        "c6": 0.23,
+        "c7": 0.29,
+        "c8": 0.09
+      },
+      "latencyMs": 226.44757299999992
+    },
+    {
+      "id": "p07",
+      "reservedUsd": 0.01,
+      "status": "complete",
+      "costUsd": 0.000077952,
+      "inputTokens": 1856,
+      "scores": {
+        "c1": 0.67,
+        "c2": 0.69,
+        "c3": 0.52,
+        "c4": 0.57,
+        "c5": 0.69,
+        "c6": 0.6,
+        "c7": 0.46,
+        "c8": 0.77
+      },
+      "latencyMs": 268.32666500000005
+    }
+  ],
+  "cases": [
+    {
+      "id": "p01",
+      "engine": "claude",
+      "candidates": 3,
+      "strictCount": 0,
+      "retrievalMs": 2.1911509999999907,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": []
+    },
+    {
+      "id": "p02",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 3.545500000000004,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c3"
+      ]
+    },
+    {
+      "id": "p03",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 9.59958899999998,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c3",
+        "c2"
+      ]
+    },
+    {
+      "id": "p04",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 8.922483999999997,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": []
+    },
+    {
+      "id": "p05",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 12.644326000000007,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c3",
+        "c8"
+      ]
+    },
+    {
+      "id": "p06",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 4.263814000000025,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c2"
+      ]
+    },
+    {
+      "id": "p07",
+      "engine": "codex",
+      "candidates": 8,
+      "strictCount": 0,
+      "retrievalMs": 1.4595759999999984,
+      "fts": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "jev": [
+        "c8"
+      ]
+    }
+  ]
+}

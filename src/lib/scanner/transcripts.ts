@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 
-import { headCwd, slugifyCwd } from "@/lib/agent/transcript";
+import { claudeCwdSlugs, headCwd, slugifyCwd } from "@/lib/agent/transcript";
 
 import type { FileEntry } from "../types";
 import { globalCache } from "./caches";
@@ -111,18 +112,30 @@ function codexSessionCwd(pathname: string): string {
   return cwd;
 }
 
+/** A physical cwd recorded by Claude can bridge an older directory spelling.
+    A historical logical cwd may now point at another checkout: retain the
+    stored slug in that case, including when the directory is gone. */
+function claudeProjectKey(pathname: string, cwd = headCwd(pathname, { bytes: 8192 })): string | null {
+  let slug = claudeSlug(pathname);
+  if (cwd) {
+    try {
+      if (fs.realpathSync.native(cwd) === cwd) slug = slugifyCwd(cwd);
+    } catch { /* The immutable directory slug is the remaining evidence. */ }
+  }
+  return slug ? "claude:" + slug : null;
+}
+
 /** Project key an entry must share with a process cwd for the fallback match. */
 function projectKey(entry: FileEntry): string | null {
   if (entry.root === "claude-projects") {
-    const slug = claudeSlug(entry.path);
-    return slug ? "claude:" + slug : null;
+    return claudeProjectKey(entry.path, entry.cwd);
   }
   const cwd = entry.cwd ?? codexSessionCwd(entry.path);
   return cwd ? "codex:" + cwd : null;
 }
 
-function processKey(proc: AgentProcess): string {
-  return proc.engine === "claude" ? "claude:" + slugifyCwd(proc.cwd) : "codex:" + proc.cwd;
+function processKeys(proc: AgentProcess): string[] {
+  return proc.engine === "claude" ? claudeCwdSlugs(proc.cwd).map((slug) => "claude:" + slug) : ["codex:" + proc.cwd];
 }
 
 function markRunning(entry: FileEntry, pid: number): void {
@@ -197,10 +210,11 @@ export function assignTranscriptPids(entries: FileEntry[]): void {
   for (const proc of procs) {
     if (proc.tty === 0 || claimed.has(proc.pid)) continue;
     if (argvSessionId(proc.argv) !== null) continue;
-    const key = processKey(proc);
-    const list = byProject.get(key);
-    if (list) list.push(proc);
-    else byProject.set(key, [proc]);
+    for (const key of processKeys(proc)) {
+      const list = byProject.get(key);
+      if (list) list.push(proc);
+      else byProject.set(key, [proc]);
+    }
   }
   const takenKeys = new Set<string>();
   for (const entry of unmatched) {
@@ -268,7 +282,7 @@ export function transcriptProcessOwnsEntry(
   if (proc.engine !== engine || isHelperArgv(proc.argv) || !pidAlive(proc.pid)) return false;
   const processSid = argvSessionId(proc.argv);
   if (sid && processSid === sid) return true;
-  return processSid === null && proc.tty !== 0 && entryProjectKey !== null && processKey(proc) === entryProjectKey;
+  return processSid === null && proc.tty !== 0 && entryProjectKey !== null && processKeys(proc).includes(entryProjectKey);
 }
 
 /**
@@ -289,7 +303,10 @@ export function verifyTranscriptPid(pathname: string, pid: number): boolean {
 
   const cwd = readCwd(pid);
   if (cwd === null) return false;
-  if (engine === "claude") return slugifyCwd(cwd) === claudeSlug(pathname);
+  if (engine === "claude") {
+    const key = claudeProjectKey(pathname);
+    return key !== null && claudeCwdSlugs(cwd).some((slug) => "claude:" + slug === key);
+  }
   const sessionCwd = codexSessionCwd(pathname);
   return sessionCwd !== "" && sessionCwd === cwd;
 }

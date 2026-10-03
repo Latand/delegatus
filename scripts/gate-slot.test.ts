@@ -1,0 +1,35 @@
+import { afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const roots: string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+function fixture(systemd: boolean) {
+  const root = mkdtempSync(join(tmpdir(), "slot-test-")); roots.push(root);
+  for (const name of ["mkdir", "flock", "sleep"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  if (systemd) {
+    writeFileSync(join(root, "systemctl"), "#!/bin/bash\nexit 0\n"); chmodSync(join(root, "systemctl"), 0o755);
+    writeFileSync(join(root, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$SLOT_LOG"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$@"\n'); chmodSync(join(root, "systemd-run"), 0o755);
+  }
+  const env = { ...process.env, PATH: root, LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1", SLOT_LOG: join(root, "log") };
+  const run = (script: string) => spawnSync("/bin/bash", [join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", script], { env, encoding: "utf8" });
+  return { root, run };
+}
+test("fallback without systemd preserves failure and the default heap", () => {
+  const f = fixture(false); const run = f.run('echo "$NODE_OPTIONS"; exit 37');
+  expect(run.status).toBe(37); expect(run.stdout).toContain("--max-old-space-size=6144");
+});
+test("memory scope forwards args and status", () => {
+  const f = fixture(true); expect(f.run("exit 23").status).toBe(23);
+  expect(readFileSync(join(f.root, "log"), "utf8")).toContain("MemoryMax=8G");
+});
+test("another command waits for the same legacy-compatible slot", async () => {
+  const f = fixture(false);
+  const env = { ...process.env, PATH: f.root, LLV_GATE_LOCK_DIR: f.root, LLV_GATE_SLOTS: "1" };
+  const child = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", `echo held > "$LLV_GATE_LOCK_DIR/held"; /bin/sleep 0.3`], { env, stdout: "ignore", stderr: "pipe" });
+  for (let i = 0; i < 100 && !Bun.file(join(f.root, "held")).size; i++) await Bun.sleep(10);
+  const result = spawnSync("/usr/bin/flock", ["-n", join(f.root, "llv-heavy-gate.slot1.lock"), "/bin/true"]);
+  expect(result.status).toBe(1);
+  expect(await child.exited).toBe(0);
+});

@@ -697,6 +697,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
+    /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
     expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
     /* Terminal stages re-check the last fix; other stages follow the pass edge. */
     expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
@@ -729,6 +730,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
     expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
+    expect(tool?.description).toContain("fixes every handed finding and every in-spec discovery immediately");
+    expect(tool?.description).toContain("It returns fail only when blocked");
+    expect(tool?.description).toContain("It never returns fail for its own discovery");
+    expect(tool?.description).toContain("every in-spec discovery immediately");
+    expect(tool?.description).toContain("fixer's findings as notes for the reviewer");
     expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
     expect(stage?.access?.description).toContain("does not select the sandbox");
@@ -1070,6 +1076,8 @@ test("stage_report's field descriptions match the stage contract", async () => {
     const listed = await client.listTools();
     const tool = listed.tools.find((candidate) => candidate.name === "stage_report");
     const properties = tool?.inputSchema.properties as Record<string, { description?: string; items?: { properties?: Record<string, { description?: string }> } }> | undefined;
+    expect(properties?.blocked?.description).toContain("fixer cannot proceed");
+    expect(properties?.blockedReason?.description).toContain("independently of prose and output truncation");
     const verdict = properties?.verdict?.description ?? "";
     expect(verdict).not.toContain("retryable stage failure");
     expect(verdict).toContain("for a review, the findings that stand");

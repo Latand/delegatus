@@ -236,6 +236,8 @@ export function seatTickPromptPreview(monitorPrompt: string): string {
 
 export function seatTickWakeMessage(input: {
   project: string;
+  /** Oldest evidence time, preserved across transport retention and replay. */
+  snapshotAt?: string;
   reasons: readonly SeatTickWakeReason[];
   items: readonly SeatTickItem[];
   deferred: number;
@@ -307,6 +309,7 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));
   }
   return boundedSeatTickMessage(lines, [
+    ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
     ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
@@ -325,6 +328,8 @@ export function seatTickWakeMessage(input: {
  */
 export function seatTickProposalMessage(input: {
   project: string;
+  /** Oldest evidence time, preserved across transport retention and replay. */
+  snapshotAt?: string;
   issues: readonly ProposalIssue[];
   signals: readonly SeatTickSignalInput[];
   items: number;
@@ -359,6 +364,7 @@ export function seatTickProposalMessage(input: {
      the next tick reads to recognize the card it already asked for, so losing
      it to a long issue list would mint a second proposal card. */
   return boundedSeatTickMessage(lines, [
+    ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
     "",
     `Produce ONE ranked list of at most ${input.items} actions, each with the evidence behind it, and post it as a single board card in inbox for this project.`,
     "Rank by what actually matters now: what is blocking, what is cheap and finishes something, what has been waiting longest.",

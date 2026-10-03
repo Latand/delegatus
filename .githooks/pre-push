@@ -1,19 +1,10 @@
 #!/usr/bin/env bash
-# The publication gate, before anything becomes public. One run per push
-# instead of per commit keeps the cost where the risk is.
-# Escape hatch: LLV_SKIP_HOOKS=1 git push ...
 set -euo pipefail
 [ "${LLV_SKIP_HOOKS:-0}" = "1" ] && exit 0
-git fetch origin main --quiet 2>/dev/null || true
-base=$(git merge-base HEAD origin/main 2>/dev/null || true)
-if [ -n "$base" ]; then
-  behind=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
-  if [ "${behind:-0}" -gt 0 ]; then
-    echo "pre-push: this branch is ${behind} commit(s) behind origin/main — the hosted privacy gate scans a symmetric range and WILL flag main-only commits. Merge origin/main into this branch before pushing to spare a red CI run." >&2
-  fi
-  bun scripts/privacy-publication-gate.ts --base "$base" --check-commits || {
-    echo "pre-push: privacy publication gate failed; nothing was pushed." >&2
-    exit 1
-  }
-fi
-exit 0
+# Git exports these while invoking a hook. Child git commands in the gate must
+# resolve their own fixture repositories, including from linked worktrees.
+for name in GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_OBJECT_DIRECTORY GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_INDEX_FILE GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE GIT_COMMON_DIR; do
+  unset "$name"
+done
+for name in ${!GIT_CONFIG_KEY_@} ${!GIT_CONFIG_VALUE_@}; do unset "$name"; done
+exec bun scripts/local-gate.ts pre-push
