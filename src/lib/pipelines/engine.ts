@@ -71,7 +71,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -8866,7 +8866,7 @@ export async function patchPipeline(
       const head = await currentPipelineBranchHead(pipeline, ports.exec);
       if (!head.ok) return { error: head.error, status: 409 };
       if (head.sha !== accepted) return { error: `worktree HEAD ${head.sha} does not equal acceptedSha ${accepted}`, status: 409 };
-      const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, accepted], pipeline.worktreeDir);
+      const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, accepted], pipeline.worktreeDir, pipelineLiteralGitEnv());
       if (ancestor.code !== 0) return { error: ancestor.code === 1
         ? "the previously passed commit is not an ancestor of acceptedSha"
         : "could not verify the previously passed commit is an ancestor of acceptedSha", status: 409 };

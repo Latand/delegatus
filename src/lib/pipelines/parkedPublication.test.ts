@@ -172,6 +172,91 @@ test("moved-head admission refuses a review envelope synchronized during its off
   } finally { h.cleanup(); }
 });
 
+for (const seam of ["admission", "integration proof", "publication"] as const) test(`replacement refs cannot make unreviewed application work pass ${seam}`, async () => {
+  const h = fixture();
+  const { verifyPassedHeadIntegration, publishPipelineBranch } = await import("./git");
+  try {
+    terminalReview(h);
+    fs.writeFileSync(path.join(h.repo, "unreviewed.txt"), "later application work\n");
+    h.git("add", "."); h.git("commit", "-q", "-m", "later application work");
+    const original = h.git("rev-parse", "HEAD");
+    const replacement = h.git("commit-tree", `${h.head}^{tree}`, "-p", h.passed, "-p", "origin/main", "-m", "replacement fixture");
+    h.git("replace", original, replacement); h.git("reset", "--hard", original);
+    expect(h.git("status", "--porcelain")).toBe("");
+    if (seam === "integration proof") {
+      const result = await verifyPassedHeadIntegration(h.lane, h.passed, original, h.ports.exec);
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.includes("fresh review")).toBe(true);
+    } else if (seam === "publication") {
+      const result = await publishPipelineBranch(h.current(), h.ports.exec, { acceptedSha: original });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.includes("uncommitted")).toBe(true);
+      expect(h.current().publishedCommit).toBeNull();
+    } else {
+      const result = await patchPipeline(h.lane.id, { action: "publish", acceptedSha: original }, h.ports);
+      expect(result.status).toBe(409);
+      expect(result.error?.includes("uncommitted") || result.error?.includes("fresh review")).toBe(true);
+      expect(h.current().lastPassedCommit).toBe(h.passed);
+      expect(h.current().delivery!.operation).toBeUndefined();
+    }
+    expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
+for (const source of ["replacement refs", "legacy grafts"]) for (const seam of ["admission", "integration proof"] as const) test(`${source} cannot invent passed ancestry for ${seam}`, async () => {
+  const h = fixture();
+  const { verifyPassedHeadIntegration } = await import("./git");
+  try {
+    terminalReview(h);
+    const main = h.git("rev-parse", "origin/main");
+    if (source === "replacement refs") {
+      const replacement = h.git("commit-tree", `${main}^{tree}`, "-p", h.passed, "-m", "replacement ancestry fixture");
+      h.git("replace", main, replacement);
+    } else {
+      const grafts = h.git("rev-parse", "--git-path", "info/grafts");
+      fs.mkdirSync(path.dirname(grafts), { recursive: true }); fs.writeFileSync(grafts, `${main} ${h.passed}\n`);
+    }
+    h.git("reset", "--hard", main);
+    expect(h.git("status", "--porcelain")).toBe("");
+    if (seam === "integration proof") {
+      const result = await verifyPassedHeadIntegration(h.lane, h.passed, main, h.ports.exec);
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.includes("ancestor")).toBe(true);
+    } else {
+      const result = await patchPipeline(h.lane.id, { action: "publish", acceptedSha: main }, h.ports);
+      expect(result.status).toBe(409); expect(result.error).toContain("ancestor");
+      expect(h.current().lastPassedCommit).toBe(h.passed);
+      expect(h.current().delivery!.operation).toBeUndefined();
+    }
+    expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
+for (const source of ["replacement refs", "legacy grafts"]) test(`a later integration preserves literal ancestry to the prior accepted integration despite ${source}`, async () => {
+  const h = fixture();
+  try {
+    terminalReview(h);
+    const main = h.git("rev-parse", "origin/main");
+    h.lane.lastPassedCommit = h.head;
+    h.lane.runs[1]!.attempts[0]!.publicationIntegration = { passedSha: h.passed, acceptedSha: h.head, mainSha: main };
+    savePipelines([h.lane]);
+    const alternate = h.git("commit-tree", `${h.head}^{tree}`, "-p", h.passed, "-p", main, "-m", "alternate clean integration");
+    h.git("reset", "--hard", alternate);
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: alternate }, h.ports)).error).toContain("ancestor");
+    if (source === "replacement refs") {
+      const replacement = h.git("commit-tree", `${h.head}^{tree}`, "-p", h.head, "-p", main, "-m", "replacement prior integration fixture");
+      h.git("replace", alternate, replacement);
+    } else {
+      const grafts = h.git("rev-parse", "--git-path", "info/grafts");
+      fs.mkdirSync(path.dirname(grafts), { recursive: true }); fs.writeFileSync(grafts, `${alternate} ${h.head} ${main}\n`);
+    }
+    const result = await patchPipeline(h.lane.id, { action: "publish", acceptedSha: alternate }, h.ports);
+    expect(result.status).toBe(409); expect(result.error).toContain("ancestor");
+    expect(h.current().lastPassedCommit).toBe(h.head);
+    expect(h.current().delivery!.operation).toBeUndefined(); expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
 test("parked publication refuses a non-descendant head at admission", async () => {
   const h = fixture();
   try {
@@ -509,7 +594,7 @@ test("publisher evidence stays redacted and bounded through lock reacquisition a
   } finally { if (holder?.exitCode === null && holder.signalCode === null) holder.kill("SIGTERM"); await closed; h.cleanup(); }
 });
 
-for (const held of [false, true]) for (const split of ["none", "forward", "reverse", "forward-complete", "reverse-complete"]) test(`private-key hook output is redacted before retention and reconciliation (held lock: ${held}, split streams: ${split})`, async () => {
+for (const held of [false, true]) for (const split of ["none", "forward", "reverse", "forward-complete", "reverse-complete", "crossed-complete"]) test(`private-key hook output is redacted before retention and reconciliation (held lock: ${held}, split streams: ${split})`, async () => {
   const h = fixture();
   const { publishPipelineBranch, reconcilePipelinePublication } = await import("./git");
   let holder: ChildProcess | undefined;
@@ -521,7 +606,10 @@ for (const held of [false, true]) for (const split of ["none", "forward", "rever
     const keyBytes = truncated.split("\n").slice(1).join("").trim();
     const [header, ...body] = truncated.split("\n");
     const footer = pem.trim().split("\n").at(-1)!;
-    const output = split.startsWith("reverse") ? `echo pre-push: types >&2\necho pre-push: eslint >&2\necho '${header}' >&2\ncat <<'KEY'\n${body.join("\n")}KEY\n${split.endsWith("complete") ? `echo '${footer}' >&2\n` : ""}`
+    // Opposite routing for two blocks puts the first key's body before the
+    // second opener in stdout, while stderr contains the first armor block.
+    const output = split === "crossed-complete" ? `echo pre-push: types >&2\necho pre-push: eslint >&2\necho '${header}' >&2\ncat <<'KEY'\n${body.join("\n")}KEY\necho '${footer}' >&2\necho '${header}'\ncat <<'KEY' >&2\n${body.join("\n")}KEY\necho '${footer}'\n`
+      : split.startsWith("reverse") ? `echo pre-push: types >&2\necho pre-push: eslint >&2\necho '${header}' >&2\ncat <<'KEY'\n${body.join("\n")}KEY\n${split.endsWith("complete") ? `echo '${footer}' >&2\n` : ""}`
       : split.startsWith("forward") ? `echo pre-push: types\necho pre-push: eslint\necho '${header}'\ncat <<'KEY' >&2\n${body.join("\n")}KEY\n${split.endsWith("complete") ? `echo '${footer}'\n` : ""}`
         : `echo pre-push: types >&2\necho pre-push: eslint >&2\ncat <<'KEY' >&2\n${truncated}KEY\n`;
     fs.writeFileSync(h.hook, `#!/bin/sh\n${output}exit 7\n`, { mode: 0o700 });
@@ -551,8 +639,10 @@ for (const held of [false, true]) for (const split of ["none", "forward", "rever
     expect(JSON.stringify(lane).includes(keyBytes)).toBe(false);
     expect(lane.delivery!.operation!.state).toBe("settled");
     expect(lane.delivery!.operation!.result).toMatchObject({ failure: { code: 1, signal: null, durationMs: expect.any(Number) } });
-    expect(lane.stateDetail).toContain("exit 1"); expect(lane.stateDetail).toContain("pre-push: types");
-    expect(lane.stateDetail).toContain("pre-push: eslint"); expect(lane.stateDetail).not.toContain("interrupted publication");
+    expect(lane.stateDetail).toContain("exit 1");
+    if (split === "crossed-complete") expect(lane.stateDetail).toContain("[redacted-private-key]");
+    else { expect(lane.stateDetail).toContain("pre-push: types"); expect(lane.stateDetail).toContain("pre-push: eslint"); }
+    expect(lane.stateDetail).not.toContain("interrupted publication");
   } finally { if (holder?.exitCode === null && holder.signalCode === null) holder.kill("SIGTERM"); await closed; h.cleanup(); }
 });
 

@@ -27,6 +27,26 @@ function failure(step: string, result: ExecResult): { ok: false; error: string }
   return { ok: false, error: `${step}: ${(result.stderr || result.stdout || "no output").trim()}` };
 }
 
+/** Acceptance must inspect the immutable objects Git actually pushes.
+    Replacement refs and legacy grafts otherwise change the local view. */
+export function pipelineLiteralGitEnv(env?: Partial<NodeJS.ProcessEnv>): Partial<NodeJS.ProcessEnv> {
+  const count = Number(env?.GIT_CONFIG_COUNT ?? process.env.GIT_CONFIG_COUNT ?? "0");
+  return {
+    ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: os.devNull,
+    // Git emits graft deprecation advice even for this empty graft input.
+    // A surviving push must not write that advice into its dead Viewer's pipe.
+    // Append to inherited command configuration so unrelated hook settings survive.
+    GIT_CONFIG_COUNT: String(count + 1),
+    [`GIT_CONFIG_KEY_${count}`]: "advice.graftFileDeprecated",
+    [`GIT_CONFIG_VALUE_${count}`]: "false",
+  };
+}
+
+function withLiteralGitObjects(exec: ExecPort): ExecPort {
+  return (command, args, cwd, env, options) => exec(command, args, cwd,
+    pipelineLiteralGitEnv(env), options);
+}
+
 /** The cheap half of {@link resolvePipelineBase}: the branch-name shape, with
     no repository read and no network at all. Create runs this alone (#1799) so
     an invalid base branch is still refused before the record is admitted,
@@ -804,24 +824,29 @@ async function compareStageTrees(pipeline: Pipeline, head: string, accepted: str
 export async function verifyPassedHeadIntegration(pipeline: Pipeline, passed: string, accepted: string, exec: ExecPort): Promise<
   { ok: true; passedSha: string; acceptedSha: string; mainSha: string } | { ok: false; error: string }
 > {
+  const literalExec = withLiteralGitObjects(exec);
   const refuse = (reason: string) => ({ ok: false as const, error: `${reason}; a fresh review is required before accepting this head` });
+  const ancestor = await literalExec("git", ["merge-base", "--is-ancestor", passed, accepted], pipeline.worktreeDir);
+  if (ancestor.code !== 0) return refuse(ancestor.code === 1
+    ? "the previously passed commit is not an ancestor of acceptedSha"
+    : "could not verify the previously passed commit is an ancestor of acceptedSha");
   const baseBranch = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
   if (!validBaseBranch(baseBranch)) return refuse("could not verify the configured main branch");
-  const main = await exec("git", ["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`], pipeline.worktreeDir);
+  const main = await literalExec("git", ["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`], pipeline.worktreeDir);
   const mainSha = main.stdout.trim();
   if (main.code !== 0 || !/^[0-9a-f]{40}$/i.test(mainSha)) return refuse(`could not verify origin/${baseBranch}`);
-  const introduced = await exec("git", ["rev-list", "--parents", accepted, `^${passed}`, `^${mainSha}`], pipeline.worktreeDir);
+  const introduced = await literalExec("git", ["rev-list", "--parents", accepted, `^${passed}`, `^${mainSha}`], pipeline.worktreeDir);
   if (introduced.code !== 0) return refuse("could not enumerate changes after the passed head");
   for (const line of introduced.stdout.trim().split("\n").filter(Boolean)) {
     const [commit, firstParent, mainParent, ...extra] = line.split(" ");
     if (extra.length || ![commit, firstParent, mainParent].every((sha) => typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))) {
       return refuse("acceptedSha contains additional lane work beyond clean main merges");
     }
-    const fromMain = await exec("git", ["merge-base", "--is-ancestor", mainParent, mainSha], pipeline.worktreeDir);
+    const fromMain = await literalExec("git", ["merge-base", "--is-ancestor", mainParent, mainSha], pipeline.worktreeDir);
     if (fromMain.code !== 0) return refuse("acceptedSha contains a merge from outside the configured main branch");
-    const automatic = await compareStageTrees(pipeline, firstParent, mainParent, exec);
+    const automatic = await compareStageTrees(pipeline, firstParent, mainParent, literalExec);
     if (automatic.code !== 0) return refuse("acceptedSha contains a merge that cannot be proven clean");
-    const tree = await exec("git", ["rev-parse", `${commit}^{tree}`], pipeline.worktreeDir);
+    const tree = await literalExec("git", ["rev-parse", `${commit}^{tree}`], pipeline.worktreeDir);
     if (tree.code !== 0 || tree.stdout.trim() !== automatic.stdout.split("\0")[0].trim()) {
       return refuse("acceptedSha contains additional content or resolutions in a main merge");
     }
@@ -1086,11 +1111,12 @@ export async function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): Pr
 /** Returns the clean checked-out SHA only when this worktree still owns its
     persisted branch. Review evidence must name this exact revision. */
 export async function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
+  const literalExec = withLiteralGitObjects(exec);
   if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid" };
-  const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
+  const status = (await literalExec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   if (status.stdout.trim()) return { ok: false, error: "the pipeline worktree has uncommitted changes; choose whether to commit or discard them before retrying review" };
-  const branch = (await exec("git", ["branch", "--show-current"], pipeline.worktreeDir));
+  const branch = (await literalExec("git", ["branch", "--show-current"], pipeline.worktreeDir));
   if (branch.code !== 0) return failure("checking the pipeline branch", branch);
   const checkedOut = branch.stdout.trim();
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
@@ -1098,7 +1124,7 @@ export async function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPo
   if (checkedOut !== pipeline.branch && checkedOut !== deliveryBranch) {
     return { ok: false, error: "the pipeline worktree is not checked out on its pipeline or delivery branch" };
   }
-  const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
+  const head = (await literalExec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0) return failure("resolving the pipeline branch HEAD", head);
   const sha = head.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "resolving the pipeline branch HEAD: expected an exact commit SHA" };
@@ -1137,6 +1163,9 @@ function redactPublicationOutput(stdout: string, stderr: string): string {
   // Captured streams have no shared ordering. Even a complete armor block
   // can have its body on the other stream. Once a key opens, only its own
   // prefix is proven safe; the footer cannot prove the other bytes safe.
+  // With openers on both streams, either prefix can contain the other key's
+  // body. No captured prefix is safe to retain in that case.
+  if (openers.every((index) => index !== -1)) return "[redacted-private-key]";
   if (openers.some((index) => index !== -1)) return streams.map((stream, i) => openers[i] === -1 ? ""
     : redactPublicationText(`${stream.slice(0, openers[i])}[redacted-private-key]`)).join("\n").trim();
   return redactPublicationText(`${stdout}\n${stderr}`).trim();
@@ -1382,7 +1411,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       fs.futimesSync(descriptor, new Date(), new Date());
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor });
+      const executed = await exec(command, args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
       const preparingDependencies = command === "bun" && args[0] === "install";
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
