@@ -8,6 +8,7 @@ import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { enqueueOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { setLocale } from "@/lib/i18n";
 import { appendRuntimeLiveTurnDelta, projectRuntimeLiveTurnItem, type RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
+import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
 import { applyEvent, emptyStore, type RuntimeSession, type RuntimeEnvelope } from "@/components/runtime/runtimeModel";
 
 /**
@@ -614,4 +615,39 @@ test("event-first citation-bearing completion shows one reply", () => {
     expect(host.querySelectorAll('[data-feed-kind="prose"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-feed-kind="mem-citation"]')).toHaveLength(1);
   } finally { file.engine="claude"; file.fmt="claude"; }
+});
+
+
+test("completion after a non-overlapping reconnect retains the already read opening and names the unseen gap", () => {
+  const turnId = "gap-turn";
+  const opening = "Already read opening.";
+  let live = appendRuntimeLiveTurnDelta(null, turnId, opening, AT(0))!;
+  sessionState.session = { ...session, liveTurn: live };
+  const { host, paint } = render();
+  const original = host.querySelector("[data-live-turn]")!;
+  let full = opening;
+  for (let index = 0; index < 9; index++) {
+    const text = `${index}:` + "b".repeat(8190);
+    full += text;
+    const event = projectEngineHostEvent(CONVERSATION_ID, "codex:gap-thread", { kind: "delta", turnId, text, seq: index + 1 })!;
+    live = appendRuntimeLiveTurnDelta(live, turnId, event.payload.text as string, AT(0))!;
+  }
+  sessionState.session = { ...session, turn: "unknown", liveTurn: live };
+  paint();
+  const completed = projectEngineHostEvent(CONVERSATION_ID, "codex:gap-thread", { kind: "item", turnId,
+    item: { type: "agentMessage", id: "gap-answer", text: full }, phase: "completed", seq: 11 })!;
+  expect(completed.payload.item).toMatchObject({ truncated: true, id: "gap-answer" });
+  live = projectRuntimeLiveTurnItem(live, turnId, completed.payload.item, "completed", AT(1))!;
+  sessionState.session = { ...session, turn: "idle", liveTurn: live };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(original);
+  expect(original.textContent).toContain(opening);
+  expect(original.textContent).toContain("8:");
+  expect(original.querySelector("[data-live-turn-omitted-chars]")?.textContent).toContain("8192");
+  tailState.lines = [JSON.stringify({ type: "assistant", uuid: "gap-answer", timestamp: AT(1), message: { content: [{ type: "text", text: full }] } })];
+  paint();
+  expect(host.querySelector('[data-feed-source-id="gap-answer"]')).toBe(original);
+  flushSync(() => original.querySelector<HTMLButtonElement>("button")!.click());
+  expect(original.textContent).toContain(full);
+  expect(original.querySelector("[data-live-turn-omitted-chars]")).toBeNull();
 });

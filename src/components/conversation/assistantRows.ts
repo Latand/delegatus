@@ -6,7 +6,7 @@ import type { RuntimeTurnAxis } from "@/lib/runtime/contracts";
 import { newestTranscriptInstant, transcriptInstant } from "../feed/transcriptOrder";
 import { LIVE_TURN_ITEM_LIMIT, LIVE_TURN_OVERFLOW_LIMIT, runtimeLiveTurnItems, type RuntimeLiveTurn, type RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 
-interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; order: number; stream: string; turnId: string }
+interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; wire: RuntimeLiveTurnItem; order: number; stream: string; turnId: string; occurrence: number }
 interface Binding { key: string; at: number | null; order: number; identity: string }
 export interface AssistantHandoff {
   pending: PendingAnswer[];
@@ -30,19 +30,28 @@ const echoTextMatches = (text: string, live: RuntimeLiveTurnItem): boolean => {
     // The producer keeps the suffix when the bounded text buffer fills.
     || Boolean(live.omittedChars) && (live.phase === "streaming" ? canonical.includes(streamed) : canonical.endsWith(streamed));
 };
-// Omission counts describe Unicode code points removed from the beginning.
-// Their overlap proves a clipped delta still belongs to the observed stream.
-const clippedContinuation = (observed: RuntimeLiveTurnItem, live: RuntimeLiveTurnItem): string | null => {
-  if (observed.phase !== "streaming" || live.phase !== "streaming") return null;
-  const dropped = (live.omittedChars ?? 0) - (observed.omittedChars ?? 0);
-  if (dropped <= 0) return null;
-  const overlap = Array.from(observed.text).slice(dropped).join("");
-  return overlap && live.text.startsWith(overlap) ? observed.text + live.text.slice(overlap.length) : null;
+// Keep rendered observations separate from the bounded transport descriptor.
+// Missing intermediate deltas leave an explicit gap between known text spans.
+const retainedBody = (entry: PendingAnswer, live: RuntimeLiveTurnItem): RuntimeLiveTurnItem => {
+  if (!live.omittedChars) return live;
+  const previous = Array.from(entry.wire.text);
+  const dropped = live.omittedChars - (entry.wire.omittedChars ?? 0);
+  const overlap = dropped >= 0 ? previous.slice(dropped).join("") : "";
+  if (overlap && live.text.startsWith(overlap)) return { ...live,
+    text: entry.live.text + live.text.slice(overlap.length), omittedChars: entry.live.omittedChars };
+  if (entry.wire.text.endsWith(live.text)) return { ...live,
+    text: entry.live.text, omittedChars: entry.live.omittedChars };
+  if (dropped >= previous.length) {
+    const gap = dropped - previous.length;
+    return { ...live, text: entry.live.text + (gap ? "\n\n…\n\n" : "") + live.text,
+      omittedChars: (entry.live.omittedChars ?? 0) + gap };
+  }
+  return live;
 };
-// Deltas keep their original start even when carried into a newer turn. A
-// legacy descriptor without that identity is fenced by its consumed text.
-const streamKey = (live: RuntimeLiveTurnItem, turnId: string) => JSON.stringify([
-  live.startedAt, live.startedAt === null ? [turnId, textKey(live.text)] : null,
+// Occurrences sharing an instant still own separate retirement claims. A dated
+// descriptor carried into the next turn keeps its original identity.
+const streamKey = (live: RuntimeLiveTurnItem, turnId: string, occurrence = 0) => JSON.stringify([
+  live.startedAt, live.startedAt === null ? turnId : null, textKey(live.text), occurrence,
 ]);
 const source = (item: Item) => "sourceId" in item ? item.sourceId : undefined;
 // Parser sequence keys restart on a new filter or locale. Bind the original
@@ -64,27 +73,32 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   let sequence = state.sequence;
   const pending = state.pending.map(entry => liveTurn && entry.turnId !== liveTurn.turnId
     && entry.live.startedAt === null && entry.live.phase === "streaming"
-    ? { ...entry, live: { ...entry.live, phase: "awaiting-echo" as const } } : entry);
+    ? { ...entry, live: { ...entry.live, phase: "awaiting-echo" as const }, wire: { ...entry.wire, phase: "awaiting-echo" as const } } : entry);
   const retiredStreams = new Set(state.retiredStreams);
   const current = runtimeLiveTurnItems(liveTurn);
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
+  const usedPending = new Set<number>();
+  const occurrences = new Map<string, number>();
   for (const [order, live] of current.entries()) {
-    const stream = streamKey(live, liveTurn!.turnId);
+    const baseStream = streamKey(live, liveTurn!.turnId);
+    const occurrence = occurrences.get(baseStream) ?? 0;
+    occurrences.set(baseStream, occurrence + 1);
+    const stream = streamKey(live, liveTurn!.turnId, occurrence);
     if (live.tool || live.omittedItems || !live.itemId && retiredStreams.has(stream)) continue;
-    const index = pending.findIndex((entry) => live.itemId && entry.live.itemId === live.itemId
-      || !entry.live.itemId && entry.live.startedAt === live.startedAt
-        && (live.startedAt !== null || entry.turnId === liveTurn!.turnId && (live.text.startsWith(entry.live.text) || clippedContinuation(entry.live, live) !== null)));
+    const index = pending.findIndex((entry, index) => !usedPending.has(index) && (
+      live.itemId && entry.wire.itemId === live.itemId
+      || !entry.wire.itemId && entry.wire.startedAt === live.startedAt
+        && (live.startedAt !== null || entry.turnId === liveTurn!.turnId)
+        && (entry.wire.text === live.text || entry.wire.phase === "streaming"
+          || Boolean(live.omittedChars) && entry.wire.text.endsWith(live.text))));
     if (index >= 0) {
-      const observed = pending[index].live;
-      // Transport budgeting can remove a prefix after the pane read it. Keep
-      // that observed body while adopting current identity and lifecycle fields.
-      // A changed completion with no matching omitted suffix remains authority.
-      const continued = clippedContinuation(observed, live);
-      const retained = continued !== null || live.omittedChars && live.text.length < observed.text.length && observed.text.endsWith(live.text)
-        ? { ...live, text: continued ?? observed.text, omittedChars: observed.omittedChars } : live;
       if (pending[index].stream !== stream) retiredStreams.add(pending[index].stream);
-      pending[index] = { ...pending[index], live: retained, order, stream };
-    } else if (live.text.trim()) pending.push({ key: `assistant-pending:${sequence++}`, live, order, stream, turnId: liveTurn!.turnId });
+      pending[index] = { ...pending[index], live: retainedBody(pending[index], live), wire: live, order, stream, occurrence };
+      usedPending.add(index);
+    } else if (live.text.trim()) {
+      usedPending.add(pending.length);
+      pending.push({ key: `assistant-pending:${sequence++}`, live, wire: live, order, stream, turnId: liveTurn!.turnId, occurrence });
+    }
   }
   const bindings = new Map<string, Binding>();
   const priorBindings = new Map([...state.bindings.values()].map(binding => [binding.identity, binding]));
@@ -94,7 +108,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   }
   const remaining: PendingAnswer[] = [];
   const transcriptAt = newestTranscriptInstant(feed);
-  const claimedRows = new Set<string>();
+  const claimedRows = new Set(bindings.keys());
   const hiddenEchoes = new Set<string>();
   // One assistant record can project into prose, review and citation cards.
   // Reassemble only its own projections; identical later records stay separate.
@@ -110,7 +124,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   }));
   for (let entry of pending) {
     const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
-      && echoTextMatches(echo.text, entry.live)
+      && echoTextMatches(echo.text, entry.wire)
       && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
     const matches = entry.live.itemId ? feed.filter(({ item, key }) => !claimedRows.has(key)
       && (source(item) === entry.live.itemId || item.kind === "think" && item.members?.some(member => member.sourceId === entry.live.itemId))) : echo?.rows ?? [];
@@ -121,7 +135,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       const completedAt = Date.parse(entry.live.completedAt ?? "");
       const mirror = echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key) && !source(row.item))
         && echo.rows.some(({ item }) => item.kind === "prose" && item.engine === "codex" || item.kind === "review")
-        && echoTextMatches(echo.text, entry.live) && Number.isFinite(completedAt)
+        && echoTextMatches(echo.text, entry.wire) && Number.isFinite(completedAt)
         && echo.at !== null && Math.abs(echo.at - completedAt) <= 1000);
       if (mirror) {
         // The canonical event may contain a prefix the transport never sent.
@@ -135,7 +149,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
         retiredStreams.add(entry.stream);
         // A legacy reconnect may contain the complete split reply instead of
         // the prefix consumed by this pane. Both are already canonical.
-        if (echo) retiredStreams.add(streamKey({ ...entry.live, text: echo.text }, entry.turnId));
+        if (echo) retiredStreams.add(streamKey({ ...entry.wire, text: echo.text }, entry.turnId, entry.occurrence));
       }
       matches.forEach((match, index) => {
         claimedRows.add(match.key);
@@ -171,21 +185,29 @@ export function useAssistantHandoff(identity: string | null, live: RuntimeLiveTu
 export function retainedAssistantItems(handoff: AssistantHandoff, liveTurn: RuntimeLiveTurn | null,
   visible: readonly RuntimeLiveTurnItem[]): RuntimeLiveTurnItem[] {
   const pending = handoff.pending.map(answer => answer.live);
-  const sameReply = (a: RuntimeLiveTurnItem, b: RuntimeLiveTurnItem) => a.itemId && a.itemId === b.itemId
-    || !a.itemId && !b.itemId && a.startedAt !== null && a.startedAt === b.startedAt;
+  const replyKey = (item: RuntimeLiveTurnItem) => item.itemId ? `id:${item.itemId}`
+    : JSON.stringify([item.startedAt, textKey(item.text)]);
   const descriptors = runtimeLiveTurnItems(liveTurn);
   const aggregate = descriptors.length === LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT ? descriptors[0] : null;
   const aggregateStart = Date.parse(aggregate?.startedAt ?? "");
   const aggregateEnd = Date.parse(aggregate?.completedAt ?? "");
   // An idle snapshot can reset the client's transport window. Older cached
   // replies outside this aggregate's interval remain independent occurrences.
-  const foldedButRetained = pending.filter(answer => {
-    const instant = at(answer);
-    return instant !== null && instant >= aggregateStart && instant <= aggregateEnd
-      && !descriptors.some(item => !item.omittedItems && sameReply(answer, item));
-  }).length;
+  const available = new Map<string, number>();
+  for (const item of descriptors) if (!item.omittedItems) {
+    const key = replyKey(item);
+    available.set(key, (available.get(key) ?? 0) + 1);
+  }
+  let foldedButRetained = 0;
+  for (const answer of handoff.pending) {
+    const instant = at(answer.live);
+    if (!aggregate || instant === null || instant < aggregateStart || instant > aggregateEnd) continue;
+    const key = replyKey(answer.wire), count = available.get(key) ?? 0;
+    if (count) available.set(key, count - 1);
+    else foldedButRetained++;
+  }
   return [...pending, ...visible.flatMap(item => {
-    if (!item.tool && !item.omittedItems && pending.some(answer => sameReply(answer, item))) return [];
+    if (!item.tool && !item.omittedItems && handoff.pending.some(answer => replyKey(answer.wire) === replyKey(item))) return [];
     if (item.omittedItems && !item.itemId && aggregate && !aggregate.itemId
       && item.startedAt === aggregate.startedAt && item.completedAt === aggregate.completedAt
       && item.omittedItems === aggregate.omittedItems) {

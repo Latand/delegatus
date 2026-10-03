@@ -323,3 +323,30 @@ test.each(["message-only", "envelope-id"])("Claude assistant identifiers adopt c
   state = projectAssistantHandoff(state, null, [...feed, later], claims);
   expect(rows([...feed, later], state)).toHaveLength(2);
 });
+
+
+test.each([{ texts: ["First occurrence", "Second occurrence"] }, { texts: ["Repeated answer", "Repeated answer"] }])("same-instant idless replies retain separate echo ownership (%j)", ({ texts }) => {
+  const timestamp = "2026-10-02T10:00:00Z";
+  let first = projectRuntimeLiveTurnItem(null, "collision-turn", { type: "agentMessage", text: texts[0] }, "completed", timestamp)!;
+  let state = projectAssistantHandoff(null, first, [], claims);
+  const original = state.pending[0].key;
+  first = projectRuntimeLiveTurnItem(first, "collision-turn", { type: "agentMessage", text: texts[1] }, "completed", timestamp)!;
+  state = projectAssistantHandoff(state, first, [], claims);
+  expect(state.pending).toHaveLength(2);
+  const second = state.pending[1].key;
+  const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+  const record = (text: string) => JSON.stringify({ type: "assistant", timestamp, message: { content: [{ type: "text", text }] } });
+  const canonicalFirst = session.feed([record(texts[0])], 0, false).items;
+  state = projectAssistantHandoff(state, first, canonicalFirst, claims);
+  expect(state.pending).toHaveLength(1);
+  expect(rows([...canonicalFirst], state).map(row => row.key)).toEqual([original, second]);
+  state = projectAssistantHandoff(state, first, canonicalFirst, claims);
+  expect(state.pending).toHaveLength(1);
+  const canonicalBoth = session.feed(texts.map(record), 0, false).items;
+  state = projectAssistantHandoff(state, first, canonicalBoth, claims);
+  expect(state.pending).toEqual([]);
+  expect(rows([...canonicalBoth], state).map(row => row.key)).toEqual([original, second]);
+  const third = projectRuntimeLiveTurnItem(first, "collision-turn", { type: "agentMessage", text: texts[1] }, "completed", timestamp)!;
+  state = projectAssistantHandoff(state, third, canonicalBoth, claims);
+  expect(state.pending).toHaveLength(1);
+});
