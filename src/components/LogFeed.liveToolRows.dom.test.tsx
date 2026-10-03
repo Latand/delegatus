@@ -592,8 +592,8 @@ test("event-first citation-bearing completion shows one reply", () => {
     const copies = [...host.querySelectorAll('[data-live-turn], [data-feed-kind="prose"]')].filter(node => node.textContent?.includes("Event citation answer"));
     expect(copies).toHaveLength(1);
     expect(host.querySelector('[data-feed-kind="mem-citation"]')).toBeNull();
-    tailState.lines.push(JSON.stringify({ type: "response_item", timestamp: AT(1), payload: { type: "message",
-      id: "event-citation-answer", role: "assistant", content: [{ type: "output_text", text: answer }] } }));
+    tailState.lines = [...tailState.lines, JSON.stringify({ type: "response_item", timestamp: AT(1), payload: { type: "message",
+      id: "event-citation-answer", role: "assistant", content: [{ type: "output_text", text: answer }] } })];
     paint();
     expect(host.querySelector('[data-feed-kind="prose"]')).toBe(original);
     expect(host.querySelectorAll('[data-feed-kind="prose"]')).toHaveLength(1);
