@@ -1325,7 +1325,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor });
-      if (executed.code !== 0 && command === "git" && args[0] === "push") {
+      const preparingDependencies = command === "bun" && args[0] === "install";
+      if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactMonitorText(`${executed.stdout}\n${executed.stderr}`).trim();
@@ -1334,7 +1335,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long test diagnostics must not erase the hook's phase markers.
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
-        failureEvidence = { step: "publishing the pipeline branch",
+        failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail };
       }
@@ -1500,6 +1501,20 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
 
+  // Read-only stages can pass without dependencies. Prepare a Bun worktree before
+  // its full repository hook runs, keeping privacy and every other gate active.
+  // Frozen installation cannot upgrade the accepted lockfile. The same bounded,
+  // fenced executor retains setup failures and cancels them on supersession.
+  if (!fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))
+    && fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
+    && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
+    const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, undefined, { timeoutMs: 180_000 });
+    if (installed.code !== 0) return failure("preparing publication dependencies", installed);
+    // Lifecycle scripts must not change the accepted head or tracked work.
+    const prepared = await currentPipelineBranchHead(pipeline, exec);
+    if (!prepared.ok) return prepared;
+    if (prepared.sha !== acceptedSha) return { ok: false, error: "dependency preparation changed the accepted pipeline revision; nothing was published" };
+  }
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);

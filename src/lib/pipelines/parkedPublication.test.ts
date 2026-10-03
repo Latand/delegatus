@@ -116,6 +116,69 @@ test("failed publication retains the hook tail, exit status and duration in lane
   } finally { h.cleanup(); }
 });
 
+function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
+  h.lane.stages[0]!.role = { roleId: "verifier" };
+  h.lane.stages[0]!.effectiveRole = { ...h.lane.stages[0]!.effectiveRole!, roleId: "verifier", access: "read-only" };
+  fs.mkdirSync(path.join(h.repo, "dependency"));
+  fs.writeFileSync(path.join(h.repo, "dependency/package.json"), JSON.stringify({ name: "publication-fixture-dependency", version: "1.0.0" }));
+  fs.writeFileSync(path.join(h.repo, "package.json"), JSON.stringify({ name: "publication-fixture", dependencies: { "publication-fixture-dependency": "file:./dependency" } }));
+  fs.writeFileSync(path.join(h.repo, ".gitignore"), "node_modules/\n");
+  const lock = spawnSync(process.execPath, ["install", "--lockfile-only", "--ignore-scripts"], { cwd: h.repo, encoding: "utf8" });
+  expect(lock.status).toBe(0);
+  fs.rmSync(path.join(h.repo, "node_modules"), { recursive: true, force: true });
+  h.git("add", "."); h.git("commit", "-q", "-m", "read-only publication fixture");
+  return h.git("rev-parse", "HEAD");
+}
+
+for (const privacyFails of [false, true]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails})`, async () => {
+  const h = fixture();
+  try {
+    const head = missingDependencyFixture(h);
+    const source = path.join(h.root, "source");
+    for (let n = 0; n < 2; n++) h.git("-C", source, "commit", "--allow-empty", "-q", "-m", `later main ${n}`);
+    h.git("-C", source, "push", "-q", "origin", "main"); h.git("fetch", "-q", "origin", "main");
+    const marker = path.join(h.root, "privacy-ran");
+    fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\nbehind=$(git rev-list --count HEAD..origin/main)\necho "pre-push: branch is $behind commit(s) behind origin/main" >&2\necho pre-push: privacy >&2\ntouch '${marker}'\n${privacyFails ? "exit 9" : "test -d node_modules/publication-fixture-dependency\necho pre-push: types >&2"}\n`, { mode: 0o700 });
+    savePipelines([h.lane]);
+    expect(fs.existsSync(path.join(h.repo, "node_modules"))).toBe(false);
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(path.join(h.repo, "node_modules/publication-fixture-dependency"))).toBe(true);
+    expect(h.git("status", "--porcelain")).toBe("");
+    if (privacyFails) {
+      expect(h.current().publishedCommit).toBeNull();
+      expect(h.current().stateDetail).toContain("pre-push: privacy");
+      expect(h.current().stateDetail).toContain("exit 1");
+    } else {
+      expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+      expect(h.pushes()).toBe(1);
+    }
+  } finally { h.cleanup(); }
+});
+
+for (const dirty of [false, true]) test(`publication refuses unsuccessful dependency preparation (changed tracked work: ${dirty})`, async () => {
+  const h = fixture();
+  try {
+    const head = missingDependencyFixture(h); savePipelines([h.lane]);
+    const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
+      if (args[0] === "bun" && args[1][0] === "install") {
+        if (dirty) fs.writeFileSync(path.join(h.repo, "stage.txt"), "changed by install script\n");
+        return { code: dirty ? 0 : 7, stdout: "dependency preparation failed", stderr: "" };
+      }
+      return h.ports.exec(...args);
+    } };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(0);
+    expect(h.current().publishedCommit).toBeNull();
+    expect(h.current().stateDetail).toContain(dirty ? "uncommitted" : "preparing publication dependencies: exit 7");
+    if (!dirty) expect(h.current().delivery!.operation!.result).toMatchObject({ failure: {
+      code: 7, signal: null, durationMs: expect.any(Number), outputTail: "dependency preparation failed",
+    } });
+  } finally { h.cleanup(); }
+});
+
 for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retries a settled failure without takeover`, async () => {
   const h = fixture();
   try {
