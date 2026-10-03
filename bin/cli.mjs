@@ -30,7 +30,7 @@ let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   viewerServerBunRuntime, viewerExitStatus;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
   probePageAndChunk, selfUpdatePaths, watchRestartRequests;
-let probeHeadersFrom, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
+let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
 let lockLauncherStartup;
@@ -1031,12 +1031,17 @@ async function main() {
     webRestartTimer = null;
   };
     const probeHeaders = () => {
-      // Use the serving child's effective token, but never let a malformed
-      // value reach fetch: Bun's header error includes the rejected value.
-      const { LLV_TOKEN: token } = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
-      const value = typeof token === "string" ? token.trim() : "";
+      /* The key the serving Viewer asks for, by the rule its own boot follows:
+         the one this launcher hands it, else the key file while the
+         phone-access flag or a links gate is present. The files are read on
+         every probe, because the Viewer can turn its gate on while this
+         launcher keeps running. A key no header can carry never reaches
+         fetch: its header error would include the rejected value. */
+      const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
+      const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
+      const value = typeof key === "string" ? key.trim() : "";
       const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
-      if (value && !/[^\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
+      if (value && !/[^\t\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
       return headers;
     };
   relaunch = createRelaunch({ paths: selfUpdate, installRoot: packageRoot, entry: cliPath,
@@ -1238,7 +1243,7 @@ async function main() {
   /* Restart requests are taken only once startup has finished, and only from
      a checkout: a packaged install is updated by its package manager. */
   {
-    const attemptWeb = async (release, verifyPage = true) => {
+    const attemptWeb = async (release, verifyPage = true, keepWhenRefused = false) => {
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
         return "port-in-use";
       }
@@ -1248,6 +1253,11 @@ async function main() {
         await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
         if (verifyPage) {
           const page = await probePageAndChunk(options.port, undefined, probeHeaders());
+          if (page && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page)) {
+            handle.state.restarting = false;
+            if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
+            return { refused: page };
+          }
           if (page) throw new Error(page);
         }
         handle.state.restarting = false;
@@ -1293,7 +1303,7 @@ async function main() {
         return;
       }
       const next = releaseNow();
-      const failure = await attemptWeb(next);
+      const failure = await attemptWeb(next, true, next.dir === previousRelease.dir);
       if (failure === null) {
         webRestartFailures = 0;
         record.set("web", { state: "healthy", error: null });
@@ -1301,6 +1311,10 @@ async function main() {
       }
       /* The web process is the page the operator restarts from: a release
          that does not come up gives way to the one it replaced. */
+      if (failure && typeof failure === "object") {
+        record.set("web", { state: "healthy", error: { kind: "message", text: `The readiness probe could not authenticate (${failure.refused}), so the release serving before the restart was kept.` } });
+        return;
+      }
       const fallbackFailure = await attemptWeb(previousRelease, false);
       if (fallbackFailure === null) {
         record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail: failure } });
@@ -1509,6 +1523,7 @@ async function checkoutLauncher() {
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
     probePageAndChunk, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
+  ({ viewerBootGateKey } = await import("./viewerGateKey.mjs").catch(() => ({ viewerBootGateKey: (environment) => environment.LLV_TOKEN || null })));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));
   ({ linkSkills } = await import("./skillLinks.mjs"));
   ({ createRelaunch } = await import("./launcher-relaunch.mjs"));

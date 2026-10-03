@@ -1,3 +1,4 @@
+import { searchUnavailable } from "@/lib/search/unavailable";
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import {
   InvalidTranscriptSearchCursorError,
@@ -71,7 +72,7 @@ export async function GET(request: Request): Promise<Response> {
     if (error instanceof InvalidTranscriptSearchCursorError || error instanceof TranscriptSearchPageTooLargeError) {
       return Response.json({ error: error.message }, { status: 400 });
     }
-    throw error;
+    return searchUnavailable("transcript", error);
   }
   const titles = titlesForPaths(new Set(page.items.map((item) => item.transcriptPath)));
   const items: TranscriptSearchRow[] = page.items.map((item) => ({

@@ -287,10 +287,12 @@ export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}) {
     const asset = await fetch(`http://127.0.0.1:${port}${chunk}`, { signal, redirect: "manual" });
     await asset.body?.cancel();
     return asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
-  } catch {
+  } catch (error) {
     // Fetch errors can include the rejected header value. Restart diagnostics
-    // are persisted and printed by the launcher, so expose no runtime text.
-    return "Viewer readiness probe failed";
+    // are persisted and printed by the launcher, so the message stays out and
+    // only the error's own code or class name says what kind it was.
+    const kind = [error?.code, error?.name].find((value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(value));
+    return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
   }
 }
 
