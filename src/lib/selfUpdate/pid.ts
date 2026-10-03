@@ -2,6 +2,7 @@
    else (#2007). `startIdentity` is field 22 of /proc/<pid>/stat (the start
    time in clock ticks), the same identity `bin/self-update-supervisor.mjs`
    records, so a PID reused after an exit never matches its record. */
+import { procBackend } from "@/lib/proc";
 import { spawnSync } from "node:child_process";
 import { windowsStartIdentity } from "../../../bin/windows-process-identity.mjs";
 import { readFileSync } from "node:fs";
@@ -51,4 +52,14 @@ export function signalGroup(record: RecordedPid, signal: NodeJS.Signals): boolea
   } catch {
     try { process.kill(record.pid, signal); return true; } catch { return false; }
   }
+}
+
+
+/** Health and launcher records use different historical identity encodings.
+    Both must name the same live process before either format is admitted. */
+export function runtimeHostMatches(record: { pid: number | null; startIdentity: string | null },
+  health: { pid: number; startIdentity?: string | null } | null, alive: (pid: number, identity: string) => boolean): boolean {
+  if (!health || record.pid === null || record.startIdentity === null || health.pid !== record.pid
+    || !health.startIdentity || !alive(record.pid, record.startIdentity)) return false;
+  return health.startIdentity === record.startIdentity || health.startIdentity === procBackend.processIdentity(record.pid);
 }

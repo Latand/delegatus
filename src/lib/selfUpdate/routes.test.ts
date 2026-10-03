@@ -554,6 +554,27 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
+    const { procBackend } = await import("@/lib/proc");
+    const { ApplyController } = await import("./apply");
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")) as LauncherRecord;
+    const controller = new ApplyController(h.deps.dir);
+    controller.begin(record, firstSha, "operator");
+    controller.patch({ state: "switching" });
+    record.launcher = { ...record.launcher, relaunch: 1, state: "healthy", revision: firstSha, requestId: controller.current!.requestId };
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid), hostEpoch: 1 });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps);
+    try {
+      const healthy = await h.service.snapshot();
+      expect(healthy.processes.runtimeHost.state).toBe("healthy");
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).state).toBe("done");
+      h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: `${process.pid}:reused`, hostEpoch: 1 });
+      expect((await h.service.snapshot()).processes.runtimeHost.state).toBe("failed");
+    } finally { h.service.stop(); }
+  });
+
   test("a checkout exact deploy is idempotent, applies once and settles its seat receipt", async () => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8"));

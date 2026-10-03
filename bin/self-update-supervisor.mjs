@@ -28,6 +28,7 @@
 /* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
    environment (docs/design/rename-delegatus.md §5). */
 import "./envAlias.mjs";
+import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
 import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
@@ -59,6 +60,14 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
 /** Field 22 of /proc/<pid>/stat: the start time in clock ticks. Null where
     there is no /proc (the record then carries no identity, and the Viewer
     treats the process as unverifiable rather than as the same process). */
+/** The identity written by the runtime-host fence, distinct from old
+    launcher records which retain bare Linux ticks or macOS ps start time. */
+export function runtimeHostStartIdentity(pid) {
+  if (process.platform === "darwin") return darwinKernelIdentity(pid);
+  const identity = readStartIdentity(pid);
+  return process.platform === "win32" ? identity : identity === null ? null : `${pid}:${identity}`;
+}
+
 export function readStartIdentity(pid, platform = process.platform, run = spawnSync) {
   if (platform === "win32") return windowsStartIdentity(pid, run);
   try {

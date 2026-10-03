@@ -3,7 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import net from "node:net";
-import { installedRelease, readStartIdentity } from "./self-update-supervisor.mjs";
+import { installedRelease, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function alive(pid, identity) {
@@ -74,13 +74,13 @@ export async function ensureWebPortFree(paths, port, socket, hostname = "127.0.0
   }
   return false;
 }
-export async function takeOverOrphanHost(paths, config) {
+export async function takeOverOrphanHost(paths, config, ports = { launcherIdentity: readStartIdentity, hostIdentity: runtimeHostStartIdentity, stop: stopRecorded }) {
   const other = json(paths.record)?.launcher;
   // A verified live supervisor retains custody of its host.
   if (other && alive(other.pid, other.startIdentity)) return false;
   const fence = json(config.fencePath);
   if (!fence || typeof fence.startIdentity !== "string") return false;
-  const identity = readStartIdentity(fence.pid);
-  if (identity === null || fence.startIdentity !== `${fence.pid}:${identity}`) return false;
-  return stopRecorded({ pid: fence.pid, startIdentity: identity }, config.socketPath);
+  const identity = ports.launcherIdentity(fence.pid);
+  if (identity === null || fence.startIdentity !== ports.hostIdentity(fence.pid)) return false;
+  return ports.stop({ pid: fence.pid, startIdentity: identity }, config.socketPath);
 }

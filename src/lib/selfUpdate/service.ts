@@ -9,6 +9,7 @@
    `managed.json`, the automatic policy and managed request intent in
    `auto.json`, and the launcher's own record. A fresh process reads them
    back, so the surface carries on where the previous one stopped. */
+import { runtimeHostMatches } from "./pid";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -1382,7 +1383,7 @@ export class SelfUpdateService {
         && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
         && serving.web.revision === target.slice(0, 7) && serving.runtimeHost.revision === target.slice(0, 7)
         && serving.web.pid !== null && serving.web.startIdentity !== null && this.deps.processAlive(serving.web.pid, serving.web.startIdentity)
-        && health?.pid === serving.runtimeHost.pid && health?.startIdentity === serving.runtimeHost.startIdentity;
+        && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive);
       const deploymentId = `checkout-${randomUUID()}`;
       const at = new Date(this.deps.now()).toISOString();
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
@@ -1594,7 +1595,7 @@ export class SelfUpdateService {
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
-    const settled = this.apply.observe(record, !!health && health.pid === record.runtimeHost.pid && health.startIdentity === record.runtimeHost.startIdentity
+    const settled = this.apply.observe(record, runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive)
       && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity), now);
     if (settled) {
       const intent = this.apply.current!;
@@ -1629,7 +1630,7 @@ export class SelfUpdateService {
     });
     let host = fromRecord(record.runtimeHost, { socket: record.socket });
     if (host.state === "healthy") {
-      if (health && health.pid === host.pid && health.startIdentity === record.runtimeHost.startIdentity) host = { ...host, lastHealthAt: at, lastHealthOk: true };
+      if (runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive)) host = { ...host, lastHealthAt: at, lastHealthOk: true };
       else host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError ?? (health ? "Runtime host health identity does not match the launcher" : "Runtime host health is unavailable") } };
     }
 

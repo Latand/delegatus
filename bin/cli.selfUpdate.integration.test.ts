@@ -109,7 +109,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean;
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -140,7 +140,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean;
       LLV_STATE_DIR: state,
       TMPDIR: path.join(root, "tmp"),
       LLV_BUN_EXECUTABLE: process.execPath,
-    },
+    } as NodeJS.ProcessEnv,
   };
 }
 
@@ -1164,13 +1164,22 @@ test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions
   await health(record);
   const oldWeb = record.web.pid;
   const oldHost = record.runtimeHost.pid;
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const applyDirectory = path.join(state, "self-update");
+  const apply = new ApplyController(applyDirectory);
+  apply.begin(record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, target, "operator");
+  apply.patch({ state: "ready" });
   const pointer = JSON.stringify({ sha: target, dir: nextDir, checkoutHead: first });
   writeFileSync(record.releasePointer, pointer);
-  writeFileSync(record.requestFile, JSON.stringify({ role: "relaunch", requestId: "real-success", target, rollbackPointer: null }));
-  record = await until(() => { const r = readHealthy(); return r?.launcher.requestId === "real-success" && r.launcher.revision === target ? r : null; }, 150_000);
+  apply.send(record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord);
+  record = await until(() => { const r = readHealthy(); return r?.launcher.requestId === apply.current!.requestId && r.launcher.revision === target ? r : null; }, 150_000);
   expect(record.web.pid).not.toBe(oldWeb); expect(record.runtimeHost.pid).not.toBe(oldHost);
   expect(record.web.revision).toBe(target.slice(0, 7)); expect(record.runtimeHost.revision).toBe(target.slice(0, 7));
   await health(record);
+  const settled = await fetch(`http://127.0.0.1:${running.port}/api/self-update`, { headers: { authorization: `Bearer ${token}` } });
+  expect(settled.status).toBe(200);
+  expect((await settled.json()).processes.runtimeHost.state).toBe("healthy");
+  expect(JSON.parse(readFileSync(path.join(applyDirectory, "apply.json"), "utf8")).state).toBe("done");
 
   const brokenDir = path.join(root, "broken");
   git(root, "clone", "--shared", nextDir, brokenDir);

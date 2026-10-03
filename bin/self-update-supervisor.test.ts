@@ -334,3 +334,27 @@ test("Windows launcher and Viewer identities agree on the kernel creation token"
   expect(readStartIdentity(pid, "win32", (() => ({ status: 1, stdout: "133000000000000001" })) as never)).toBeNull();
   expect(readStartIdentity(pid, "win32", (() => ({ status: 0, stdout: "1" })) as never)).toBeNull();
 });
+
+
+test("macOS orphan takeover verifies the kernel fence and retains legacy launcher identity", async () => {
+  const { takeOverOrphanHost } = await import("./launcher-adoption.mjs");
+  const { parseDarwinProcBsdInfoIdentity } = await import("../src/lib/proc/darwinIdentity");
+  const root = mkdtempSync(join(tmpdir(), "macos-orphan-fence-"));
+  try {
+    const pid = 42420; const buffer = Buffer.alloc(136);
+    buffer.writeUInt32LE(pid, 12); buffer.writeBigUInt64LE(1_700_000_000n, 120); buffer.writeBigUInt64LE(123456n, 128);
+    const kernel = parseDarwinProcBsdInfoIdentity(pid, buffer, 136)!;
+    const { parseDarwinIdentity } = await import("./darwin-process-identity.mjs");
+    expect(parseDarwinIdentity(pid, buffer, 136)).toBe(kernel);
+    const fencePath = join(root, "fence.json"); const stopped: unknown[] = [];
+    const ports = { launcherIdentity: () => "ps:fixture start", hostIdentity: () => kernel,
+      stop: async (...args: unknown[]) => { stopped.push(args); return true; } };
+    writeFileSync(fencePath, JSON.stringify({ pid, startIdentity: kernel }));
+    const config = { fencePath, socketPath: join(root, "host.sock") };
+    expect(await takeOverOrphanHost({ record: join(root, "record.json") }, config, ports)).toBe(true);
+    expect(stopped[0]).toEqual([{ pid, startIdentity: "ps:fixture start" }, config.socketPath]);
+    writeFileSync(fencePath, JSON.stringify({ pid, startIdentity: `${pid}:1700000000:123457` }));
+    expect(await takeOverOrphanHost({ record: join(root, "record.json") }, config, ports)).toBe(false);
+    expect(stopped.length).toBe(1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
