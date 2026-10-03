@@ -18,7 +18,7 @@ export interface NativeQueueExecutorPort {
   resolveHost(conversationId: string): EngineHost | null;
   binding(conversationId: string): NativeQueueBinding | null;
   /** Registry evidence of a succession from this predecessor's generation chain. */
-  succession?(conversationId: string, binding: NativeQueueBinding, admissionEventSeq?: number):
+  succession?(conversationId: string, binding: NativeQueueBinding, admittedAt?: string):
     | { status: "pending" }
     | { status: "committed"; binding: NativeQueueBinding }
     | { status: "refused"; reason: string }
@@ -45,7 +45,7 @@ export class NativeQueueExecutor {
     if (entryTargeted && (!entry || entry.mutationOperationId !== command.operationId)) throw new Error("native queue mutation identity is unavailable");
     const version = entry?.versions.find(v => v.revision === entry.revision);
     let binding = command.action === "add" && entry ? entry.binding : command.binding;
-    const succession = this.port.succession?.(command.conversationId, binding, command.eventSeq);
+    const succession = this.port.succession?.(command.conversationId, binding, prior.receipt.admittedAt);
     if (succession?.status === "refused") {
       await transition({ phase: "refused", reason: succession.reason });
       return;

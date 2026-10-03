@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost, releaseStructuredDeliveryHost } from "./structuredDeliveryController";
@@ -307,6 +307,60 @@ test.each(["cancelled", "provider"] as const)("later native add delivers on the 
       binding: { threadId: f.key.sessionId, accountId: "account-a" } });
     expect(f.writes).toEqual([{ threadId: f.key.sessionId, input: [{ type: "text", text: "words after recovery" }] }]);
   } finally { await f.cleanup(); }
+});
+
+test.each([
+  ["rolled-back", "reseat"], ["failed-recoverable", "reseat"],
+  ["rolled-back", "engine-wide"], ["failed-recoverable", "engine-wide"],
+  ["rolled-back", "legacy reseat"], ["failed-recoverable", "legacy reseat"],
+] as const)("a %s ownerless migration via %s refuses only the earlier native add", async (phase, starter) => {
+  const f = await switchingFixture();
+  try {
+    const start = Date.now();
+    setSystemTime(start);
+    const add = (operationId: string) => f.journal.executeOperation({ kind: "native-queue", operationId, idempotencyKey: operationId,
+      conversationId: f.conversation.id, action: "add", text: operationId,
+      binding: { threadId: f.key.sessionId, accountId: "account-a" } });
+    // The engine intent predates both admissions and is reused when enrolled.
+    if (starter === "engine-wide") f.registry.upsertMigrationIntent("codex", "account-b", "manual", "account-selection");
+    setSystemTime(start + 500);
+    add("before-reseat");
+    setSystemTime(start + 1_000);
+    if (starter === "engine-wide") {
+      f.registry.commitMigrationIntent({ engine: "codex", targetId: "account-b", origin: "manual", requestId: "engine-switch",
+        expectedRevision: f.registry.engineRouting("codex").revision });
+    } else {
+      f.registry.requestConversationReseat(f.conversation.id, "account-b");
+    }
+    const pending = f.registry.conversation(f.conversation.id)!;
+    expect(pending.migration?.startedAt).toBe(new Date(start + 1_000).toISOString());
+    if (starter === "legacy reseat") f.registry.setConversationMigration(f.conversation.id, { ...pending.migration!, startedAt: undefined });
+    expect(f.registry.conversation(f.conversation.id)?.reconfigure).toBeFalsy();
+    if (phase === "rolled-back") {
+      f.registry.cancelConversationSwitch(f.conversation.id, pending.migration!.revision);
+    } else {
+      await advanceConversationMigration(f.conversation.id, f.registry, {
+        create: async () => { throw new Error("successor provider failed a recoverable preflight"); },
+        verify: async () => {},
+      });
+      f.registry.releaseSwitchHold(f.conversation.id);
+    }
+    expect(f.registry.conversation(f.conversation.id)?.migration?.phase).toBe(phase);
+    if (starter !== "legacy reseat") expect(f.registry.conversation(f.conversation.id)?.migration?.startedAt).toBe(pending.migration!.startedAt);
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("before-reseat")?.receipt).toMatchObject({ status: "failed",
+      reason: phase === "rolled-back" ? "runtime switch cancelled" : "runtime switch failed: successor provider failed a recoverable preflight" });
+    expect(f.writes).toEqual([]);
+
+    setSystemTime(start + 2_000);
+    add("after-reseat");
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult("after-reseat")?.receipt).toMatchObject({ status: "applied", reason: null });
+    expect(f.journal.nativeQueueRead(f.conversation.id).find(entry => entry.entryId === "after-reseat")).toMatchObject({
+      state: "queued", binding: { threadId: f.key.sessionId, accountId: "account-a" }, reason: null });
+    expect(f.writes).toEqual([{ threadId: f.key.sessionId, input: [{ type: "text", text: "after-reseat" }] }]);
+  } finally { setSystemTime(); await f.cleanup(); }
 });
 
 test.each(["idle", "unpublished", "dead", "attention"] as const)("an unsubmitted native message follows two switches to the current successor (%s)", async availability => {

@@ -695,7 +695,7 @@ export async function bindStructuredDeliveryQueue(
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
     },
-    succession: (conversationId, binding, admissionEventSeq) => {
+    succession: (conversationId, binding, admittedAt) => {
       const conversation = registry.conversation(conversationId as ViewerConversationId);
       if (!conversation || conversation.engine !== "codex") return { status: "refused", reason: "native queue conversation is unavailable" };
       const migration = conversation.migration;
@@ -706,15 +706,13 @@ export async function bindStructuredDeliveryQueue(
       if (!migration || sourceIndex < 0 || migrationSourceIndex < sourceIndex) return null;
       const source = generations[sourceIndex]!;
       const current = generations.at(-1);
-      // A terminal switch leaves its migration behind. Its intent retains the
-      // owning switch revision even after a model-only reconfigure replaces it.
-      // Later admissions on the unchanged generation belong to recovery.
+      // Terminal migration residue applies only to entries already admitted
+      // when this migration began, regardless of who requested the switch.
+      // A reused intent can predate this conversation's migration.
       const terminal = migration.phase === "rolled-back" || migration.phase === "failed-recoverable";
-      if (terminal && current === source && !conversation.switchHold && admissionEventSeq !== undefined) {
-        const requestId = registry.readOnlySnapshot().migrationIntents[migration.intentId]?.requestIds
-          .find(request => request.startsWith("reconfigure:"));
-        const switchRevision = requestId ? Number(requestId.slice(requestId.lastIndexOf(":") + 1)) : NaN;
-        if (Number.isSafeInteger(switchRevision) && admissionEventSeq > switchRevision) return null;
+      if (terminal && current === source && !conversation.switchHold && admittedAt !== undefined) {
+        const startedAt = migration.startedAt ?? registry.readOnlySnapshot().migrationIntents[migration.intentId]?.createdAt;
+        if (Date.parse(admittedAt) > Date.parse(startedAt ?? "")) return null;
       }
       // Each committed edge archives its predecessor at the successor's birth.
       // Keep that evidence when a newer migration replaces the previous receipt.
