@@ -1317,7 +1317,10 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
     renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
   }
   const priorRelease = shape === "checkout-published" ? release(fixture, "legacy-prior") : null;
-  if (priorRelease) writeFileSync(pointerFile(fixture), JSON.stringify({ ...priorRelease, checkoutHead: fixture.first }));
+  if (priorRelease) {
+    mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true });
+    writeFileSync(pointerFile(fixture), JSON.stringify({ ...priorRelease, checkoutHead: fixture.first }));
+  }
   const newer = install(); const candidate = release(newer, "terminal-candidate", { brokenHost: failure === "host" });
   if (shape === "package") {
     writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
@@ -1343,7 +1346,7 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   if (failure === "web") writeFileSync(path.join(candidate.dir, shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next"), STUB_NEXT(true));
   const failedAttempts = path.join(candidate.dir, "failed-attempts");
   const failingEntry = path.join(candidate.dir, failure === "host" ? "dist/runtime-host.mjs" : failure === "import" ? "bin/cli.mjs" : shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next");
-  writeFileSync(failingEntry, `(await import("node:fs")).appendFileSync(${JSON.stringify(failedAttempts)}, "attempt\\n");\n` + readFileSync(failingEntry, "utf8").replace(/^#![^\n]*\n/, ""));
+  writeFileSync(failingEntry, `(await import("node:fs")).appendFileSync(${JSON.stringify(failedAttempts)}, "attempt\n");\n` + readFileSync(failingEntry, "utf8").replace(/^#![^\n]*\n/, ""));
   expect(existsSync(path.join(path.dirname(record.requestFile), "apply.json"))).toBe(false);
   const action = await installAction({ mode: shape === "package" ? "package" : "checkout", reason: null, record: { ...record, installRoot: fixture.checkout, port: running.port } as never },
     { cgroup: () => "", ready: () => true, argv: () => [], env: fixture.env, platform: form === "posix" ? "linux" : "win32" });
