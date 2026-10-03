@@ -24,6 +24,12 @@ const at = (live: RuntimeLiveTurnItem) => {
 const textKey = (text: string) => text.trim().replace(/\s+/g, " ");
 const projectedText = (item: Item): string | null => item.kind === "prose" || item.kind === "blob" ? item.text
   : item.kind === "review" || item.kind === "mem-citation" ? item.raw : null;
+const echoTextMatches = (text: string, live: RuntimeLiveTurnItem): boolean => {
+  const canonical = textKey(text), streamed = textKey(live.text);
+  return canonical === streamed || live.phase === "streaming" && canonical.startsWith(streamed)
+    // The producer keeps the suffix when the bounded text buffer fills.
+    || Boolean(live.omittedChars) && (live.phase === "streaming" ? canonical.includes(streamed) : canonical.endsWith(streamed));
+};
 // Deltas keep their original start even when carried into a newer turn. A
 // legacy descriptor without that identity is fenced by its consumed text.
 const streamKey = (live: RuntimeLiveTurnItem, turnId: string) => JSON.stringify([
@@ -84,7 +90,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   }));
   for (const entry of pending) {
     const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
-      && (textKey(echo.text) === textKey(entry.live.text) || entry.live.phase === "streaming" && textKey(echo.text).startsWith(textKey(entry.live.text)))
+      && echoTextMatches(echo.text, entry.live)
       && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
     const matches = entry.live.itemId ? feed.filter(({ item, key }) => !claimedRows.has(key)
       && (source(item) === entry.live.itemId || item.kind === "think" && item.members?.some(member => member.sourceId === entry.live.itemId))) : echo?.rows ?? [];
@@ -95,7 +101,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       const completedAt = Date.parse(entry.live.completedAt ?? "");
       const mirror = echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key) && !source(row.item))
         && echo.rows.some(({ item }) => item.kind === "prose" && item.engine === "codex" || item.kind === "review")
-        && textKey(echo.text) === textKey(entry.live.text) && Number.isFinite(completedAt)
+        && echoTextMatches(echo.text, entry.live) && Number.isFinite(completedAt)
         && echo.at !== null && Math.abs(echo.at - completedAt) <= 1000);
       if (mirror) for (const row of mirror.rows) { hiddenEchoes.add(row.key); claimedRows.add(row.key); }
     }

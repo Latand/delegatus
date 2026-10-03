@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createFeedSession, type FeedEntry } from "../feed/parse";
 import type { RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
-import { appendRuntimeLiveTurnDelta } from "@/lib/runtime/liveTurn";
+import { appendRuntimeLiveTurnDelta, projectRuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { mergeAssistantRows, projectAssistantHandoff } from "./assistantRows";
 
 const later: FeedEntry = { key: "later", anchorKey: "row:1:0", item: {
@@ -168,6 +168,35 @@ test("same-instant prose and tools preserve the host's source order", () => {
       ({ key }) => ({ kind: "item", key, instant: Date.parse(prose.startedAt!), liveOrder: first ? 0 : 1 }));
     expect(result.map(row => row.kind)).toEqual(first ? ["item", "delta"] : ["delta", "item"]);
   }
+});
+
+test("a clipped idless stream adopts its complete canonical answer after missed completion", () => {
+  const text = "Opening context. " + "The response continues with readable prose. ".repeat(1800) + "Final answer.";
+  const stream = appendRuntimeLiveTurnDelta(null, "clipped-turn", text, "2026-10-02T10:00:00Z");
+  expect(stream.items![0].omittedChars).toBeGreaterThan(0);
+  expect(text.endsWith(stream.items![0].text)).toBe(true);
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  const feed = session.feed([JSON.stringify({ type: "response_item", timestamp: "2026-10-02T10:00:01Z",
+    payload: { type: "message", id: "clipped-answer", role: "assistant", content: [{ type: "output_text", text }] } })], 0, false).items;
+  let state = projectAssistantHandoff(null, stream, [], claims);
+  const original = state.pending[0].key;
+  state = projectAssistantHandoff(state, null, feed, new Set(["clipped-answer"]), "unknown");
+  expect(state.pending).toEqual([]);
+  expect(rows(feed, state)).toHaveLength(1);
+  expect(rows(feed, state)[0].key).toBe(original);
+});
+
+test("a clipped identified completion suppresses its event-first full-text mirror", () => {
+  const text = "Opening context. " + "The response continues with readable prose. ".repeat(1800) + "Final answer.";
+  const completed = projectRuntimeLiveTurnItem(null, "clipped-turn", { type: "agentMessage", id: "clipped-answer", text }, "completed", "2026-10-02T10:00:01Z");
+  expect(completed.items![0].omittedChars).toBeGreaterThan(0);
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  const feed = session.feed([JSON.stringify({ type: "event_msg", timestamp: "2026-10-02T10:00:01Z",
+    payload: { type: "agent_message", message: text } })], 0, false).items;
+  const state = projectAssistantHandoff(null, completed, feed, claims);
+  expect(state.pending).toHaveLength(1);
+  expect(state.hiddenEchoes.size).toBe(1);
+  expect(rows(feed, state)).toHaveLength(1);
 });
 
 test("idle turns fence stranded streaming drafts while completed replies await their own echo", () => {
