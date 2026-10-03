@@ -277,7 +277,25 @@ describe("probePageAndChunk", () => {
   test("does not expose malformed bearer values from fetch errors", async () => {
     const token = `fixture-prefix\nfixture-suffix`;
     const error = await probePageAndChunk(port, 5_000, { authorization: `Bearer ${token}` });
-    expect(error).toBe("Viewer readiness probe failed");
+    expect(error).toMatch(/^Viewer readiness probe failed( \([A-Za-z0-9_]+\))?$/);
     expect(error).not.toContain(token);
+  });
+
+  test("a refused connection and a timeout are told apart without the error's text", async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+    const closedPort = (closed.address() as { port: number }).port;
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const refused = await probePageAndChunk(closedPort);
+
+    const silent = createServer(() => { /* never answers */ });
+    await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+    const timedOut = await probePageAndChunk((silent.address() as { port: number }).port, 200);
+    silent.closeAllConnections();
+    silent.close();
+
+    expect(refused).toMatch(/^Viewer readiness probe failed \([A-Za-z0-9_]+\)$/);
+    expect(timedOut).toMatch(/^Viewer readiness probe failed \([A-Za-z0-9_]+\)$/);
+    expect(refused).not.toBe(timedOut);
   });
 });

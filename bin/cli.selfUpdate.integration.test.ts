@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -38,14 +38,34 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 
+/* The `tokenProtected` stub gates the way a Viewer does: on the key its
+   environment sets, else on the key file while a links gate or the
+   phone-access flag is present. It reads the files on every request, as the
+   Viewer's own gate can come on while it runs. The rule is written out here
+   on purpose, so the launcher's resolver is checked against a second copy. */
 const STUB_NEXT = (exitAtOnce: boolean, tokenProtected = false) => exitAtOnce ? "process.exit(3);\n" : `
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const config = join(process.env.XDG_CONFIG_HOME, "delegatus");
+const links = join(process.env.LLV_STATE_DIR, "links");
+const gateKey = () => {
+  if (process.env.LLV_TOKEN) return process.env.LLV_TOKEN;
+  let outward = false;
+  try {
+    const { publicUrl } = JSON.parse(readFileSync(join(links, "self.json"), "utf8"));
+    outward = !["localhost", "127.0.0.1"].includes(new URL(publicUrl).hostname);
+  } catch { /* no saved address */ }
+  if (!outward && !existsSync(join(links, "grants.json")) && !existsSync(join(config, "phone-access"))) return null;
+  return readFileSync(join(config, "token"), "utf8").trim();
+};
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT),
   fetch(request) {
     const pathname = new URL(request.url).pathname;
     if (${tokenProtected} && (pathname === "/" || pathname === "/api/self-update/launcher-admission")) {
-      if (request.headers.get("authorization") !== "Bearer " + process.env.LLV_TOKEN) {
+      const key = gateKey();
+      if (key && request.headers.get("authorization") !== "Bearer " + key) {
         return new Response("Unauthorized", { status: 401 });
       }
     }
@@ -89,7 +109,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean;
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "viewerGateKey.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -177,7 +197,7 @@ function version(fixture: ReturnType<typeof install>, extraEnv: Record<string, s
   });
 }
 
-type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string } | null };
+type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string; detail?: string; text?: string } | null };
 type LauncherRecord = { launcher: { pid: number; autoAdmission?: number }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {
@@ -471,7 +491,12 @@ test("a checkout records both children, and a restart request moves each one ont
   expect(readdirSync(path.join(fixture.state, "self-update")).some((name) => name.startsWith("launcher-"))).toBe(false);
 }, 60_000);
 
-for (const tokenSource of ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated"] as const) {
+/* Where the key the Viewer gates on comes from. The first three reach it
+   through the launcher's environment; the last three are a key the Viewer
+   picks for itself from the key file, which the launcher never handed it. */
+const KEY_SOURCES = ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated", "links-grants", "links-public-address", "phone-access-after-start"] as const;
+
+for (const tokenSource of KEY_SOURCES) {
   for (const { broken, automatic } of [
     { broken: false, automatic: false },
     { broken: true, automatic: false },
@@ -482,14 +507,32 @@ for (const tokenSource of ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated"] as const
       const env = fixture.env as Record<string, string | undefined>;
       delete env.LLV_TOKEN;
       delete env.DELEGATUS_TOKEN;
-      const token = "fixture-update-access";
-      if (tokenSource !== "generated") env[tokenSource] = token;
+      const fromEnvironment = tokenSource === "LLV_TOKEN" || tokenSource === "DELEGATUS_TOKEN";
+      const fromKeyFile = !fromEnvironment && tokenSource !== "generated";
+      const token = fromKeyFile ? randomBytes(16).toString("hex") : "fixture-update-access";
+      const config = path.join(env.XDG_CONFIG_HOME as string, "delegatus");
+      if (fromEnvironment) env[tokenSource] = token;
+      if (fromKeyFile) {
+        mkdirSync(path.join(fixture.state, "links"), { recursive: true });
+        mkdirSync(config, { recursive: true });
+        writeFileSync(path.join(config, "token"), `${token}\n`, { mode: 0o600 });
+      }
+      if (tokenSource === "links-grants") writeFileSync(path.join(fixture.state, "links", "grants.json"), "{}\n");
+      if (tokenSource === "links-public-address") {
+        writeFileSync(path.join(fixture.state, "links", "self.json"), JSON.stringify({ publicUrl: "https://board.example.test" }));
+      }
       const running = await start(fixture, tokenSource === "generated" ? ["--hostname", "0.0.0.0"] : []);
       const before = await until(() => {
         const record = readRecord(fixture.state);
         return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
       });
       const url = `http://127.0.0.1:${running.port}/`;
+      if (tokenSource === "phone-access-after-start") {
+        /* The phone-access button: the gate comes on in a Viewer whose
+           launcher started before the choice was made. */
+        expect((await fetch(url)).status).toBe(200);
+        writeFileSync(path.join(config, "phone-access"), "tailscale\n");
+      }
       expect((await fetch(url)).status).toBe(401);
       const next = release(fixture, "token-update", { broken });
       writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
@@ -519,12 +562,19 @@ for (const tokenSource of ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated"] as const
         expect(response.status).toBe(200);
         expect(await response.text()).toBe(broken ? fixture.checkout : next.dir);
       }
+      if (fromKeyFile) {
+        expect(stateText(fixture.state)).not.toContain(token);
+        expect(running.output()).not.toContain(token);
+      }
     }, 60_000);
   }
 }
 
-for (const invalidCharacter of ["\n", "\r", "\u0100"] as const) {
-  test(`malformed Viewer tokens are omitted from restart headers and diagnostics (${JSON.stringify(invalidCharacter)})`, async () => {
+/* A key no header can carry: the probe goes out without it and is refused.
+   The process that refused it is up and gating, so the restart ends with the
+   release that served before still serving, never with no web. */
+for (const invalidCharacter of ["\n", "\r", "\u0100", "\u0436", "\u00e9"] as const) {
+  test(`a key the probe cannot send keeps the previous release serving and stays out of diagnostics (${JSON.stringify(invalidCharacter)})`, async () => {
     const fixture = install({ tokenProtected: true });
     const token = `fixture-prefix${invalidCharacter}fixture-suffix`;
     fixture.env.LLV_TOKEN = token;
@@ -533,23 +583,70 @@ for (const invalidCharacter of ["\n", "\r", "\u0100"] as const) {
       const record = readRecord(fixture.state);
       return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
     });
+    const url = `http://127.0.0.1:${running.port}/`;
+    expect((await fetch(url)).status).toBe(401);
     const next = release(fixture, "malformed-token-update");
     writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
     request(before, "web", "restart-malformed-token");
 
     const after = await until(() => {
       const record = readRecord(fixture.state);
-      return record.web.requestId === "restart-malformed-token" && record.web.state === "failed" ? record : null;
+      return record.web.requestId === "restart-malformed-token" && ["healthy", "failed"].includes(record.web.state) ? record : null;
     });
-    const persistedState = stateText(fixture.state);
-    expect(after.web.error).toMatchObject({ kind: "message", text: "GET / answered 401" });
-    expect(persistedState).not.toContain(token);
+    expect(after.web.state).toBe("healthy");
+    expect(after.web.revision).toBe(fixture.first.slice(0, 7));
+    expect(after.web.error).toMatchObject({ kind: "fell-back", revision: next.sha.slice(0, 7) });
+    expect(after.web.error?.detail).toContain("GET / answered 401");
+    expect(after.web.pid).not.toBe(before.web.pid);
+    expect(existsSync(`/proc/${after.web.pid}`)).toBe(true);
+    /* Still up and still gating. */
+    expect((await fetch(url)).status).toBe(401);
+    expect(stateText(fixture.state)).not.toContain(token);
     expect(running.output()).not.toContain(token);
     expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
     expect(await socketAnswers(before.socket)).toBe(true);
     expect(running.child.exitCode).toBeNull();
+
+    /* With nothing new published the restarted release is the one that was
+       serving, so a refusal keeps it without a second start. */
+    writeFileSync(before.releasePointer, JSON.stringify({ sha: fixture.first, dir: fixture.checkout, checkoutHead: fixture.first }));
+    request(after, "web", "restart-malformed-token-again");
+    const again = await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.requestId === "restart-malformed-token-again" && ["healthy", "failed"].includes(record.web.state) ? record : null;
+    });
+    expect(again.web.state).toBe("healthy");
+    expect(again.web.error?.kind).toBe("message");
+    expect(again.web.error?.text).toContain("GET / answered 401");
+    expect((await fetch(url)).status).toBe(401);
+    expect(stateText(fixture.state)).not.toContain(token);
+    expect(running.output()).not.toContain(token);
   }, 60_000);
 }
+
+test("a key with a tab inside is sent, and the restart moves onto the new release", async () => {
+  const fixture = install({ tokenProtected: true });
+  const token = "fixture-prefix\tfixture-suffix";
+  fixture.env.LLV_TOKEN = token;
+  const running = await start(fixture);
+  const before = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  const next = release(fixture, "tab-token-update");
+  writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+  request(before, "web", "restart-tab-token");
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.requestId === "restart-tab-token" && ["healthy", "failed"].includes(record.web.state) ? record : null;
+  });
+  expect(after.web.state).toBe("healthy");
+  expect(after.web.error).toBeNull();
+  expect(after.web.revision).toBe(next.sha.slice(0, 7));
+  expect((await fetch(`http://127.0.0.1:${running.port}/`)).status).toBe(401);
+  expect(stateText(fixture.state)).not.toContain(token);
+  expect(running.output()).not.toContain(token);
+}, 60_000);
 
 test("a release whose web does not start gives way to the one it replaced, and says so", async () => {
   const fixture = install();
