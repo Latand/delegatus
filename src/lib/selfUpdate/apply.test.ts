@@ -113,3 +113,27 @@ test("an untaken external service handoff restores its pointer and permits Retry
   expect(existsSync(trial)).toBe(false); expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull();
   expect(() => cold.begin(old, "a".repeat(40), "operator")).not.toThrow();
 });
+
+
+test.each([null, JSON.stringify({ sha: "b".repeat(40) }) + "\n"])("a verified legacy rollback settles its owned trial and seat receipt, pointer=%s", previous => {
+  const dir = mkdtempSync(join(root, "legacy-")); const r = record(dir); r.web.revision = r.runtimeHost.revision = "bbbbbbb";
+  if (previous !== null) writeFileSync(r.releasePointer, previous);
+  writeFileSync(join(dir, "deployments.json"), JSON.stringify([{ deploymentId: "legacy-seat", idempotencyKey: "legacy-key", phase: "queued", terminal: false, revisionNumber: 1 }]));
+  const c = new ApplyController(dir); c.begin(r, "a".repeat(40), "seat", "legacy-seat"); c.send(r); rmSync(r.requestFile); c.patch({ externalRestart: true });
+  const trial = r.requestFile.replace("request-", "trial-");
+  const owned = { requestId: c.current!.requestId, target: c.current!.target, rollbackPointer: previous, state: "rolled-back", detail: "candidate host failed" };
+  writeFileSync(trial, JSON.stringify({ ...owned, requestId: "unrelated" }));
+  const legacy = { ...r, launcher: { pid: 6, startIdentity: "8", autoAdmission: 1 as const } };
+  const cold = new ApplyController(dir);
+  expect(cold.observe(legacy, true)).toBeNull();
+  writeFileSync(trial, JSON.stringify(owned));
+  expect(cold.observe(legacy, false)).toBeNull();
+  writeFileSync(r.releasePointer, JSON.stringify({ sha: "a".repeat(40) }));
+  expect(cold.observe(legacy, true)).toBeNull();
+  if (previous === null) rmSync(r.releasePointer); else writeFileSync(r.releasePointer, previous);
+  expect(cold.observe({ ...legacy, web: { ...r.web, revision: "aaaaaaa" } }, true)).toBeNull();
+  expect(cold.observe(legacy, true)).toBe("failed");
+  expect(cold.current).toMatchObject({ state: "failed", rolledBack: true, detail: owned.detail });
+  expect(JSON.parse(readFileSync(join(dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "rolled-back", terminal: true });
+  expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull(); expect(existsSync(trial)).toBe(false);
+});

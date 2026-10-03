@@ -6,6 +6,7 @@ import { releaseDrain, writeDrain } from "./drain";
 import { launcherControlFile, type LauncherRecord } from "./launcher";
 export interface ApplyIntent {
   requestId: string; target: string; releasePointer?: string; rollbackPointer: string | null; launcherPid: number; launcherIdentity: string | null;
+  rollbackWebRevision?: string | null; rollbackHostRevision?: string | null;
   autoGateId?: string; switchedAt?: string; admissionRefused?: boolean; externalRestart?: boolean; trigger: "operator" | "seat" | "auto"; deploymentId?: string; startedAt: string;
   state: "building" | "ready" | "switching" | "done" | "failed"; rolledBack: boolean; detail?: string;
 }
@@ -27,6 +28,7 @@ export class ApplyController {
   begin(record: LauncherRecord, target: string, trigger: ApplyIntent["trigger"], deploymentId?: string, options: { rollbackPointer?: string | null; state?: "building" | "ready"; autoGateId?: string } = {}): void {
     if (this.current && ["building", "ready", "switching"].includes(this.current.state)) throw new Error("An apply is already active");
     this.current = { requestId: randomUUID(), target, releasePointer: record.releasePointer, trigger, deploymentId, rollbackPointer: options.rollbackPointer !== undefined ? options.rollbackPointer : existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null,
+      rollbackWebRevision: record.web.revision, rollbackHostRevision: record.runtimeHost.revision,
       launcherPid: record.launcher.pid, launcherIdentity: record.launcher.startIdentity, state: options.state ?? "building", autoGateId: options.autoGateId, rolledBack: false, startedAt: new Date().toISOString() };
     this.save();
   }
@@ -66,8 +68,27 @@ export class ApplyController {
     try { result = JSON.parse(readFileSync(`${record.requestFile}.result.json`, "utf8")); } catch { /* no terminal admission result */ }
     const sameLauncher = record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity;
     const trialFile = launcherControlFile(record.requestFile, "trial");
-    let trial: { requestId?: string } | null = null;
+    let trial: { requestId?: string; target?: string; rollbackPointer?: string | null; state?: string; detail?: string } | null = null;
     try { trial = JSON.parse(readFileSync(trialFile, "utf8")); } catch { /* no readable trial */ }
+    // A first upgrade may return to a launcher predating the trial protocol.
+    // Its healthy record carries no request ID; the owned trial, restored raw
+    // pointer and independently checked serving processes establish rollback.
+    if (intent.externalRestart && trial?.requestId === intent.requestId && trial.target === intent.target
+      && trial.state === "rolled-back" && trial.rollbackPointer === intent.rollbackPointer && hostHealthy
+      && (!record.launcher.state || record.launcher.state === "healthy")
+      && (record.launcher.requestId == null || record.launcher.requestId === intent.requestId)
+      && record.web.state === "healthy" && record.runtimeHost.state === "healthy") {
+      let rollbackRevision: string | null = null;
+      try { rollbackRevision = JSON.parse(intent.rollbackPointer ?? "null")?.sha?.slice(0, 7) ?? null; } catch { /* An unpublished release uses captured serving revisions. */ }
+      const webRevision = rollbackRevision ?? intent.rollbackWebRevision;
+      const hostRevision = rollbackRevision ?? intent.rollbackHostRevision;
+      const pointerRestored = intent.rollbackPointer === null ? !existsSync(record.releasePointer)
+        : existsSync(record.releasePointer) && readFileSync(record.releasePointer, "utf8") === intent.rollbackPointer;
+      if (pointerRestored && webRevision && hostRevision && record.web.revision === webRevision && record.runtimeHost.revision === hostRevision) {
+        this.patch({ state: "failed", rolledBack: true, detail: trial.detail ?? "The replacement rolled back to the previous release" });
+        releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); rmSync(trialFile, { force: true }); return "failed";
+      }
+    }
     const externalUntaken = intent.state === "switching" && intent.externalRestart && intent.switchedAt
       && now - Date.parse(intent.switchedAt) > 60_000 && sameLauncher && hostHealthy
       && (!record.launcher.state || record.launcher.state === "healthy")

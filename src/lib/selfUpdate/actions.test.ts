@@ -31,3 +31,12 @@ test("terminal bootstrap preserves a custom port and safe access arguments", () 
   expect(action?.command).toContain("'--tailscale'");
   expect(action?.command).not.toContain("--new-token");
 });
+
+
+test("manual no-record launch preserves the Viewer's custom listener", () => {
+  const action = installAction({ mode: "unsupported", record: null, reason: "no-launcher", installRoot: "/srv/manual" },
+    { cgroup: () => "", ready: () => false, env: { PORT: "45678", HOSTNAME: "0.0.0.0" } });
+  expect(action).toMatchObject({ id: "start-launcher", button: false });
+  expect(action?.command).toContain("'--port' '45678'");
+  expect(action?.command).toContain("'--hostname' '0.0.0.0'");
+});

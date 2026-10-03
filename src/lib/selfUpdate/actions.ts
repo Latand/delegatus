@@ -29,7 +29,7 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean; argv?(pid: number): string[] } = {
+export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean; argv?(pid: number): string[]; env?: { PORT?: string; HOSTNAME?: string } } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): InstallAction | null {
@@ -44,6 +44,12 @@ export function installAction(decision: ModeDecision, ports: { cgroup(pid: numbe
     else if (arg === "--tailscale" || arg.startsWith("--port=") || arg.startsWith("--hostname=")) args.push(arg);
   }
   if (decision.record?.port && !args.some(arg => ["--port", "-p"].includes(arg) || arg.startsWith("--port="))) args.push("--port", String(decision.record.port));
+  if (!decision.record) {
+    const env = ports.env ?? process.env;
+    const port = Number(env.PORT);
+    if (Number.isInteger(port) && port > 0 && port <= 65_535) args.push("--port", String(port));
+    if (env.HOSTNAME?.trim()) args.push("--hostname", env.HOSTNAME);
+  }
   const command = [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"].map(quote).join(" ");
   if (decision.record) {
     if (!ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };

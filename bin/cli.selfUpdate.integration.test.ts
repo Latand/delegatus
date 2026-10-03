@@ -1119,3 +1119,46 @@ test.skipIf(process.env.LLV_SELF_UPDATE_REHEARSAL !== "1")("real built revisions
   expect(record.launcher.pid).toBe(supervisor); expect(record.web.revision).toBe(target.slice(0, 7));
   await health(record);
 }, 480_000);
+
+
+// A first upgrade can roll back to a launcher that predates this protocol.
+// The optional local source fixture is the exact base checkout, never a live install.
+const legacySource = process.env.LLV_REHEARSAL_LEGACY;
+(legacySource ? test : test.skip)("actual legacy bootstrap rollback settles the apply and seat receipt", async () => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { activeDrain, writeDrain } = await import("../src/lib/selfUpdate/drain");
+  const fixture = install();
+  for (const name of readdirSync(path.join(fixture.checkout, "bin"))) {
+    const source = path.join(legacySource!, "bin", name);
+    if (existsSync(source)) copyFileSync(source, path.join(fixture.checkout, "bin", name));
+  }
+  git(fixture.checkout, "add", "-f", "."); git(fixture.checkout, "commit", "-m", "legacy launcher fixture");
+  fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  const candidateFixture = install(); const candidate = release(candidateFixture, "broken-new-host", { brokenHost: true });
+  const running = await start(fixture);
+  const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  expect(Object.keys(before.launcher).sort()).toEqual(["autoAdmission", "pid", "startIdentity"]);
+  const directory = path.dirname(before.requestFile);
+  const controller = new ApplyController(directory);
+  writeFileSync(path.join(directory, "deployments.json"), JSON.stringify([{ deploymentId: "legacy-seat", idempotencyKey: "legacy-key", phase: "queued", terminal: false, revisionNumber: 1 }]));
+  controller.begin(before as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, candidate.sha, "seat", "legacy-seat");
+  controller.patch({ state: "switching", externalRestart: true, switchedAt: new Date().toISOString() });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  const trial = before.requestFile.replace("request-", "trial-");
+  writeFileSync(trial, JSON.stringify({ requestId: controller.current!.requestId, target: candidate.sha, rollbackPointer: null,
+    previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "starting", at: controller.current!.startedAt }));
+  writeDrain(path.join(directory, "auto-drain.json"), { id: controller.current!.requestId, target: candidate.sha, since: controller.current!.startedAt, until: Date.now() + 600_000, persistent: true });
+  const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
+  const restarted = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(running.port)],
+    { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" }); children.add(restarted);
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid
+    && r.web.state === "healthy" && r.runtimeHost.state === "healthy" && r.web.revision === fixture.first.slice(0, 7) ? r : null; }, 60_000);
+  expect(JSON.parse(readFileSync(trial, "utf8")).state).toBe("rolled-back");
+  expect(existsSync(before.releasePointer)).toBe(false); expect(await served(running.port)).toBe(fixture.checkout);
+  const healthy = await socketAnswers(after.socket);
+  const cold = new ApplyController(directory);
+  expect(cold.observe(after as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, healthy)).toBe("failed");
+  expect(cold.current).toMatchObject({ state: "failed", rolledBack: true });
+  expect(JSON.parse(readFileSync(path.join(directory, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "rolled-back", terminal: true });
+  expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull(); expect(existsSync(trial)).toBe(false);
+}, 90_000);
