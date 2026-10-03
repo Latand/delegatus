@@ -593,9 +593,9 @@ test("every other recovery outcome settles on first sight, whatever its message 
     let attempts = 0;
     const tracked = trackedQueue({
       effect: sendEffect("operation-other"),
-      recover: async (conversationId) => {
+      recover: async (conversationId, delivery) => {
         attempts += 1;
-        return recover(conversationId);
+        return recover(conversationId, delivery);
       },
     });
 

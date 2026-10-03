@@ -1996,11 +1996,12 @@ export class StructuredDeliveryQueue {
   private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId"> & { origin?: MessageOrigin }): Promise<void> {
     if (!this.recoverHost) return;
     try {
-      const admission = await this.port.status(effect.operationId);
+      const admission = await this.readStatus(effect.operationId);
+      if (!admission.readable) { this.fenceUnavailable(); return; }
       const recovered = await this.recoverHost(effect.conversationId, {
         operationId: effect.operationId,
         origin: effect.origin,
-        admittedAt: admission?.admittedAt ?? admission?.at,
+        admittedAt: admission.value?.admittedAt ?? admission.value?.at,
       });
       this.contendedRecoveries.delete(effect.operationId);
       if (recovered) {
