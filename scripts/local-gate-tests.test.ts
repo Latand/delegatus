@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { compareTests, parseReport, prepareCache, touchedTests, type TestSite } from "./local-gate-tests";
@@ -38,6 +38,7 @@ test("pre-existing failures pass, remain listed, and a warm cache never reruns b
   expect(f.logs.join("\n")).toContain("PRE-EXISTING example.test.ts: old red");
   const before = readFileSync(marker, "utf8").trim().split("\n").length;
   expect(before).toBe(2);
+  f.env.INVOCATION_ID = "another-systemd-scope";
   f.logs.length = 0; expect(f.run().preexisting).toHaveLength(1);
   expect(readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(3);
   expect(f.logs.join("\n")).toContain("baseline cache hit");
@@ -150,4 +151,18 @@ test("an incomplete cached baseline is rebuilt before it can certify a compariso
   writeFileSync(entry, JSON.stringify(contents)); f.logs.length = 0;
   expect(f.run().preexisting).toHaveLength(1);
   expect(f.logs.join("\n")).toContain("baseline run");
+});
+
+test("shared cache pruning tolerates six simultaneous gate processes", async () => {
+  const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-race-")); roots.push(dir);
+  const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });
+  for (let i = 0; i < 1000; i++) writeFileSync(path.join(cache, `${i.toString(16).padStart(64, "0")}.json`), "{}");
+  const env = isolatedEnvironment(path.join(dir, "env"), process.env);
+  const code = `import { prepareCache } from ${JSON.stringify(path.join(root, "scripts/local-gate-tests.ts"))}; prepareCache(${JSON.stringify(cache)});`;
+  const results = await Promise.all(Array.from({ length: 6 }, () => new Promise<number | null>((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", code], { env, stdio: "ignore" });
+    child.once("error", reject); child.once("exit", resolve);
+  })));
+  expect(results).toEqual([0, 0, 0, 0, 0, 0]);
+  expect(readdirSync(cache).length).toBeLessThanOrEqual(32);
 });

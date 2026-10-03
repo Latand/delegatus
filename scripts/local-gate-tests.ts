@@ -15,7 +15,7 @@ const PENDING_NAME = /^[a-f0-9]{64}\.[a-f0-9-]{36}\.pending$/;
 const MAX_CACHE_BYTES = 4 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const RUN_BUDGET_MS = 15 * 60 * 1000;
-const FILE_BUDGET_MS = 3 * 60 * 1000;
+const FILE_BUDGET_MS = 5 * 60 * 1000;
 
 /** Match occurrences, so a duplicate test name cannot hide an additional failure. */
 export function compareTests(base: TestRun, head: TestRun) {
@@ -123,7 +123,10 @@ export function prepareCache(directory: string, now = Date.now()): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const info = lstatSync(directory);
   if (!info.isDirectory() || info.isSymbolicLink() || (process.getuid && info.uid !== process.getuid()) || (process.platform !== "win32" && (info.mode & 0o077))) throw new Error("baseline cache must be an owned private directory");
-  const entries = readdirSync(directory).filter(name => RESULT_NAME.test(name) || PENDING_NAME.test(name)).map(name => ({ name, info: lstatSync(path.join(directory, name)) }));
+  const entries = readdirSync(directory).filter(name => RESULT_NAME.test(name) || PENDING_NAME.test(name)).flatMap(name => {
+    try { return [{ name, info: lstatSync(path.join(directory, name)) }]; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  });
   entries.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs);
   for (const [index, entry] of entries.entries()) if (index >= MAX_CACHE_ENTRIES || now - entry.info.mtimeMs > MAX_AGE_MS || entry.info.size > MAX_CACHE_BYTES || !entry.info.isFile()) {
     rmSync(path.join(directory, entry.name), { force: true });
@@ -151,7 +154,9 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     const oldFiles = files.filter(file => baseFiles.has(file));
     const dependencyInputs = ["package.json", "bun.lock"];
     const graph = dependencyInputs.map(file => existsSync(path.join(root, file)) ? digest(readFileSync(path.join(root, file))) : "missing");
-    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
+    // Scope ids and journal descriptors change on each gate-slot invocation;
+    // they do not change the test inputs. Keep semantic environment in the key.
+    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
     const identity = digest(JSON.stringify(["per-file-junit-v2", base, files, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);

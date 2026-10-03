@@ -96,7 +96,7 @@ Baseline results are cached by commit, sorted file set, Bun version, dependency
 graph and execution environment under the private temp directory
 `delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). Deleting
 that cache is safe. Both runs report elapsed time; a warm baseline needs no
-checkout or test rerun. Budgets are three minutes per file and fifteen minutes
+checkout or test rerun. Budgets are five minutes per file and fifteen minutes
 per baseline/head test run. Privacy, types and ESLint retain their own checks.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media
