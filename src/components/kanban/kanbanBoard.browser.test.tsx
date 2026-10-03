@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
@@ -11218,7 +11219,7 @@ describe("column dwell smooth", () => {
     } finally { await browser.close(); server.stop(); }
   }, 60_000);
 
-  browserTest("scroll-mode width controls keep source wrapping until the fade", async () => {
+  browserTest("scroll-mode width controls keep source wrapping until staged reflow", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth/scroll-width");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -11521,7 +11522,7 @@ describe("column dwell smooth", () => {
       await inspectColumnAnimations(page);
       try {
         await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
-        for (const phase of ["staging", 10, 20, 40, "after-wrap"] as const) {
+        for (const phase of [0, 10, 20, 40, "after-wrap"] as const) {
           await page.reload();
           await page.locator('[data-col-width="inbox"]').waitFor();
           if (await page.locator('[data-rail-hide]').count()) await page.locator('[data-rail-hide]').click();
@@ -11552,7 +11553,7 @@ describe("column dwell smooth", () => {
             });
             const naturalLabels = labels.map(labelGlyph);
             click("inbox"); await Promise.resolve();
-            while (root.dataset.columnLayout !== (phase === "staging" ? "inverted" : "running")) await frame();
+            while (root.dataset.columnLayout !== "running") await frame();
             if (phase === "after-wrap") {
               await new Promise<void>((resolve) => setTimeout(resolve, 140));
               document.getAnimations().forEach((animation) => animation.pause());
@@ -11566,10 +11567,12 @@ describe("column dwell smooth", () => {
             });
             const children = layers.filter((node) => node.matches(".card")).flatMap((node) => [...node.children].filter((child): child is HTMLElement => child instanceof HTMLElement && !child.matches(".label, .saving")));
             const before = layers.map((node) => rect(node)), glyphBefore = children.map((node) => rect(node, true));
-            const target = phase === "staging" || phase === "after-wrap" ? "inbox" : phase === 40 ? "assigned" : "done";
+            const target = phase === 0 || phase === "after-wrap" ? "inbox" : phase === 40 ? "assigned" : "done";
             click(target); await Promise.resolve();
-            // Observe the first inverse pose, before all text layers are promoted.
-            while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "inverted") await frame();
+            // Scrub the newly released effects to their source pose. The helper
+            // now releases immediately rather than holding an inverted phase.
+            while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "running") await frame();
+            document.getAnimations().forEach((animation) => { animation.pause(); animation.currentTime = 0; });
             const after = layers.map((node) => rect(node)), glyphAfter = children.map((node) => rect(node, true));
             return { phase, target, before, after, glyphBefore, glyphAfter, labelGlyphs };
           }, phase);
@@ -11675,7 +11678,7 @@ describe("column dwell smooth", () => {
   browserTest("moving hover widens at one second and cards FLIP smoothly at CPU x4", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth");
     const evidenceDir = "evidence/column-dwell-smooth";
-    const videoPath = ".artifacts/column-dwell-smooth/hover-narrow.webm";
+    const videoPathFor = (locale: string) => `.artifacts/column-dwell-smooth/${locale}-hover-narrow.webm`;
     fs.mkdirSync(out, { recursive: true });
     fs.mkdirSync(evidenceDir, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -11687,8 +11690,10 @@ describe("column dwell smooth", () => {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", locale, motion);
         await inspectColumnAnimations(page);
         const frames: { data: string; time: number }[] = [];
+        let capturing = true;
         const cdp = await context.newCDPSession(page);
-        const record = motion === "no-preference" && locale === "en";
+        const record = motion === "no-preference";
+        const videoPath = videoPathFor(locale);
         const cpu = record ? 4 : 1;
         try {
           await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
@@ -11706,11 +11711,17 @@ describe("column dwell smooth", () => {
           await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
           if (record) {
             cdp.on("Page.screencastFrame", (event) => {
-              frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
+              if (capturing) frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
               void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => { /* A final in-flight frame may arrive after context cleanup. */ });
             });
-            await cdp.send("Page.startScreencast", { format: "png", maxWidth: 1440, maxHeight: 900, everyNthFrame: 1 });
+            await cdp.send("Page.startScreencast", { format: "jpeg", quality: 90, maxWidth: 1440, maxHeight: 900, everyNthFrame: 1 });
           }
+          const geometry = () => page.evaluate(() => ["inbox", "assigned"].map((status) => {
+            const column = document.querySelector<HTMLElement>(`.column[data-status="${status}"]`)!;
+            const box = column.getBoundingClientRect(), body = column.querySelector(".col-body")!.getBoundingClientRect();
+            return { status, left: box.left, top: body.top, width: box.width, bottom: Math.min(body.bottom, innerHeight) };
+          }));
+          const narrowBoxes = await geometry();
           await page.evaluate(() => {
             const column = document.querySelector<HTMLElement>('[data-board] .column[data-status="inbox"]')!;
             const board = document.querySelector<HTMLElement>('[data-board]')!;
@@ -11720,6 +11731,9 @@ describe("column dwell smooth", () => {
             const marks: { name: string; at: number }[] = [];
             let scroll = body.scrollTop;
             body.addEventListener("scroll", () => { scroll = body.scrollTop; }, { passive: true });
+            const clock = document.createElement("div");
+            Object.assign(clock.style, {position:"fixed", right:"0", top:"0", width:"16px", height:"16px", zIndex:"2147483647", pointerEvents:"none"});
+            clock.dataset.captureClock = ""; document.body.append(clock);
             let previous = performance.now();
             let stopped = false;
             const hover = (event: PointerEvent) => {
@@ -11728,9 +11742,13 @@ describe("column dwell smooth", () => {
               board.removeEventListener("pointerover", hover);
             };
             board.addEventListener("pointerover", hover);
+            new MutationObserver(() => marks.push({ name: "commit", at: performance.timeOrigin + performance.now() })).observe(column, { attributes: true, attributeFilter: ["data-wide"] });
             const tick = (now: number) => {
               /* The timing probe must not force layout every frame. Geometry
                  continuity is measured by the retarget case, and by the video. */
+              const index = samples.length;
+              if (index < 15) clock.style.backgroundColor = `rgb(${(index % 32)*8}, ${Math.floor(index/32)*8}, 128)`;
+              else if (clock.isConnected) clock.remove();
               samples.push({ at: performance.timeOrigin + now, gap: now - previous, wide: column.dataset.wide!, active: !!document.querySelector("[data-column-layout]"), animated: document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout === "running", scroll });
               previous = now;
               if (!stopped) requestAnimationFrame(tick);
@@ -11753,6 +11771,7 @@ describe("column dwell smooth", () => {
           await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
           // Let the deferred board measurement finish before a still capture.
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          const wideBoxes = await geometry();
           await page.screenshot({ path: path.join(out, `${locale}-${motion}-wide.png`) });
           await page.evaluate(() => (window as unknown as { dwellVideo: { mark(name: string): void } }).dwellVideo.mark("narrow"));
           await page.locator('[data-col-width="inbox"][data-col-width-action="narrow"]').click();
@@ -11773,10 +11792,11 @@ describe("column dwell smooth", () => {
           });
           if (record) {
             await cdp.send("Page.stopScreencast");
-            const frameDir = path.join(out, "frames");
+            capturing = false;
+            const frameDir = path.join(out, `${locale}-frames`);
             fs.mkdirSync(frameDir, { recursive: true });
-            frames.forEach((frame, i) => fs.writeFileSync(path.join(frameDir, `${i}.png`), Buffer.from(frame.data, "base64")));
-            const manifest = frames.map((frame, i) => `file '${i}.png'\noption framerate 1000\nduration ${Math.max(0.001, ((frames[i + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
+            frames.forEach((frame, i) => fs.writeFileSync(path.join(frameDir, `${i}.jpg`), Buffer.from(frame.data, "base64")));
+            const manifest = frames.map((frame, i) => `file '${i}.jpg'\noption framerate 1000\nduration ${Math.max(0.001, ((frames[i + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
             fs.writeFileSync(path.join(frameDir, "frames.txt"), manifest + "\n");
             execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", path.join(frameDir, "frames.txt"), "-fps_mode", "passthrough", "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", path.resolve(videoPath)]);
             const starts = measurement.samples.filter((sample, i) => sample.active && !measurement.samples[i - 1]?.active);
@@ -11789,9 +11809,90 @@ describe("column dwell smooth", () => {
               expect(window.motionFrames).toBeGreaterThan(5);
               if (window.maxCaptureFrameMs > 50) timingFailures.push({ locale, motion, phase: window.name, milliseconds: window.maxCaptureFrameMs });
             }
+            // Decode captured pixels after recording, so the visibility/start
+            // probes cannot introduce forced layouts into the RAF timing gate.
+            const pixels = await Promise.all(frames.map(async (frame) => (await sharp(Buffer.from(frame.data, "base64")).removeAlpha().raw().toBuffer({ resolveWithObject: true }))));
+            const dark = (index: number, box: typeof narrowBoxes[number]) => {
+              const { data, info } = pixels[index]!;
+              let count = 0;
+              for (let y = Math.ceil(box.top + 20); y < Math.floor(box.bottom - 12); y++) for (let x = Math.ceil(box.left + 20); x < Math.floor(box.left + box.width - 20); x++) {
+                const at = (y * info.width + x) * info.channels;
+                if (data[at]! < 145 && data[at + 1]! < 145 && data[at + 2]! < 145) count++;
+              }
+              return count;
+            };
+            // Find an empty row in Inbox's first card in either wrapping pose.
+            // Its right edge moves with the real column, independently of the
+            // header buttons that change on the state commit.
+            const cardEdge = (index: number) => {
+              const { data, info } = pixels[index]!;
+              let best = { left: 0, right: 0 };
+              const origin = narrowBoxes[0]!.left;
+              const limit = Math.ceil(origin + Math.max(narrowBoxes[0]!.width, wideBoxes[0]!.width));
+              for (let y = Math.ceil(narrowBoxes[0]!.top + 20); y < narrowBoxes[0]!.top + 100; y += 3) {
+                const white = (x: number) => {
+                  const at = (y*info.width+x)*info.channels;
+                  return data[at]! >= 245 && data[at+1]! >= 245 && data[at+2]! >= 245;
+                };
+                let x = Math.ceil(origin+5);
+                while (x < limit) {
+                  while (x < limit && !white(x)) x++;
+                  const left = x;
+                  while (x < limit && white(x)) x++;
+                  if (left < origin+55 && x-left > best.right-best.left) best = { left, right: x };
+                }
+              }
+              expect(best.right-best.left).toBeGreaterThan(100);
+              return { ...best, columnRight: best.right+best.left-origin };
+            };
+            const edge = (index: number) => cardEdge(index).right;
+            // CDP timestamps stamp delivery of the captured surface, which
+            // can trail its producing RAF by several frames even at rest.
+            // A short pixel clock calibrates that pipeline before the hover
+            // transition; it is removed long before activation. RAF gaps and
+            // capture gaps retain their original, unadjusted clocks.
+            const captureDelays = pixels.flatMap(({data,info}, index) => {
+              const at = (4*info.width + info.width-4)*info.channels;
+              if (Math.abs(data[at+2]!-128) > 8) return [];
+              const tick = Math.round(data[at]!/8) + Math.round(data[at+1]!/8)*32;
+              if (tick < 2 || tick >= 15) return [];
+              const produced = measurement.samples[tick]?.at;
+              return produced ? [frames[index]!.time-produced] : [];
+            }).sort((a,b) => a-b);
+            expect(captureDelays.length).toBeGreaterThanOrEqual(3);
+            const captureLatencyMs = captureDelays[Math.floor(captureDelays.length/2)]!;
+            const paintTime = (index: number) => frames[index]!.time-captureLatencyMs;
+            const visibility = [];
+            for (const [i, transition] of transitions.entries()) {
+              const commit = measurement.marks.filter((mark) => mark.name === "commit")[i]!.at;
+              const before = frames.findLastIndex((_, index) => paintTime(index) < commit-100);
+              const after = frames.findIndex((_, index) => paintTime(index) >= transition.end+33);
+              const source = i === 0 ? narrowBoxes : wideBoxes, target = i === 0 ? wideBoxes : narrowBoxes;
+              const firstMotion = frames.findIndex((_, index) => paintTime(index) >= commit && Math.abs(edge(index) - edge(before)) > 2);
+              expect(firstMotion).toBeGreaterThanOrEqual(0);
+              const delay = paintTime(firstMotion) - commit;
+              expect(delay).toBeLessThanOrEqual(50);
+              if (i === 0) expect(paintTime(firstMotion) - measurement.marks.find((mark) => mark.name === "hover")!.at).toBeLessThanOrEqual(1100);
+              for (const [column, box] of source.entries()) {
+                const settled = target[column]!;
+                const baseline = Math.min(dark(before, box), dark(after, settled));
+                expect(baseline).toBeGreaterThan(100);
+                const counts = frames.flatMap((frame, index) => {
+                  if (paintTime(index) < commit || paintTime(index) > transition.end) return [];
+                  const boundary = cardEdge(index).columnRight;
+                  const gap = narrowBoxes[1]!.left-(narrowBoxes[0]!.left+narrowBoxes[0]!.width);
+                  const right = narrowBoxes[1]!.left+narrowBoxes[1]!.width;
+                  const pose = column === 0 ? { ...box, width: boundary-box.left } : { ...box, left: boundary+gap, width: right-boundary-gap };
+                  return [{ frame: index, ratio: dark(index, pose)/baseline }];
+                });
+                const minimum = Math.min(...counts.map((entry) => entry.ratio));
+                expect(minimum, `${locale} ${transition.name} ${box.status}: ${JSON.stringify(counts)}`).toBeGreaterThanOrEqual(0.5);
+                visibility.push({ transition: transition.name, column: box.status, baseline, minimum, firstMotionDelayMs: delay, counts });
+              }
+            }
             const decodedFrames = Number(execFileSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", path.resolve(videoPath)], { encoding: "utf8" }).trim());
             expect(decodedFrames).toBe(frames.length);
-            cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement, video: videoPath, frameCount: frames.length, frameWindows });
+            cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement, video: videoPath, frameCount: frames.length, frameWindows, captureLatencyMs, captureDelays, visibility });
           } else cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement });
           if (measurement.maxAnimationFrameMs > 50) timingFailures.push({ locale, motion, phase: "activation-through-cleanup", milliseconds: measurement.maxAnimationFrameMs });
           expect(measurement.copiesLeft).toBe(0);
@@ -11801,7 +11902,7 @@ describe("column dwell smooth", () => {
           expect(motion === "reduce" ? measurement.animationFrames === 0 : measurement.animationFrames > 5).toBe(true);
           const firstWide = measurement.samples.find((sample) => sample.wide === "1")!;
           expect(firstWide.at - measurement.marks[0]!.at).toBeGreaterThanOrEqual(990);
-          expect(firstWide.at - measurement.marks[0]!.at).toBeLessThan(1200);
+          expect(firstWide.at - measurement.marks[0]!.at).toBeLessThan(1100);
           expect(pageErrors).toEqual([]);
         } finally { await cdp.detach(); await context.close(); }
       }

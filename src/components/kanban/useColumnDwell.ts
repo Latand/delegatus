@@ -70,6 +70,7 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     let exitTimer: ReturnType<typeof setTimeout> | null = null;
     let cueTimer: ReturnType<typeof setTimeout> | null = null;
     let widenTimer: ReturnType<typeof setTimeout> | null = null;
+    let warmTimer: ReturnType<typeof setTimeout> | null = null;
     /* The column a press landed in: it does not arm again until the pointer leaves it. */
     let latched: HTMLElement | null = null;
 
@@ -81,7 +82,9 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
     const stopTimers = () => {
       if (cueTimer) clearTimeout(cueTimer);
       if (widenTimer) clearTimeout(widenTimer);
-      cueTimer = widenTimer = null;
+      if (warmTimer) clearTimeout(warmTimer);
+      cueTimer = widenTimer = warmTimer = null;
+      layout.cancelWarm();
     };
     const clearCue = () => {
       if (armed) {
@@ -114,6 +117,10 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
       if (elapsed >= DWELL_CUE_MS) cue();
       else cueTimer = setTimeout(cue, DWELL_CUE_MS - elapsed);
       if (armed !== column) return;
+      warmTimer = setTimeout(() => {
+        warmTimer = null;
+        if (armed === column && present && may(column)) layout.warm(statusOf(column));
+      }, Math.max(0, DWELL_MS - 150 - elapsed));
       widenTimer = setTimeout(() => {
         widenTimer = null;
         if (armed !== column || !present) return;
@@ -126,7 +133,7 @@ export function useColumnDwell(rootRef: RefObject<HTMLElement | null>, options: 
           if (armed !== column || !present) return false;
           if (may(column)) return true;
           cancel(); return false;
-        });
+        }, statusOf(column));
       }, DWELL_MS - elapsed);
     };
     const arm = (column: HTMLElement) => {

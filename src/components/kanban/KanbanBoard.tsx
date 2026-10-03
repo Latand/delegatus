@@ -644,6 +644,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
        columns' mode follows what those leave them (#1841). */
     const aside = asideRef.current;
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
+    let frame = 0;
     const apply = () => {
       // The helper owns intermediate widths; measure the settled layout.
       if (element.hasAttribute("data-column-layout")) return;
@@ -657,13 +658,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
+    const settled = () => {
+      // Release transient layers before asking for the settled layout. This
+      // read otherwise forces raster/layout in the animation's cleanup task.
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; apply(); });
+    };
     apply();
-    element.addEventListener(COLUMN_LAYOUT_END, apply);
+    element.addEventListener(COLUMN_LAYOUT_END, settled);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(apply) : null;
     observer?.observe(element);
     if (aside) observer?.observe(aside);
     if (seat) observer?.observe(seat);
-    return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, apply); };
+    return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, settled); if (frame) cancelAnimationFrame(frame); };
   }, [hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */

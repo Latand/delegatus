@@ -208,7 +208,7 @@
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
-.kb [data-layout-animating="content"] { transform-origin: top left; will-change: transform, opacity; }
+.kb [data-layout-animating="content"] { transform-origin: top left; will-change: transform; }
 /* Keep promoted glyphs paused while their temporary text layers are released. */
 .kb [data-layout-animating="content"].mglyph::before,
 .kb [data-layout-animating="content"] .mglyph::before,

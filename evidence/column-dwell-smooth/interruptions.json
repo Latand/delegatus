@@ -1163,7 +1163,7 @@
       "action": "widen",
       "how": "keyboard",
       "scroll": {
-        "top": 5,
+        "top": 4,
         "pageTop": 0,
         "boardLeft": 0,
         "windowTop": 0,
@@ -1235,7 +1235,7 @@
       "action": "narrow",
       "how": "keyboard",
       "scroll": {
-        "top": 7,
+        "top": 5,
         "pageTop": 0,
         "boardLeft": 0,
         "windowTop": 0,

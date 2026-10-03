@@ -1,18 +1,19 @@
-/** The real card keeps its old wrapping until its text has faded. Width and
- * position use compositor transforms; wrapping is staged one column per frame
- * while text is invisible. Counter-scales keep the glyphs at their own size.
+/** Real columns and cards resize and move through compositor transforms.
+ * Wrapping is staged one column per frame with visible, counter-scaled text.
+ * Short-lived layers are warmed before the width commit and released afterward.
  * No DOM is copied and intentional navigation scrolling is never rewound. */
 export const COLUMN_LAYOUT_MS = 240;
 export const COLUMN_LAYOUT_END = "columnlayoutend";
 const EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
 const COLUMN = ".board > .column[data-wide]";
 const CONTENT_SURFACE = ".card, .col-head, .divider, .empty, .remote-unbound";
-const FADE_MS = 80;
-const MIN_REVEAL_MS = 80;
+const WRAP_DELAY_MS = 80;
+const MIN_WRAP_MS = 80;
 interface Shot {
   node: HTMLElement; column: HTMLElement; rect: DOMRect;
   width: string; height: string; widthAsNumber: number; visible: boolean; opacity: number;
   contents: { node: HTMLElement; opacity: number; scaleX: number; scaleY: number }[];
+  paint?: { backgroundColor: string; backgroundImage: string; borderColor: string };
 }
 interface Snapshot { key: string; shots: Shot[] }
 interface Pose { rect: DOMRect; next: DOMRect }
@@ -33,29 +34,29 @@ function ease(t: number): number {
 // separately for every glyph layer during activation.
 const CONTENT_CURVE = Array.from({ length: 13 }, (_, i) => {
   const offset = (i / 12) ** 2;
-  return { offset, q: ease(offset), reveal: ease(Math.min(1, offset * 2)), fade: 1 - ease(Math.min(1, offset * COLUMN_LAYOUT_MS / FADE_MS)) };
+  return { offset, q: ease(offset) };
 });
-const widthChanges = new WeakMap<HTMLElement, (update: () => void, allowed?: () => boolean) => void>();
+const widthChanges = new WeakMap<HTMLElement, (update: () => void, allowed?: () => boolean, status?: string) => void>();
 /** Align source capture and the width commit with the start of a frame. */
 export function changeColumnWidth(node: HTMLElement, update: () => void): void {
   const root = node.closest<HTMLElement>(".kb");
   const change = root && widthChanges.get(root);
-  if (change) change(update);
+  if (change) change(update, undefined, node.closest<HTMLElement>(".column")?.dataset.status);
   else update();
 }
-export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): void; change(update: () => void, allowed?: () => boolean): void; dispose(): void } {
+export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): void; warm(status: string): void; cancelWarm(): void; change(update: () => void, allowed?: () => boolean, status?: string): void; dispose(): void } {
   let pending: Snapshot | null = null;
   let expiry: ReturnType<typeof setTimeout> | null = null;
   let finishTimer: ReturnType<typeof setTimeout> | null = null;
   let wrapTimer: ReturnType<typeof setTimeout> | null = null;
   let paintFrame = 0;
   const changeFrames = new Set<number>();
+  const warmFrames = new Set<number>();
+  let warmPrepared = false;
   let started = 0;
   let wrapping = false;
   let motionDeadline = 0;
   let active: Snapshot | null = null;
-  let promoting: Snapshot | null = null;
-  let resumePromotion: (() => void) | null = null;
   let released = false;
   const projected = new Map<HTMLElement, (q: number) => DOMRect>();
   const wrapped = new Set<HTMLElement>();
@@ -65,6 +66,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   const marked = new Set<HTMLElement>();
   const inlinePose = new Map<HTMLElement, { transform: string; opacity: string; origin: string }>();
   const frozen = new Map<HTMLElement, { width: string; height: string; margin: string }>();
+  const frozenPaint = new Map<HTMLElement, { backgroundColor: string; backgroundImage: string; borderColor: string }>();
   const contentBase = new Map<HTMLElement, string>();
   // A neutral slot wrapper preserves React's light-DOM parents and gives
   // each surface one text layer. Its layout exists before source capture.
@@ -95,8 +97,9 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   const mark = (node: HTMLElement, role: string) => {
     if (node.dataset.layoutAnimating !== role) node.dataset.layoutAnimating = role;
     if (textGroups.has(node)) {
-      node.style.willChange = "transform, opacity";
-      groupHosts.get(node)?.setAttribute("data-column-text-held", "");
+      if (node.style.willChange !== "transform") node.style.willChange = "transform";
+      const host = groupHosts.get(node);
+      if (host && !host.hasAttribute("data-column-text-held")) host.setAttribute("data-column-text-held", "");
     }
     marked.add(node);
   };
@@ -132,6 +135,10 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     node.style.width = style.width; node.style.height = style.height; node.style.marginRight = style.margin;
     frozen.delete(node);
   };
+  const restorePaint = (node: HTMLElement) => {
+    const paint = frozenPaint.get(node);
+    if (paint) { Object.assign(node.style, paint); frozenPaint.delete(node); }
+  };
   const clearPending = () => {
     pending = null;
     if (expiry) clearTimeout(expiry);
@@ -150,13 +157,21 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     if (!keepPromotion) { marked.forEach(unmark); marked.clear(); }
   };
   const restoreInline = () => {
-    inlinePose.forEach((style, node) => { node.style.transform = style.transform; node.style.opacity = style.opacity; node.style.transformOrigin = style.origin; }); inlinePose.clear();
+    inlinePose.forEach((style, node) => {
+      if (node.style.transform !== style.transform) node.style.transform = style.transform;
+      if (node.style.opacity !== style.opacity) node.style.opacity = style.opacity;
+      if (node.style.transformOrigin !== style.origin) node.style.transformOrigin = style.origin;
+    }); inlinePose.clear();
   };
   const finish = () => {
+    warmFrames.forEach((frame) => window.cancelAnimationFrame(frame)); warmFrames.clear();
+    changeFrames.forEach((frame) => window.cancelAnimationFrame(frame)); changeFrames.clear();
+    warmPrepared = false;
     clearPending(); stopClock(); clearAnimations(); plans.length = 0;
     restoreInline();
-    active = promoting = null; resumePromotion = null; activeColumns = []; released = false; projected.clear(); wrapped.clear(); invalidated.clear();
+    active = null; activeColumns = []; released = false; projected.clear(); wrapped.clear(); invalidated.clear();
     thawGrid(); [...frozen.keys()].forEach(thaw); contentBase.clear(); scrollPositions.clear();
+    [...frozenPaint.keys()].forEach(restorePaint);
     const wasActive = root.hasAttribute("data-column-layout");
     root.removeAttribute("data-column-layout");
     root.removeAttribute("data-column-layout-active");
@@ -164,7 +179,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   };
   const settle = () => {
     // A slow frame or retarget can leave later columns queued at 240ms.
-    // Keep their source wrapping until each has its own completed reveal.
+    // Keep their source wrapping until each has completed its resize.
     if (finishTimer) clearTimeout(finishTimer);
     finishTimer = null;
     if (wrapping) return;
@@ -175,9 +190,13 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     stopClock();
     root.dataset.columnLayout = "settling";
     const queue = [...marked];
+    const paints = [...frozenPaint.keys()];
     const release = () => {
       paintFrame = window.requestAnimationFrame(() => {
         paintFrame = 0;
+        // A wide shelf's dotted background needs its own raster. Keep that
+        // paint out of the frame that reflows all of its card contents.
+        if (paints.length) { restorePaint(paints.shift()!); release(); return; }
         for (const node of queue.splice(0, 4)) {
           animations.get(node)?.cancel(); animations.delete(node);
           unmark(node); marked.delete(node);
@@ -198,8 +217,17 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     for (const { node } of plans) animations.get(node)?.cancel();
     for (const { node, role } of plans) mark(node, role);
     for (const { node, frames, duration, role, paused } of plans) {
-      const animation = node.animate(typeof frames === "function" ? frames() : frames, { duration, fill: "both", easing: role === "content" ? "linear" : EASING });
-      if (paused) animation.pause();
+      const keyframes = typeof frames === "function" ? frames() : frames;
+      const options: KeyframeAnimationOptions = { duration, fill: "both", easing: role === "content" ? "linear" : EASING };
+      let animation: Animation;
+      if (typeof window.KeyframeEffect === "function" && typeof window.Animation === "function") {
+        animation = new window.Animation(new window.KeyframeEffect(node, keyframes, options), document.timeline);
+        animation.currentTime = 0;
+        if (!paused) animation.play();
+      } else {
+        animation = node.animate(keyframes, options);
+        if (paused) animation.pause();
+      }
       animations.set(node, animation);
     }
     plans.length = 0;
@@ -212,16 +240,15 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     return { dx, dy, sx: rect.width / next.width / px, sy: rect.height / next.height / py, px, py };
   };
   const transform = (dx: number, dy: number, sx: number, sy: number) => `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
-  const contentFrames = (node: HTMLElement, startOpacity: number, sx: number, sy: number, ex: number, ey: number, px: number, py: number, reveal: boolean, parentEnd = 1, sourceX = 1, sourceY = 1, count = 13): Keyframe[] => {
+  const contentFrames = (node: HTMLElement, sx: number, sy: number, ex: number, ey: number, px: number, py: number, parentEnd = 1, sourceX = 1, sourceY = 1, count = 13): Keyframe[] => {
     const base = contentBase.get(node) ?? "";
-    return (count === 1 ? CONTENT_CURVE.slice(0, 1) : CONTENT_CURVE).map(({ offset, q, reveal: shown, fade }) => {
+    return (count === 1 ? CONTENT_CURVE.slice(0, 1) : CONTENT_CURVE).map(({ offset, q }) => {
       const x = (px + (parentEnd - px) * q) * (sx + (ex - sx) * q);
       const y = (py + (1 - py) * q) * (sy + (ey - sy) * q);
-      const opacity = reveal ? shown : startOpacity * fade;
-      return { offset, transform: `scale(${(sourceX + (1 - sourceX) * q) / x}, ${(sourceY + (1 - sourceY) * q) / y}) ${base}`.trim(), opacity };
+      return { offset, transform: `scale(${(sourceX + (1 - sourceX) * q) / x}, ${(sourceY + (1 - sourceY) * q) / y}) ${base}`.trim() };
     });
   };
-  const applyCard = (shot: Shot, next: DOMRect, parent: Pose, duration: number, reveal: boolean, endWidth = next.width, paused = false, parentEnd = 1) => {
+  const applyCard = (shot: Shot, next: DOMRect, parent: Pose, duration: number, rewrapped: boolean, endWidth = next.width, paused = false, parentEnd = 1) => {
     const pose = inverse(shot.rect, next, parent);
     const ex = endWidth / next.width;
     const opacity = shot.visible ? shot.opacity : 0;
@@ -234,10 +261,10 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     for (const content of shot.contents) {
       const { node } = content;
       const frames = (count?: number) => {
-        const key = `${count ?? "full"}|${content.opacity}|${content.scaleX}|${content.scaleY}|${contentBase.get(node) ?? ""}`;
+        const key = `${count ?? "full"}|${content.scaleX}|${content.scaleY}|${contentBase.get(node) ?? ""}`;
         let frames = contentCache.get(key);
         if (!frames) {
-          frames = contentFrames(node, content.opacity, pose.sx, pose.sy, ex, 1, pose.px, pose.py, reveal, parentEnd, reveal ? 1 : content.scaleX, reveal ? 1 : content.scaleY, count);
+          frames = contentFrames(node, pose.sx, pose.sy, ex, 1, pose.px, pose.py, parentEnd, rewrapped ? 1 : content.scaleX, rewrapped ? 1 : content.scaleY, count);
           contentCache.set(key, frames);
         }
         return frames;
@@ -264,9 +291,11 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         const sources = shots.map((shot) => ({ ...shot, rect: sourceRect(shot.node) }));
         wrapped.add(column);
         animations.get(column)?.cancel();
+        animations.delete(column);
         thaw(column);
         for (const shot of shots) {
           animations.get(shot.node)?.cancel();
+          animations.delete(shot.node);
           thaw(shot.node);
         }
         // Anchoring is disabled; the browser retains the current viewport.
@@ -291,7 +320,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
           content.opacity = Number(style.opacity || "1");
           contentBase.set(content.node, style.transform === "none" ? "" : style.transform);
         }
-        const duration = Math.max(MIN_REVEAL_MS, COLUMN_LAYOUT_MS - (performance.now() - started));
+        const duration = Math.max(MIN_WRAP_MS, COLUMN_LAYOUT_MS - (performance.now() - started));
         const parent = { rect: columnRect, next: finalColumn };
         const pose = inverse(columnRect, finalColumn);
         play(column, [{ transform: transform(pose.dx, pose.dy, pose.sx, pose.sy) }, { transform: "none" }], duration, "frame");
@@ -300,19 +329,18 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         // in the same frame as wrapping made the frame miss its CPU budget.
         const batch = plans.splice(0);
         for (const { node, first, role } of batch) {
-          // The old fade already holds this promoted text invisible. Retain
-          // that effect through reflow; replacing it with an inline inverse
-          // here rebuilt and painted every glyph layer in the wrapping frame.
-          if (role === "content" && animations.has(node)) continue;
+          // Replace the old counter-scale with the new inverse in one batch.
+          // Text remains visible in the held paint and throughout the effect.
+          if (role === "content") { animations.get(node)?.cancel(); animations.delete(node); }
           mark(node, role);
           if (!inlinePose.has(node)) inlinePose.set(node, { transform: node.style.transform, opacity: node.style.opacity, origin: node.style.transformOrigin });
           node.style.transformOrigin = "top left";
           node.style.transform = String(first.transform);
-          if (first.opacity !== undefined) node.style.opacity = String(first.opacity);
+          if (first.opacity !== undefined && Number(first.opacity) !== 1) node.style.opacity = String(first.opacity);
         }
         paintFrame = window.requestAnimationFrame(() => {
           paintFrame = 0;
-          const remaining = Math.max(MIN_REVEAL_MS, COLUMN_LAYOUT_MS - (performance.now() - started));
+          const remaining = Math.max(MIN_WRAP_MS, COLUMN_LAYOUT_MS - (performance.now() - started));
           batch.forEach((plan) => { plan.duration = remaining; });
           plans.push(...batch); flush(); restoreInline();
           motionDeadline = Math.max(motionDeadline, performance.now() + remaining);
@@ -323,14 +351,6 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     nextColumn();
   };
   const start = (snapshot: Snapshot) => {
-    // Updates painted during promotion become the source pose, before the
-    // first transform write; frozen widths still preserve source wrapping.
-    if (promoting === snapshot && invalidated.size) {
-      const fresh = capture();
-      snapshot = { ...snapshot, shots: [...snapshot.shots.filter((shot) => !invalidated.has(shot.column)), ...fresh.filter((shot) => invalidated.has(shot.column))] };
-    }
-    promoting = null;
-    resumePromotion = null;
     const retargeting = active !== null;
     clearAnimations(true); restoreInline();
     root.dataset.columnLayout = "inverted";
@@ -389,35 +409,17 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         applyCard(shot, next, parent, COLUMN_LAYOUT_MS, false, next.width, true, targetWidth(shot.column) / parent.next.width);
       }
     }
-    const initial = plans.splice(0);
-    for (const { node, first, role } of initial) {
-      if (role !== "content") mark(node, role);
-      // Before the first release, the frozen column already preserves the
-      // natural text pose. Identity transforms would create every text layer
-      // together instead of letting the promotion batches prepare them.
-      if (role === "content" && !retargeting) continue;
-      if (!inlinePose.has(node)) inlinePose.set(node, { transform: node.style.transform, opacity: node.style.opacity, origin: node.style.transformOrigin });
-      node.style.transformOrigin = "top left";
-      node.style.transform = String(first.transform);
-      if (first.opacity !== undefined) node.style.opacity = String(first.opacity);
-    }
-    active = snapshot; activeColumns = [...resizing.keys()]; released = false;
-    // Text layers already own their raster before promoting the column.
-    // Construct effects from cached source styles, then release on the next frame.
-    const activate = () => {
-      plans.push(...initial.splice(0, 4)); flush();
-      paintFrame = window.requestAnimationFrame(() => {
-        paintFrame = 0;
-        if (initial.length) { activate(); return; }
-        restoreInline();
-        started = performance.now(); released = true; root.dataset.columnLayout = "running";
-        motionDeadline = started + COLUMN_LAYOUT_MS;
-        animations.forEach((animation) => animation.play());
-        wrapTimer = setTimeout(() => wrapColumns(snapshot, resizing), FADE_MS);
-        finishTimer = setTimeout(settle, COLUMN_LAYOUT_MS);
-      });
-    };
-    activate();
+    active = snapshot; activeColumns = [...resizing.keys()]; released = true;
+    // Preparation already painted the source widths. Release the FLIP in
+    // this next frame alongside the committed controls, without another hold.
+    plans.forEach((plan) => { plan.paused = false; });
+    const commonStart = document.timeline?.currentTime;
+    flush();
+    started = performance.now(); root.dataset.columnLayout = "running";
+    motionDeadline = started + COLUMN_LAYOUT_MS;
+    if (typeof commonStart === "number") animations.forEach((animation) => { animation.startTime = commonStart; });
+    wrapTimer = setTimeout(() => wrapColumns(snapshot, resizing), WRAP_DELAY_MS);
+    finishTimer = setTimeout(settle, COLUMN_LAYOUT_MS);
   };
   const capture = () => {
     const shots: Shot[] = [];
@@ -456,12 +458,13 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
           const own = scale(current.transform), base = scale(contentBase.get(node)!);
           return { node, opacity: Number(current.opacity || "1"), scaleX: active ? rect.width / width * own.x / base.x : 1, scaleY: active ? rect.height / height * own.y / base.y : 1 };
         });
-        shots.push({ node, column, rect, visible, opacity: Number(style?.opacity || "1"), widthAsNumber: width, width: `${width}px`, height: `${height}px`, contents: children });
+        shots.push({ node, column, rect, visible, opacity: Number(style?.opacity || "1"), widthAsNumber: width, width: `${width}px`, height: `${height}px`, contents: children, paint: node === column && style ? { backgroundColor: style.backgroundColor, backgroundImage: style.backgroundImage, borderColor: style.borderColor } : undefined });
       }
     }
     return shots;
   };
   const prepare = () => {
+    warmPrepared = false;
     clearPending();
     if (motion?.matches || typeof root.animate !== "function") { finish(); return; }
     stopClock(); animations.forEach((animation) => animation.pause());
@@ -478,12 +481,16 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     // Source rects/styles are complete before any width/height write.
     for (const shot of shots) if (shot.node === shot.column) {
       if (!frozen.has(shot.node)) frozen.set(shot.node, { width: shot.node.style.width, height: shot.node.style.height, margin: shot.node.style.marginRight });
-      shot.node.style.width = shot.width;
+      if (shot.node.style.width !== shot.width) shot.node.style.width = shot.width;
+      if (shot.paint && !frozenPaint.has(shot.node)) {
+        frozenPaint.set(shot.node, { backgroundColor: shot.node.style.backgroundColor, backgroundImage: shot.node.style.backgroundImage, borderColor: shot.node.style.borderColor });
+        Object.assign(shot.node.style, shot.paint);
+      }
     }
     pending = { key: keyOf(root), shots };
     // Keep the styling marker stable while diagnostic phases change. A CSS
     // selector on that attribute invalidated descendant styles at every phase.
-    root.setAttribute("data-column-layout-active", "");
+    if (!root.hasAttribute("data-column-layout-active")) root.setAttribute("data-column-layout-active", "");
     root.dataset.columnLayout = "pending";
     expiry = setTimeout(finish, 1000);
     paintFrame = window.requestAnimationFrame(() => {
@@ -491,7 +498,6 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       if (!pending || pending.key !== keyOf(root)) return;
       if (!released) {
         if (active) { const snapshot = pending; clearPending(); start(snapshot); }
-        else if (promoting && resumePromotion) { clearPending(); resumePromotion(); }
         else {
           // Give React its commit frame, then release an idle no-op control.
           paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; if (pending?.key === keyOf(root) && !active) finish(); });
@@ -502,25 +508,84 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       animations.forEach((animation) => animation.play());
       const remaining = Math.max(1, COLUMN_LAYOUT_MS - Number(animations.values().next().value?.currentTime ?? 0));
       motionDeadline = performance.now() + remaining;
-      if (active) wrapTimer = setTimeout(() => wrapColumns(active!, new Map(activeColumns.map((node) => [node, node.getBoundingClientRect()]))), Math.min(FADE_MS, remaining));
+      if (active) wrapTimer = setTimeout(() => wrapColumns(active!, new Map(activeColumns.map((node) => [node, node.getBoundingClientRect()]))), Math.min(WRAP_DELAY_MS, remaining));
       finishTimer = setTimeout(settle, remaining);
     });
   };
   const layoutStyle = (style: string | null) => (style ?? "").split(";").map((part) => part.trim()).filter((part) => part && !/^(transform(?:-origin)?|opacity)\s*:/.test(part)).sort().join(";");
-  const change = (update: () => void, allowed = () => true) => {
+  const change = (update: () => void, allowed = () => true, status?: string) => {
     const apply = () => { if (allowed()) { prepare(); update(); } };
-    // Retargets capture their current compositor pose synchronously, before
-    // another frame can advance it. Only a fresh activation needs alignment.
-    if (active || promoting || motion?.matches || typeof root.animate !== "function") { apply(); return; }
-    const frame = window.requestAnimationFrame(() => { changeFrames.delete(frame); apply(); });
+    if (active || motion?.matches || typeof root.animate !== "function") { apply(); return; }
+    const frame = window.requestAnimationFrame(() => {
+      changeFrames.delete(frame);
+      if (!allowed()) return;
+      warmPrepared = false;
+      prepare();
+      if (paintFrame) window.cancelAnimationFrame(paintFrame);
+      paintFrame = 0;
+      const text = pending?.shots.filter((shot) => shot.visible && (!status || shot.column.dataset.wide === "1" || shot.column.dataset.status === status || shot.column.dataset.status === "assigned")).flatMap((shot) => shot.contents.map(({ node }) => node)) ?? [];
+      const commitWidth = () => {
+        if (!allowed()) { finish(); return; }
+        update();
+        paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; if (pending && pending.key === keyOf(root)) finish(); });
+      };
+      if (text.every((node) => marked.has(node))) { commitWidth(); return; }
+      for (const node of text.splice(0, 8)) mark(node, "content");
+      const promotion = window.requestAnimationFrame(() => {
+        changeFrames.delete(promotion);
+        if (!allowed()) { finish(); return; }
+        if (!text.length) { commitWidth(); return; }
+        for (const node of text) mark(node, "content");
+        const commit = window.requestAnimationFrame(() => { changeFrames.delete(commit); commitWidth(); });
+        changeFrames.add(commit);
+      });
+      changeFrames.add(promotion);
+    });
     changeFrames.add(frame);
   };
   widthChanges.set(root, change);
+  const cancelWarm = () => {
+    warmFrames.forEach((frame) => window.cancelAnimationFrame(frame)); warmFrames.clear();
+    if (warmPrepared || (!active && !pending)) finish();
+  };
+  const warm = (status: string) => {
+    if (active || pending || motion?.matches || typeof root.animate !== "function") return;
+    const shots = capture().filter((shot) => shot.visible && (shot.column.dataset.status === status || shot.column.dataset.wide === "1" || shot.column.dataset.status === "assigned"));
+    const text = shots.flatMap((shot) => shot.contents.map(({ node }) => node));
+    if (!text.length) return;
+    root.setAttribute("data-column-layout-active", "");
+    root.dataset.columnLayout = "warming";
+    const next = () => {
+      const frame = window.requestAnimationFrame(() => {
+        warmFrames.delete(frame);
+        for (const node of text.splice(0, 4)) mark(node, "content");
+        if (text.length) next();
+        else {
+          const columns = window.requestAnimationFrame(() => {
+            warmFrames.delete(columns);
+            for (const shot of shots) if (shot.node === shot.column) mark(shot.node, "frame");
+            const source = window.requestAnimationFrame(() => {
+              warmFrames.delete(source);
+              // Paint source widths before the dwell deadline. The commit
+              // still captures fresh rectangles, now from a settled layout.
+              prepare(); warmPrepared = true;
+              if (paintFrame) window.cancelAnimationFrame(paintFrame);
+              paintFrame = 0;
+            });
+            warmFrames.add(source);
+          });
+          warmFrames.add(columns);
+        }
+      });
+      warmFrames.add(frame);
+    };
+    next();
+  };
   const observer = new window.MutationObserver((records) => {
     if (records.some((record) => record.type === "childList")) groupSurfaces();
     // Live content can change between capture and wrapping. Such a column
     // must use its current DOM pose rather than the original projection.
-    if (active || promoting) for (const record of records) if (record.attributeName !== "data-wide") {
+    if (active) for (const record of records) if (record.attributeName !== "data-wide") {
       const node = record.target instanceof window.Element ? record.target : record.target.parentElement;
       const column = node?.closest<HTMLElement>(COLUMN);
       if (!column) continue;
@@ -549,26 +614,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
       paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
       return;
     }
-    promoting = snapshot;
-    // Promote text before transforming a wrapper: promoting the wrapper first
-    // rasterizes all its live glyphs into that layer again.
-    const changed = new Set(snapshot.key.split("|").filter((entry) => !keyOf(root).split("|").includes(entry)).map((entry) => entry.split(":")[0]));
-    const grid = !root.querySelector(".board.scroll");
-    const contents = snapshot.shots.filter((shot) => shot.visible && (grid || changed.has(shot.column.dataset.status!))).flatMap((shot) => shot.contents.map(({ node }) => node));
-    let firstPromotion = true;
-    const promote = () => {
-      paintFrame = window.requestAnimationFrame(() => {
-        paintFrame = 0;
-        // React has just changed the shelf paint; its first raster shares
-        // this frame with promotion. Leave room for that one-time work.
-        for (const node of contents.splice(0, firstPromotion ? 0 : 8)) mark(node, "content");
-        firstPromotion = false;
-        if (contents.length) promote();
-        else paintFrame = window.requestAnimationFrame(() => { paintFrame = 0; start(snapshot); });
-      });
-    };
-    resumePromotion = promote;
-    promote();
+    start(snapshot);
   });
   observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ["data-wide", "class", "style"] });
   const onClick = (event: Event) => {
@@ -607,8 +653,11 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
   motion?.addEventListener("change", interrupted);
   return {
     prepare,
+    warm,
+    cancelWarm,
     change,
     dispose() {
+      warmFrames.forEach((frame) => window.cancelAnimationFrame(frame)); warmFrames.clear();
       changeFrames.forEach((frame) => window.cancelAnimationFrame(frame)); changeFrames.clear();
       widthChanges.delete(root);
       clearPending(); finish(); observer.disconnect();

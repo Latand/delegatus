@@ -5,7 +5,7 @@
   },
   "readings": [
     {
-      "phase": "staging",
+      "phase": 0,
       "target": "inbox",
       "visibleGlyphs": 52,
       "maxLayerDelta": 0,

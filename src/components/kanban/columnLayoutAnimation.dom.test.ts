@@ -24,7 +24,7 @@ function mount(reduce = false) {
   Object.defineProperty(dom, "matchMedia", { configurable: true, value: () => ({ matches: reduce, addEventListener() {}, removeEventListener() {} }) });
   Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, value(this: HTMLElement, frames: Keyframe[], timing: KeyframeAnimationOptions) {
     const call = { node: this, frames, timing, cancelled: false }; calls.push(call);
-    return { cancel() { call.cancelled = true; }, pause() {}, play() {} };
+    return { cancel() { call.cancelled = true; }, pause() { if (call.cancelled) throw new Error("revived a cancelled effect"); }, play() {} };
   } });
   const rect = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON() {} }) as DOMRect;
   root.querySelector<HTMLElement>(".board")!.style.gridTemplateColumns = "220px 220px 220px 420px";
@@ -55,8 +55,7 @@ test("width changes FLIP real columns and cards, preserve scroll, then release p
   expect(frame.frames[1]!.transform).toBe("translate(0px, 0px) scale(1.9090909090909092, 1)");
   expect(frame.timing.duration).toBe(COLUMN_LAYOUT_MS);
   const content = calls.find((call) => call.node.id === "sample")!;
-  expect(content.frames[0]!.opacity).toBe(1);
-  expect(content.frames.at(-1)!.opacity).toBe(0);
+  expect(content.frames.every((frame) => frame.opacity === undefined)).toBe(true);
   expect(root.querySelector(".kb-layout-copy")).toBeNull();
   expect(root.querySelectorAll("#sample")).toHaveLength(1);
   expect(root.dataset.columnLayout).toBe("running");
@@ -67,7 +66,7 @@ test("width changes FLIP real columns and cards, preserve scroll, then release p
   expect(root.hasAttribute("data-column-layout")).toBe(false);
   expect(root.querySelector("[data-layout-animating]")).toBeNull();
   expect(calls.some((call) => call.node === card)).toBe(true);
-  expect(calls.filter((call) => call.node.id === "sample").at(-1)!.frames.at(-1)!.opacity).toBe(1);
+  expect(calls.filter((call) => call.node.id === "sample").every((call) => call.frames.every((frame) => frame.opacity === undefined))).toBe(true);
   expect(card.hasAttribute("data-layout-animating")).toBe(false);
   expect(calls.every((call) => call.cancelled)).toBe(true);
 });
@@ -188,9 +187,9 @@ test("a card brought into view by wrapping slides and fades from its clipped pos
   const glyph = calls.find((call) => call.node.id === "sample")!;
   expect(glyph.frames[0]!.transform).toContain("scale(");
   expect(glyph.frames[0]!.transform).not.toBe("scale(1, 1)");
-  expect(glyph.frames[0]!.opacity).toBe(0);
+  expect(glyph.frames[0]!.opacity).toBeUndefined();
   expect(glyph.frames.at(-1)!.transform).toBe("scale(1, 1)");
-  expect(glyph.frames.at(-1)!.opacity).toBe(1);
+  expect(glyph.frames.at(-1)!.opacity).toBeUndefined();
   layout.dispose();
   expect(root.querySelector("[data-layout-animating]")).toBeNull();
 });
@@ -291,7 +290,7 @@ test("live height changes invalidate the projected pose before wrapping", async 
 });
 
 
-test("a live update painted during promotion becomes the first inverse source pose", async () => {
+test("a live update painted during warming becomes the first inverse source pose", async () => {
   const originalRAF = dom.requestAnimationFrame;
   const originalCancel = dom.cancelAnimationFrame;
   const frames = new Map<ReturnType<typeof dom.requestAnimationFrame>, FrameRequestCallback>();
@@ -310,13 +309,13 @@ test("a live update painted during promotion becomes the first inverse source po
     batch.forEach((callback) => callback(0));
   };
   try {
-    layout.prepare(); column.dataset.wide = "1";
-    await mutations(); frame();
-    expect(root.dataset.columnLayout).toBe("pending");
+    layout.warm("done"); frame();
+    expect(root.dataset.columnLayout).toBe("warming");
     height = 240;
     card.querySelector("button")!.textContent = "A live title update";
     await mutations();
-    for (let i = 0; i < 30 && root.dataset.columnLayout !== "running"; i++) frame();
+    layout.change(() => { column.dataset.wide = "1"; });
+    for (let i = 0; i < 30 && root.dataset.columnLayout !== "running"; i++) { frame(); await mutations(); }
     expect(root.dataset.columnLayout).toBe("running");
     // The newly painted card must not shrink back to its older 180px height.
     const inverse = calls.find((call) => call.node === card);
@@ -355,7 +354,7 @@ test("cards and content added during motion receive counter-scales and wrapping 
   expect(added.querySelector("[data-layout-animating]")).toBeNull();
 });
 
-test("a no-op control during promotion resumes motion instead of releasing frozen widths", async () => {
+test("a no-op control during warming releases its temporary layers", async () => {
   const originalRAF = dom.requestAnimationFrame;
   const originalCancel = dom.cancelAnimationFrame;
   const frames = new Map<ReturnType<typeof dom.requestAnimationFrame>, FrameRequestCallback>();
@@ -368,16 +367,48 @@ test("a no-op control during promotion resumes motion instead of releasing froze
     batch.forEach((callback) => callback(0));
   };
   try {
-    layout.prepare(); column.dataset.wide = "1";
-    await mutations(); frame();
-    expect(root.dataset.columnLayout).toBe("pending");
-    layout.prepare();
-    for (let i = 0; i < 30 && root.dataset.columnLayout !== "running"; i++) frame();
-    expect(root.dataset.columnLayout).toBe("running");
-    expect(column.style.width).toBe("220px");
+    layout.warm("done"); frame();
+    expect(root.dataset.columnLayout).toBe("warming");
+    layout.change(() => {});
+    for (let i = 0; i < 30; i++) { frame(); await mutations(); }
+    expect(root.hasAttribute("data-column-layout")).toBe(false);
+    expect(column.style.width).toBe("");
+    expect(root.querySelector("[data-layout-animating]")).toBeNull();
   } finally {
     layout.dispose();
     dom.requestAnimationFrame = originalRAF; dom.cancelAnimationFrame = originalCancel;
+  }
+});
+
+test("cancelling a warmed source restores widths and temporary layers", async () => {
+  const { root, column, layout } = mount();
+  layout.warm("done");
+  await mutations();
+  expect(column.style.width).toBe("220px");
+  layout.cancelWarm();
+  expect(column.style.width).toBe("");
+  expect(root.hasAttribute("data-column-layout")).toBe(false);
+  expect(root.querySelector("[data-layout-animating]")).toBeNull();
+});
+
+test("retargeting a held wrapping paint never revives cancelled effects", async () => {
+  const originalRAF = dom.requestAnimationFrame, originalCancel = dom.cancelAnimationFrame;
+  const frames = new Map<ReturnType<typeof dom.requestAnimationFrame>, FrameRequestCallback>();
+  dom.requestAnimationFrame = (callback) => { const id = setImmediate(() => {}); frames.set(id, callback); return id; };
+  dom.cancelAnimationFrame = (id) => { frames.delete(id); clearImmediate(id); };
+  const { root, column, layout } = mount();
+  const frame = () => { const batch = [...frames.values()]; frames.clear(); batch.forEach((callback) => callback(0)); };
+  try {
+    layout.prepare(); column.dataset.wide = "1";
+    await mutations();
+    await new Promise((resolve) => dom.setTimeout(resolve, 90));
+    frame(); // The wrapping read/inverse paint, before its replacement effects.
+    expect(column.style.width).toBe("");
+    layout.change(() => { column.dataset.wide = "0"; });
+    await mutations(); frame();
+    expect(root.dataset.columnLayout).toBe("running");
+  } finally {
+    layout.dispose(); dom.requestAnimationFrame = originalRAF; dom.cancelAnimationFrame = originalCancel;
   }
 });
 
@@ -447,7 +478,7 @@ test("a four-column retarget at 32ms RAF cadence completes every reveal before c
     await new Promise((resolve) => setTimeout(resolve, 1400));
     const retarget = calls.slice(cut);
     expect(new Set(retarget.filter(({ node }) => node.matches(".column")).map(({ node }) => node.dataset.status))).toEqual(new Set(statuses));
-    const reveals = retarget.filter(({ node, effect }) => node.hasAttribute("data-owner") && effect.frames.at(-1)!.opacity === 1);
+    const reveals = retarget.filter(({ node, effect }) => node.hasAttribute("data-owner") && effect.frames.at(-1)!.transform === "scale(1, 1)");
     expect(new Set(reveals.map(({ node }) => node.dataset.owner))).toEqual(new Set(statuses));
     expect(reveals.every(({ effect }) => Number(effect.timing.duration) >= 80)).toBe(true);
     expect(root.hasAttribute("data-column-layout")).toBe(false);
