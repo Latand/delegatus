@@ -1815,10 +1815,13 @@ function wakeItems(context: {
      counted as deferred. It is still listed, after the tasks. A stall no wake
      named keeps its place ahead of them, or the tasks would starve it. */
   const reported = new Set(input.state.reportedStalls ?? []);
-  const owned = new Set(context.ownLanes.map((lane) => lane.id));
   const laneStall = (entry: { pipeline: SeatTickPipelineInput; reason: string }): void => {
-    if (owned.has(entry.pipeline.id)) return;
-    if (items.some((item) => item.kind === "pipeline" && item.id === entry.pipeline.id)) return;
+    const existing = items.find((item) => item.id === entry.pipeline.id && (item.kind === "pipeline" || item.kind === "provisioning"));
+    if (existing) {
+      existing.stallToken = laneStallToken(entry.pipeline);
+      existing.label += `; ${entry.reason}`;
+      return;
+    }
     items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}`, stallToken: laneStallToken(entry.pipeline) });
   };
   /* One line per child here too (#1783 round two). A child whose host died

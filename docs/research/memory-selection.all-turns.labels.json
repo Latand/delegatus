@@ -434,7 +434,7 @@
         {
           "id": "c10",
           "helpful": false,
-          "summary": "Reference concerning independent review of PR #45 against pinned specification items 1\u20136 passed.",
+          "summary": "Reference concerning independent review of PR #45 against pinned specification items 1–6 passed.",
           "reason": "The active Odoo fix, tests and independent review are already described; this entry does not resolve the next step."
         },
         {
@@ -458,7 +458,7 @@
         {
           "id": "c14",
           "helpful": false,
-          "summary": "Reference concerning local Odoo 17 review of PR #43 against guide items 1\u20136.",
+          "summary": "Reference concerning local Odoo 17 review of PR #43 against guide items 1–6.",
           "reason": "The active Odoo fix, tests and independent review are already described; this entry does not resolve the next step."
         },
         {
@@ -1129,7 +1129,7 @@
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Reference concerning board maintenance reconciled Bona Vita\u2019s Delegatus board and preserved unresolved work.",
+          "summary": "Reference concerning board maintenance reconciled Bona Vita’s Delegatus board and preserved unresolved work.",
           "reason": "This entry does not identify the missing production record or a usable production read-only access path; other-task constraints are not transferable."
         },
         {
@@ -1177,7 +1177,7 @@
         {
           "id": "c11",
           "helpful": false,
-          "summary": "Reference concerning review of PR #44 against specification items 6\u201310 found two blocking regressions.",
+          "summary": "Reference concerning review of PR #44 against specification items 6–10 found two blocking regressions.",
           "reason": "This entry does not identify the missing production record or a usable production read-only access path; other-task constraints are not transferable."
         },
         {
@@ -1267,7 +1267,7 @@
         {
           "id": "c26",
           "helpful": false,
-          "summary": "Reference concerning independent review of PR #45 against pinned specification items 1\u20136 passed.",
+          "summary": "Reference concerning independent review of PR #45 against pinned specification items 1–6 passed.",
           "reason": "This entry does not identify the missing production record or a usable production read-only access path; other-task constraints are not transferable."
         },
         {
@@ -1411,187 +1411,55 @@
     },
     {
       "id": "p13",
-      "prompt": "Read the specified prior Codex transcript and continue its work.",
+      "prompt": "Identify clarification questions for the stakeholder about the sales analysis.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Workflow reference for codex desktop linux update.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "summary": "Workflow reference for bonavita sales analytics.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c2",
-          "helpful": true,
-          "summary": "A dedicated tool reads Codex transcripts and extracts the plain conversation.",
-          "reason": "Adds a specific transcript-reading tool reference when no preceding context supplies one."
+          "helpful": false,
+          "summary": "Reference concerning send stakeholder questions as separate messages.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Workflow reference for bnv tariff sources of truth.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "summary": "Reference concerning tariff requirements and source-material references.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Workflow reference for prod ssh login shell.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "summary": "Workflow reference for bnv repo analyze origin main.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Workflow reference for private email.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "summary": "Workflow reference for check prior agent solutions first.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "Workflow reference for codex chatgpt auth quota do not api key fallback.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "summary": "Workflow reference for bnv bridge reports post to bv group.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Workflow reference for daily session memory consolidation.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "summary": "Workflow reference for bnv ssh alias prod vs dev.",
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         },
         {
           "id": "c8",
           "helpful": false,
-          "summary": "Workflow reference for celestia production log triage reference.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c9",
-          "helpful": false,
-          "summary": "Workflow reference for hetzner tofu token file.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c10",
-          "helpful": false,
-          "summary": "Workflow reference for stage daniil deploy flow.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c11",
-          "helpful": false,
-          "summary": "Workflow reference for celestia debug triage.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c12",
-          "helpful": false,
-          "summary": "Workflow reference for review loop.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c13",
-          "helpful": false,
-          "summary": "Workflow reference for skills doctor reference.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c14",
-          "helpful": false,
-          "summary": "Workflow reference for svakom ble prototype.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c15",
-          "helpful": false,
           "summary": "Workflow reference for bnv external tester access.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c16",
-          "helpful": false,
-          "summary": "Workflow reference for distrokid release reference.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c17",
-          "helpful": false,
-          "summary": "Workflow reference for check prior agent solutions first.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c18",
-          "helpful": false,
-          "summary": "Workflow reference for openclaw fleet upgrade.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c19",
-          "helpful": false,
-          "summary": "Workflow reference for desktop tmux session discipline.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c20",
-          "helpful": false,
-          "summary": "Workflow reference for x post.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c21",
-          "helpful": false,
-          "summary": "Workflow reference for bnv feedback rec26 campaign.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c22",
-          "helpful": false,
-          "summary": "Workflow reference for tmux multi agent.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c23",
-          "helpful": false,
-          "summary": "Workflow reference for skills doctor.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c24",
-          "helpful": false,
-          "summary": "Workflow reference for cursor worktree ssh.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c25",
-          "helpful": false,
-          "summary": "Workflow reference for hetzner tofu vps.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c26",
-          "helpful": false,
-          "summary": "Workflow reference for treadmill ftms control.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c27",
-          "helpful": false,
-          "summary": "Workflow reference for codex desktop transcription.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c28",
-          "helpful": false,
-          "summary": "Workflow reference for telegram personal mcp.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c29",
-          "helpful": false,
-          "summary": "Workflow reference for live log viewer orchestration reference.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
-        },
-        {
-          "id": "c30",
-          "helpful": false,
-          "summary": "Workflow reference for bnv verify ui before instructing users.",
-          "reason": "The task is transcript recovery; this entry supplies no applicable transcript-reading reference."
+          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
         }
       ]
     },
@@ -1876,13 +1744,13 @@
         {
           "id": "c14",
           "helpful": false,
-          "summary": "Reference concerning independent local review of tariff-guide items 6\u201310 passed.",
+          "summary": "Reference concerning independent local review of tariff-guide items 6–10 passed.",
           "reason": "This entry does not establish that the identified obsolete code is still present or safe to remove."
         },
         {
           "id": "c15",
           "helpful": false,
-          "summary": "Reference concerning implemented guide acceptance items 6\u201310 for `bnv_tariff_planning`.",
+          "summary": "Reference concerning implemented guide acceptance items 6–10 for `bnv_tariff_planning`.",
           "reason": "This entry does not establish that the identified obsolete code is still present or safe to remove."
         },
         {
@@ -1960,7 +1828,7 @@
         {
           "id": "c28",
           "helpful": false,
-          "summary": "Reference concerning local Odoo 17 review of PR #43 against guide items 1\u20136.",
+          "summary": "Reference concerning local Odoo 17 review of PR #43 against guide items 1–6.",
           "reason": "This entry does not establish that the identified obsolete code is still present or safe to remove."
         },
         {
@@ -2081,55 +1949,85 @@
     },
     {
       "id": "p20",
-      "prompt": "Identify clarification questions for the stakeholder about the sales analysis.",
+      "prompt": "Monitor development readiness every twenty minutes and run browser QA with multiple accounts before production migration readiness.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Workflow reference for bonavita sales analytics.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for obra superpowers finishing a development branch.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Reference concerning send stakeholder questions as separate messages.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for obra superpowers test driven development.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Reference concerning tariff requirements and source-material references.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for obra superpowers subagent driven development.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Workflow reference for bnv repo analyze origin main.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for tdd.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         },
         {
           "id": "c5",
-          "helpful": false,
-          "summary": "Workflow reference for check prior agent solutions first.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "helpful": true,
+          "summary": "Keep existing development test-user passwords and obtain the saved login list from its private reference.",
+          "reason": "The requested multi-account QA needs existing logins; this adds the missing credential-location reference and prevents password regeneration."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "Workflow reference for bnv bridge reports post to bv group.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for bnv feedback rec26 campaign.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Workflow reference for bnv ssh alias prod vs dev.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for teach.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         },
         {
           "id": "c8",
           "helpful": false,
-          "summary": "Workflow reference for bnv external tester access.",
-          "reason": "This entry adds no unresolved sales-analysis requirement; the sales workflow is already named in context."
+          "summary": "Workflow reference for delegatus conveyor.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+        },
+        {
+          "id": "c9",
+          "helpful": false,
+          "summary": "Workflow reference for bnv tariff sources of truth.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+        },
+        {
+          "id": "c10",
+          "helpful": false,
+          "summary": "Workflow reference for ui ux pro max.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+        },
+        {
+          "id": "c11",
+          "helpful": false,
+          "summary": "Workflow reference for writing great skills.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+        },
+        {
+          "id": "c12",
+          "helpful": false,
+          "summary": "Workflow reference for openai docs.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+        },
+        {
+          "id": "c13",
+          "helpful": false,
+          "summary": "Workflow reference for spotify library.",
+          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
         }
       ]
     },
@@ -2717,85 +2615,175 @@
     },
     {
       "id": "p26",
-      "prompt": "Monitor development readiness every twenty minutes and run browser QA with multiple accounts before production migration readiness.",
+      "prompt": "Use Opus for the ongoing HTML report work.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Workflow reference for obra superpowers finishing a development branch.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for bonavita sales analytics.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Workflow reference for obra superpowers test driven development.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for svakom ble prototype.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Workflow reference for obra superpowers subagent driven development.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for bnv wkhtmltopdf patched qt.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Workflow reference for tdd.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for improve codebase architecture.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c5",
-          "helpful": true,
-          "summary": "Keep existing development test-user passwords and obtain the saved login list from its private reference.",
-          "reason": "The requested multi-account QA needs existing logins; this adds the missing credential-location reference and prevents password regeneration."
+          "helpful": false,
+          "summary": "Workflow reference for bnv tariff sources of truth.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "Workflow reference for bnv feedback rec26 campaign.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Reference concerning keep spreadsheet reconciliation out of the Odoo interface.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Workflow reference for teach.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for platform owned release direction.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c8",
           "helpful": false,
-          "summary": "Workflow reference for delegatus conveyor.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Reference concerning search prior agent solutions before claiming access is unavailable.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c9",
           "helpful": false,
-          "summary": "Workflow reference for bnv tariff sources of truth.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Reference concerning use local checks while hosted workflows are disabled.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c10",
           "helpful": false,
-          "summary": "Workflow reference for ui ux pro max.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for prefer real image generation.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c11",
           "helpful": false,
-          "summary": "Workflow reference for writing great skills.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for teach.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c12",
           "helpful": false,
-          "summary": "Workflow reference for openai docs.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for face swap tiktok.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         },
         {
           "id": "c13",
           "helpful": false,
-          "summary": "Workflow reference for spotify library.",
-          "reason": "This entry adds no concrete readiness or multi-account browser-QA fact beyond the current plan."
+          "summary": "Workflow reference for bnv repo analyze origin main.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c14",
+          "helpful": false,
+          "summary": "Workflow reference for morning.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c15",
+          "helpful": false,
+          "summary": "Workflow reference for record transcribe destutter.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c16",
+          "helpful": false,
+          "summary": "Workflow reference for bnv ssh alias prod vs dev.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c17",
+          "helpful": false,
+          "summary": "Workflow reference for record transcribe revoice.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c18",
+          "helpful": false,
+          "summary": "Workflow reference for live log viewer orchestration reference.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c19",
+          "helpful": false,
+          "summary": "Workflow reference for bnv bridge reports post to bv group.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c20",
+          "helpful": false,
+          "summary": "Workflow reference for bnv feedback rec26 campaign.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c21",
+          "helpful": false,
+          "summary": "Workflow reference for bnv verify ui before instructing users.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c22",
+          "helpful": false,
+          "summary": "Workflow reference for bnv dev test passwords fixed.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c23",
+          "helpful": false,
+          "summary": "Workflow reference for agent conveyor.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c24",
+          "helpful": false,
+          "summary": "Workflow reference for skill marketplace.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c25",
+          "helpful": false,
+          "summary": "Workflow reference for forgedemy.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c26",
+          "helpful": false,
+          "summary": "Workflow reference for bnv merge without asking.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c27",
+          "helpful": false,
+          "summary": "Workflow reference for bnv external tester access.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+        },
+        {
+          "id": "c28",
+          "helpful": false,
+          "summary": "Workflow reference for bnv dev upgrade no auto rollback.",
+          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
         }
       ]
     },
@@ -3352,175 +3340,37 @@
     },
     {
       "id": "p32",
-      "prompt": "Use Opus for the ongoing HTML report work.",
+      "prompt": "Set a goal to make the tariff form usable, with correct names, automatic templates, clean business fields and role-specific demo accounts.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Workflow reference for bonavita sales analytics.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+          "summary": "Project bridge reports are mirrored to a client group; internal questions belong in chat.",
+          "reason": "This is a builder task, not the client-facing orchestrator seat to which the routing rule applies."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Workflow reference for svakom ble prototype.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+          "summary": "Merge reviewed changes after the development gate without another routine approval.",
+          "reason": "The builder scope and preceding exchanges leave merge outside this task; a later generic merge permission cannot replace that scope."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Workflow reference for bnv wkhtmltopdf patched qt.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+          "summary": "Search earlier project agent transcripts before declaring access unavailable.",
+          "reason": "The preceding exchange establishes working development access; no access failure requires transcript recovery."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Workflow reference for improve codebase architecture.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+          "summary": "Reference for regenerating subtitles on the existing tariff tutorial videos.",
+          "reason": "This UI goal needs the stated form and role changes; the offered reference adds no applicable implementation fact."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Workflow reference for bnv tariff sources of truth.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c6",
-          "helpful": false,
-          "summary": "Reference concerning keep spreadsheet reconciliation out of the Odoo interface.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c7",
-          "helpful": false,
-          "summary": "Workflow reference for platform owned release direction.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c8",
-          "helpful": false,
-          "summary": "Reference concerning search prior agent solutions before claiming access is unavailable.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c9",
-          "helpful": false,
-          "summary": "Reference concerning use local checks while hosted workflows are disabled.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c10",
-          "helpful": false,
-          "summary": "Workflow reference for prefer real image generation.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c11",
-          "helpful": false,
-          "summary": "Workflow reference for teach.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c12",
-          "helpful": false,
-          "summary": "Workflow reference for face swap tiktok.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c13",
-          "helpful": false,
-          "summary": "Workflow reference for bnv repo analyze origin main.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c14",
-          "helpful": false,
-          "summary": "Workflow reference for morning.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c15",
-          "helpful": false,
-          "summary": "Workflow reference for record transcribe destutter.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c16",
-          "helpful": false,
-          "summary": "Workflow reference for bnv ssh alias prod vs dev.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c17",
-          "helpful": false,
-          "summary": "Workflow reference for record transcribe revoice.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c18",
-          "helpful": false,
-          "summary": "Workflow reference for live log viewer orchestration reference.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c19",
-          "helpful": false,
-          "summary": "Workflow reference for bnv bridge reports post to bv group.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c20",
-          "helpful": false,
-          "summary": "Workflow reference for bnv feedback rec26 campaign.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c21",
-          "helpful": false,
-          "summary": "Workflow reference for bnv verify ui before instructing users.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c22",
-          "helpful": false,
-          "summary": "Workflow reference for bnv dev test passwords fixed.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c23",
-          "helpful": false,
-          "summary": "Workflow reference for agent conveyor.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c24",
-          "helpful": false,
-          "summary": "Workflow reference for skill marketplace.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c25",
-          "helpful": false,
-          "summary": "Workflow reference for forgedemy.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c26",
-          "helpful": false,
-          "summary": "Workflow reference for bnv merge without asking.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c27",
-          "helpful": false,
-          "summary": "Workflow reference for bnv external tester access.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
-        },
-        {
-          "id": "c28",
-          "helpful": false,
-          "summary": "Workflow reference for bnv dev upgrade no auto rollback.",
-          "reason": "The HTML work and its validation are already established; this entry does not affect the requested model change."
+          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
+          "reason": "This UI goal needs the stated form and role changes; the offered reference adds no applicable implementation fact."
         }
       ]
     },
@@ -3740,7 +3590,7 @@
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Reference concerning local Odoo 17 review of PR #43 against guide items 1\u20136.",
+          "summary": "Reference concerning local Odoo 17 review of PR #43 against guide items 1–6.",
           "reason": "This entry does not supply a development-server access method or current availability evidence."
         },
         {
@@ -3836,7 +3686,7 @@
         {
           "id": "c20",
           "helpful": false,
-          "summary": "Reference concerning implemented guide acceptance items 6\u201310 for `bnv_tariff_planning`.",
+          "summary": "Reference concerning implemented guide acceptance items 6–10 for `bnv_tariff_planning`.",
           "reason": "This entry does not supply a development-server access method or current availability evidence."
         },
         {
@@ -3866,7 +3716,7 @@
         {
           "id": "c25",
           "helpful": false,
-          "summary": "Reference concerning board maintenance reconciled Bona Vita\u2019s Delegatus board and preserved unresolved work.",
+          "summary": "Reference concerning board maintenance reconciled Bona Vita’s Delegatus board and preserved unresolved work.",
           "reason": "This entry does not supply a development-server access method or current availability evidence."
         },
         {
@@ -3933,37 +3783,115 @@
     },
     {
       "id": "p38",
-      "prompt": "Set a goal to make the tariff form usable, with correct names, automatic templates, clean business fields and role-specific demo accounts.",
+      "prompt": "Explain the differences between workbook tariffs and the newly loaded candidate results.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Project bridge reports are mirrored to a client group; internal questions belong in chat.",
-          "reason": "This is a builder task, not the client-facing orchestrator seat to which the routing rule applies."
+          "summary": "Keep a persistent login shell for multi-step remote work when practical.",
+          "reason": "The immediately preceding messages already show an active remote investigation; shell style does not explain the numerical differences."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Merge reviewed changes after the development gate without another routine approval.",
-          "reason": "The builder scope and preceding exchanges leave merge outside this task; a later generic merge permission cannot replace that scope."
+          "summary": "Reference for querying property-sales data and producing analytics reports.",
+          "reason": "Property-sales analytics is distinct from the workbook extraction and Odoo calculator discrepancy at issue."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Search earlier project agent transcripts before declaring access unavailable.",
-          "reason": "The preceding exchange establishes working development access; no access failure requires transcript recovery."
+          "summary": "Workflow reference for built in browser.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Reference for regenerating subtitles on the existing tariff tutorial videos.",
-          "reason": "This UI goal needs the stated form and role changes; the offered reference adds no applicable implementation fact."
+          "summary": "Verify real thread and branch identifiers after failed subagent setup.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
-          "reason": "This UI goal needs the stated form and role changes; the offered reference adds no applicable implementation fact."
+          "summary": "Reference for opening worktrees and checking SSH readiness.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c6",
+          "helpful": false,
+          "summary": "Keep a persistent login shell for Celestia production operations.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c7",
+          "helpful": false,
+          "summary": "Workflow reference for fal ai video toolkit.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c8",
+          "helpful": false,
+          "summary": "Workflow reference for computer use.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c9",
+          "helpful": false,
+          "summary": "Reference for operating OpenClaw through its CLI.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c10",
+          "helpful": false,
+          "summary": "Workflow reference for setup matt pocock skills.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c11",
+          "helpful": false,
+          "summary": "Reference for Celestia staging deployment and separate end-to-end verification.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c12",
+          "helpful": false,
+          "summary": "Workflow reference for nano banana fal.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c13",
+          "helpful": false,
+          "summary": "Reference for locating current official OpenAI product documentation.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c14",
+          "helpful": false,
+          "summary": "Reference for entering and validating a music-distribution release.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c15",
+          "helpful": false,
+          "summary": "Reference for updating the Linux desktop application safely.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c16",
+          "helpful": false,
+          "summary": "Reference for preparing a music-distribution release.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c17",
+          "helpful": false,
+          "summary": "General workflow for coordinating implementation, review, merge and deployment.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+        },
+        {
+          "id": "c18",
+          "helpful": false,
+          "summary": "Reference for upgrading the OpenClaw gateway fleet.",
+          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
         }
       ]
     },
@@ -4382,115 +4310,25 @@
     },
     {
       "id": "p43",
-      "prompt": "Explain the differences between workbook tariffs and the newly loaded candidate results.",
+      "prompt": "Check tariff accounting periods and reconcile underlying costs and areas, rather than only the final per-area rate.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Keep a persistent login shell for multi-step remote work when practical.",
-          "reason": "The immediately preceding messages already show an active remote investigation; shell style does not explain the numerical differences."
+          "summary": "Keep workbook reconciliation details outside the Odoo user interface.",
+          "reason": "The current work is an external reconciliation report; there is no request to expose workbook traces in Odoo."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Reference for querying property-sales data and producing analytics reports.",
-          "reason": "Property-sales analytics is distinct from the workbook extraction and Odoo calculator discrepancy at issue."
+          "summary": "Reference locating tariff requirements, meeting evidence, control workbooks and seeds.",
+          "reason": "Workbook locations and the current reconciliation script are already established; the offered locator adds no period interpretation."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Workflow reference for built in browser.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c4",
-          "helpful": false,
-          "summary": "Verify real thread and branch identifiers after failed subagent setup.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c5",
-          "helpful": false,
-          "summary": "Reference for opening worktrees and checking SSH readiness.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c6",
-          "helpful": false,
-          "summary": "Keep a persistent login shell for Celestia production operations.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c7",
-          "helpful": false,
-          "summary": "Workflow reference for fal ai video toolkit.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c8",
-          "helpful": false,
-          "summary": "Workflow reference for computer use.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c9",
-          "helpful": false,
-          "summary": "Reference for operating OpenClaw through its CLI.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c10",
-          "helpful": false,
-          "summary": "Workflow reference for setup matt pocock skills.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c11",
-          "helpful": false,
-          "summary": "Reference for Celestia staging deployment and separate end-to-end verification.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c12",
-          "helpful": false,
-          "summary": "Workflow reference for nano banana fal.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c13",
-          "helpful": false,
-          "summary": "Reference for locating current official OpenAI product documentation.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c14",
-          "helpful": false,
-          "summary": "Reference for entering and validating a music-distribution release.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c15",
-          "helpful": false,
-          "summary": "Reference for updating the Linux desktop application safely.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c16",
-          "helpful": false,
-          "summary": "Reference for preparing a music-distribution release.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c17",
-          "helpful": false,
-          "summary": "General workflow for coordinating implementation, review, merge and deployment.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
-        },
-        {
-          "id": "c18",
-          "helpful": false,
-          "summary": "Reference for upgrading the OpenClaw gateway fleet.",
-          "reason": "The question concerns workbook-versus-calculator numbers; this reference supplies no relevant financial or source-data explanation."
+          "summary": "Verify the development UI in a browser before giving users navigation instructions.",
+          "reason": "The user asks about accounting periods and amounts, not instructions for navigating the UI."
         }
       ]
     },
@@ -4891,25 +4729,25 @@
     },
     {
       "id": "p48",
-      "prompt": "Check tariff accounting periods and reconcile underlying costs and areas, rather than only the final per-area rate.",
+      "prompt": "Continue preparing and testing the portable read-only SQL access package.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Keep workbook reconciliation details outside the Odoo user interface.",
-          "reason": "The current work is an external reconciliation report; there is no request to expose workbook traces in Odoo."
+          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
+          "reason": "The active task is a portable SQL client and ODBC diagnostics, not PDF rendering, music or personal prose."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Reference locating tariff requirements, meeting evidence, control workbooks and seeds.",
-          "reason": "Workbook locations and the current reconciliation script are already established; the offered locator adds no period interpretation."
+          "summary": "Reference for reading and analyzing the operator music library.",
+          "reason": "The active task is a portable SQL client and ODBC diagnostics, not PDF rendering, music or personal prose."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Verify the development UI in a browser before giving users navigation instructions.",
-          "reason": "The user asks about accounting periods and amounts, not instructions for navigating the UI."
+          "summary": "Reference for matching the operator personal chat style.",
+          "reason": "The active task is a portable SQL client and ODBC diagnostics, not PDF rendering, music or personal prose."
         }
       ]
     },
@@ -5167,25 +5005,19 @@
     },
     {
       "id": "p53",
-      "prompt": "Continue preparing and testing the portable read-only SQL access package.",
+      "prompt": "Check the ongoing development-copy and migration-review work now and monitor every ten minutes until completion.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
-          "reason": "The active task is a portable SQL client and ODBC diagnostics, not PDF rendering, music or personal prose."
+          "summary": "Workflow reference for kostiantyn writing style.",
+          "reason": "The running copy and review tasks are identified; this entry adds no monitoring or completion information."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Reference for reading and analyzing the operator music library.",
-          "reason": "The active task is a portable SQL client and ODBC diagnostics, not PDF rendering, music or personal prose."
-        },
-        {
-          "id": "c3",
-          "helpful": false,
-          "summary": "Reference for matching the operator personal chat style.",
-          "reason": "The active task is a portable SQL client and ODBC diagnostics, not PDF rendering, music or personal prose."
+          "summary": "Use the patched Qt PDF renderer to preserve document headers and logos.",
+          "reason": "No PDF rendering defect is part of the current monitoring request."
         }
       ]
     },
@@ -5346,19 +5178,115 @@
     },
     {
       "id": "p58",
-      "prompt": "Check the ongoing development-copy and migration-review work now and monitor every ten minutes until completion.",
+      "prompt": "Ensure Odoo review focuses on desktop use and does not spend effort on mobile layouts.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Workflow reference for kostiantyn writing style.",
-          "reason": "The running copy and review tasks are identified; this entry adds no monitoring or completion information."
+          "summary": "Reference for querying the enterprise SQL databases through the approved network path.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Use the patched Qt PDF renderer to preserve document headers and logos.",
-          "reason": "No PDF rendering defect is part of the current monitoring request."
+          "summary": "Reference for connecting to the enterprise VPN and file share.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c3",
+          "helpful": false,
+          "summary": "Reference for querying property-sales data and producing analytics reports.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c4",
+          "helpful": false,
+          "summary": "Keep workbook references and reconciliation in external reports.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c5",
+          "helpful": false,
+          "summary": "Reference to tariff specifications, meeting transcript, source workbooks and seeds.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c6",
+          "helpful": false,
+          "summary": "Search project transcripts for established access methods before reporting a blocker.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c7",
+          "helpful": false,
+          "summary": "Run local verification; older hosted failures stem from disabled billing-dependent workflows.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c8",
+          "helpful": false,
+          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c9",
+          "helpful": false,
+          "summary": "Analyze fetched upstream main rather than an outdated local checkout.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c10",
+          "helpful": false,
+          "summary": "Reference for regenerating subtitles on the existing tariff tutorial videos.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c11",
+          "helpful": false,
+          "summary": "Development and production have distinct SSH routes despite similar host names.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c12",
+          "helpful": false,
+          "summary": "Bridge reports go to the client group, so keep internal requests out of them.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c13",
+          "helpful": false,
+          "summary": "Reference to the recorded stakeholder UI-feedback campaign and its implementation waves.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c14",
+          "helpful": false,
+          "summary": "Verify the development UI in a browser before giving users navigation instructions.",
+          "reason": "The request sets review viewport scope; it is not asking for end-user navigation instructions."
+        },
+        {
+          "id": "c15",
+          "helpful": false,
+          "summary": "Preserve existing development test-user passwords; use the private operator credential inventory.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c16",
+          "helpful": false,
+          "summary": "Merge reviewed work at the agreed local gate without repeated routine confirmation.",
+          "reason": "No merge decision is part of the desktop-only scope correction."
+        },
+        {
+          "id": "c17",
+          "helpful": false,
+          "summary": "External testers reach the development stand through a server-only tunnel chain.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+        },
+        {
+          "id": "c18",
+          "helpful": false,
+          "summary": "Diagnose failed development checks; roll back only for actual data damage or an unavailable stand.",
+          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
         }
       ]
     },
@@ -5610,115 +5538,187 @@
     },
     {
       "id": "p63",
-      "prompt": "Ensure Odoo review focuses on desktop use and does not spend effort on mobile layouts.",
+      "prompt": "Read the linked prior conversation for the existing access evidence.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Reference for querying the enterprise SQL databases through the approved network path.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Reference for connecting to the enterprise VPN and file share.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Reference for querying property-sales data and producing analytics reports.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Keep workbook references and reconciliation in external reports.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Reference to tariff specifications, meeting transcript, source workbooks and seeds.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "Search project transcripts for established access methods before reporting a blocker.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Run local verification; older hosted failures stem from disabled billing-dependent workflows.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c8",
           "helpful": false,
-          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c9",
           "helpful": false,
-          "summary": "Analyze fetched upstream main rather than an outdated local checkout.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c10",
           "helpful": false,
-          "summary": "Reference for regenerating subtitles on the existing tariff tutorial videos.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c11",
           "helpful": false,
-          "summary": "Development and production have distinct SSH routes despite similar host names.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c12",
           "helpful": false,
-          "summary": "Bridge reports go to the client group, so keep internal requests out of them.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c13",
           "helpful": false,
-          "summary": "Reference to the recorded stakeholder UI-feedback campaign and its implementation waves.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c14",
           "helpful": false,
-          "summary": "Verify the development UI in a browser before giving users navigation instructions.",
-          "reason": "The request sets review viewport scope; it is not asking for end-user navigation instructions."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c15",
           "helpful": false,
-          "summary": "Preserve existing development test-user passwords; use the private operator credential inventory.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c16",
           "helpful": false,
-          "summary": "Merge reviewed work at the agreed local gate without repeated routine confirmation.",
-          "reason": "No merge decision is part of the desktop-only scope correction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c17",
           "helpful": false,
-          "summary": "External testers reach the development stand through a server-only tunnel chain.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         },
         {
           "id": "c18",
           "helpful": false,
-          "summary": "Diagnose failed development checks; roll back only for actual data damage or an unavailable stand.",
-          "reason": "The prompt directly establishes desktop-only acceptance; this reference adds no applicable viewport or scope instruction."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c19",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c20",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c21",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c22",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c23",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c24",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c25",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c26",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c27",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c28",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c29",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
+        },
+        {
+          "id": "c30",
+          "helpful": false,
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The request asks to read existing SQL-access evidence in the linked conversation; this offer adds no applicable new access fact or reading constraint."
         }
       ]
     },
@@ -5957,67 +5957,37 @@
     },
     {
       "id": "p68",
-      "prompt": "Read the existing conversation information while continuing the SQL-access investigation.",
+      "prompt": "Inspect and fix the tariff UI that exposes technical rounding controls, raw JSON, poor labels and incomplete service results.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Use the established server tunnel chain for external development access.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
+          "summary": "Search earlier project agent transcripts before declaring access unavailable.",
+          "reason": "The preceding turn already has an authenticated development browser session, so access-recovery advice adds nothing."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Search earlier project agent transcripts before declaring access unavailable.",
-          "reason": "The agent is already reading the prior conversation and searching established access methods; the advice is redundant."
+          "summary": "Preserve existing development test-user passwords; use the private operator credential inventory.",
+          "reason": "The current issue is UI correctness, and the prior response already establishes the test login."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Reference for Codex Desktop voice transcription and cleanup internals.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
+          "summary": "Reference to the recorded stakeholder UI-feedback campaign and its implementation waves.",
+          "reason": "The later recorded feedback campaign is not established as the source of this earlier UI defect report."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Preserve existing development test-user passwords; use the private operator credential inventory.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
+          "summary": "External testers reach the development stand through a server-only tunnel chain.",
+          "reason": "The development browser is already open and authenticated; a different external-test tunnel route is unnecessary."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Merge reviewed work at the agreed local gate without repeated routine confirmation.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
-        },
-        {
-          "id": "c6",
-          "helpful": false,
-          "summary": "Use the patched Qt PDF renderer to preserve report headers and footers.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
-        },
-        {
-          "id": "c7",
-          "helpful": false,
-          "summary": "Workflow reference for stop slop.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
-        },
-        {
-          "id": "c8",
-          "helpful": false,
-          "summary": "Reference for Celestia staging UI verification and frontend deployment.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
-        },
-        {
-          "id": "c9",
-          "helpful": false,
-          "summary": "Verify the development UI in a browser before giving users navigation instructions.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
-        },
-        {
-          "id": "c10",
-          "helpful": false,
           "summary": "Diagnose failed development checks; roll back only for actual data damage or an unavailable stand.",
-          "reason": "The active task concerns existing SQL-access evidence; this reference targets another product or activity."
+          "reason": "No failed upgrade check or rollback decision is occurring; the task is to inspect and correct the rendered UI."
         }
       ]
     },
@@ -6257,37 +6227,187 @@
     },
     {
       "id": "p72",
-      "prompt": "Inspect and fix the tariff UI that exposes technical rounding controls, raw JSON, poor labels and incomplete service results.",
+      "prompt": "Continue the tariff analysis using the supplied material.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Search earlier project agent transcripts before declaring access unavailable.",
-          "reason": "The preceding turn already has an authenticated development browser session, so access-recovery advice adds nothing."
+          "summary": "Create and validate animated Codex pets.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Preserve existing development test-user passwords; use the private operator credential inventory.",
-          "reason": "The current issue is UI correctness, and the prior response already establishes the test login."
+          "summary": "Use the designated Celestia stage runtime and separate E2E checkout.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Reference to the recorded stakeholder UI-feedback campaign and its implementation waves.",
-          "reason": "The later recorded feedback campaign is not established as the source of this earlier UI defect report."
+          "summary": "Generate a narrated avatar video.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "External testers reach the development stand through a server-only tunnel chain.",
-          "reason": "The development browser is already open and authenticated; a different external-test tunnel route is unnecessary."
+          "summary": "Use Nano Banana through an explicitly requested inference.sh workflow.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Diagnose failed development checks; roll back only for actual data damage or an unavailable stand.",
-          "reason": "No failed upgrade check or rollback decision is occurring; the task is to inspect and correct the rendered UI."
+          "summary": "Safely update the local Codex Desktop Linux build.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c6",
+          "helpful": false,
+          "summary": "Generate identity-consistent images through fal.ai.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c7",
+          "helpful": false,
+          "summary": "Save generated media in persistent storage.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c8",
+          "helpful": false,
+          "summary": "Replace a filmed presenter with a generated character.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c9",
+          "helpful": false,
+          "summary": "Use fal.ai media-generation and editing workflows.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c10",
+          "helpful": false,
+          "summary": "Operate the private email account.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c11",
+          "helpful": false,
+          "summary": "Reference defaults for visible Viewer workers and delivery.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c12",
+          "helpful": false,
+          "summary": "Prefer raster generation for requested generated pictures.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c13",
+          "helpful": false,
+          "summary": "Build a disposable runnable prototype.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c14",
+          "helpful": false,
+          "summary": "The old Viewer orchestration skill redirects to Delegatus orchestration.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c15",
+          "helpful": false,
+          "summary": "Review Viewer authority, receipts and lifecycle behavior independently.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c16",
+          "helpful": false,
+          "summary": "Audit Celestia translation coverage.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c17",
+          "helpful": false,
+          "summary": "Connect to the Stikon shared drive through its VPN.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c18",
+          "helpful": false,
+          "summary": "Draft or publish posts on X.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c19",
+          "helpful": false,
+          "summary": "Triage Celestia debug reports.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c20",
+          "helpful": false,
+          "summary": "Read the configured Hetzner credential file safely.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c21",
+          "helpful": false,
+          "summary": "Audit Ukrainian dissertation and article prose.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c22",
+          "helpful": false,
+          "summary": "Control the office lights.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c23",
+          "helpful": false,
+          "summary": "Control the local treadmill over Bluetooth.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c24",
+          "helpful": false,
+          "summary": "Deploy and browser-test Celestia stage frontend changes.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c25",
+          "helpful": false,
+          "summary": "Open an isolated worktree in Cursor and check remote connectivity.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c26",
+          "helpful": false,
+          "summary": "Inspect local Codex session transcripts.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c27",
+          "helpful": false,
+          "summary": "Reference workflow for DistroKid release preparation.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c28",
+          "helpful": false,
+          "summary": "Prepare and fill a DistroKid music release.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c29",
+          "helpful": false,
+          "summary": "Use the established personal Telegram transport with identity and delivery verification.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+        },
+        {
+          "id": "c30",
+          "helpful": false,
+          "summary": "Reference a local Bluetooth device prototype.",
+          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
         }
       ]
     },
@@ -6683,187 +6803,103 @@
     },
     {
       "id": "p76",
-      "prompt": "Continue the tariff analysis using the supplied material.",
+      "prompt": "Check the unresolved agent-launch state and continue the already authorized merge and development deployment.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Create and validate animated Codex pets.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Historical tariff-project branches, data and development status.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Use the designated Celestia stage runtime and separate E2E checkout.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for check prior agent solutions first.",
+          "reason": "The uncertainty is a current launch receipt, not absent access credentials; the summary supplies no prior solution to this specific failure."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Generate a narrated avatar video.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for live log viewer orchestration.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Use Nano Banana through an explicitly requested inference.sh workflow.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for bnv verify ui before instructing users.",
+          "reason": "The immediate blocker is launch delivery, and no stakeholder UI instructions are being sent."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Safely update the local Codex Desktop Linux build.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for live log viewer orchestration reference.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "Generate identity-consistent images through fal.ai.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for live log viewer adversarial review reference.",
+          "reason": "This is an operational receipt check, not a requested independent code review."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Save generated media in persistent storage.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for review loop.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c8",
           "helpful": false,
-          "summary": "Replace a filmed presenter with a generated character.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for llv review loop ready marker reference.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c9",
           "helpful": false,
-          "summary": "Use fal.ai media-generation and editing workflows.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for agent conveyor.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c10",
           "helpful": false,
-          "summary": "Operate the private email account.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for delegatus orchestration.",
+          "reason": "The context already uses the Viewer and avoids duplicate launches; the summary adds no receipt-recovery procedure."
         },
         {
           "id": "c11",
           "helpful": false,
-          "summary": "Reference defaults for visible Viewer workers and delivery.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for bnv read bv group via telethon.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c12",
           "helpful": false,
-          "summary": "Prefer raster generation for requested generated pictures.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for writing platform native.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c13",
           "helpful": false,
-          "summary": "Build a disposable runnable prototype.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for face swap tiktok.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c14",
           "helpful": false,
-          "summary": "The old Viewer orchestration skill redirects to Delegatus orchestration.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for bnv external tester access.",
+          "reason": "External tester routing does not resolve the uncertain deployment-agent launch."
         },
         {
           "id": "c15",
           "helpful": false,
-          "summary": "Review Viewer authority, receipts and lifecycle behavior independently.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for delegatus conveyor.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         },
         {
           "id": "c16",
           "helpful": false,
-          "summary": "Audit Celestia translation coverage.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c17",
-          "helpful": false,
-          "summary": "Connect to the Stikon shared drive through its VPN.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c18",
-          "helpful": false,
-          "summary": "Draft or publish posts on X.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c19",
-          "helpful": false,
-          "summary": "Triage Celestia debug reports.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c20",
-          "helpful": false,
-          "summary": "Read the configured Hetzner credential file safely.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c21",
-          "helpful": false,
-          "summary": "Audit Ukrainian dissertation and article prose.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c22",
-          "helpful": false,
-          "summary": "Control the office lights.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c23",
-          "helpful": false,
-          "summary": "Control the local treadmill over Bluetooth.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c24",
-          "helpful": false,
-          "summary": "Deploy and browser-test Celestia stage frontend changes.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c25",
-          "helpful": false,
-          "summary": "Open an isolated worktree in Cursor and check remote connectivity.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c26",
-          "helpful": false,
-          "summary": "Inspect local Codex session transcripts.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c27",
-          "helpful": false,
-          "summary": "Reference workflow for DistroKid release preparation.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c28",
-          "helpful": false,
-          "summary": "Prepare and fill a DistroKid music release.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c29",
-          "helpful": false,
-          "summary": "Use the established personal Telegram transport with identity and delivery verification.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
-        },
-        {
-          "id": "c30",
-          "helpful": false,
-          "summary": "Reference a local Bluetooth device prototype.",
-          "reason": "The preceding request needs a building and approved estimate; this candidate supplies neither a tariff fact nor the relevant evidence."
+          "summary": "Workflow reference for skill creator.",
+          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
         }
       ]
     },
@@ -7091,103 +7127,31 @@
     },
     {
       "id": "p80",
-      "prompt": "Check the unresolved agent-launch state and continue the already authorized merge and development deployment.",
+      "prompt": "Check whether the parking analysis covered other properties.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Historical tariff-project branches, data and development status.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
+          "summary": "External testers use the server-hosted Odoo development route.",
+          "reason": "The required next step is to check analytical coverage; this reference supplies no results for other properties."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Workflow reference for check prior agent solutions first.",
-          "reason": "The uncertainty is a current launch receipt, not absent access credentials; the summary supplies no prior solution to this specific failure."
+          "summary": "Reference architecture for Codex Desktop voice transcription.",
+          "reason": "The required next step is to check analytical coverage; this reference supplies no results for other properties."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Workflow reference for live log viewer orchestration.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
+          "summary": "Use the patched-Qt wkhtmltopdf build to retain PDF headers and logos.",
+          "reason": "The required next step is to check analytical coverage; this reference supplies no results for other properties."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Workflow reference for bnv verify ui before instructing users.",
-          "reason": "The immediate blocker is launch delivery, and no stakeholder UI instructions are being sent."
-        },
-        {
-          "id": "c5",
-          "helpful": false,
-          "summary": "Workflow reference for live log viewer orchestration reference.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c6",
-          "helpful": false,
-          "summary": "Workflow reference for live log viewer adversarial review reference.",
-          "reason": "This is an operational receipt check, not a requested independent code review."
-        },
-        {
-          "id": "c7",
-          "helpful": false,
-          "summary": "Workflow reference for review loop.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c8",
-          "helpful": false,
-          "summary": "Workflow reference for llv review loop ready marker reference.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c9",
-          "helpful": false,
-          "summary": "Workflow reference for agent conveyor.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c10",
-          "helpful": false,
-          "summary": "Workflow reference for delegatus orchestration.",
-          "reason": "The context already uses the Viewer and avoids duplicate launches; the summary adds no receipt-recovery procedure."
-        },
-        {
-          "id": "c11",
-          "helpful": false,
-          "summary": "Workflow reference for bnv read bv group via telethon.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c12",
-          "helpful": false,
-          "summary": "Workflow reference for writing platform native.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c13",
-          "helpful": false,
-          "summary": "Workflow reference for face swap tiktok.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c14",
-          "helpful": false,
-          "summary": "Workflow reference for bnv external tester access.",
-          "reason": "External tester routing does not resolve the uncertain deployment-agent launch."
-        },
-        {
-          "id": "c15",
-          "helpful": false,
-          "summary": "Workflow reference for delegatus conveyor.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
-        },
-        {
-          "id": "c16",
-          "helpful": false,
-          "summary": "Workflow reference for skill creator.",
-          "reason": "The pending launch and uncertain receipt are the blocker; this entry provides no specific resolution beyond the existing orchestration context."
+          "summary": "Remove repetitive and artificial prose patterns.",
+          "reason": "The user already demanded a clear, direct explanation; this general prose-cleanup reference adds no coverage evidence."
         }
       ]
     },
@@ -7336,31 +7300,37 @@
     },
     {
       "id": "p84",
-      "prompt": "Check whether the parking analysis covered other properties.",
+      "prompt": "Verify which full account identity corresponds to the investigated record.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "External testers use the server-hosted Odoo development route.",
-          "reason": "The required next step is to check analytical coverage; this reference supplies no results for other properties."
+          "summary": "Send tariff stakeholder questions separately.",
+          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Reference architecture for Codex Desktop voice transcription.",
-          "reason": "The required next step is to check analytical coverage; this reference supplies no results for other properties."
+          "summary": "Bona Vita bridge reports are mirrored to a client group.",
+          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Use the patched-Qt wkhtmltopdf build to retain PDF headers and logos.",
-          "reason": "The required next step is to check analytical coverage; this reference supplies no results for other properties."
+          "summary": "Locations of tariff requirements, source workbooks and seed data.",
+          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Remove repetitive and artificial prose patterns.",
-          "reason": "The user already demanded a clear, direct explanation; this general prose-cleanup reference adds no coverage evidence."
+          "summary": "Draft concise text in the operator personal chat style.",
+          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
+        },
+        {
+          "id": "c5",
+          "helpful": false,
+          "summary": "Verify Odoo UI instructions in a development browser first.",
+          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
         }
       ]
     },
@@ -7581,37 +7551,187 @@
     },
     {
       "id": "p88",
-      "prompt": "Verify which full account identity corresponds to the investigated record.",
+      "prompt": "Confirm the production password has been stored and ask to verify access.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Send tariff stakeholder questions separately.",
-          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
+          "summary": "Workflow for the private mailbox.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Bona Vita bridge reports are mirrored to a client group.",
-          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
+          "summary": "Workflow reference for check prior agent solutions first.",
+          "reason": "The prior conversation has already investigated historical access and now names the newly saved credential entry."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Locations of tariff requirements, source workbooks and seed data.",
-          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
+          "summary": "Workflow reference for stikon one s sql.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Draft concise text in the operator personal chat style.",
-          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
+          "summary": "Historical tariff-project branches, data and development status.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Verify Odoo UI instructions in a development browser first.",
-          "reason": "This candidate does not identify the requested account or provide a relevant lookup procedure."
+          "summary": "Workflow reference for bnv dev test passwords fixed.",
+          "reason": "Preserving development test-user passwords is distinct from verifying the newly stored production sudo password."
+        },
+        {
+          "id": "c6",
+          "helpful": false,
+          "summary": "PDF header rendering requires the patched Qt build.",
+          "reason": "The pending step verifies production access; installing a PDF renderer would exceed that immediate request."
+        },
+        {
+          "id": "c7",
+          "helpful": false,
+          "summary": "Workflow reference for stikon obmennik connect.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c8",
+          "helpful": false,
+          "summary": "Workflow reference for oura api personal analysis.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c9",
+          "helpful": false,
+          "summary": "Workflow reference for bnv group questions one per message.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c10",
+          "helpful": false,
+          "summary": "Workflow reference for prod ssh login shell.",
+          "reason": "This operational access check concerns another project, so the Celestia-specific shell guidance supplies no necessary detail."
+        },
+        {
+          "id": "c11",
+          "helpful": false,
+          "summary": "Workflow reference for admin api access.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c12",
+          "helpful": false,
+          "summary": "Workflow reference for miro board connector.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c13",
+          "helpful": false,
+          "summary": "Workflow reference for bnv dev look only no new button.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c14",
+          "helpful": false,
+          "summary": "Workflow reference for bnv bridge reports post to bv group.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c15",
+          "helpful": false,
+          "summary": "Workflow reference for celestia production log triage reference.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c16",
+          "helpful": false,
+          "summary": "Workflow reference for openclaw ops.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c17",
+          "helpful": false,
+          "summary": "Workflow reference for bnv external tester access.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c18",
+          "helpful": false,
+          "summary": "Workflow reference for bnv tariff sources of truth.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c19",
+          "helpful": false,
+          "summary": "Workflow reference for x post.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c20",
+          "helpful": false,
+          "summary": "Workflow reference for cursor worktree ssh.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c21",
+          "helpful": false,
+          "summary": "Workflow reference for bnv ci local no github actions.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c22",
+          "helpful": false,
+          "summary": "Workflow reference for hetzner tofu vps.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c23",
+          "helpful": false,
+          "summary": "Workflow reference for celestia webapp stage frontend deploy.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c24",
+          "helpful": false,
+          "summary": "Workflow reference for forgedemy pr review reference.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c25",
+          "helpful": false,
+          "summary": "Workflow reference for tool error state refresh.",
+          "reason": "The newly saved credential is a changed input, not a retry against stale file or session content; the preceding plan already specifies verification."
+        },
+        {
+          "id": "c26",
+          "helpful": false,
+          "summary": "Workflow reference for celestia debug triage.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c27",
+          "helpful": false,
+          "summary": "Workflow reference for codex memory requires tool.",
+          "reason": "The user stored a credential in the system keyring; they are not asking to save conversational memory."
+        },
+        {
+          "id": "c28",
+          "helpful": false,
+          "summary": "Workflow reference for claude tmux lessons.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c29",
+          "helpful": false,
+          "summary": "Workflow reference for nano banana 2.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+        },
+        {
+          "id": "c30",
+          "helpful": false,
+          "summary": "Workflow reference for spotify library.",
+          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
         }
       ]
     },
@@ -8007,187 +8127,187 @@
     },
     {
       "id": "p92",
-      "prompt": "Confirm the production password has been stored and ask to verify access.",
+      "prompt": "Safely retain the supplied Odoo and accounting access details and configure SQL tools.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Workflow for the private mailbox.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Query sales data and produce sales analytics reports.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Workflow reference for check prior agent solutions first.",
-          "reason": "The prior conversation has already investigated historical access and now names the newly saved credential entry."
+          "summary": "Analyze the current remote main branch rather than a stale local checkout.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Workflow reference for stikon one s sql.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Locations of canonical tariff source materials.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Historical tariff-project branches, data and development status.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Query the separate Stikon accounting SQL server through VPN.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Workflow reference for bnv dev test passwords fixed.",
-          "reason": "Preserving development test-user passwords is distinct from verifying the newly stored production sudo password."
+          "summary": "Bona Vita bridge reports are mirrored to a client group.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "PDF header rendering requires the patched Qt build.",
-          "reason": "The pending step verifies production access; installing a PDF renderer would exceed that immediate request."
+          "summary": "Use inference.sh only when explicitly needed.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Workflow reference for stikon obmennik connect.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Use the configured administrator API credential source.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c8",
           "helpful": false,
-          "summary": "Workflow reference for oura api personal analysis.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Design onboarding and empty-state experiences.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c9",
           "helpful": false,
-          "summary": "Workflow reference for bnv group questions one per message.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Design a distinctive frontend.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c10",
           "helpful": false,
-          "summary": "Workflow reference for prod ssh login shell.",
-          "reason": "This operational access check concerns another project, so the Celestia-specific shell guidance supplies no necessary detail."
+          "summary": "Dispatch isolated implementation workers with layered reviews.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c11",
           "helpful": false,
-          "summary": "Workflow reference for admin api access.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "External Odoo testers use a server-hosted tunnel rather than the operator PC.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c12",
           "helpful": false,
-          "summary": "Workflow reference for miro board connector.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "An earlier tariff project and workbook snapshot.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c13",
           "helpful": false,
-          "summary": "Workflow reference for bnv dev look only no new button.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Use Nano Banana through an explicitly requested inference.sh workflow.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c14",
           "helpful": false,
-          "summary": "Workflow reference for bnv bridge reports post to bv group.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Automate browser navigation, login, inspection and interaction.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c15",
-          "helpful": false,
-          "summary": "Workflow reference for celestia production log triage reference.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "helpful": true,
+          "summary": "Use distinct DEV and PROD routes; their shared hostname is unsafe for target selection.",
+          "reason": "Adds the missing development route and a concrete host-confusion guard while configuring persistent access interfaces."
         },
         {
           "id": "c16",
           "helpful": false,
-          "summary": "Workflow reference for openclaw ops.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Upgrade the known OpenClaw gateway fleet.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c17",
           "helpful": false,
-          "summary": "Workflow reference for bnv external tester access.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "References for an earlier Odoo feedback implementation campaign.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c18",
           "helpful": false,
-          "summary": "Workflow reference for bnv tariff sources of truth.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Pass development credentials through the designated helper without printing them.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c19",
           "helpful": false,
-          "summary": "Workflow reference for x post.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Keep spreadsheet provenance and reconciliation details out of Odoo UI.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c20",
           "helpful": false,
-          "summary": "Workflow reference for cursor worktree ssh.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Find and explain codebase architecture improvements.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c21",
           "helpful": false,
-          "summary": "Workflow reference for bnv ci local no github actions.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Explore options before converging on a design.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c22",
           "helpful": false,
-          "summary": "Workflow reference for hetzner tofu vps.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Discover skills through the Skills CLI.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c23",
           "helpful": false,
-          "summary": "Workflow reference for celestia webapp stage frontend deploy.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Keep stage branches aligned with their source changes.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c24",
           "helpful": false,
-          "summary": "Workflow reference for forgedemy pr review reference.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Investigate Celestia production logs and track findings.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c25",
           "helpful": false,
-          "summary": "Workflow reference for tool error state refresh.",
-          "reason": "The newly saved credential is a changed input, not a retry against stale file or session content; the preceding plan already specifies verification."
+          "summary": "Replay tested Celestia changes from stage to main safely.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c26",
           "helpful": false,
-          "summary": "Workflow reference for celestia debug triage.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Break a plan into independently actionable issues.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c27",
           "helpful": false,
-          "summary": "Workflow reference for codex memory requires tool.",
-          "reason": "The user stored a credential in the system keyring; they are not asking to save conversational memory."
+          "summary": "Turn the conversation into a product requirements document.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c28",
           "helpful": false,
-          "summary": "Workflow reference for claude tmux lessons.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Load the implementation-planning workflow.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c29",
           "helpful": false,
-          "summary": "Workflow reference for nano banana 2.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Load the brainstorming workflow from its platform source.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         },
         {
           "id": "c30",
           "helpful": false,
-          "summary": "Workflow reference for spotify library.",
-          "reason": "The preceding turn already gives the exact credential-store entry and read-only verification plan; this entry adds no applicable access-check detail."
+          "summary": "Load the systematic debugging workflow.",
+          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
         }
       ]
     },
@@ -8408,187 +8528,49 @@
     },
     {
       "id": "p96",
-      "prompt": "Safely retain the supplied Odoo and accounting access details and configure SQL tools.",
+      "prompt": "Check whether the verified Odoo changes can be deployed on development.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Query sales data and produce sales analytics reports.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "summary": "Keep spreadsheet artifacts out of Odoo screens.",
+          "reason": "Keeping spreadsheet artifacts out of the UI is exactly the change already described and verified in the preceding response."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Analyze the current remote main branch rather than a stale local checkout.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "summary": "Locations of canonical tariff source materials.",
+          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
         },
         {
           "id": "c3",
           "helpful": false,
-          "summary": "Locations of canonical tariff source materials.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "summary": "Use the patched-Qt wkhtmltopdf build to retain PDF headers and logos.",
+          "reason": "No header/logo defect blocks this deployment; applying a separate renderer upgrade would add unsupported scope."
         },
         {
           "id": "c4",
           "helpful": false,
-          "summary": "Query the separate Stikon accounting SQL server through VPN.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "summary": "Reference architecture for Codex Desktop voice transcription.",
+          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
         },
         {
           "id": "c5",
           "helpful": false,
-          "summary": "Bona Vita bridge reports are mirrored to a client group.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "summary": "Read, modify or create spreadsheet files.",
+          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
         },
         {
           "id": "c6",
           "helpful": false,
-          "summary": "Use inference.sh only when explicitly needed.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "summary": "An earlier snapshot of tariff branches, methods and the development server.",
+          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
         },
         {
           "id": "c7",
           "helpful": false,
-          "summary": "Use the configured administrator API credential source.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c8",
-          "helpful": false,
-          "summary": "Design onboarding and empty-state experiences.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c9",
-          "helpful": false,
-          "summary": "Design a distinctive frontend.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c10",
-          "helpful": false,
-          "summary": "Dispatch isolated implementation workers with layered reviews.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c11",
-          "helpful": false,
-          "summary": "External Odoo testers use a server-hosted tunnel rather than the operator PC.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c12",
-          "helpful": false,
-          "summary": "An earlier tariff project and workbook snapshot.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c13",
-          "helpful": false,
-          "summary": "Use Nano Banana through an explicitly requested inference.sh workflow.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c14",
-          "helpful": false,
-          "summary": "Automate browser navigation, login, inspection and interaction.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c15",
-          "helpful": true,
-          "summary": "Use distinct DEV and PROD routes; their shared hostname is unsafe for target selection.",
-          "reason": "Adds the missing development route and a concrete host-confusion guard while configuring persistent access interfaces."
-        },
-        {
-          "id": "c16",
-          "helpful": false,
-          "summary": "Upgrade the known OpenClaw gateway fleet.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c17",
-          "helpful": false,
           "summary": "References for an earlier Odoo feedback implementation campaign.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c18",
-          "helpful": false,
-          "summary": "Pass development credentials through the designated helper without printing them.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c19",
-          "helpful": false,
-          "summary": "Keep spreadsheet provenance and reconciliation details out of Odoo UI.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c20",
-          "helpful": false,
-          "summary": "Find and explain codebase architecture improvements.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c21",
-          "helpful": false,
-          "summary": "Explore options before converging on a design.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c22",
-          "helpful": false,
-          "summary": "Discover skills through the Skills CLI.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c23",
-          "helpful": false,
-          "summary": "Keep stage branches aligned with their source changes.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c24",
-          "helpful": false,
-          "summary": "Investigate Celestia production logs and track findings.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c25",
-          "helpful": false,
-          "summary": "Replay tested Celestia changes from stage to main safely.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c26",
-          "helpful": false,
-          "summary": "Break a plan into independently actionable issues.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c27",
-          "helpful": false,
-          "summary": "Turn the conversation into a product requirements document.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c28",
-          "helpful": false,
-          "summary": "Load the implementation-planning workflow.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c29",
-          "helpful": false,
-          "summary": "Load the brainstorming workflow from its platform source.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
-        },
-        {
-          "id": "c30",
-          "helpful": false,
-          "summary": "Load the systematic debugging workflow.",
-          "reason": "This candidate targets a different system or activity and adds no applicable connection detail to the supplied access instructions."
+          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
         }
       ]
     },
@@ -8749,49 +8731,19 @@
     },
     {
       "id": "p100",
-      "prompt": "Check whether the verified Odoo changes can be deployed on development.",
+      "prompt": "Ask whether the development data copy has completed.",
       "candidates": [
         {
           "id": "c1",
           "helpful": false,
-          "summary": "Keep spreadsheet artifacts out of Odoo screens.",
-          "reason": "Keeping spreadsheet artifacts out of the UI is exactly the change already described and verified in the preceding response."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The status request concerns a pending selective data copy already explained in context; this offer concerns another activity and adds no completion evidence."
         },
         {
           "id": "c2",
           "helpful": false,
-          "summary": "Locations of canonical tariff source materials.",
-          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
-        },
-        {
-          "id": "c3",
-          "helpful": false,
-          "summary": "Use the patched-Qt wkhtmltopdf build to retain PDF headers and logos.",
-          "reason": "No header/logo defect blocks this deployment; applying a separate renderer upgrade would add unsupported scope."
-        },
-        {
-          "id": "c4",
-          "helpful": false,
-          "summary": "Reference architecture for Codex Desktop voice transcription.",
-          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
-        },
-        {
-          "id": "c5",
-          "helpful": false,
-          "summary": "Read, modify or create spreadsheet files.",
-          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
-        },
-        {
-          "id": "c6",
-          "helpful": false,
-          "summary": "An earlier snapshot of tariff branches, methods and the development server.",
-          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
-        },
-        {
-          "id": "c7",
-          "helpful": false,
-          "summary": "References for an earlier Odoo feedback implementation campaign.",
-          "reason": "The current change and verification are already described; this candidate adds no reliable current deployment readiness evidence."
+          "summary": "Reference to a separate workflow or an unrelated operational constraint.",
+          "reason": "The status request concerns a pending selective data copy already explained in context; this offer concerns another activity and adds no completion evidence."
         }
       ]
     }

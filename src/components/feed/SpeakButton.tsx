@@ -134,7 +134,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
      cache module, so a completed message keeps its replay control across
      mounts — and loses it when its chunks are evicted. */
   const [, setSpokenTick] = useState(0);
-  const phase = speech && (header || rowMine) ? (header ? snapshot!.phase : rowPhase) : localPhase;
+  const phase = speech && (header || rowMine) ? (header ? snapshot?.phase ?? "idle" : rowPhase) : localPhase;
   const setPhase = (phase: "idle" | "loading" | "playing") => {
     if (mounted.current) setLocalPhase(phase);
     speech?.update({ phase, activeText: phase === "idle" ? null : frozenText.current, activeId: phase === "idle" ? null : frozenId.current });

@@ -159,7 +159,7 @@ for (const locale of ["en", "uk"] as const satisfies readonly Locale[]) {
     expect(stack.open).toBe(false);
 
     /* At rest: glyph + "not delivered — <terse cause>" + counter. */
-    const line = `${t("composer.receiptFailed")} — ${t("receipt.cause.hostUnavailable")}`;
+    const line = `${t("composer.deliveryNotDelivered")} — ${t("receipt.cause.hostUnavailable")}`;
     const cause = summary.querySelector("[data-delivery-notice-cause]") as HTMLElement;
     expect(cause.textContent).toBe(line);
     expect(summary.querySelector("svg")).not.toBeNull();
@@ -295,7 +295,7 @@ test("#1362 a known reason code reads as its human sentence with nothing further
   const mounted = mount({ receipts: [receipt({ operationId: "op-dead", reason: "dead-host" })], onDismiss: () => {} });
   const t = (key: Parameters<typeof translate>[1]) => translate("en", key);
   const cause = mounted.summary().querySelector("[data-delivery-notice-cause]") as HTMLElement;
-  expect(cause.textContent).toBe(`${t("composer.receiptFailed")} — ${t("receipt.human.deadHost")}`);
+  expect(cause.textContent).toBe(`${t("composer.deliveryNotDelivered")} — ${t("receipt.human.deadHost")}`);
   expect(mounted.summary().querySelector("[data-delivery-notice-count]")).toBeNull();
   click(mounted.summary());
   expect(mounted.stack().open).toBe(true);
@@ -314,7 +314,7 @@ test("#1362 identical consecutive failures collapse; an older different cause st
   const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate("en", key, params);
   const summary = mounted.summary();
   expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
-    .toBe(`${t("composer.receiptFailed")} — ${t("receipt.cause.hostUnavailable")}`);
+    .toBe(`${t("composer.deliveryNotDelivered")} — ${t("receipt.cause.hostUnavailable")}`);
   expect(summary.querySelector("[data-delivery-notice-count]")?.textContent).toContain("×2");
   const details = mounted.stack().querySelector("[data-runtime-receipt-details]") as HTMLElement;
   expect(details.querySelectorAll("[data-receipt-message]")).toHaveLength(3);
@@ -327,7 +327,7 @@ test("#1362 identical consecutive failures collapse; an older different cause st
   /* With the run dismissed the older cause surfaces as the next notice. */
   rerender(mounted, { receipts, dismissed: new Set(batches.flat()), onDismiss: () => {} });
   expect(mounted.summary().querySelector("[data-delivery-notice-cause]")?.textContent)
-    .toBe(`${t("composer.receiptFailed")} — ${t("receipt.human.deadHost")}`);
+    .toBe(`${t("composer.deliveryNotDelivered")} — ${t("receipt.human.deadHost")}`);
   expect(mounted.summary().querySelector("[data-delivery-notice-count]")).toBeNull();
   mounted.cleanup();
 });
@@ -439,6 +439,29 @@ for (const reason of [HOST_DOWN, "The connection to the structured recovery proc
     expect(retries).toEqual(["op-retry-2"]);
     expect(edits).toEqual(["op-retry-2"]);
     expect(dismissals).toEqual([["op-retry-2", "op-retry-1", "op-retry-0"]]);
+    mounted.cleanup();
+  });
+}
+
+for (const locale of ["uk", "en"] as const) {
+  test(`delivery notice uses plain ${locale} copy and vanishes on confirmation`, () => {
+    setLocale(locale);
+    const unknown = receipt({ operationId: "late-delivery", resend: "verify-first",
+      reason: "delivery was started by an earlier executor; whether it reached the recipient is unverified" });
+    const mounted = mount({ receipts: [unknown] }, 390);
+    const checking = translate(locale, "composer.deliveryChecking");
+    expect(mounted.summary().querySelector("[data-delivery-notice-cause]")?.textContent).toBe(checking);
+    click(mounted.summary());
+    expect(mounted.host.textContent).not.toContain("delivery was started");
+    rerender(mounted, { receipts: [{ ...unknown, status: "delivered", reason: null, resend: "not-needed" }] });
+    expect(mounted.host.querySelector("[data-runtime-receipt-stack]")).toBeNull();
+    const retries: string[] = [];
+    rerender(mounted, { receipts: [{ ...unknown, reason: "host died before accepting", resend: "safe" }],
+      onRetry: target => retries.push(target.operationId) });
+    expect(mounted.summary().querySelector("[data-delivery-notice-cause]")?.textContent)
+      .toBe(translate(locale, "composer.deliveryNotDelivered"));
+    clickAction(mounted.summary().querySelector("[data-delivery-notice-retry]") as HTMLButtonElement);
+    expect(retries).toEqual([unknown.operationId]);
     mounted.cleanup();
   });
 }

@@ -100,7 +100,10 @@ test("all five bins of the packed package run, and the legacy names say so on st
       expect(mcp.status, mcp.stderr).toBe(0);
       /* stdout is the protocol channel: its first byte is the first frame's. */
       expect(mcp.stdout.startsWith('{"jsonrpc":"2.0","id":1,')).toBeTrue();
-      expect(mcp.stdout.trim().split("\n")).toHaveLength(1);
+      expect(mcp.stdout.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+        { jsonrpc: "2.0", id: 1, result: { serverInfo: { name: "viewer" } } },
+        { jsonrpc: "2.0", method: "notifications/tools/list_changed" },
+      ]);
       const notices = mcp.stderr.split("\n").filter((line) => line.includes("is now delegatus"));
       expect(notices).toHaveLength(bin === "agent-log-viewer-mcp" ? 1 : 0);
     }

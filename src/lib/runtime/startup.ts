@@ -1,5 +1,4 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import crypto from "node:crypto";
 
 import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
@@ -11,7 +10,7 @@ import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrat
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords } from "@/lib/scanner/activity";
-import { loadPipelinesForStartup, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { loadPipelinesForStartup, pipelineRegistryHealth, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
   adoptClaudeRegistryHosts,
@@ -1060,9 +1059,11 @@ function pipelineStartupEvidence(registry: AgentRegistry, available = true): Pip
   const settled = new Set<string>();
   const deferred = new Set<string>();
   let pipelines;
+  let preservedIds: Set<string>;
   try {
     if (!available) throw new Error("pipeline admission authority is unavailable");
     pipelines = loadPipelinesForStartup();
+    preservedIds = new Set(pipelineRegistryHealth().map((issue) => issue.id));
   } catch (error) {
     console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
       error: error instanceof Error ? error.message : String(error),
@@ -1075,6 +1076,11 @@ function pipelineStartupEvidence(registry: AgentRegistry, available = true): Pip
     return { settled, deferred };
   }
   const memberships = registry.readOnlySnapshot().memberships;
+  for (const [id, entries] of Object.entries(memberships)) {
+    if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
+      deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
+    }
+  }
   for (const pipeline of pipelines) {
     const attempts = pipeline.runs.flatMap((run) => run.attempts);
     const evidence = [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map((host) => host.evidence)];
@@ -1440,6 +1446,7 @@ async function adoptStructuredHostsPass(
           model: entry.launchProfile?.model ?? undefined,
           serviceTier: entry.launchProfile ? launchServiceTier(entry.launchProfile) : undefined,
           effort: entry.launchProfile?.effort ?? undefined,
+          approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
           /* Re-adoption replays the durable grant (issue #687) — a session never

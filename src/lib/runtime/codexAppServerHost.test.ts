@@ -667,6 +667,34 @@ describe("CodexAppServerHost", () => {
     await readWriteHost.release();
   });
 
+  test.each([
+    { sandbox: "danger-full-access", approvalPolicy: "never" },
+    { sandbox: "workspace-write", approvalPolicy: "on-request" },
+    { sandbox: "read-only", approvalPolicy: "untrusted" },
+  ])("succession resume replays sandbox=$sandbox and approval=$approvalPolicy, including hydration fallback", async ({ sandbox, approvalPolicy }) => {
+    for (const paginated of [false, true]) {
+      const threadId = "launch-access-thread";
+      const firstServer = new FakeAppServer(threadId);
+      const options = { cwd: process.cwd(), sandbox, approvalPolicy, eventStore: new MemoryEventStore() };
+      const first = await CodexAppServerHost.start({ ...options, spawnProcess: fakeSpawn(firstServer) });
+      await first.release();
+      const successorServer = new FakeAppServer(threadId);
+      successorServer.paginatedResume = paginated;
+      const successor = await CodexAppServerHost.adopt(threadId, { ...options, spawnProcess: fakeSpawn(successorServer) });
+      try {
+        const fresh = firstServer.requests.find(request => request.method === "thread/start")!.params as Record<string, unknown>;
+        const resumed = successorServer.requests.filter(request => request.method === "thread/resume");
+        expect(resumed).toHaveLength(paginated ? 2 : 1);
+        for (const request of resumed) {
+          expect(request.params).toMatchObject({ sandbox: fresh.sandbox, approvalPolicy: fresh.approvalPolicy });
+          expect(request.params).not.toHaveProperty("permissions");
+        }
+      } finally {
+        await successor.release();
+      }
+    }
+  });
+
   test("starts a client-managed V3 WebRTC call on the hosted thread", async () => {
     const server = new FakeAppServer("voice-thread");
     const host = await CodexAppServerHost.start({

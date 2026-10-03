@@ -680,6 +680,11 @@ export interface DeliveryOperationOwner {
   command: HeldDeliveryCommand;
   requestDigest: string;
   contentDigest: string | null;
+  /** Recipient evidence stays tied to the generation that received the send
+      after the reservation is compacted or a successor is committed. */
+  targetGenerationId?: string | null;
+  evidenceText?: string | null;
+  evidenceImageCount?: number;
   createdAt: string;
   /** The attempt this row REPLACES, when a retry minted a fresh operation for a
       send that already had one (#1131).
@@ -1256,6 +1261,7 @@ function conversationMigrationForIntent(
     : [];
   return {
     intentId: intent.id,
+    startedAt: changedAt,
     phase,
     targetId: intent.targetId,
     revision: intent.revision,
@@ -2475,6 +2481,9 @@ function syncDeliveryOperationOwnerState(
 ): void {
   const owner = file.deliveryOperationOwners[delivery.command.operationId];
   if (owner?.deliveryId !== delivery.id) return;
+  if (delivery.generationId) owner.targetGenerationId = delivery.generationId;
+  owner.evidenceText ??= delivery.text;
+  owner.evidenceImageCount ??= delivery.runtimeImages.length;
   const terminalState = terminalDeliveryState(delivery);
   owner.terminalState = terminalState;
   if (terminalState === null) {
@@ -2788,6 +2797,15 @@ function normalizeDeliveryOperationOwners(
         contentDigest: typeof owner.contentDigest === "string"
           ? owner.contentDigest
           : referencedDelivery?.contentDigest ?? settledDelivery?.contentDigest ?? null,
+        targetGenerationId: typeof owner.targetGenerationId === "string"
+          ? owner.targetGenerationId
+          : referencedDelivery?.generationId ?? settledDelivery?.generationId ?? null,
+        evidenceText: typeof owner.evidenceText === "string"
+          ? owner.evidenceText
+          : referencedDelivery?.text ?? settledDelivery?.text ?? null,
+        evidenceImageCount: Number.isSafeInteger(owner.evidenceImageCount) && owner.evidenceImageCount! >= 0
+          ? owner.evidenceImageCount
+          : referencedDelivery?.runtimeImages.length ?? settledDelivery?.runtimeImages.length ?? 0,
         createdAt: typeof owner.createdAt === "string"
           ? owner.createdAt
           : referencedDelivery?.createdAt ?? settledDelivery?.createdAt ?? LEGACY_POLICY_RESTARTED_AT,
@@ -2827,6 +2845,9 @@ function normalizeDeliveryOperationOwners(
       command: delivery.command,
       requestDigest: delivery.requestDigest,
       contentDigest: delivery.contentDigest,
+      targetGenerationId: delivery.generationId,
+      evidenceText: delivery.text,
+      evidenceImageCount: delivery.runtimeImages.length,
       createdAt: delivery.createdAt,
       retryOfOperationId: null,
       terminalState: terminalDeliveryState(delivery),
@@ -2941,6 +2962,9 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       command: delivery.command,
       requestDigest: delivery.requestDigest,
       contentDigest: delivery.contentDigest,
+      targetGenerationId: delivery.generationId,
+      evidenceText: delivery.text,
+      evidenceImageCount: delivery.runtimeImages.length,
       createdAt: delivery.createdAt,
       retryOfOperationId: null,
       terminalState: null,
@@ -8815,6 +8839,9 @@ export class AgentRegistry {
         command: held.command,
         requestDigest: held.requestDigest!,
         contentDigest: held.contentDigest,
+        targetGenerationId: held.generationId,
+        evidenceText: held.text,
+        evidenceImageCount: held.runtimeImages.length,
         createdAt: held.createdAt,
         retryOfOperationId: null,
         terminalState: null,
@@ -9096,9 +9123,13 @@ export class AgentRegistry {
           command: delivery.command,
           requestDigest: delivery.requestDigest ?? "",
           contentDigest: delivery.contentDigest,
+          targetGenerationId: delivery.generationId,
+          evidenceText: delivery.text,
+          evidenceImageCount: delivery.runtimeImages.length,
         }
         : null);
       if (!source?.requestDigest) return false;
+      const conversation = file.conversations[resolveConversationAlias(file, source.conversationId)];
       file.deliveryOperationOwners[retryOperationId] = {
         conversationId: source.conversationId,
         runtimeConversationId: source.runtimeConversationId,
@@ -9107,6 +9138,12 @@ export class AgentRegistry {
         command: { ...source.command, operationId: retryOperationId },
         requestDigest: source.requestDigest,
         contentDigest: source.contentDigest,
+        /* A retry is a new actuation. The old owner names the generation its
+           predecessor reached, while structured delivery dispatch follows the
+           conversation's currently committed generation after recovery. */
+        targetGenerationId: conversation?.generations.at(-1)?.id ?? null,
+        evidenceText: source.evidenceText ?? delivery?.text ?? null,
+        evidenceImageCount: source.evidenceImageCount ?? delivery?.runtimeImages.length ?? 0,
         createdAt: now(),
         retryOfOperationId: previousOperationId,
         terminalState: null,
@@ -9114,6 +9151,19 @@ export class AgentRegistry {
         terminalReason: null,
         settledAt: null,
       };
+      return true;
+    });
+  }
+
+  /** Bind a retry owner to the host generation selected by the delivery queue,
+      immediately before it hands the operation to that host. */
+  bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
+    if (!operationId || !generationId) return false;
+    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    return this.mutate((file) => {
+      const owner = file.deliveryOperationOwners[operationId];
+      if (!owner?.retryOfOperationId) return false;
+      owner.targetGenerationId = generationId;
       return true;
     });
   }
@@ -9136,7 +9186,11 @@ export class AgentRegistry {
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId || owner.terminalState !== null) return owner ? clone(owner) : null;
+      if (!owner?.retryOfOperationId || (owner.terminalState !== null
+        && !(state === "delivered" && disposition === "delivered"
+          && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
+          && owner.terminalReason !== OPERATOR_DISCARDED_DELIVERY_REASON
+          && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)))) return owner ? clone(owner) : null;
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
@@ -9222,7 +9276,21 @@ export class AgentRegistry {
       const settled = outcomes.map((outcome) => {
         const canonicalId = resolveConversationAlias(file, outcome.conversationId);
         const delivery = deliveries.get(keyFor(canonicalId, outcome.operationId));
-        if (!delivery || delivery.state === "delivered") return delivery ? clone(delivery) : null;
+        if (!delivery) {
+          const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+            && outcome.state === "delivered" && outcome.disposition === "delivered"
+            && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
+            && owner.terminalReason !== OPERATOR_DISCARDED_DELIVERY_REASON
+            && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)) {
+            owner.terminalState = "delivered";
+            owner.terminalDisposition = "delivered";
+            owner.terminalReason = null;
+            owner.settledAt = now();
+          }
+          return null;
+        }
+        if (delivery.state === "delivered") return clone(delivery);
         const retryRecovered = delivery.state === "failed"
           && outcome.state === "delivered"
           && !terminalDeliveryFailureIsAbsorbing(delivery);

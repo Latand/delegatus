@@ -1,0 +1,123 @@
+{
+  "removedInterruptionNotices": 8,
+  "counts": {
+    "messages": 4497,
+    "machine": 3902,
+    "copies": 18,
+    "eligible": 577,
+    "requested": 100,
+    "sampled": 100,
+    "conversations": 1467,
+    "memoryEntries": 7675,
+    "senderConfirmed": 10
+  },
+  "population": [
+    {
+      "project": "project-1",
+      "engine": "claude",
+      "indexed": 23,
+      "operator": 12,
+      "sampled": 12
+    },
+    {
+      "project": "project-1",
+      "engine": "codex",
+      "indexed": 2,
+      "operator": 0,
+      "sampled": 0
+    },
+    {
+      "project": "project-2",
+      "engine": "claude",
+      "indexed": 1,
+      "operator": 0,
+      "sampled": 0
+    },
+    {
+      "project": "project-3",
+      "engine": "claude",
+      "indexed": 16,
+      "operator": 6,
+      "sampled": 6
+    },
+    {
+      "project": "project-3",
+      "engine": "codex",
+      "indexed": 37,
+      "operator": 0,
+      "sampled": 0
+    },
+    {
+      "project": "project-4",
+      "engine": "claude",
+      "indexed": 655,
+      "operator": 153,
+      "sampled": 20
+    },
+    {
+      "project": "project-4",
+      "engine": "codex",
+      "indexed": 1705,
+      "operator": 291,
+      "sampled": 20
+    },
+    {
+      "project": "project-5",
+      "engine": "claude",
+      "indexed": 415,
+      "operator": 74,
+      "sampled": 20
+    },
+    {
+      "project": "project-5",
+      "engine": "codex",
+      "indexed": 1427,
+      "operator": 0,
+      "sampled": 0
+    },
+    {
+      "project": "project-6",
+      "engine": "claude",
+      "indexed": 165,
+      "operator": 39,
+      "sampled": 20
+    },
+    {
+      "project": "project-6",
+      "engine": "codex",
+      "indexed": 44,
+      "operator": 2,
+      "sampled": 2
+    },
+    {
+      "project": "project-7",
+      "engine": "claude",
+      "indexed": 3,
+      "operator": 0,
+      "sampled": 0
+    },
+    {
+      "project": "project-7",
+      "engine": "codex",
+      "indexed": 4,
+      "operator": 0,
+      "sampled": 0
+    }
+  ],
+  "sampledIdentitiesUnchanged": 100,
+  "casesUnchanged": true,
+  "labelsUnchanged": true,
+  "requestBodiesUnchanged": 400,
+  "reusedScoredRequests": 344,
+  "receiptsUnchanged": 358,
+  "newPaidCalls": 0,
+  "networkDisabled": true,
+  "spendUsd": 0.19981462199999997,
+  "reproducedArms": 48,
+  "casesSha256": "0b3e4bf5a03c8d76efa6ea2876844b3672e0805bff936ae011debdc193638c08",
+  "labelsFileSha256": "26b5b335df25146c1bde331cbbb2b4e6d4a2c5e2dce0eb5857d591c1c76e1b83",
+  "requestBodiesSha256": "a3ddba6914556768fa5d107097c8760ca9b9dd2111428e1fa07a084f20026ceb",
+  "receiptsSha256": "2eb93850f90085ec6fcd9486d6690eda8887ea1d9d93f27bcde547e539b1ff2d",
+  "originalInputsByteUnchanged": true,
+  "metricsSha256": "9265d31811afdb44895fdcd0b3d3d4d272acbc1f689aab69a42af2c03fd31b3e"
+}

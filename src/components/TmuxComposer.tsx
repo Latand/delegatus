@@ -50,7 +50,7 @@ import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./Composer
 import { chatState } from "./mobile/mobileChatState";
 import { SelectedContextBadge } from "./SelectedContextBadge";
 import { TaskChipRow } from "./orchestrator/TaskChipRow";
-import { readTaskChips, taskChipRefs, restoreTaskChips, settleTaskChips, useSeatChipProject, type TaskChip } from "./orchestrator/taskChips";
+import { readTaskChips, taskChipRefs, restoreTaskChips, settleTaskChips, captureTaskChipSnapshot, settleTaskChipSnapshot, useSeatChipProject, type TaskChip } from "./orchestrator/taskChips";
 import { OutboxDispatcher } from "./conversation/OutboxDispatcher";
 import {
   adoptOutbox,
@@ -74,6 +74,7 @@ import {
   type OperationReconciliation,
   readOperationShared,
   readOutbox,
+  nextDispatch,
   rebindOutboxEchoText,
   releaseHeldOutbox,
   transcriptEchoCount,
@@ -133,6 +134,7 @@ import {
 import { VoiceFloatButton } from "./voice/VoiceFloatButton";
 import { isDesignatedManagerConversation } from "./voice/managerIdentity";
 import { viewerContextPrelude } from "./voice/viewerContextPrelude";
+import { useSeatParallelBusy } from "./orchestrator/useSeatParallelBusy";
 import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
 import { parseSeatDeputyView } from "@/lib/orchestrator/deputyView";
 import {
@@ -385,7 +387,7 @@ export function RuntimeComposerReceipts({
   payloadRecoveryKeys?: ReadonlySet<string>;
   /** Complete local submissions whose admission has no server operation yet. */
   localRecoveryKeys?: ReadonlySet<string>;
-  onRecheck?: () => void;
+  onRecheck?: (receipt?: RuntimeReceipt) => void;
 }) {
   const { t } = useLocale();
   const statusId = useId();
@@ -444,11 +446,11 @@ export function RuntimeComposerReceipts({
     nowMs: now,
   });
   const receiptStatusText = (receipt: RuntimeReceipt): string => receiptHasUnknownFate(receipt)
-    ? [t("orchPanel.errorUnknownTitle"), receipt.reason].filter(Boolean).join(": ")
+    ? t("composer.deliveryChecking")
     : runtimeReceiptStatusText(t, receipt);
   const uncertainControls = (receipt: RuntimeReceipt) => (
     <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5" data-operation={receipt.operationId}>
-      <span role="status" className="text-caption text-warning">{t("orchPanel.errorUnknownTitle")}</span>
+      <span role="status" className="text-caption text-warning">{t("composer.deliveryChecking")}</span>
       {/* #1560: an injection gets the verdict and NO controls. Both of these
           re-arm or end the original operation, and the journal refuses either
           for this kind — the engine does not deduplicate a second insertion,
@@ -460,7 +462,7 @@ export function RuntimeComposerReceipts({
       {(!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) || localRecoveryKeys.has(receipt.idempotencyKey)) && isRetryableReceipt(receipt) ? <>
         {alternateRetry(receipt)
           ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
-          : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={onRecheck}>{t("composer.payloadRecheck")}</button>}
+          : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRecheck?.(receipt)}>{t("composer.payloadRecheck")}</button>}
         {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
       </> : null}
     </span>
@@ -500,9 +502,9 @@ export function RuntimeComposerReceipts({
      sentence with its remediation waits behind expand/hover. The per-message
      history below keeps the detail — the notice is its disclosure, not a copy. */
   const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
-  const noticeFailure = notice ? describeReceiptFailure(t, notice.current.reason) : null;
   const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
-  const noticeLabel = t(noticeUnknown ? "orchPanel.errorUnknownTitle" : "composer.receiptFailed");
+  const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
+  const noticeLabel = t(noticeUnknown ? "composer.deliveryChecking" : "composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`
@@ -569,7 +571,7 @@ export function RuntimeComposerReceipts({
                only (design §3.7: role in the edge, never a full wash) — an
                annotation under the composer, subordinate to it in both themes. */
             className={`group w-full min-w-0 rounded-control border border-border ${
-              notice ? "border-l-2 border-l-danger " : ""
+              notice ? noticeUnknown ? "border-l-2 border-l-warning " : "border-l-2 border-l-danger " : ""
             }bg-sunken/55 text-caption text-secondary`}
             data-runtime-receipt-stack
             {...(notice ? { "data-delivery-notice": "" } : {})}
@@ -596,7 +598,7 @@ export function RuntimeComposerReceipts({
                     data-delivery-notice-cause
                     title={noticeFailure?.full ?? undefined}
                   >
-                    <span className="font-semibold text-danger">{noticeLabel}</span>
+                    <span className={`font-semibold ${noticeUnknown ? "text-warning" : "text-danger"}`}>{noticeLabel}</span>
                     {noticeFailure?.cause ? <span className="text-secondary">{` — ${noticeFailure.cause}`}</span> : null}
                   </span>
                   {/* Counters are plain muted text, never badges (design rule 5). */}
@@ -662,14 +664,16 @@ export function RuntimeComposerReceipts({
                     <button
                       type="button"
                       data-delivery-notice-retry
-                      aria-label={t("runtime.receipt.retry")}
-                      title={t("runtime.receipt.retry")}
+                      aria-label={t(noticeUnknown ? "composer.payloadRecheck" : "runtime.receipt.retry")}
+                      title={t(noticeUnknown ? "composer.payloadRecheck" : "runtime.receipt.retry")}
                       disabled={actionsDisabled}
                       className={`${noticeActionClass} hover:text-accent`}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        retryFailed(notice.current);
+                        if (noticeUnknown && onRecheck && !notice.current.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+                          onRecheck(notice.current);
+                        } else retryFailed(notice.current);
                       }}
                     >
                       <RotateCcw className="h-3 w-3" aria-hidden />
@@ -825,7 +829,7 @@ export function RuntimeComposerReceipts({
                         className="min-w-0 max-w-full text-right text-caption text-muted"
                         data-receipt-uncertain-why
                       >
-                        {unknownFate ? receipt.reason : deliveryUncertainWhy(t, wait!)}
+                        {unknownFate ? t("composer.deliveryCheckingDetail") : deliveryUncertainWhy(t, wait!)}
                       </span>
                     ) : null}
                     {history.length ? (
@@ -868,7 +872,7 @@ export function RuntimeComposerReceipts({
                       onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
                     />}
                     {receiptHasUnknownFate(receipt) && receipt.reason ? (
-                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{receipt.reason}</span>
+                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{t("composer.deliveryCheckingDetail")}</span>
                     ) : null}
                     {onDismiss && !receiptHasUnknownFate(receipt) && receiptIsTerminal(receipt.status) ? (
                       <button
@@ -1457,11 +1461,45 @@ function ComposerFocusContinuity({ claimKeys }: {
  * in sessionStorage for the next mount. `id` is the stable conversation identity
  * (falls back to path), so a draft survives an account-migration succession.
  */
+// A pending ask owns its conversation across composer unmounts. The ordinary
+// outbox takes ownership only after an idle answer; keep that interval fenced.
+const parallelRequests = new Set<string>();
+const parallelRequestListeners = new Set<() => void>();
+function subscribeParallelRequests(listener: () => void): () => void {
+  parallelRequestListeners.add(listener);
+  return () => { parallelRequestListeners.delete(listener); };
+}
+function setParallelRequestPending(id: string, pending: boolean): void {
+  if (pending) parallelRequests.add(id);
+  else parallelRequests.delete(id);
+  for (const listener of parallelRequestListeners) listener();
+}
+
+/** Settle a response for a composer that has already left this conversation. */
+function settleStoredParallelDraft(id: string, text: string, images: readonly PendingImage[], chips: ReturnType<typeof readTaskChips>, project: string | null): void {
+  const remaining = draftAfterDelivery(sessionStorage.getItem(draftKey(id)) ?? "", text);
+  if (remaining) sessionStorage.setItem(draftKey(id), remaining);
+  else sessionStorage.removeItem(draftKey(id));
+  const delivered = new Set(images.map((image) => image.id));
+  writeDraftImages(id, (readDraftImages(id) ?? []).filter((image) => !delivered.has(image.id)), false);
+  if (project) settleTaskChips(project, chips);
+  window.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail: { path: id, settledImageIds: images.flatMap((image) => image.id ? [image.id] : []) } }));
+}
+
 export function appendComposerDraft(id: string, text: string) {
   const key = draftKey(id);
   const prev = sessionStorage.getItem(key) ?? "";
   sessionStorage.setItem(key, prev.trim() ? prev.replace(/\s*$/, "") + "\n\n" + text : text);
   window.dispatchEvent(new CustomEvent(COMPOSE_EVENT, { detail: { path: id } }));
+}
+
+/** Return an unsent row without duplicating its retained parallel draft. */
+export function restoreOutboxDraft(id: string, entry: OutboxEntry): void {
+  const text = entry.idleParallelDraft ?? entry.text;
+  if (!text.trim()) return;
+  const current = sessionStorage.getItem(draftKey(id)) ?? "";
+  if (entry.idleParallelDraft !== undefined && !entry.idleParallelTextSettled && current.startsWith(text)) return;
+  appendComposerDraft(id, text);
 }
 
 const hhmm = (at: number) =>
@@ -1780,7 +1818,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* Pulls the bridge inbox once, at the start of a turn, and only for the voice
      conversation. Returns "" for every other card and whenever nothing is pending. */
   const drainBridgeTurnStart = useBridgeTurnStartDrain(voiceEnabled, { conversationId: cardId });
-  const { text, textRef, setText, setTextState, inputRef, setStatus, busy, setBusy, voiceSending, attachments } = composer;
+  const { text, textRef, setText, setTextState, inputRef, setStatus, busy: composerBusy, setBusy, voiceSending, attachments } = composer;
+  const parallelAsking = useSyncExternalStore(subscribeParallelRequests, () => parallelRequests.has(cardId), () => false);
+  const busy = composerBusy || parallelAsking;
   /* CONTEXT MODE (docs/design/composer-context-mode.md). Offered on a Codex
      conversation on the structured plane, where the operator's draft can be
      added to the thread's context instead of sent as a message that interrupts
@@ -1802,6 +1842,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const contextShown = contextOffered && contextMachine.snapshot.shown === "context";
   const contextBlocked = contextShown && !contextSupported;
   const attachmentDraftHydrated = useRef(false);
+  const attachmentDraftOwner = useRef<string | null>(null);
   const isMobile = useIsMobile(viewActive);
   /* The runtime's own connection, for the phone's Queue slot (§4.2): while the
      bus is off this reads inert, so nothing changes on the landing-disabled
@@ -1821,8 +1862,34 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* The queue-first outbox (issue #561): submitted drafts live here from the
      moment they are submitted, so the feed can render them as optimistic user
      bubbles while the composer clears and stays typable. */
+  const seatProject = useSeatProjectFor(file.conversationId ?? null);
+  const seatParallelBusy = useSeatParallelBusy(seatProject, file.conversationId ?? null, viewActive && !pollPaused);
   const outbox = useOutbox(cardId);
+  const parallelFallbacks = useRef(new Map<string, { cardId: string; text: string; images: PendingImage[]; files: PendingFile[]; chips: ReturnType<typeof readTaskChips> }>());
   const [payloadRows, setPayloadRows] = useState<RestoredComposerSubmission[]>([]);
+  useEffect(() => {
+    if (!attachmentDraftHydrated.current || attachmentDraftOwner.current !== cardId) return;
+    for (const entry of outbox) {
+      if (typeof entry.idleParallelDraft !== "string") continue;
+      const stored = payloadRows.find((row) => row.ref.key === entry.id)?.submission;
+      const draft = parallelFallbacks.current.get(entry.id) ?? {
+        cardId, text: entry.idleParallelDraft, images: entry.idleParallelImageIds
+          ? attachments.imagesRef.current.filter((image) => image.id && entry.idleParallelImageIds!.includes(image.id))
+          : stored?.images ?? [], files: stored?.files ?? [], chips: entry.selectedContext?.tasks ?? [],
+      };
+      if (draft.cardId !== cardId) continue;
+      if (entry.images > 0 && !entry.idleParallelImageIds && !draft.images.length) continue;
+      if (entry.state !== "delivered" && !(entry.deliveryReceipt && receiptIsAdmitted(entry.deliveryReceipt.status))) continue;
+      parallelFallbacks.current.delete(entry.id);
+      updateOutbox(cardId, entry.id, { idleParallelDraft: undefined });
+      if (entry.idleParallelTextSettled) setText(sessionStorage.getItem(draftKey(cardId)) ?? "");
+      else setText((current) => draftAfterDelivery(current, draft.text));
+      attachments.settleDelivered(draft.images, draft.files);
+      if (entry.idleParallelChips) settleTaskChipSnapshot(entry.idleParallelChips.project, entry.idleParallelChips.snapshot);
+      else if (chipProject) settleTaskChips(chipProject, draft.chips);
+      setStatus({ kind: "ok", text: t("composer.parallelSentDirectly") });
+    }
+  }, [outbox, payloadRows, cardId, setText, setStatus, attachments, chipProject, t]);
   const [payloadStorageError, setPayloadStorageError] = useState<string | null>(null);
   const payloadOwner = useRef(cardId);
   const settlingPayloads = useRef(new Set<string>());
@@ -2322,6 +2389,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const resumable = restoredPending.find((entry) => entry.payloadComplete !== false);
     const draftImages = readDraftImages(cardId);
     attachmentDraftHydrated.current = false;
+    attachmentDraftOwner.current = cardId;
     const trayImages = draftImages ?? (resumable?.text === draftNow ? resumable.images : []);
     const draftFiles = readDraftFiles(cardId);
     const restoredImages = attachments.replace(trayImages.map((image) => ({ ...image })), draftFiles);
@@ -2568,7 +2636,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      persisted, and the closure must not go stale between events. */
   useEffect(() => {
     const onCompose = (event: Event) => {
-      if ((event as CustomEvent<{ path?: string }>).detail?.path !== cardId) return;
+      const detail = (event as CustomEvent<{ path?: string; settledImageIds?: string[] }>).detail;
+      if (detail?.path !== cardId) return;
+      if (detail.settledImageIds?.length) attachments.settleDelivered(attachments.imagesRef.current.filter((image) =>
+        image.id && detail.settledImageIds!.includes(image.id)));
       const next = sessionStorage.getItem(draftKey(cardId)) ?? "";
       composer.draftRevision.current += 1;
       textRef.current = next;
@@ -2582,7 +2653,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     };
     window.addEventListener(COMPOSE_EVENT, onCompose);
     return () => window.removeEventListener(COMPOSE_EVENT, onCompose);
-  }, [cardId, inputRef, setTextState, textRef]);
+  }, [cardId, inputRef, setTextState, textRef, attachments, composer.draftRevision]);
 
   /* The queue drains itself: a pane message is delivered once the transcript
      grew after the send moment; a spawn prompt lands in a fresh window whose
@@ -2652,13 +2723,32 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* `preserveDraft` queues a message that stands apart from the operator's
      current draft — the quick-ack (finding 5). It carries no attachments and
      leaves the composer's typed text and staged tiles exactly where they were. */
-  const queueSubmit = (overrideText?: string, options?: { preserveDraft?: boolean; policy?: "steer-if-active" }) => {
-    if (composerSubmissionSaving(cardId)) return;
+  const retainedParallelFallback = (draftText: string) => readOutbox(cardId).find((entry) => {
+    if (typeof entry.idleParallelDraft !== "string") return false;
+    if (entry.idleParallelDraft) return draftText.startsWith(entry.idleParallelDraft);
+    const snapshot = parallelFallbacks.current.get(entry.id)?.images
+      ?? payloadRows.find((row) => row.ref.key === entry.id)?.submission.images;
+    const sameImages = entry.idleParallelImageIds?.length
+      ? entry.idleParallelImageIds.every((id) => attachments.imagesRef.current.some((current) => current.id === id))
+      : snapshot?.length && snapshot.every((image) => attachments.imagesRef.current.some((current) =>
+        image.id ? current.id === image.id : current.base64 === image.base64 && current.mime === image.mime));
+    return Boolean(sameImages && (entry.state !== "failed" || entry.deliveryUncertain || !draftText.trim()));
+  });
+
+  const queueSubmit = (overrideText?: string, options?: { preserveDraft?: boolean; policy?: "steer-if-active"; idleParallelFallback?: { images: PendingImage[]; chips: ReturnType<typeof readTaskChips> } }) => {
+    if (parallelRequests.has(cardId) || composerSubmissionSaving(cardId)) return;
     const preserveDraft = options?.preserveDraft ?? false;
+    const retainedFallback = retainedParallelFallback(overrideText ?? textRef.current);
+    if (retainedFallback) {
+      // Retry stays on the original key; a pending/uncertain copy cannot send
+      // a second generation just because its draft remains visible.
+      if (retainedFallback.state === "failed" && !retainedFallback.deliveryUncertain) retryOutbox(cardId, retainedFallback.id);
+      return;
+    }
     const draftRevision = composer.draftRevision.current;
     const requestedText = overrideText ?? textRef.current;
-    const requestedImages: PendingImage[] = preserveDraft ? [] : attachments.imagesRef.current.map((image) => ({ ...image }));
-    const requestedFiles: PendingFile[] = preserveDraft ? [] : attachments.filesRef.current.map((file) => ({ ...file }));
+    const requestedImages: PendingImage[] = preserveDraft ? [] : (options?.idleParallelFallback?.images ?? attachments.imagesRef.current).map((image) => ({ ...image }));
+    const requestedFiles: PendingFile[] = preserveDraft || options?.idleParallelFallback ? [] : attachments.filesRef.current.map((file) => ({ ...file }));
     if (voiceSending || reconcilingSend) return;
     if (!requestedText.trim() && !requestedImages.length && !requestedFiles.length) return;
     if (refuseWhileInjecting(requestedFiles)) return;
@@ -2701,7 +2791,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        reference the wire carries is captured by `send` at dispatch. */
     /* The task chips attached to this seat's composer, frozen with the rest of
        the reference: chips added after Send belong to the next message. */
-    const chipsAtSubmit = chipProject && !preserveDraft ? readTaskChips(chipProject) : [];
+    const chipsAtSubmit = options?.idleParallelFallback?.chips ?? (chipProject && !preserveDraft ? readTaskChips(chipProject) : []);
     const submittedContext = withSelectedTasks(viewerSelectedContext(), taskChipRefs(chipsAtSubmit));
     /**
      * The row, at the instant the operator pressed Send.
@@ -2716,12 +2806,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      * had finished, which is precisely the wait the operator called slow.
      */
     const reserveSubmission = (preparing: boolean): boolean => {
-      if (payloadOwner.current !== cardId) return false;
+      if (payloadOwner.current !== cardId && !options?.idleParallelFallback) return false;
       outboxImages.current.set(clientMessageId, requestedImages);
       if (requestedFiles.length) outboxFiles.current.set(clientMessageId, requestedFiles);
       outboxKeys.current.add(clientMessageId);
       const admitted = enqueueOutbox(cardId, {
         id: clientMessageId,
+        ...(options?.idleParallelFallback ? { idleParallelDraft: requestedText, idleParallelImageIds: requestedImages.flatMap((image) => image.id ? [image.id] : []),
+          ...(chipProject ? { idleParallelChips: { project: chipProject, snapshot: captureTaskChipSnapshot(chipProject, chipsAtSubmit) } } : {}),
+        } : {}),
         text: requestedText,
         images: requestedImages.length,
         /* #1224: recorded on the durable entry so the refresh fence holds a
@@ -2754,6 +2847,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         setStatus({ kind: "err", text: t("composer.outboxFull") });
         return false;
       }
+      if (options?.idleParallelFallback) parallelFallbacks.current.set(clientMessageId, {
+        cardId, text: requestedText, images: requestedImages, files: requestedFiles, chips: chipsAtSubmit,
+      });
       return true;
     };
     /* The preparation could not be made durable, so the message never became
@@ -2769,7 +2865,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        then the draft and its staged attachments are the only copy of some of
        it, and a preparation that fails must leave the operator whole. */
     const releaseComposer = () => {
-      if (!preserveDraft) {
+      if (payloadOwner.current !== cardId) return;
+      if (!preserveDraft && !options?.idleParallelFallback) {
         if (composer.draftRevision.current === draftRevision) setText("");
         attachments.settleDelivered(requestedImages, requestedFiles);
         /* The chips went with the message; one attached while it was being
@@ -2779,7 +2876,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setStatus(null);
       inputRef.current?.focus();
     };
-    if (!requestedImages.length && !requestedFiles.length
+    if (!options?.idleParallelFallback && !requestedImages.length && !requestedFiles.length
       && !pendingDeliveries.current.some(entry => entry.payloadComplete === false)) {
       if (reserveSubmission(false)) releaseComposer();
       return;
@@ -2824,11 +2921,71 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         if (!await composerSubmissionPayloads.beginAttempt(ref)) throw new Error("Original attempt is already owned");
         if (bridge?.ackToken) rememberBridgeAcknowledgement(clientMessageId, bridge.ackToken);
         await refreshPayloads();
-        if (payloadOwner.current !== cardId) return;
+        if (payloadOwner.current !== cardId && !options?.idleParallelFallback) return;
         /* Durable: the row stops being held back and the dispatcher may take
            it. Nothing about the row itself changes — it has been in its final
            form, in its final position, since Send. */
         updateOutbox(cardId, clientMessageId, { preparing: undefined });
+        if (payloadOwner.current !== cardId && options?.idleParallelFallback) {
+          // The original composer is gone. Dispatch its sealed normal-message
+          // envelope once; its outbox/receipt remains with that conversation.
+          const claimed = nextDispatch(readOutbox(cardId))?.id === clientMessageId
+            ? claimOutboxDispatch(cardId, clientMessageId) : null;
+          if (claimed) {
+            const retained = await composerSubmissionPayloads.restore(ref);
+            if (!retained?.envelope || !composerSubmissionPayloads.consumeAttempt(ref)) throw new Error("Original fallback envelope unavailable");
+            const envelope = retained.envelope;
+            updateOutbox(cardId, clientMessageId, { dispatchedAt: nowMs() });
+            const request: Promise<ComposerSendResult> = envelope.route === "runtime"
+                ? runtimeDependencies.sendRuntimeMessage(envelope.body as unknown as Parameters<typeof runtimeDependencies.sendRuntimeMessage>[0])
+                : fetch("/api/tmux", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope.body) })
+                  .then(async (response) => {
+                    const body = await response.json();
+                    return { ...body, ok: response.ok && body.ok === true, status: response.status };
+                  });
+            const applyResult = async (result: ComposerSendResult) => {
+              const current = readOutbox(cardId).find((entry) => entry.id === clientMessageId);
+              if (current?.state === "delivered" || (!result.receipt && (current?.operationId || current?.deliveryReceipt))) return;
+              const receipt = result.receipt as RuntimeReceipt | undefined;
+              if (receipt && current?.deliveryReceipt?.operationId === receipt.operationId
+                && current.deliveryReceipt.revision >= receipt.revision) return;
+              if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
+                || (result.operationId && result.operationId !== receipt.operationId)
+                || !await composerSubmissionPayloads.observe(ref, receipt))) throw new Error("receipt-identity-mismatch");
+              const refused = !result.ok && !result.operationId && !receipt
+                && (result.delivery === "refused" || (result.status !== undefined && PRE_ADMISSION_REFUSALS.has(result.status)));
+              if (refused && !await composerSubmissionPayloads.refuse(ref, { status: result.status ?? 503, reason: result.error ?? "message refused" })) return;
+              const structured = envelope.route === "runtime" || result.structured === true;
+              const admitted = structured ? Boolean(receipt && receiptIsAdmitted(receipt.status)) : result.ok;
+              const uncertain = !admitted && !refused && (!receipt || receiptHasUnknownFate(receipt))
+                && (result.ok || result.status === undefined || result.status >= 500);
+              const delivered = admitted && (structured ? receipt?.status === "delivered"
+                : result.outcome !== "held" && result.outcome !== "queued" && result.outcome !== "recovering");
+              if (delivered) await composerSubmissionPayloads.settle(ref, structured ? receipt : undefined);
+              if (admitted) {
+                if (bridge?.ackToken) commitBridgeFor(clientMessageId);
+                settleStoredParallelDraft(cardId, requestedText, requestedImages, chipsAtSubmit, chipProject);
+              } else if (!result.ok) forgetBridgeAcknowledgement(clientMessageId);
+              updateOutbox(cardId, clientMessageId, { state: admitted
+                ? !structured && result.outcome !== "held" && result.outcome !== "queued" && result.outcome !== "recovering"
+                  || receipt?.status === "delivered" ? "delivered" : "delivering"
+                : uncertain || result.ok ? "delivering" : "failed",
+                deliveryUncertain: uncertain ? true : undefined,
+                ...(admitted ? { idleParallelTextSettled: true } : {}),
+                ...(receipt ? { deliveryReceipt: receipt } : {}), ...(result.operationId ? { operationId: result.operationId } : {}),
+                ...(result.error ? { error: result.error } : {}) });
+            };
+            try {
+              await applyResult(await withComposerAdmissionDeadline(request, admissionTiming.admissionDeadlineMs));
+            } catch (error) {
+              if (error instanceof ComposerAdmissionTimeoutError) void request.then(applyResult).catch(() => {});
+              const current = readOutbox(cardId).find((entry) => entry.id === clientMessageId);
+              if (current?.state !== "delivered" && !(current?.deliveryReceipt && receiptIsAdmitted(current.deliveryReceipt.status))) {
+                updateOutbox(cardId, clientMessageId, { state: "delivering", deliveryUncertain: true });
+              }
+            }
+          }
+        }
         releaseComposer();
       } catch {
         withdrawSubmission();
@@ -3357,7 +3514,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           json = { ...json, ok: false, receipt: undefined, operationId: undefined, error: "receipt-identity-mismatch" };
         }
         await refreshPayloads();
-      } else if (durable?.envelope?.route === "runtime" && !json.ok && !json.operationId
+      } else if (durable && !json.ok && !json.operationId
         && (refusedBeforeDispatch || (json.status !== undefined && PRE_ADMISSION_REFUSALS.has(json.status)))) {
         /* Refused before anything was reserved: say so durably, so a reload
            still offers the sealed envelope again instead of an unknown fate.
@@ -3767,7 +3924,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       }
       const cleared = clearParkedOutbox(cardId, key);
       if (!cleared) cancelOutbox(cardId, key);
-      if (!readOutbox(cardId).some((candidate) => candidate.id === key) && entry.text.trim()) appendComposerDraft(cardId, entry.text);
+      if (!readOutbox(cardId).some((candidate) => candidate.id === key)) restoreOutboxDraft(cardId, entry);
     },
     editContext: (key) => {
       const entry = readOutbox(cardId).find((candidate) => candidate.id === key);
@@ -4332,17 +4489,21 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      transcript; its block's head, drawn from the deputy record the route
      answers with, takes the place a sent message would have. Pictures ride
      along; documents are refused by name rather than dropped. */
-  const seatProject = useSeatProjectFor(file.conversationId ?? null);
-  const seatTurnRunning = structuredSession?.session.turn === "running";
   const askInParallel = () => {
-    if (!seatProject) return;
+    if (!seatProject || parallelRequests.has(cardId) || busy || voiceSending || sendBlocked) return;
+    const retainedFallback = retainedParallelFallback(textRef.current);
+    if (retainedFallback) {
+      // A failed idle fallback still owns this authored generation. Retry its
+      // sealed envelope under the original key instead of creating a deputy
+      // alongside the retained row.
+      if (retainedFallback.state === "failed" && !retainedFallback.deliveryUncertain) {
+        retryOutbox(cardId, retainedFallback.id);
+      }
+      return;
+    }
     const requestedText = textRef.current.trim();
     const requestedImages = attachments.imagesRef.current.map((image) => ({ ...image }));
     if (!requestedText && !requestedImages.length) return;
-    if (!seatTurnRunning) {
-      setStatus({ kind: "err", text: t("composer.askInParallelFailed", { error: t("queue.steerIdle") }) });
-      return;
-    }
     if (attachments.filesRef.current.length) {
       setStatus({ kind: "err", text: t("inject.imagesUnsupported") });
       return;
@@ -4352,15 +4513,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const chips = chipProject ? readTaskChips(chipProject) : [];
     const requestedTasks = taskChipRefs(chips);
     const clientRequestId = mintIdempotencyKey();
-    setText("");
+    setParallelRequestPending(cardId, true);
     void (async () => {
-      let answer: { ok?: boolean; error?: string; deputy?: unknown } = {};
+      let answer: { ok?: boolean; code?: string; error?: string; deputy?: unknown } = {};
       try {
         const response = await fetch("/api/orchestrator/ghost", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             project: seatProject,
+            seatConversationId: file.conversationId,
             text: [taskReferencePrelude(requestedTasks), requestedText].filter(Boolean).join("\n"),
             images: requestedImages.map((image) => ({ base64: image.base64, mime: image.mime })),
             clientRequestId,
@@ -4371,16 +4533,27 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       } catch (error) {
         answer = { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
+      setParallelRequestPending(cardId, false);
+      if (!answer.ok && answer.code === "seat_not_busy") {
+        // This refusal reserves nothing. The ordinary durable send owns the
+        // fallback, its attachments and retry; the draft waits for admission.
+        queueSubmit(snapshotText, { idleParallelFallback: { images: requestedImages, chips } });
+        return;
+      }
       const deputy = answer.ok ? parseSeatDeputyView(answer.deputy) : null;
       if (deputy) {
         publishSeatDeputy(deputy);
+        if (payloadOwner.current !== cardId) {
+          settleStoredParallelDraft(cardId, snapshotText, requestedImages, chips, chipProject);
+          return;
+        }
+        setText((current) => draftAfterDelivery(current, snapshotText));
         if (chipProject) settleTaskChips(chipProject, chips);
         attachments.settleDelivered(requestedImages, []);
         setStatus({ kind: "ok", text: t("composer.askInParallel") });
         return;
       }
-      setStatus({ kind: "err", text: t("composer.askInParallelFailed", { error: answer.error ?? "" }) });
-      setText((current) => current || snapshotText);
+      if (payloadOwner.current === cardId) setStatus({ kind: "err", text: t("composer.askInParallelFailed", { error: answer.error ?? "" }) });
     })();
   };
 
@@ -4825,8 +4998,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ? [{
             id: "ask-in-parallel",
             label: t("composer.askInParallel"),
-            description: t("composer.askInParallelHint"),
-            disabled: busy || voiceSending || sendBlocked || !seatTurnRunning,
+            description: t(seatParallelBusy === false ? "composer.parallelIdleHint" : "composer.askInParallelHint"),
+            disabled: busy || voiceSending || sendBlocked,
             onSelect: askInParallel,
           } as const]
           : []),
@@ -4913,7 +5086,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                 ...payloadRows.flatMap(row => [row.ref.key, ...payloadReceiptEvidence({ conversationId: row.ref.conversationId,
                   key: row.ref.key, operationId: row.operationId }, [...runtimeReceipts, ...displayedRuntimeReceipts]).map(receipt => receipt.idempotencyKey)]),
                 ...pendingDeliveries.current.filter(entry => entry.payloadComplete === false).map(entry => entry.key)])}
-              onRecheck={() => void runtimeDependencies.refreshRuntime().then(() => refreshPayloads())}
+              onRecheck={(receipt) => {
+                if (receipt && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+                  readOperationBack({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey, original: receipt }, true);
+                }
+                void runtimeDependencies.refreshRuntime().then(() => refreshPayloads());
+              }}
               actionsDisabled={busy || voiceSending || deadHostBlocksSend}
               dismissed={dismissedReceipts}
               session={structuredSession

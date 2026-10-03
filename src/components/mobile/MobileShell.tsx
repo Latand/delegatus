@@ -185,7 +185,6 @@ export function MobileShell({
   host,
   onOpenSearch,
   barAction,
-  secondaryBarAction,
   searchTestId,
   menu = true,
   renderSheet,
@@ -210,8 +209,6 @@ export function MobileShell({
   /** One more control in the bar, before search: the orchestrator
       conversation's report log (#2146). */
   barAction?: ReactNode;
-  /** Secondary action yields to attention so the title retains its budget. */
-  secondaryBarAction?: ReactNode;
   searchTestId?: string;
   /** The ⋯ target: every screen opens the board menu over itself. */
   menu?: boolean;
@@ -334,7 +331,6 @@ export function MobileShell({
             </span>
           ) : null}
           {barAction}
-          {attentionCount || noticeDot ? null : secondaryBarAction}
           {showSearch ? (
             <button type="button" data-testid={searchTestId} data-mobile2-open="search" aria-label={t("mobile2.bar.search")} className={ICON_BUTTON} onClick={onOpenSearch}>
               <Search className="h-5 w-5" aria-hidden />

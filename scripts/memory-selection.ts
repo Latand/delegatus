@@ -9,6 +9,8 @@ import {
 } from "../src/lib/asks/jev";
 import { decodeCodexStructuredUserText } from "../src/lib/runtime/codexStructuredUserText";
 import { readOpenRouterApiKey } from "../src/lib/asks/settings";
+import { en } from "../src/lib/i18n/en";
+import { uk } from "../src/lib/i18n/uk";
 
 export const CAP_USD = 2;
 export const THRESHOLD = 0.7;
@@ -20,6 +22,7 @@ export interface Message {
   transcript_path: string; message_index: number; body: string; engine: string;
   project: string; timestamp: number | null;
   byte_offset?: number; machineOrigin?: boolean; operatorOrigin?: boolean; eventId?: string; nativeTimestamp?: number;
+  uiContext?: string;
 }
 export interface Candidate {
   id: string; title: string; summary: string; body: string; engine: string;
@@ -41,12 +44,30 @@ export interface Labels {
   cases: Array<{ id: string; prompt: string; candidates: Array<{ id: string; helpful: boolean; summary: string; reason: string }> }>;
 }
 
-export function cleanEnvelope(text: string): string {
+// Match the complete UI-owned prefix. A partial
+// phrase may be the operator's own prose and must remain untouched.
+const uiPrefixes = [en, uk].flatMap(dictionary => ["draft.readPrompt", "link.handoffContext"].map(key => {
+  const message = dictionary[key as "draft.readPrompt" | "link.handoffContext"];
+  if (typeof message !== "string") throw new Error("Expected a string UI continuation template");
+  const template = message.replace(/\{ask\}$/, "").trimEnd();
+  const parts = template.split(/\{(?:src|title|path)\}/);
+  return new RegExp("^" + parts.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^\\n]+?") + "(?:\\s*|$)");
+}));
+
+export function operatorEnvelope(text: string): { text: string; uiContext?: string } {
   const withoutAttachments = text.replace(/<image\b[^>]*>[\s\S]*?<\/image>/g, "").trimStart();
-  return decodeCodexStructuredUserText(withoutAttachments).text
+  const body = decodeCodexStructuredUserText(withoutAttachments).text
     .replace(/^(?:While you were away the manager reported:|Other sessions also reported \(NOT the manager)[\s\S]*?Mention what matters in your own words\. Do not read this list aloud\.\s*/, "")
-    .replace(/^\[viewer context[^\n]*\]\s*/i, "")
-    .replace(/^Тобі передали контекст іншого агента[^\n]*\n\n/, "").trim();
+    .replace(/^\[viewer context[^\n]*\]\s*/i, "").trim();
+  for (const prefix of uiPrefixes) {
+    const match = body.match(prefix);
+    if (match) return { text: body.slice(match[0].length).trim(), uiContext: match[0].trim() };
+  }
+  return { text: body };
+}
+
+export function cleanEnvelope(text: string): string {
+  return operatorEnvelope(text).text;
 }
 
 export function isPreamble(text: string): boolean {
@@ -117,6 +138,9 @@ export function samplePrompts(messages: Message[], limit: number) {
  * attachments or whether the message can stand alone. */
 export function machineMessage(text: string, operatorOrigin = false): boolean {
   const body = cleanEnvelope(text);
+  // Same tag-boundary recognizer as the feed's isCodexHarnessUserText.
+  // Codex injects this notice even when the enclosing turn has operator origin.
+  if (/^<turn_aborted\b/.test(body)) return true;
   // Historic recovery and pipeline protocol messages can carry operator-origin
   // markers. These exact control envelopes remain machine messages; ordinary
   // operator prose must never be classified by tool names or urgency wording.
@@ -137,7 +161,7 @@ export function sampleOperatorPrompts(messages: Message[], limit = SAMPLE_LIMIT)
     const key = m.eventId ?? `${m.transcript_path}:${m.message_index}`;
     if (seen.has(key)) { copies++; return false; }
     seen.add(key); return true;
-  }).map(m => ({ ...m, body: cleanEnvelope(m.body) }));
+  }).map(m => { const envelope = operatorEnvelope(m.body); return { ...m, body: envelope.text, uiContext: envelope.uiContext }; });
   // Every indexed occurrence is a population unit, including repeated short
   // answers. No content deduplication can erase a separately written answer.
   const strata = new Map<string, Message[]>();
@@ -398,6 +422,7 @@ export function collect(transcripts: string, memories: string, limit = SAMPLE_LI
       const context = t.query<{ role: string; text: string }, [string, number]>(
         "SELECT speaker AS role, body AS text FROM transcript_messages WHERE transcript_path=? AND message_index<? ORDER BY message_index"
       ).all(message.transcript_path, message.message_index).filter(turn => !isPreamble(turn.text));
+      if (message.uiContext) context.push({ role: "context", text: message.uiContext });
       // Latest request first, then prior turns newest-first for term extraction.
       const queryMessage = { ...message, body: message.body + "\n" + context.slice().reverse().map(turn => turn.text).join("\n") };
       const started = performance.now();
@@ -496,7 +521,10 @@ export function replayText(text: string): string {
 /** Keep the complete prefix privately; the decider gets a bounded trailing
  * view because Jev has a 32K-token input window. Truncation is explicit. */
 export function contextView(c: Case): string {
-  const text = (c.context ?? []).map(t => `${t.role}: ${cleanEnvelope(t.text)}`).join("\n\n");
+  const text = (c.context ?? []).map(t => {
+    const envelope = operatorEnvelope(t.text);
+    return [envelope.uiContext ? `context: ${envelope.uiContext}` : "", envelope.text ? `${t.role}: ${envelope.text}` : ""].filter(Boolean).join("\n\n");
+  }).join("\n\n");
   const safe = replayText(text);
   return safe.length > 16_000 ? "[earlier context omitted]\n" + safe.slice(-16_000) : safe;
 }
