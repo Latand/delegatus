@@ -897,21 +897,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     return () => observer.disconnect();
   }, []);
 
-  /* One reveal step, a few rows per frame. A reveal asked for while a ramp is
-     still running is the same ask, so it adds nothing. */
-  const growVisibleBy = (step: number) => {
-    if (rampTargetRef.current === null) rampVisibleTo(visibleCountRef.current + step);
+  /* One reveal step, a few rows per frame. Repeated scroll asks coalesce while
+     a ramp runs; explicit reveals and successful pages can extend its target. */
+  const growVisibleBy = (step: number, extendActiveRamp = false) => {
+    if (rampTargetRef.current === null || extendActiveRamp) {
+      rampVisibleTo(visibleCountRef.current + step);
+    }
   };
-  const revealOlder = () => {
+  const revealOlder = (source: "scroll" | "explicit" = "scroll") => {
     if (hiddenLocal) {
-      growVisibleBy(revealStep);
+      growVisibleBy(revealStep, source === "explicit");
     } else if (tail.hasMore && !olderRequestRef.current) {
       const owner = historyOwnerRef.current;
       const request = {};
       olderRequestRef.current = request;
       void tail.loadOlder().then((added) => {
         if (historyOwnerRef.current === owner && added > 0) {
-          growVisibleBy(revealStep);
+          growVisibleBy(revealStep, true);
         }
       }).finally(() => {
         if (olderRequestRef.current === request) olderRequestRef.current = null;
@@ -1744,7 +1746,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               <button
                 className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-control border border-dashed border-border bg-sunken px-2 py-1 text-label font-semibold text-muted [@media(pointer:coarse)]:min-h-11 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 disabled={tail.loadingOlder}
-                onClick={revealOlder}
+                onClick={() => revealOlder("explicit")}
               >
                 {tail.loadingOlder ? (
                   t("common.loading")
@@ -1759,7 +1761,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               <button
                 className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-control border border-dashed border-border bg-sunken px-3 py-1.5 text-ui font-semibold text-muted [@media(pointer:coarse)]:min-h-11 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 disabled={tail.loadingOlder}
-                onClick={revealOlder}
+                onClick={() => revealOlder("explicit")}
               >
                 {tail.loadingOlder
                   ? t("common.loading")
