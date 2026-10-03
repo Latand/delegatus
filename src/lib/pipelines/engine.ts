@@ -2766,7 +2766,14 @@ function passSuccessor(
   /* A spent edge's terminal re-check remains authoritative. The lineage return
      applies between granted rounds and after nested repairs before exhaustion. */
   const terminalGrant = !recheck && attempt ? terminalReviewGrantForFix(pipeline, stage, attempt) : null;
-  if (terminalGrant) return { next: terminalGrant.stageId, handoff: null };
+  if (terminalGrant && (stage.id === pipeline.stages.find((candidate) => candidate.id === terminalGrant.stageId)?.onFail?.to
+    || stage.next === null)) {
+    return {
+      next: terminalGrant.stageId,
+      handoff: null,
+      recheck: terminalGrantIsLastRound(pipeline, terminalGrant),
+    };
+  }
 
   if (!source || !activation) return { next: stage.next, handoff: null };
   return { next: recheck ? source.id : source.next, handoff: { source, attempt: sourceAttempt }, recheck: !!recheck };
@@ -2783,7 +2790,7 @@ function terminalReviewGrantForFix(
   for (const grant of pipeline.reviewGrants ?? []) {
     if (grant.terminalAttempt === undefined) continue;
     const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
-    if (review?.onFail?.to !== stage.id) continue;
+    if (!review?.onFail || stage.id === review.id) continue;
 
     let current: PipelineStageAttempt | undefined = attempt;
     const visited = new Set<string>();
@@ -2801,6 +2808,38 @@ function terminalReviewGrantForFix(
     }
   }
   return null;
+}
+
+/** Granted reviews spend one round per fix/review traversal. A repair inside
+    the final fix still carries the exhausted-budget marker to its reviewer. */
+function terminalGrantIsLastRound(pipeline: Pipeline, grant: PipelineReviewGrant): boolean {
+  if (grant.terminalAttempt === undefined) return false;
+  const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
+  if (!review) return false;
+  const grantRoot = { stageId: grant.stageId, attempt: grant.terminalAttempt };
+  let completedReviews = 0;
+  for (const run of pipeline.runs) {
+    if (run.stageId !== grant.stageId) continue;
+    for (const candidate of run.attempts) {
+      if (candidate.n <= grant.terminalAttempt) continue;
+      let current: PipelineStageAttempt | undefined = candidate;
+      const visited = new Set<string>();
+      while (current?.activatedBy) {
+        const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+        if (activation.edge === "fail" && activation.stageId === grantRoot.stageId
+          && activation.attempt === grantRoot.attempt) {
+          completedReviews += 1;
+          break;
+        }
+        const key = `${activation.stageId}:${activation.attempt}`;
+        if (visited.has(key)) break;
+        visited.add(key);
+        current = pipeline.runs.find((candidateRun) => candidateRun.stageId === activation.stageId)?.attempts
+          .find((prior) => prior.n === activation.attempt && !prior.historical);
+      }
+    }
+  }
+  return completedReviews >= grant.rounds - 1;
 }
 
 /** Stop a lane whose spent review budget left an unreviewed head (#1938). The
