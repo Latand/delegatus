@@ -7,7 +7,10 @@ import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error" }
 interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
-const key = (site: TestSite) => JSON.stringify([site.file, site.suite, site.name, site.kind]);
+const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
+const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
+const key = (site: TestSite) => JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind]);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const MAX_CACHE_ENTRIES = 32;
 const RESULT_NAME = /^[a-f0-9]{64}\.json$/;
@@ -216,7 +219,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
     const comparison = compareTests(baseline, head);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
-      for (const site of sites) log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${site.name}`);
+      for (const site of sites) log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`);
     }
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped`);
     return comparison;

@@ -193,3 +193,17 @@ test("a changed dependency patch cannot contaminate or reuse the baseline", () =
   const warm = run(); expect(warm.introduced).toHaveLength(1); expect(warm.preexisting).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("baseline cache hit");
 });
+
+
+test("between-test errors match across private roots without hiding a changed path", () => {
+  const xml = '<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>';
+  const run = (suffix: string, file = "missing") => {
+    const home = path.join(gateTemporaryRoot(), `delegatus-test-comparison-${suffix}`, `test-${suffix}`, "home", file);
+    const output = `# Unhandled error between tests\n----------------\nerror: ENOENT: ${home}\n----------------\n 1 error\n`;
+    return { ...parseReport(xml, output, "f.test.ts", "/checkout"), elapsedMs: 0, completed: ["f.test.ts"] };
+  };
+  const old = run("ABCDEF"), head = run("GHIJKL");
+  expect(compareTests(old, head).introduced).toHaveLength(0);
+  expect(compareTests(old, head).preexisting).toHaveLength(1);
+  expect(compareTests(old, run("GHIJKL", "different")).introduced).toHaveLength(1);
+});
