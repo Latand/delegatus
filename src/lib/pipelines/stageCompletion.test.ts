@@ -5,14 +5,17 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 
 import type { FileEntry } from "@/lib/types";
+import { realExec } from "@/lib/workflows/provision";
+import type { Pipeline } from "./types";
 
 /* Graph slice 2 (#1730): a stage attempt reports its own completion through one
-   MCP call. Every port is a mock and the state directory is private to this
-   file, so nothing here reaches a host, an account or the operator's registry. */
+   MCP call. Host and account ports are mocks. Artifact reads inspect only the
+   fixture index, and the state directory is private to this file. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-completion-"));
 const { createPipelineFromRequest, patchPipeline, reportStageCompletion, tickPipelines } = await import("./engine");
+const { settlePendingStageProvenance } = await import("./stageProvenance");
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, savePipelines, withPipelineMutation } = await import("./store");
+const { loadPipelines, savePipelines, pipelineIdentity, withPipelineMutation } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
@@ -57,15 +60,20 @@ function harness() {
   let duringProvenance: (() => void) | null = null;
   let clock = 1_000_000;
   const ports: PipelinePorts = {
-    exec: (command, rawArgs) => {
+    exec: async (command, rawArgs, cwd, env, options) => {
+      if (options?.stdoutEncoding === "latin1") return await realExec(command, rawArgs, cwd, env, options);
       execCalls.push([command, ...rawArgs].join(" "));
+      if (command === "gh") {
+        const race = duringProvenance; duringProvenance = null; race?.();
+        return { code: 0, stdout: worktree.pullRequest, stderr: "" };
+      }
       if (command === "timeout") {
         const race = duringProvenance;
         duringProvenance = null;
         race?.();
         const bounded = rawArgs.slice(rawArgs.findIndex((argument) => argument === "git" || argument === "gh"));
         if (bounded[0] === "gh") return { code: 0, stdout: worktree.pullRequest, stderr: "" };
-        return ports.exec("git", bounded.slice(1), "");
+        return (await ports.exec("git", bounded.slice(1), ""));
       }
       const args = rawArgs;
       // The publication contract needs a forge remote; an absent one parks.
@@ -141,9 +149,9 @@ function harness() {
 const stage = (id: string, next: string | null, extra: Record<string, unknown> = {}) =>
   ({ id, kind: "run", role: { roleId: "builder" }, prompt: `Do ${id}`, next, ...extra });
 
-async function started(ports: PipelinePorts, stages: unknown[]): Promise<string> {
+async function started(ports: PipelinePorts, stages: unknown[], publication: Pipeline["publication"] = "internal", repoDir = "/repo"): Promise<string> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", publication, repoDir, stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   /* A review-loop here stands for a lane stored before #2187, which still
      reviews through its embedded flow; creation now converts new ones. */
@@ -155,6 +163,74 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
 
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
+
+test("stage_report durably accepts pending provenance without waiting for the forge", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const original = h.ports.exec;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  h.ports.exec = async (command, args, cwd) => {
+    if (command === "gh") await held;
+    return await original(command, args, cwd);
+  };
+  const pendingReport = h.report(1, { verdict: "pass", summary: "Checked." });
+  try {
+    const answer = await Promise.race([pendingReport, new Promise<null>((resolve) => setTimeout(() => resolve(null), 150))]);
+    expect(answer).not.toBeNull();
+    expect(current().runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ state: "pending", head: null, pullRequest: null });
+  } finally { release(); await pendingReport; }
+  await tickPipelines([], h.ports);
+  expect(current().runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ state: "complete", head: HEAD });
+});
+
+test.each(["control-before", "control-during", "delivery-before", "delivery-during", "worktree-during", "head-during", "branch-during"] as const)("deferred provenance fences %s against its durable admission", async (change) => {
+  const h = harness(); await started(h.ports, [stage("build", null)]);
+  const clock = "2026-01-01T00:00:00.000Z"; h.ports.now = () => clock;
+  await withPipelineMutation((pipelines, persist) => {
+    const lane = pipelines[0]!; lane.pausedAt = clock; lane.resumedAt = clock;
+    lane.delivery = { target: { repository: "provenance-repo", remote: "origin", branch: `refs/heads/${lane.branch}` },
+      disposition: "owner", publish: "enabled", active: true, ownerId: lane.id, epoch: 1, journal: [] };
+    persist();
+  });
+  await h.report(1, { verdict: "pass", summary: "Checked." });
+  const mutate = async () => {
+    if (change.startsWith("control")) {
+      await patchPipeline(current().id, { action: "pause" }, h.ports);
+      await patchPipeline(current().id, { action: "resume" }, h.ports);
+    } else await withPipelineMutation((pipelines, persist) => {
+      const lane = pipelines[0]!;
+      if (change.startsWith("delivery")) lane.delivery!.epoch++;
+      if (change.startsWith("worktree")) { lane.repoDir += "-replacement"; Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); }
+      if (change.startsWith("head")) lane.lastPassedCommit = "b".repeat(40);
+      if (change.startsWith("branch")) { lane.task += " replacement"; Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); }
+      persist();
+    });
+  };
+  let commands = 0, observedSignal: AbortSignal | undefined;
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const original = h.ports.exec;
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    commands++;
+    if (command === "gh" && change.endsWith("during")) { observedSignal = options?.signal; entered(); await held; }
+    return await original(command, args, cwd, env, options);
+  };
+  const before = change.endsWith("before");
+  if (before) await mutate();
+  const observation = settlePendingStageProvenance(h.ports);
+  try {
+    if (!before) {
+      await checking; await mutate(); await Bun.sleep(75);
+      expect(observedSignal?.aborted).toBe(true);
+    }
+    release(); await observation;
+    if (before) expect(commands).toBe(0);
+    expect(attemptsOf("build")[0]!.report).toMatchObject({ verdict: { status: "pass" }, provenance: { state: "unknown", head: null, pullRequestState: "unknown" } });
+    expect(current().stageReports!.at(-1)).toMatchObject({ provenanceState: "unknown" });
+  } finally { release(); await observation; }
+});
 
 test("stage_report and controller ticks ignore a future stage beside a healthy running lane", async () => {
   const h = harness();
@@ -262,6 +338,7 @@ test("a long stage_report finding survives settlement and the fix relay intact",
   const result = await h.report(2, { verdict: "fail", findings: [{ severity: "P1", text: body }] });
   expect(result.report?.verdict.findings).toEqual([`P1 — ${body}`]);
   await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await settlePendingStageProvenance(h.ports);
   await tickPipelines([], h.ports);
   expect(attemptsOf("verify")[0]!.verdict?.rankedFindings).toEqual([{ severity: "P1", text: body }]);
   expect(attemptsOf("build")[1]!.input).toContain(`P1 — ${body}`);
@@ -282,12 +359,7 @@ test("a live attempt's reported completion settles it when the turn ends, with s
     actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
     verdict: { status: "pass" },
     summary: "Bound the report to the attempt.",
-    provenance: {
-      head: HEAD,
-      uncommitted: [],
-      pullRequest: { url: "https://forge.example/repo/pull/1730", number: 1730, state: "OPEN" },
-      outputs: [],
-    },
+    provenance: { state: "pending", head: null, uncommitted: null, pullRequest: null, outputs: [] },
   });
   expect(accepted.report!.provenance.branch).toBe(current().branch);
 
@@ -315,7 +387,9 @@ test("a live attempt's reported completion settles it when the turn ends, with s
   expect(h.spawnedStages).toEqual(["build", "verify"]);
   /* The second stage's declared outputs are the ones read for its own report. */
   const verify = await h.report(2, { verdict: "pass", summary: "Checked." });
-  expect(verify.report!.provenance.outputs).toEqual([{ path: "docs/report.html", present: true }]);
+  expect(verify.report!.provenance.outputs).toEqual([{ path: "docs/report.html", present: null }]);
+  await settlePendingStageProvenance(h.ports);
+  expect(attemptsOf("verify")[0]!.report!.provenance.outputs).toEqual([{ path: "docs/report.html", present: true }]);
 });
 
 for (const engine of ["claude", "codex"] as const) {
@@ -359,7 +433,8 @@ test("a brief written before stage_report survives a shorter closing message", a
 
 test("a long final brief is bounded in bytes with an explicit truncation marker", async () => {
   const h = harness();
-  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "{{prev.output}}" })]);
+  await started(h.ports, [stage("brief", "build"), stage("build", null, { prompt: "{{prev.output}}" })], "internal", path.join(process.env.LLV_STATE_DIR!, "long-relay-repo"));
+  fs.mkdirSync(current().worktreeDir, { recursive: true });
   await h.report(1, { verdict: "pass", summary: "Brief ready." });
   await tickPipelines([h.endTurn(1, `Start. ${"🙂".repeat(20_000)} End.`)], h.ports);
   const relay = attemptsOf("brief")[0]!.output!;
@@ -369,7 +444,11 @@ test("a long final brief is bounded in bytes with an explicit truncation marker"
   expect(relay).not.toContain("End.");
   expect(relay).not.toContain("�");
   await tickPipelines([], h.ports);
-  expect(h.spawnedPrompts.at(-1)).toContain(relay);
+  const prompt = h.spawnedPrompts.at(-1)!;
+  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32_000);
+  const file = prompt.match(/Full previous output file: (.+)\n/)?.[1];
+  expect(file).toBeDefined();
+  expect(fs.readFileSync(file!, "utf8")).toBe(relay);
 });
 
 test("a pass reported without a summary relays its prose without the fenced JSON verdict", async () => {
@@ -411,6 +490,7 @@ test("every accepted call is attributed on the pipeline, with the conversation, 
     status: "fail",
     findings: 1,
     replaces: null,
+    provenanceState: "pending",
     summary: "One finding left.",
   });
   expect(Number.isFinite(Date.parse(entry!.at))).toBe(true);
@@ -461,6 +541,29 @@ test("a second call replaces the first before settlement, and is refused after i
   expect(attemptsOf("build")[0]!.verdict).toEqual({ status: "pass" });
   expect(attemptsOf("build")[0]!.report).toMatchObject({ seq: 2 });
   expect(current().stageReports).toHaveLength(2);
+});
+
+test("replaced pending stage report provenance settles as superseded while the newer report is observed", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  await h.report(1, { verdict: "pass", summary: "First report." });
+  await h.report(1, { verdict: "pass", summary: "Replacement report." });
+
+  expect(current().stageReports).toMatchObject([
+    { seq: 1, replaces: null, provenanceState: "unknown", provenanceAt: expect.any(String) },
+    { seq: 2, replaces: 1, provenanceState: "pending" },
+  ]);
+  await settlePendingStageProvenance(h.ports);
+  expect(attemptsOf("build")[0]!.report).toMatchObject({ seq: 2, summary: "Replacement report.", provenance: { state: "complete", head: HEAD } });
+  expect(current().stageReports).toMatchObject([
+    { seq: 1, provenanceState: "unknown", provenanceAt: expect.any(String) },
+    { seq: 2, provenanceState: "complete", provenanceAt: expect.any(String) },
+  ]);
+  await settlePendingStageProvenance(h.ports);
+  expect(current().stageReports).toMatchObject([
+    { seq: 1, provenanceState: "unknown", provenanceAt: expect.any(String) },
+    { seq: 2, provenanceState: "complete", provenanceAt: expect.any(String) },
+  ]);
 });
 
 test("the tool call wins when the turn also ends in a fenced JSON verdict", async () => {
@@ -545,7 +648,8 @@ test("a report whose worktree the server could not read is still accepted, and s
   h.worktree.pullRequest = "[]";
 
   const accepted = await h.report(1, { verdict: "pass", summary: "Left work uncommitted." });
-  expect(accepted.report!.provenance).toMatchObject({ uncommitted: ["src/lib/x.ts"], pullRequest: null });
+  await settlePendingStageProvenance(h.ports);
+  expect(attemptsOf("build")[0]!.report!.provenance).toMatchObject({ uncommitted: ["src/lib/x.ts"], pullRequest: null });
   expect(accepted.error).toBeUndefined();
 });
 
@@ -561,21 +665,18 @@ test("a refused call runs no command at all, so no forge latency is ever spent o
     .toMatchObject({ code: "STAGE_REPORT_CONTRADICTORY" });
   expect(h.execCalls).toEqual([]);
 
-  /* The accepted call reads the worktree and then the forge, bounded. */
+  /* Acceptance reads no external command; the controller later observes it. */
   expect((await h.report(1, { verdict: "pass" })).error).toBeUndefined();
-  expect(h.execCalls).toEqual([
-    "git branch --show-current",
-    "git status --porcelain",
-    "git rev-parse HEAD",
-    `timeout --signal=KILL 10s gh pr list --head ${current().branch} --state all --limit 1 --json url,number,state`,
-  ]);
+  expect(h.execCalls).toEqual([]);
+  await settlePendingStageProvenance(h.ports);
+  expect(h.execCalls.some((command) => command.includes("gh pr list"))).toBe(true);
 });
 
-test("an attempt that moved on while its provenance was read is refused, and keeps the record it had", async () => {
+test("a deferred observation cannot attach to an attempt that replaced the reported one", async () => {
   const h = harness();
   await started(h.ports, [stage("build", null)]);
-  /* The window the two reads open: between them, this stage's live attempt
-     becomes a different one under the same conversation. */
+  const accepted = await h.report(1, { verdict: "pass", summary: "Reported against attempt 1." });
+  expect(accepted.report?.provenance.state).toBe("pending");
   h.raceDuringProvenance(() => {
     const records = loadPipelines();
     const attempts = records[0]!.runs[0]!.attempts;
@@ -583,17 +684,11 @@ test("an attempt that moved on while its provenance was read is refused, and kee
     attempts.push({ ...structuredClone(attempts[0]!), n: 2, state: "running", report: null } as never);
     savePipelines(records);
   });
-
-  const refused = await h.report(1, { verdict: "pass", summary: "Reported against attempt 1." });
-  expect(refused).toMatchObject({ code: "STAGE_REPORT_CHANGED", status: 409 });
-  expect(refused.slots).toEqual([{ pipelineId: current().id, stageId: "build", attempt: 2, state: "running" }]);
-  expect(attemptsOf("build").map((attempt) => attempt.report ?? null)).toEqual([null, null]);
-  expect(current().stageReports).toBeUndefined();
-
-  /* Reported again, the call lands on the attempt that is actually live. */
-  const accepted = await h.report(1, { verdict: "pass", summary: "Reported against attempt 2." });
-  expect(accepted).toMatchObject({ attempt: 2, replaced: false });
-  expect(attemptsOf("build")[1]!.report).toMatchObject({ summary: "Reported against attempt 2." });
+  await settlePendingStageProvenance(h.ports);
+  expect(attemptsOf("build")[1]!.report).toBeNull();
+  expect(attemptsOf("build")[0]!.report?.provenance.state).toBe("unknown");
+  const next = await h.report(1, { verdict: "pass", summary: "Reported against attempt 2." });
+  expect(next).toMatchObject({ attempt: 2, replaced: false });
 });
 
 test("a review-loop stage's reviewer cannot report a completion, and nothing is written", async () => {
@@ -950,10 +1045,11 @@ test("the PR a report looked up reaches the board's forge cache with no second f
   expect(accepted.error).toBeUndefined();
   const { forgeCacheView } = await import("@/lib/forge/cache");
   const { pipelineWorkLinks } = await import("@/lib/forge/resolve");
+  await settlePendingStageProvenance(h.ports);
   expect(forgeCacheView().repository("acme/widgets")?.pr(2059)).toMatchObject({ headRefName: current().branch, state: "open" });
   expect(pipelineWorkLinks(current()).links).toEqual([expect.objectContaining({ number: 2059, kind: "pr", state: "open" })]);
   /* The provenance read is the report's only forge call. */
-  expect(h.execCalls.slice(before).filter((call) => call.includes(" gh "))).toHaveLength(1);
+  expect(h.execCalls.slice(before).filter((call) => call.includes("gh pr list"))).toHaveLength(1);
 });
 
 test("a parked lane writes a short status note and preserves a newer agent note", async () => {
@@ -1125,7 +1221,7 @@ test("publication blocked, a failed stage and a spent budget each leave a plain 
   };
   const h = harness();
   h.worktree.remote = "";
-  await started(h.ports, [stage("build", null)]);
+  await started(h.ports, [stage("build", null)], "remote-branch");
   attach();
   await h.report(1, { verdict: "pass", summary: "Checked." });
   await tickPipelines([h.endTurn(1, "Done.")], h.ports);

@@ -482,6 +482,38 @@ test("#c= whose row arrives only via the pinned fetch keeps its pin after resolv
   await expectNavigationQuiescence();
 });
 
+test("#c= to a conversation the plain catalog carries opens it without a pinned catalog request", async () => {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(() => [otherRow, targetRow]);
+
+  const host = await mountViewer();
+
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
+  await act(async () => { await Bun.sleep(200); });
+  /* A pin is a request scope of its own, so the whole catalog comes down again
+     for it. The plain catalog already carries this conversation: nothing asks
+     for it by name, before the link resolves or after. */
+  const filesRequests = requestLog.filter((url) => url.startsWith("/api/files"));
+  expect(filesRequests.length).toBeGreaterThan(0);
+  expect(filesRequests.filter((url) => url.includes("path="))).toEqual([]);
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  await expectNavigationQuiescence();
+});
+
+test("a link on a warm tab to a conversation the plain catalog carries sends no pinned request", async () => {
+  stubFetch(() => [otherRow, targetRow]);
+  const host = await mountViewer();
+  await act(async () => { await Bun.sleep(100); });
+
+  await act(async () => { dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`; });
+
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  await act(async () => { await Bun.sleep(200); });
+  expect(requestLog.filter((url) => url.startsWith("/api/files") && url.includes("path="))).toEqual([]);
+  await expectNavigationQuiescence();
+});
+
 /** Mirrors `STALE_FOCUS_REPLAY_MS` in Viewer.tsx. */
 const STALE_DEADLINE_MS = 8_000;
 
