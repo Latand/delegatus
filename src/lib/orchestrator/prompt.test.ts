@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 38, and a v37 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(38);
+test("the default mandate is at version 39, and a v38 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(39);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -114,7 +114,8 @@ test("the default mandate is at version 38, and a v37 seat reads as stale", () =
   expect(orchestratorMandateStale(35)).toBe(true);
   expect(orchestratorMandateStale(36)).toBe(true);
   expect(orchestratorMandateStale(37)).toBe(true);
-  expect(orchestratorMandateStale(38)).toBe(false);
+  expect(orchestratorMandateStale(38)).toBe(true);
+  expect(orchestratorMandateStale(39)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -159,6 +160,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   36: "851761d46924e3c16328ea1e31f1c768ae15d1aecb48b6ab9ee1b25c2aac9749",
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
   38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
+  39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -747,8 +749,9 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(builderRow).toContain("size=trivial, domain=frontend, domain=docs, domain=frontend mode=apply-fixes, domain=docs mode=apply-fixes: claude/claude-sonnet-5-5/high; mode=apply-fixes: codex/gpt-6-luna/high.");
   const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
-  expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
-  expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
+  expect(table).toContain("- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round.");
+  expect(table).toContain("normal: rows, effort low or medium");
+  expect(table).toContain("design (options, architecture, proposals, design issues): architect first");
   /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7). */
   expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
   expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
