@@ -3950,3 +3950,55 @@ test.each(["before-admission", "before-claim"])("automatic retirement protects a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test.each(["live", "unverified", "dead"])("automatic retirement claim protects the executor lifetime: %s", async (scenario) => {
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const dir = sandbox("retirement-owner");
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  const recordedPid = child.pid;
+  const identity = captureProcessIdentity(recordedPid);
+  const owner = { executorId: "executor-a", process: scenario === "unverified" ? { ...identity, bootEpoch: null } : identity };
+  const contender = { executorId: "executor-b", process: captureProcessIdentity(process.pid) };
+  let journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  try {
+    const conversationId = "conversation_retirement_owner";
+    const key = { engine: "codex" as const, sessionId: "owner-generation" };
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+    } });
+    const session = journal.readSession({ conversationId })!;
+    const kill = (id: string) => journal.executeOperation({ kind: "kill", operationId: id, idempotencyKey: id,
+      conversationId, sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim! } });
+    kill("exclusive-retire");
+    kill("second-retire");
+    expect(journal.transitionOperation("exclusive-retire", "delivering", {}, { retirementClaim: owner,
+      fromStatuses: ["queued", "pending"] }).receipt.retirementClaim).toEqual(owner);
+    // Ownership survives journal reopen / runtime-host replacement.
+    journal.close();
+    journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+    expect(journal.transitionOperation("second-retire", "delivering", {}, { retirementClaim: contender,
+      fromStatuses: ["queued", "pending"] }).receipt.status).toBe("failed");
+    for (const status of ["failed", "uncertain", "delivered", "delivering", "queued"] as const) {
+      expect(() => journal.transitionOperation("exclusive-retire", status, { reason: "foreign executor" })).toThrow("another executor");
+      expect(() => journal.transitionOperation("exclusive-retire", status, {}, { retirementClaim: contender })).toThrow("another executor");
+    }
+    expect(journal.executeOperation({ kind: "send", operationId: "owner-racing-send", idempotencyKey: "owner-racing-send",
+      conversationId, policy: "queue", text: "new work" }).receipt.status).toBe("rejected");
+    if (scenario === "dead") {
+      child.kill(9);
+      await child.exited;
+      expect(journal.transitionOperation("exclusive-retire", "queued", {}, { retirementClaim: contender }).receipt.retirementClaim).toBeNull();
+    } else {
+      // The executor releases only after its own actuation has returned.
+      expect(journal.transitionOperation("exclusive-retire", "failed", {}, { retirementClaim: owner }).receipt.retirementClaim).toBeNull();
+    }
+    expect(journal.executeOperation({ kind: "send", operationId: "owner-next-send", idempotencyKey: "owner-next-send",
+      conversationId, policy: "queue", text: "after actuation" }).receipt.status).toBe("queued");
+  } finally {
+    journal.close();
+    if (child.exitCode === null) child.kill(9);
+    await child.exited;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

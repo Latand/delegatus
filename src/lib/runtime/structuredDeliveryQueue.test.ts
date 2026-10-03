@@ -2815,6 +2815,8 @@ for (const policy of ["steer-or-queue", "steer-if-active"]) test(`${policy} unkn
 
 test.each(["running", "attention", "flags", "unreadable"])("automatic kill defers owned host with %s evidence", async (scenario) => {
   let pending = true;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
   let terminations = 0;
   const transitions: string[] = [];
   const owned = host(async () => { throw new Error("no delivery expected"); });
@@ -2828,12 +2830,12 @@ test.each(["running", "attention", "flags", "unreadable"])("automatic kill defer
     effects: async () => pending ? [{ id: "effect:retire-one", kind: "runtime.kill", eventSeq: 1,
       payload: { operationId: "retire-one", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
         onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } }] : [],
-    status: async () => ({ status: pending ? "queued" : "failed", revision: 1 }),
-    transition: async (_id, status) => { transitions.push(status); if (status === "failed") pending = false; },
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; transitions.push(status); if (status === "failed") pending = false; },
   }, () => owned, async () => { terminations++; return true; });
   await queue.drain();
   expect(terminations).toBe(0);
-  expect(transitions).toEqual(["failed"]);
+  expect(transitions).toEqual(["delivering", "failed"]);
 });
 
 
@@ -2841,14 +2843,15 @@ test.each(["native-queue", "native-inject", "structured-image-v1", "native-turn-
   let pending = true;
   let terminations = 0;
   let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
   const owned = host(async () => { throw new Error("no delivery expected"); });
   owned.health = async () => ({ ...idleState(), activeFlags: [flag] });
   const queue = new StructuredDeliveryQueue({
     effects: async () => pending ? [{ id: "effect:retire-capability", kind: "runtime.kill", eventSeq: 1,
       payload: { operationId: "retire-capability", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
         onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } }] : [],
-    status: async () => ({ status: receiptStatus, revision: 1 }),
-    transition: async (_id, status) => { receiptStatus = status; if (status === "delivered") pending = false; },
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; if (status === "delivered") pending = false; },
   }, () => owned, async () => { terminations++; return true; });
   await queue.drain();
   expect(terminations).toBe(1);

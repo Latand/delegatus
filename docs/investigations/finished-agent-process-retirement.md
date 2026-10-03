@@ -40,8 +40,15 @@ used as authority for a signal.
    before claiming their action or rearming a failed operation. Captured-tree
    cleanup survives the root releasing its writer claim, fenced by the same
    generation, claim epoch and process identities. Finishing or refusing
-   teardown releases the barrier. Older runtime generations without this
-   protocol are deferred.
+   teardown releases the barrier. The claim records the exclusive executor
+   and its process identity. Competing drains, health failures and deadlines
+   cannot release a live executor's barrier. Rebinding revokes its signal
+   authority; the barrier stays held until its teardown returns. Recovery may
+   take over after the executor process is positively proven dead, or after
+   this Viewer's retired executor has completed its final drain. Local custody
+   retains unresolved claims across rebind so lost reads or release writes do
+   not leave a permanent barrier behind a still-live Viewer PID.
+   Older runtime generations without this protocol are deferred.
 2. MCP launcher EOF only ended child stdin. A child retaining handles or
    ignoring TERM could stay resident indefinitely. Launcher-owned children
    now receive one second for EOF, then TERM, then KILL after another second.
@@ -79,6 +86,17 @@ An idle root with real registry persistence exits on TERM; its detached helper
 ignores TERM and is still killed within the deadline after the root releases
 its writer claim.
 The two original busy-turn regressions failed before the safety correction.
+Three overlapping-controller regressions fail on the preceding branch head
+and pass with exclusive retirement ownership: successor health failure,
+expired deadline and loss of the predecessor's durable authority read. They
+use a real journal, registry, socket and recorded TERM-resistant fixture PID;
+new work remains rejected during teardown and no further signal follows
+revocation or admission of new work. Journal-reopen coverage checks that live
+and unverified owners retain their barriers while positively dead owners can
+be recovered.
+Two further replacement regressions cover loss of the claim-acquisition read
+and failure of the final claim-release write. Both fail without local executor
+completion evidence and pass with recovery after the retired drain returns.
 
 The existing retirement suite checks real tree termination, including a child
 in its own process group, retained resume data, identity changes, unreadable

@@ -1,4 +1,5 @@
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
@@ -748,6 +749,18 @@ export class RuntimeJournal {
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
+      // Dead executors can be recovered; deadlines and health failures cannot
+      // release a barrier underneath a live signal ladder.
+      const automaticKill = command.kind === "kill" && !!command.onlyIfIdle;
+      const owner = previous.retirementClaim;
+      const claimant = options.retirementClaim;
+      if (automaticKill && previous.status === "delivering" && owner) {
+        const owns = claimant?.executorId === owner.executorId
+          && sameRecordedProcessIdentity(claimant.process, owner.process);
+        if (!owns && !(status === "queued" && processIdentityProvenDead(owner.process))) {
+          throw new Error("automatic retirement is owned by another executor");
+        }
+      }
       const nativeCommand = this.nativeQueue.command(command, operationId);
       let nativeEntry: NativeQueueRecord | null = null;
       if (nativeTransition) {
@@ -789,7 +802,8 @@ export class RuntimeJournal {
       if (status === "delivering" && command.kind === "kill" && command.onlyIfIdle) {
         const session = this.entity<RuntimeSession>("session", command.conversationId);
         if (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
-          || this.retirementBlocked(command.conversationId)) {
+          || this.retirementBlocked(command.conversationId)
+          || (previous.status !== "delivering" && this.retirementInProgress(command.conversationId))) {
           status = "failed";
           details = { ...details, reason: "idle-retirement-deferred" };
         }
@@ -836,6 +850,7 @@ export class RuntimeJournal {
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
+        ...(automaticKill ? { retirementClaim: status === "delivering" ? claimant ?? owner ?? null : null } : {}),
         ...(nativeEntry ? { nativeQueue: nativeQueueReceipt(nativeEntry) } : {}),
         ...(deliveredVersion ? { text: deliveredVersion.text.slice(0, 240), imageCount: deliveredVersion.images.length,
           turnId: nativeEntry!.proof!.turnId } : {}),

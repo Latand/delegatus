@@ -208,7 +208,14 @@ export interface RuntimeAttention {
   turnId?: string | null;
 }
 
+export interface RuntimeRetirementClaim {
+  executorId: string;
+  process: import("@/lib/processIdentity").ProcessIdentity;
+}
+
 export interface RuntimeOperationReceipt {
+  /** Exclusive automatic teardown authority, held until actuation ends. */
+  retirementClaim?: RuntimeRetirementClaim | null;
   nativeQueue?: {
     entryId: string;
     nativeSubmissionId: string | null;
@@ -273,6 +280,8 @@ export interface RuntimeTransitionDetails {
 }
 
 export interface RuntimeTransitionOptions {
+  /** Competing transitions cannot release a live automatic teardown executor. */
+  retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
   fromStatuses?: readonly RuntimeReceiptStatus[];
   /** Marks a terminal transition as owed a durable projection, inside the same

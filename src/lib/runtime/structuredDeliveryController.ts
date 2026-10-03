@@ -13,7 +13,7 @@ import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type Proces
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -766,7 +766,7 @@ export async function bindStructuredDeliveryQueue(
         if (!generation || !claim) return null;
         return { threadId: generation.id, accountId: generation.accountId, writerClaim: claim };
       },
-      transition: async (operationId, status, details) => {
+      transition: async (operationId, status, details, options) => {
         const terminal = status === "delivered" || status === "failed" || status === "uncertain";
         /* Terminal transitions take out the journal's retention as they commit
            (#1612): the registry write below rides on this call's ANSWER, and an
@@ -777,7 +777,7 @@ export async function bindStructuredDeliveryQueue(
           operationId,
           status,
           details,
-          terminal ? { awaitProjection: true } : {},
+          { ...options, ...(terminal ? { awaitProjection: true } : {}) },
         );
         /* The three states a held delivery can settle into. `uncertain` — a
            send an executor actuated and could not answer for — settles the
@@ -822,7 +822,7 @@ export async function bindStructuredDeliveryQueue(
       },
     },
     hostResolver(registry, hosts),
-    async (conversationId, expectedKey, onlyIfIdle) => {
+    async (conversationId, expectedKey, onlyIfIdle, authority) => {
       if (onlyIfIdle) {
         // Re-read the journal after admission and immediately before actuation.
         // Missing evidence leaves retirement deferred, with no process effects.
@@ -830,8 +830,18 @@ export async function bindStructuredDeliveryQueue(
         if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
+      const durableAuthority = async (): Promise<boolean> => {
+        if (!onlyIfIdle) return true;
+        if (!authority || stopped || state.activeQueue !== queue) return false;
+        const result = await client.operationStatus(authority.operationId).catch(() => null);
+        // Rebind may have happened while the socket read was pending.
+        return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
+          && result.receipt.retirementClaim?.executorId === authority.claim.executorId
+          && sameRecordedProcessIdentity(result.receipt.retirementClaim.process, authority.claim.process);
+      };
       const idleAuthority = (): boolean => {
         if (!onlyIfIdle) return true;
+        if (stopped || state.activeQueue !== queue) return false;
         const snapshot = registry.readOnlySnapshot();
         if (Object.values(snapshot.heldDeliveries).some(delivery => delivery.conversationId === conversationId
           && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))) return false;
@@ -857,7 +867,7 @@ export async function bindStructuredDeliveryQueue(
           && entry.structuredHost.pendingAttention.length === 0 && blockingHostActivityFlags(entry.structuredHost.activeFlags).length === 0
           && (`${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` === onlyIfIdle.writerClaim || releasedCapturedWriter);
       };
-      if (!idleAuthority()) return false;
+      if (!await durableAuthority() || !idleAuthority()) return false;
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
         for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
@@ -909,6 +919,8 @@ export async function bindStructuredDeliveryQueue(
         const outcome = await terminateStructuredHostTree(ref, {
           retainedSurvivors,
           authorize,
+          ...(onlyIfIdle ? { authorizeAsync: async () => await durableAuthority()
+            ? null : { status: 409 as const, error: "idle-retirement-authority-lost" } } : {}),
           // The automatic path uses the signal ladder's synchronous authority
           // recheck rather than the operator's unconditional release method.
           ...(onlyIfIdle ? { terminateOwnedHost: async () => false } : {}),
@@ -1445,6 +1457,7 @@ export async function bindStructuredDeliveryQueue(
   });
   state.stopActive = () => {
     stopped = true;
+    queue.retire();
     if (drainTimer) clearTimeout(drainTimer);
     drainTimer = null;
     for (const timer of inheritedRetries.values()) clearTimeout(timer);
