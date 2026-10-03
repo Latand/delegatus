@@ -1329,9 +1329,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactMonitorText(`${executed.stdout}\n${executed.stderr}`).trim();
+        const tail = output.slice(-4000);
+        const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
+          .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Long test diagnostics must not erase the hook's phase markers.
+        const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
-          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail: output.slice(-4000) };
+          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail };
       }
       return executed;
     };

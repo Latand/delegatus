@@ -164,7 +164,7 @@ test("publisher evidence stays redacted and bounded through lock reacquisition a
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
     // An owned child inherits the actual per-lane kernel fence and outlives
     // the failed push. Recovery must use the durable executor result.
-    const failure = ["noise".repeat(1500), `path=${os.homedir()}/private/output`,
+    const failure = ["pre-push: types", "pre-push: eslint", "noise".repeat(1500), `path=${os.homedir()}/private/output`,
       `Authorization: Bearer ${"test".repeat(30)}`, "pre-push: touched-tests failed"].join("\n");
     const exec = async (...args: Parameters<typeof realExec>) => {
       if (args[0] === "git" && args[1][0] === "push") {
@@ -185,7 +185,9 @@ test("publisher evidence stays redacted and bounded through lock reacquisition a
     const retained = JSON.stringify(operation.executor!.result);
     expect(retained).not.toContain(os.homedir()); expect(retained).not.toContain("test".repeat(30));
     expect(operation.executor!.result!.failure!.outputTail.length).toBeLessThanOrEqual(4000);
-    expect(operation.executor!.result!.failure!.outputTail).toBe(redactMonitorText(`\n${failure}`).trim().slice(-4000));
+    expect(operation.executor!.result!.failure!.outputTail).toContain("pre-push: types");
+    expect(operation.executor!.result!.failure!.outputTail).toContain("pre-push: eslint");
+    expect(operation.executor!.result!.failure!.outputTail.endsWith(redactMonitorText(failure).trim().slice(-500))).toBe(true);
     expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toContain("still in flight");
     expect(holder!.pid).toBeGreaterThan(0); holder!.kill("SIGTERM"); await closed;
     expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
