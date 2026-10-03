@@ -730,6 +730,28 @@ test("a launched card with its reader open lands under the agent being read, whe
 });
 
 
+test("a launched card with its reader open stands first when no other card is read, above a needs-you card", () => {
+  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1 });
+  const tasks = [task("asking", "assigned", [asking.path]), task("launched", "assigned", [launchedFile.path])];
+  const files = [asking, launchedFile];
+  const base = layout(files);
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const reading = new Set([conversationIdentity(launchedFile)]);
+  /* The motion order puts the needs-you card first; the launched card being read takes the window's top. */
+  expect(order(new Set())).toEqual(["asking", "launched"]);
+  expect(order(reading)).toEqual(["asking", "launched"]);
+  expect(order(reading, isLaunched)).toEqual(["launched", "asking"]);
+  /* A reader open on the needs-you card keeps the launched card under it. */
+  expect(order(new Set([...reading, conversationIdentity(asking)]), isLaunched)).toEqual(["asking", "launched"]);
+});
+
+
 function reviewerActivityFixture() {
   const implementer = file(101, { lastAgentWorkAt: 1000 });
   const reviewer = file(102, { lastAgentWorkAt: 3000, parent: implementer.path });

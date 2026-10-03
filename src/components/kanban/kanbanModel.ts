@@ -374,8 +374,10 @@ export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "memb
  * place right under the last card the operator is reading in the column. The
  * draft waited in Inbox beside that card; the launch writes a task that sorts
  * above it, and the card being read would drop below the new card's reader and
- * out of the window. Closing either reader lets the launched card sort as any
- * other. Reorders `cards` in place.
+ * out of the window. With no other card read, the launched card stands first:
+ * the motion order would put it under a needs-you card, below the window's
+ * edge, where the draft it replaced stood in view. Closing either reader lets
+ * the launched card sort as any other. Reorders `cards` in place.
  */
 export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<string> | undefined, launched: ((file: FileEntry) => boolean) | undefined): void {
   if (!reading?.size || !launched) return;
@@ -383,7 +385,11 @@ export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<strin
   const landing = (card: KanbanCard) => held(card) && card.members.some((member) => launched(member.file));
   let anchor = -1;
   cards.forEach((card, index) => { if (held(card) && !landing(card)) anchor = index; });
-  if (anchor < 0) return;
+  if (anchor < 0) {
+    const first = cards.filter(landing);
+    if (first.length) cards.splice(0, cards.length, ...first, ...cards.filter((card) => !landing(card)));
+    return;
+  }
   const above = cards.slice(0, anchor + 1);
   const moved = above.filter(landing);
   if (!moved.length) return;

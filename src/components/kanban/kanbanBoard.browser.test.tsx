@@ -9226,6 +9226,8 @@ describe("the open agents at the board's side: short names, role emblem and colo
     name: number | null;
     seat: { left: number; top: number; bottom: number } | null;
     bar: number;
+    /** The bottom of what stands right above the Orchestrator row: the bar, or the reason filters under it. */
+    above: number;
     rail: { left: number; top: number; right: number } | null;
     edge: number;
     column: number | null;
@@ -9270,6 +9272,7 @@ describe("the open agents at the board's side: short names, role emblem and colo
       name,
       seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
       bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
+      above: (rect(document.querySelector(".kb > .reason-filter-row")) ?? rect(document.querySelector(".bar[data-bar=\"project\"]")))!.bottom,
       rail: railBox ? { left: railBox.left, top: railBox.top, right: railBox.right } : null,
       edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
       column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
@@ -9295,11 +9298,11 @@ describe("the open agents at the board's side: short names, role emblem and colo
       if (edges.tier === "full" && !near(edges.railInset, edges.cardInset)) failures.push(`${label}: the rail's rows hold their content ${edges.railInset} in, the cards ${edges.cardInset}`);
     }
     if (!railExpected && !near(edges.column, edges.seat.left)) failures.push(`${label}: the first column starts at ${edges.column}, the Orchestrator row at ${edges.seat.left}`);
-    const above = edges.seat.top - edges.bar;
+    const above = edges.seat.top - edges.above;
     const next = edges.strip ?? { top: edges.columns, bottom: edges.columns };
     const below = next.top - edges.seat.bottom;
     if (!near(above, below)) failures.push(`${label}: ${above} px above the Orchestrator row, ${below} below it`);
-    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the ${edges.mode} strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below the bar`);
+    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the ${edges.mode} strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below what stands above it`);
     if (edges.strip && !near(edges.strip.left, edges.column)) failures.push(`${label}: the ${edges.mode} strip starts at ${edges.strip.left}, the first column at ${edges.column}`);
     const inbox = edges.titles.inbox;
     for (const [status, title] of Object.entries(edges.titles)) {
@@ -15073,6 +15076,44 @@ describe("task motion and waiting reasons", () => {
     fs.mkdirSync("evidence/task-states-and-reasons", { recursive: true });
     fs.writeFileSync("evidence/task-states-and-reasons/renders.json", `${JSON.stringify({ cases }, null, 2)}\n`);
   }, 180_000);
+
+  /* The Orchestrator row keeps one gap above and below it with the reason filters under the panel, and the
+     filters end where their chips end. Frames at 1440, 1000, 700 and 390 in en and uk go to
+     LLV_TASK_STATES_PNG_DIR. */
+  browserTest("the Orchestrator row keeps one gap round it beside the reason filters at 1440, 1000, 700 and 390 px in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const gaps: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1000, 700, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-motion`, { width, height: 844 }, "light", locale, "reduce", phone);
+        try {
+          await page.locator(phone ? '[data-phone-kanban-tab="assigned"]' : '[data-kanban-board] .column[data-status] .card >> visible=true').first().waitFor();
+          if (!phone) {
+            await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+            if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+            await page.waitForTimeout(700);
+            const gap = await page.evaluate(() => {
+              const seat = document.querySelector(".kb-page > .seat")!.getBoundingClientRect();
+              const filters = document.querySelector(".kb > .reason-filter-row")?.getBoundingClientRect();
+              const bar = document.querySelector('.bar[data-bar="project"]')!.getBoundingClientRect();
+              const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
+              const strip = document.querySelector(".scroll-wrap > .tabs-nav > button")?.getBoundingClientRect();
+              return { above: seat.top - (filters ?? bar).bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
+            });
+            if (Math.abs(gap.above - gap.below) > 0.5) gaps.push(`${width}-${locale}: ${gap.above} px above the Orchestrator row, ${gap.below} below it`);
+            if (width < 1168 !== gap.filtersUnderBar) gaps.push(`${width}-${locale}: the reason filters ${gap.filtersUnderBar ? "stand under" : "share"} the bar`);
+          }
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `orchestrator-gap-${width}-${locale}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(gaps).toEqual([]);
+  }, 180_000);
 });
 
 describe("agent memory isolation", () => {
@@ -15318,8 +15359,9 @@ describe("launch layout shift rendered evidence", () => {
         const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
         if (await seat.count()) await seat.click();
         await page.waitForTimeout(600);
-        /* The agent the operator is reading: the first task card in Assigned, opened from its tile. */
-        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]').first();
+        /* The agent the operator is reading: the first task card in Assigned that has a tile, opened from it. The
+           needs-you card stands first under the motion order and carries stage chips, no tile. */
+        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]:has(.tile)').first();
         const readId = await card.getAttribute("data-id");
         await card.locator(".tile").first().click();
         const readerOf = `.card[data-id="${readId}"] [data-kanban-reader]`;
