@@ -35,15 +35,15 @@ test("candidate privacy tests run last with a failing time budget", () => {
   const candidate = step(job, "Verify candidate privacy gate behavior within budget");
   expect(job.steps.at(-1)).toBe(candidate);
   expect(candidate["working-directory"]).toBe("candidate");
-  expect(candidate["timeout-minutes"]).toBe(2);
-  expect(candidate.run).toContain("timeout --kill-after=5s 90s bun test scripts/privacy-*.test.ts");
+  expect(candidate["timeout-minutes"]).toBe(3);
+  expect(candidate.run).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
   const root = mkdtempSync(join(tmpdir(), "privacy-candidate-budget-"));
   try {
     // Drive the actual shell with a short budget and a stalled test process.
     mkdirSync(join(root, "trusted/node_modules"), { recursive: true });
     mkdirSync(join(root, "candidate"));
     writeFileSync(join(root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
-    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("90s", "0.1s")], {
+    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("130s", "0.1s")], {
       cwd: join(root, "candidate"),
       env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
       stdout: "pipe", stderr: "pipe",

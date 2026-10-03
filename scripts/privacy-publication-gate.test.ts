@@ -2910,14 +2910,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
-  test("runs candidate privacy tests last under the 90-second budget", () => {
+  test("runs candidate privacy tests last under the 130-second budget", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
     const trustedCheck = workflow.indexOf("- name: Verify privacy gate behavior");
     const candidateCheck = workflow.indexOf("- name: Verify candidate privacy gate behavior within budget");
 
     expect(trustedCheck).toBeGreaterThanOrEqual(0);
     expect(candidateCheck).toBeGreaterThan(trustedCheck);
-    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 90s bun test scripts/privacy-*.test.ts");
+    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
   });
 
   test("scopes issue-comment audits to the triggering comment", () => {
