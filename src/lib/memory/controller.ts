@@ -16,8 +16,10 @@ import { sharedMemoryEnabled } from "./settings";
 import type { Candidate } from "./selection";
 
 // Offers remain provisional until the standalone hook confirms a successful
-// stdout write. Expired/disconnected responses never enter the durable ledger.
-const pendingOffers = new Map<string, { expires: number; index: ReturnType<typeof memoryIndex>; requestId: string; entries: Array<Candidate & { score: number }> }>();
+// stdout write. Prompt expiry stops selection/output, while bounded retained
+// evidence lets a confirmation already sent by the hook finish after expiry.
+const CONFIRMATION_RETENTION_MS = 30000;
+const pendingOffers = new Map<string, { expires: number; preparedAt: number; retainUntil: number; index: ReturnType<typeof memoryIndex>; requestId: string; entries: Array<Candidate & { score: number }> }>();
 
 export async function offerForHook(request: Request, input: Record<string, unknown>): Promise<string> {
   const expires = Math.min(Number(request.headers.get("x-llv-memory-deadline")), Date.now() + 1500);
@@ -25,16 +27,22 @@ export async function offerForHook(request: Request, input: Record<string, unkno
   const remaining = Math.min(1500, expires - Date.now());
   const deadline = performance.now() + remaining;
   try {
-    for (const [id, offer] of pendingOffers) if (offer.expires <= Date.now()) pendingOffers.delete(id);
-    if (!Number.isFinite(remaining) || remaining <= 0 || !/^[a-f0-9-]{36}$/.test(hookId) || request.signal.aborted) return "";
+    for (const [id, offer] of pendingOffers) if (offer.retainUntil <= Date.now()) pendingOffers.delete(id);
+    if (!/^[a-f0-9-]{36}$/.test(hookId)) return "";
     const conversationId = callerConversationId(request);
-    if (!conversationId || !viewerReleaseOwnsTraffic()) return "";
+    if (!conversationId) return "";
     const offerKey = conversationId + ":" + hookId;
     if (input.delegatus_confirm === true) {
-      const offer = pendingOffers.get(offerKey); pendingOffers.delete(offerKey);
-      if (offer && offer.expires > Date.now() && offer.index === memoryIndex()) offer.index.recordInjection(offer.entries, offer.requestId, conversationId);
+      const offer = pendingOffers.get(offerKey);
+      const emittedAt = input.delegatus_emitted_at;
+      if (offer && typeof emittedAt === "number" && Number.isFinite(emittedAt)
+        && emittedAt >= offer.preparedAt && emittedAt < offer.expires && offer.index === memoryIndex()) {
+        offer.index.recordInjection(offer.entries, offer.requestId, conversationId);
+        pendingOffers.delete(offerKey);
+      }
       return "";
     }
+    if (!Number.isFinite(remaining) || remaining <= 0 || request.signal.aborted || !viewerReleaseOwnsTraffic()) return "";
     if (typeof input.prompt !== "string" || input.prompt.length > 64000 || typeof input.session_id !== "string"
       || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.session_id) || input.hook_event_name !== "UserPromptSubmit") return "";
     const snapshot = agentRegistry().readOnlySnapshot();
@@ -107,9 +115,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       decide: (body, signal) => decideMemories(body, key, signal),
       settle: cost => { mutateOperatorAsks(file => { if (file.spend.month === month) file.spend.usd += cost - reserved; }); },
       record: entries => {
-        if (Date.now() >= expires || request.signal.aborted) return;
-        if (pendingOffers.size >= 1024) return;
-        pendingOffers.set(offerKey, { expires, index, requestId, entries });
+        if (Date.now() >= expires || request.signal.aborted || pendingOffers.size >= 1024) throw Error("memory delivery evidence unavailable");
+        pendingOffers.set(offerKey, { expires, preparedAt: Date.now(), retainUntil: expires + CONFIRMATION_RETENTION_MS, index, requestId, entries });
       },
     });
   } catch { return ""; }

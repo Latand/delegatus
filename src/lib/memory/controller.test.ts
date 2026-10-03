@@ -31,7 +31,7 @@ async function offerForHook(request: Request, input: Record<string, unknown>) {
   headers.set("x-llv-memory-hook", crypto.randomUUID());
   const admitted = new Request(request.url, { headers });
   const block = await prepareForHook(admitted, input);
-  if (block) await prepareForHook(admitted, { delegatus_confirm: true });
+  if (block) await prepareForHook(admitted, { delegatus_confirm: true, delegatus_emitted_at: Date.now() });
   return block;
 }
 afterEach(() => {
@@ -42,7 +42,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-for (const mode of ["delayed input", "delayed body", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only output confirmed before expiry`, async () => {
+for (const mode of ["delayed input", "delayed body", "delayed confirmation", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only successfully emitted output`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-output-boundary-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
@@ -54,13 +54,17 @@ for (const mode of ["delayed input", "delayed body", "unconfirmed", "successful"
   await memoryIndex().refresh([{ path: source, engine: "claude", sourceKind: "claude_memory", project }]);
   globalThis.fetch = (async () => {
     if (mode === "delayed input") await Bun.sleep(1100);
+    if (mode === "delayed confirmation") await Bun.sleep(1050);
     const id = memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)[0].id;
     return Response.json({ answers: { [id]: { noul: .8 } }, usage: { cost: .0001 } });
   }) as unknown as typeof fetch;
   let finished: Promise<string> = Promise.resolve("");
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
     const input = await request.json();
-    finished = prepareForHook(request, input);
+    finished = (async () => {
+      if (mode === "delayed confirmation" && input.delegatus_confirm) await Bun.sleep(650);
+      return prepareForHook(request, input);
+    })();
     const block = await finished;
     if (mode === "delayed body" && block) return new Response(new ReadableStream({ async start(c) {
       await Bun.sleep(1650); c.enqueue(new TextEncoder().encode(JSON.stringify({ block }))); c.close();
@@ -68,7 +72,8 @@ for (const mode of ["delayed input", "delayed body", "unconfirmed", "successful"
     return Response.json({ block });
   } });
   const prompt = encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind: "operator" }, crypto.createHash("sha256").update("output-boundary").digest("hex"));
-  const input = { hook_event_name: "UserPromptSubmit", session_id: crypto.randomUUID(), cwd: root, prompt };
+  const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt };
   try {
     if (mode === "unconfirmed") {
       await prepareForHook(new Request("http://localhost", { headers: { "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) } }), input);
@@ -78,12 +83,27 @@ for (const mode of ["delayed input", "delayed body", "unconfirmed", "successful"
         if (mode === "delayed input") await Bun.sleep(600);
         proc.stdin.write(JSON.stringify(input)); proc.stdin.end();
         expect(await proc.exited).toBe(0);
-        expect((await new Response(proc.stdout).text()).length > 0).toBe(mode === "successful");
+        expect((await new Response(proc.stdout).text()).length > 0).toBe((mode === "successful" || mode === "delayed confirmation"));
         await finished;
       } finally { proc.kill(); await proc.exited; }
     }
-    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe(mode === "successful" ? 1 : 0);
-    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe(mode === "successful" ? 0 : 1);
+    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation") ? 1 : 0);
+    memoryIndex().close();
+    const reloaded = memoryIndex().turnOffers(receipt.conversationId);
+    if (mode === "successful" || mode === "delayed confirmation") {
+      expect(reloaded).toHaveLength(1);
+      expect(reloaded[0]).toMatchObject({ title: "Widget parser", score: .8 });
+      fs.writeFileSync(transcript, JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] } }) + "\n");
+      registry.settleSpawn(receipt.launchId, { key: { engine: "codex", sessionId: session }, artifactPath: transcript, cwd: root,
+        accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+      const offers = offeredMemoryForTranscript(transcript);
+      expect(offers[reloaded[0].requestId]).toEqual(["Widget parser"]);
+      const feed = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+      const entries = feed.feed(fs.readFileSync(transcript, "utf8").trim().split("\n"), 0, false).items;
+      const lookup = provenanceLookupFor({ memoryOffers: offers }, entries.map(entry => entry.item));
+      expect(lookup.memoryFor!(entries.find(entry => entry.item.kind === "user")!.item)).toEqual(["Widget parser"]);
+    }
+    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation") ? 0 : 1);
   } finally { server.stop(true); }
 }, 5000);
 

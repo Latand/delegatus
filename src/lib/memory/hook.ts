@@ -46,9 +46,12 @@ async function runHook(endpoint: string, token: string | null, queue: string | n
     if (typeof body.block === "string" && body.block && body.block.length <= 10000) {
       const output = JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: body.block } });
       if (performance.now() >= deadline) return;
+      const emittedAt = Date.now();
       await new Promise<void>((resolve, reject) => process.stdout.write(output, error => error ? reject(error) : resolve()));
-      if (performance.now() >= deadline) return;
-      await fetch(endpoint + "/api/memory/inject", { method: "POST", signal: abort.signal, headers, body: JSON.stringify({ delegatus_confirm: true }) });
+      // Successful output is a delivery fact. Send its evidence independently
+      // of selection cancellation; the original process deadline still holds.
+      await fetch(endpoint + "/api/memory/inject", { method: "POST", signal: AbortSignal.timeout(1000), headers,
+        body: JSON.stringify({ delegatus_confirm: true, delegatus_emitted_at: emittedAt }) });
     }
   } catch { /* fail open, with no prompt or credential in diagnostics */ }
   finally { clearTimeout(timer); abort.abort(); }
