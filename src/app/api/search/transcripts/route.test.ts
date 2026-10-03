@@ -350,3 +350,35 @@ test("HTTP and MCP relevance pages bound long tokens and multibyte fragments", a
     }
   }
 });
+
+
+test("an unreadable transcript index returns one bounded MCP failure and remains retryable after repair", async () => {
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  const filename = path.join(process.env.LLV_STATE_DIR!, "transcript-search.sqlite");
+  fs.writeFileSync(filename, "invalid database fixture");
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const { productionViewerControlDependencies } = await import("@/lib/mcp/bindings");
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests++;
+    try { return await GET(request); }
+    catch { return new Response("<html>Internal server error</html>", { status: 500 }); }
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const result = await service.callTool("search_transcripts", { query: "widget" }, { deadlineAt: Date.now() + 30_000 });
+    expect(result).toMatchObject({ ok: false, error: "Transcript search is unavailable; retry later or check index diagnostics." });
+    expect(requests).toBe(1);
+    const response = await GET(new Request("http://localhost/api/search/transcripts?q=widget"));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "TRANSCRIPT_SEARCH_UNAVAILABLE", error: "Transcript search is unavailable; retry later or check index diagnostics." });
+    fs.unlinkSync(filename);
+    expect(await service.callTool("search_transcripts", { query: "widget" }, { deadlineAt: Date.now() + 30_000 })).toMatchObject({ ok: true, items: [] });
+    expect(requests).toBe(2);
+  } finally {
+    server.stop(true);
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+  }
+});

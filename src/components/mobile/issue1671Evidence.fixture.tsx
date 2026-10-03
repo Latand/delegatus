@@ -141,6 +141,12 @@ const reviewerLineage = deckRequested
   ? { durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation_done-0", reviewsConversationId: "conversation_done-0", memberships: [] } }
   : {};
 const AGENT_LABEL = new URLSearchParams(location.search).has("agent-label");
+/* `?chrome=<n>`: the phone conversation with `n` background shell tasks behind its ⋯ menu and, unless `nopin`,
+   a pinned message (a board task assigned to it). Used with `seatnoise=ii&runtime=structured` for the seat's
+   report button. */
+const CHROME_PARAM = new URLSearchParams(location.search).get("chrome");
+const CHROME = CHROME_PARAM === null ? null : Number(CHROME_PARAM);
+const CHROME_PIN = CHROME !== null && !new URLSearchParams(location.search).has("nopin");
 
 const files: FileEntry[] = [
   conversation(RUNNING_PATH, AGENT_LABEL ? "Orchestrator" : "Rebuild the board status projection", {
@@ -171,6 +177,19 @@ const files: FileEntry[] = [
   )),
 ];
 
+if (CHROME !== null && CHROME > 0) {
+  const CHROME_COMMANDS = ["gh run watch 18234519922 --exit-status", "bun test src/components/mobile/MobileChromeSheets.dom.test.tsx", "bun scripts/verify-runtime-host.ts --runtime /usr/local/bin/bun-1.4.0-candidate"];
+  for (let index = 0; index < CHROME; index++) {
+    const id = ["bbto8z3y0", "b4xq0m2lk7ns", "b9fz1rkp3w", "bk2m8q1d4x", "bq7v5n0c9z", "bw3j6t2h8y", "bz1a4s7e5u", "bd8f2g9k6m"][index % 8]!;
+    files.push({
+      path: `/tmp/claude-1000/atlas/session/tasks/${id}.output`, root: "claude-tasks", name: `${id}.output`, project: PROJECT,
+      title: `Background task ${id}`, engine: "shell", kind: "bash", fmt: "text", parent: RUNNING_PATH,
+      mtime: now - 40 - index * 95, size: 2_048, activity: "live", proc: "running", pid: 2_145_666 + index * 436,
+      cmd: CHROME_COMMANDS[index % 3]!, cmdDesc: ["Watch the CI run", "Run the touched test file", "Rehearse the runtime host"][index % 3]!,
+      pendingQuestion: null, waitingInput: null, conversationId: null,
+    } as unknown as FileEntry);
+  }
+}
 /* The launch facts are what the board's projection hands the pane: a launch the runtime is still recovering
    carries no reason, a stopped one carries it with `recoveryStopped`. The raw recovery envelope rides in
    `error` on the pending case on purpose: the chip must not print it whatever the projection did. */
@@ -477,7 +496,13 @@ const TOOL_RUN = [
 const FAST_TTS = new URLSearchParams(location.search).has("fast-tts");
 const FAST_TTS_FEED = JSON.stringify({ type: "assistant", timestamp: iso(10), message: { role: "assistant", content: [{ type: "text", text: "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken." }] } }) + "\n";
 const FEED = FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
-const tasks = TOOLCARD ? [{
+const CHROME_PINNED_TASK = {
+  id: "task-pinned", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
+  text: "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
+  assignments: [{ path: RUNNING_PATH, conversationId: "conversation_running", panePid: null, state: "delivered", error: null, at: iso(1_800), engine: "claude" }],
+  createdAt: iso(3_600), updatedAt: iso(1_800),
+};
+const tasks = CHROME_PIN ? [CHROME_PINNED_TASK] : TOOLCARD ? [{
   id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "Rebuild the board status projection\nReplay every band from the snapshot.",
   assignments: [{ path: RUNNING_PATH, conversationId: "conversation_running", panePid: null, state: "delivered", error: null, at: iso(1_800), engine: "claude" }],
@@ -1468,7 +1493,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
-    if (FAST_TTS && SEAT_NOISE) {
+    if ((FAST_TTS || CHROME !== null) && SEAT_NOISE) {
       const file = files[0]!;
       if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [file.conversationId], paths: [file.path], previous: { conversationIds: [], paths: [] } } });
       return json({ seat: { project: PROJECT, seatEpoch: 1, conversationId: file.conversationId, path: file.path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400), intent: { clientRequestId: "seat-fast-tts", mode: "existing", launchId: null, error: null } }, pending: null, exists: true });

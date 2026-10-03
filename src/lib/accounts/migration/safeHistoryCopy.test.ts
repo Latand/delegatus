@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,19 @@ import { CodexAppServerError } from "@/lib/accounts/codexAppServer";
 import { forkClaudeHistory, HistorySecurityError, safeCopyHistory, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
 
 const roots: string[] = [];
+const ancestorMocks: { mockRestore(): void }[] = [];
+
+// The test runner's own temporary parent is 0700. Model a shared temporary
+// parent without changing any directory outside the fixture.
+function peerAccessibleParent(root: string): void {
+  const parent = path.dirname(root);
+  const lstat = fs.lstatSync.bind(fs);
+  const parentStat = lstat(parent);
+  ancestorMocks.push(spyOn(fs, "lstatSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
+    if (String(pathname) === parent) return Object.assign(Object.create(Object.getPrototypeOf(parentStat)), parentStat, { uid: parentStat.uid + 1, mode: (parentStat.mode & ~0o777) | 0o755 });
+    return lstat(pathname, ...args as []);
+  }) as typeof fs.lstatSync));
+}
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-history-copy-"));
@@ -22,6 +35,7 @@ function fixture() {
 }
 
 afterEach(() => {
+  for (const mock of ancestorMocks.splice(0)) mock.mockRestore();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -51,6 +65,8 @@ describe("safe history copy", () => {
 
   test("accepts owner-controlled 0755 directory trees and rejects writable peer roots", () => {
     const f = fixture();
+    fs.chmodSync(f.root, 0o755);
+    peerAccessibleParent(f.root);
     const year = path.join(f.sourceRoot, "2026");
     const month = path.join(year, "07");
     const day = path.join(month, "10");
@@ -85,6 +101,37 @@ describe("safe history copy", () => {
       destinationRelative: "target-writable.jsonl",
       operationId: "target-writable",
     })).toThrow(HistorySecurityError);
+  });
+
+  test("migrates Codex history roots created 0775 below private account homes", () => {
+    const f = fixture();
+    const sourceRoot = path.join(f.sourceRoot, "sessions");
+    const targetRoot = path.join(f.targetRoot, "sessions");
+    fs.mkdirSync(sourceRoot, { mode: 0o775 });
+    fs.mkdirSync(targetRoot, { mode: 0o775 });
+    fs.chmodSync(sourceRoot, 0o775);
+    fs.chmodSync(targetRoot, 0o775);
+    const sourcePath = path.join(sourceRoot, "rollout.jsonl");
+    fs.writeFileSync(sourcePath, "account history\n", { mode: 0o664 });
+    fs.chmodSync(sourcePath, 0o664);
+    const input = { sourcePath, sourceRoot, targetRoot, destinationRelative: "2026/10/02/rollout.jsonl", operationId: "private-account-move" };
+    const copied = safeCopyHistory(input);
+    expect(fs.readFileSync(copied.path, "utf8")).toBe("account history\n");
+    expect(fs.statSync(copied.path).mode & 0o777).toBe(0o600);
+    expect(safeCopyHistory(input)).toMatchObject({ reused: true, hash: copied.hash });
+    expect(fs.statSync(sourceRoot).mode & 0o777).toBe(0o775);
+    expect(fs.statSync(targetRoot).mode & 0o777).toBe(0o775);
+    expect(fs.statSync(sourcePath).mode & 0o777).toBe(0o664);
+    fs.chmodSync(sourcePath, 0o666);
+    expect(() => safeCopyHistory(input)).toThrow(new HistorySecurityError("unsafe-source"));
+    fs.chmodSync(sourcePath, 0o664);
+    fs.chmodSync(targetRoot, 0o777);
+    expect(() => safeCopyHistory(input)).toThrow(new HistorySecurityError("unsafe-root"));
+    fs.chmodSync(targetRoot, 0o775);
+    fs.chmodSync(f.sourceRoot, 0o755);
+    fs.chmodSync(f.root, 0o755);
+    peerAccessibleParent(f.root);
+    expect(() => safeCopyHistory(input)).toThrow(new HistorySecurityError("unsafe-root"));
   });
 
   test("streams, hashes, publishes with private modes, and dedupes one operation", () => {
@@ -192,7 +239,7 @@ describe("safe history copy", () => {
       .toThrow(HistorySecurityError);
     fs.unlinkSync(hardlink);
 
-    fs.chmodSync(f.sourcePath, 0o664);
+    fs.chmodSync(f.sourcePath, 0o666);
     expect(() => safeCopyHistory({ ...f, destinationRelative: "mode.jsonl", operationId: "mode" }))
       .toThrow(HistorySecurityError);
     fs.chmodSync(f.sourcePath, 0o600);
@@ -216,6 +263,15 @@ describe("safe history copy", () => {
     fs.symlinkSync(outside, path.join(f.targetRoot, "linked"));
     expect(() => safeCopyHistory({ ...f, destinationRelative: "linked/rollout.jsonl", operationId: "target-link" }))
       .toThrow(HistorySecurityError);
+  });
+
+  test("rejects group-writable files when no private ancestor prevents peer access", () => {
+    const f = fixture();
+    for (const directory of [f.root, f.sourceRoot, f.targetRoot]) fs.chmodSync(directory, 0o755);
+    peerAccessibleParent(f.root);
+    fs.chmodSync(f.sourcePath, 0o664);
+    expect(() => safeCopyHistory({ ...f, destinationRelative: "peer-file.jsonl", operationId: "peer-file" }))
+      .toThrow(new HistorySecurityError("unsafe-source"));
   });
 });
 
@@ -309,6 +365,53 @@ describe("forkClaudeHistory", () => {
     const whole = path.join(path.dirname(sourcePath), "8e2d3c4b-5f6a-\x34b7c-9d8e-0f1a2b3c4d5e.jsonl");
     const copied = forkClaudeHistory({ ...input, destination: whole, sessionId: "8e2d3c4b-5f6a-\x34b7c-9d8e-0f1a2b3c4d5e", operationId: "whole", snapshot: false });
     expect(copied.records).toBe(lines.length + 1);
+  });
+
+  test("forks a seat's owned 0775 project behind its private native projects root", () => {
+    const f = claudeFixture();
+    const project = path.dirname(f.sourcePath);
+    fs.chmodSync(f.sourceRoot, 0o700);
+    fs.chmodSync(project, 0o775);
+    const destination = path.join(project, `${forkId}.jsonl`);
+    const input = { ...f.input, sourceRoot: f.sourceRoot, targetRoot: f.sourceRoot, destination, snapshot: true };
+    const first = forkClaudeHistory(input);
+    expect(first).toMatchObject({ path: destination, reused: false });
+    expect(fs.readFileSync(destination, "utf8")).toContain(forkId);
+    expect(fs.statSync(project).mode & 0o777).toBe(0o775);
+    expect(fs.statSync(destination).mode & 0o777).toBe(0o600);
+    expect(forkClaudeHistory(input)).toMatchObject({ reused: true, hash: first.hash });
+    expect(forkClaudeHistory({ ...input, snapshot: false })).toMatchObject({ reused: true });
+  });
+
+  test("refuses peer-accessible writable project directories and writable roots", () => {
+    for (const rootMode of [0o755, 0o775]) {
+      const f = claudeFixture();
+      fs.chmodSync(f.root, 0o755);
+      peerAccessibleParent(f.root);
+      fs.chmodSync(f.sourceRoot, rootMode);
+      fs.chmodSync(path.dirname(f.sourcePath), 0o775);
+      expect(() => forkClaudeHistory({ ...f.input, snapshot: true })).toThrow(new HistorySecurityError("unsafe-root"));
+      expect(fs.existsSync(f.destination)).toBeFalse();
+    }
+    const f = claudeFixture();
+    fs.chmodSync(path.dirname(f.sourcePath), 0o777);
+    expect(() => forkClaudeHistory({ ...f.input, snapshot: true })).toThrow(new HistorySecurityError("unsafe-root"));
+    expect(fs.existsSync(f.destination)).toBeFalse();
+  });
+
+  test("a private ancestor never admits symlinked or foreign-owned seat roots", () => {
+    const f = claudeFixture();
+    const link = path.join(f.root, "native-projects-link");
+    fs.symlinkSync(f.sourceRoot, link);
+    expect(() => forkClaudeHistory({ ...f.input, sourceRoot: link, sourcePath: path.join(link, "-repo", `${sourceId}.jsonl`), snapshot: true }))
+      .toThrow(new HistorySecurityError("unsafe-root"));
+    if (process.getuid) {
+      const uid = process.getuid();
+      const foreign = spyOn(process, "getuid").mockReturnValue(uid + 1);
+      try { expect(() => forkClaudeHistory({ ...f.input, snapshot: true })).toThrow(new HistorySecurityError("unsafe-root")); }
+      finally { foreign.mockRestore(); }
+    }
+    expect(fs.existsSync(f.destination)).toBeFalse();
   });
 
   test("a fork larger than its bound is refused before anything is published", () => {

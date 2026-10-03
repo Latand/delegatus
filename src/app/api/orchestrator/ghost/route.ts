@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readDeputies } from "@/lib/orchestrator/deputies";
 import { deputyAskerOf } from "@/lib/orchestrator/deputyAsker";
 import { askOrchestratorInParallel } from "@/lib/orchestrator/deputyCommand";
+import { readDeputySeatBusy } from "@/lib/orchestrator/deputySeatBusy";
 import { readDeputyOwnLines } from "@/lib/orchestrator/deputySweep";
 import { productionDeputyCommandPorts } from "@/lib/orchestrator/deputyCommandPorts";
 import { admitRuntimeImagePayload } from "@/lib/runtime/runtimeImageAdmission";
@@ -35,6 +36,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
   if (imageError) return NextResponse.json({ error: imageError.error }, { status: imageError.status });
   try {
     const result = await askOrchestratorInParallel({
+      seatConversationId: typeof body.seatConversationId === "string" ? body.seatConversationId : undefined,
       project: typeof body.project === "string" ? body.project : "",
       text: typeof body.text === "string" ? body.text : "",
       images,
@@ -64,6 +66,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
    seat's feed. `missing` says the transcript is gone, so an expanded block can
    say so instead of drawing nothing. */
 export async function GET(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
+  const project = req.nextUrl.searchParams.get("project")?.trim();
+  if (project) {
+    try {
+      return NextResponse.json(await readDeputySeatBusy(project));
+    } catch {
+      return NextResponse.json({ error: "seat activity is unavailable" }, { status: 503 });
+    }
+  }
   const askId = req.nextUrl.searchParams.get("askId")?.trim() ?? "";
   if (!askId) return NextResponse.json({ error: "askId is required" }, { status: 400 });
   const deputy = readDeputies().find((candidate) => candidate.askId === askId);
