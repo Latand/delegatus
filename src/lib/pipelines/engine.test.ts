@@ -18884,3 +18884,30 @@ test.each([false, true])("consecutive terminal grants each buy two reviews on un
     expect(parked.reviewPending?.currentHead).toBe(ORIGIN_MAIN_SHA);
   }
 });
+
+
+test.each([1, 2] as const)("a final granted fix repaired inside its budget remains resumable (%i rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 2 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "before-final-repair", rounds)).error).toBeUndefined();
+  const repaired = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && n === rounds + 1)).pipeline;
+  const repair = repaired.runs.find(run => run.stageId === "repair")!.attempts[0]!;
+  expect(repair.state).toBe("passed");
+  expect(repair.activatedBy?.budgetSpent).toBeUndefined();
+  expect(repaired.reviewPending).toMatchObject({ terminalRecheck: true, fixStageId: "repair", fixAttempt: repair.n, currentHead: ORIGIN_MAIN_SHA });
+  const lastReview = repaired.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(lastReview.activatedBy).toMatchObject({ stageId: "repair", attempt: repair.n, budgetRecheck: true });
+  expect((await continueReview(repaired, "after-final-repair", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "fix", input: expect.stringContaining("P2 evidence gap") });
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(3 + rounds);
+  expect(completed.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!.input).toContain(lastReview.verdict!.findings![0]!);
+});

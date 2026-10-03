@@ -8189,7 +8189,10 @@ function continueReview(
   if (terminalRecheck && (!failedReview?.activatedBy?.budgetRecheck || !failedReview.verdict
     || !verdictRoutesAsFail({ verdict: failedReview.verdict, output: failedReview.output ?? "" })
     || !["failed", "needs_decision"].includes(failedReview.state)
-    || review.next !== null || review.onFail.to !== pending.fixStageId)) {
+    || review.next !== null
+    || failedReview.activatedBy.edge !== "pass"
+    || failedReview.activatedBy.stageId !== pending.fixStageId
+    || failedReview.activatedBy.attempt !== pending.fixAttempt)) {
     return { error: "the failed terminal review or its fix edge is no longer in this pipeline", status: 409 };
   }
   const grant: PipelineReviewGrant = {
@@ -8211,7 +8214,10 @@ function continueReview(
     const lastRound = req.addRounds === 1;
     if (lastRound) failedReview.budgetSpent = true;
     pipeline.cursor = {
-      stageId: pending.fixStageId,
+      // The pending fix fields retain the passed predecessor's evidence,
+      // which may be a nested repair. New findings always go to the frozen
+      // review fail target that the grant continues.
+      stageId: review.onFail.to,
       state: "pending",
       input: failEdgeInput({ verdict: failedReview.verdict!, output: failedReview.output ?? "" }),
       activatedBy: { stageId: review.id, attempt: failedReview.n, edge: "fail", ...(lastRound ? { budgetSpent: true as const } : {}) },
