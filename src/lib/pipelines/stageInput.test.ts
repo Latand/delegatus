@@ -70,13 +70,15 @@ test("a large multibyte specification is file-backed after the previous output",
 });
 
 test.each([
-  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "467949fdef55331e85de5d0f0a471b121e85a28b952316024cee4ecce7c021af" },
-  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "92c67166857ef9b34d61022729a6d04a99fdeed1fd973046ddca429baa30dfa3" },
-  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "05936aab04419797171b5821e30512dc035ae00a365a816c3ad1778568e59275" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "6fd6aab212e5dd76ff104d971bbf34bbab75f35ca72155e917a41623c4cc3145" },
+  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "e0bb08c8b7b4907c537bd85b2be4e163754dcedd3bde2e38925b8ae15a9867f8" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "baae7dc471e407d3d6f445d400a88e068eb2e87129b54a5ce056d2ffe73ca1d8" },
 ])("small stage inputs preserve the original renderer's bytes ($hash)", async ({ prompt, scaffold, previous, hash }) => {
   const { pipeline, stage } = handoffFixture(prompt);
   stage.effectiveRole.promptScaffold = scaffold;
-  const rendered = (await composeStageInput(pipeline, stage, stage.effectiveRole, previous));
+  const rendered = await composeStageInput(pipeline, stage, stage.effectiveRole, previous);
+  expect(rendered).toContain(`Pipeline branch: ${pipeline.branch}.`);
+  expect(rendered).toContain(`Commit your changes on ${pipeline.branch}`);
   // SHA-256 snapshots captured from the base renderer, including all framing.
   expect(crypto.createHash("sha256").update(rendered).digest("hex")).toBe(hash);
 });
@@ -102,12 +104,15 @@ test("an entry stage can externalize just its specification", async () => {
   expect(rendered).toContain("Full specification file:");
 });
 
-test("a tight prompt shrinks the output excerpt before externalizing a small specification", async () => {
+test("a prompt beyond the reference budget preserves full stage input in one file", async () => {
   const { pipeline, stage } = handoffFixture("x".repeat(29_500));
   const rendered = (await composeStageInput(pipeline, stage, stage.effectiveRole, "Previous head\n" + "界".repeat(15_000)));
   expect(Buffer.byteLength(rendered)).toBeLessThanOrEqual(32_000);
-  expect(rendered).toContain("Previous head");
-  expect(rendered).toContain("AC: preserve the handoff");
+  const promptFile = rendered.match(/Full stage prompt file: (.+)\n/)?.[1];
+  expect(promptFile).toBeDefined();
+  const fullPrompt = fs.readFileSync(promptFile!, "utf8");
+  expect(fullPrompt).toContain("Previous head");
+  expect(fullPrompt).toContain("AC: preserve the handoff");
   expect(rendered).not.toContain("Full specification file:");
 });
 

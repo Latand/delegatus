@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
-import { CONTROLLER_ARTIFACT_DIRECTORY } from "./controllerArtifacts";
+import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { realExec } from "@/lib/workflows/provision";
 import { renderStagePrompt } from "./prompts";
 import { composeStageInput } from "./stageInput";
 import { buildPipeline } from "./store";
@@ -513,4 +514,40 @@ test.each([
     const file = result.delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
     expect(fs.readFileSync(file!, "utf8")).toBe(result.text);
   }
+});
+
+
+test.each([
+  { boundary: "legacy ignore", unborn: false },
+  { boundary: "unstage", unborn: false },
+  { boundary: "unstage", unborn: true },
+])("async artifact repair rechecks ancestors after $boundary (unborn=$unborn)", async ({ boundary, unborn }) => {
+  const { repo, git } = repository(`async-ancestor-${boundary.replaceAll(" ", "-")}-${unborn}`, unborn);
+  const artifactRoot = path.join(repo, ".artifacts");
+  const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "old.md"), "private staged handoff\n");
+  git("add", "-A");
+  const external = path.join(root, `async-external-${boundary.replaceAll(" ", "-")}-${unborn}`);
+  fs.mkdirSync(external);
+  const original = "preserve\n";
+  fs.writeFileSync(path.join(external, ".gitignore"), original);
+  if (boundary === "legacy ignore") fs.mkdirSync(path.join(external, "pipeline-stage-inputs"));
+  let swapped = false;
+  await expect(prepareControllerArtifactDirectory(repo, async (command, args, ...rest) => {
+    const result = await realExec(command, args, ...rest);
+    const atBoundary = boundary === "legacy ignore"
+      ? args[0] === "ls-files" && args.at(-1) === ".artifacts/.gitignore"
+      : args[0] === (unborn ? "rm" : "reset");
+    if (!swapped && atBoundary) {
+      swapped = true;
+      const replaced = boundary === "legacy ignore" ? artifactRoot : directory;
+      fs.renameSync(replaced, `${replaced}-retained`);
+      fs.symlinkSync(external, replaced, "dir");
+    }
+    return result;
+  })).rejects.toThrow(/pipeline controller artifact path must be a real directory/);
+  expect(swapped).toBe(true);
+  expect(fs.readFileSync(path.join(external, ".gitignore"), "utf8")).toBe(original);
+  expect(fs.readdirSync(external).sort()).toEqual(boundary === "legacy ignore" ? [".gitignore", "pipeline-stage-inputs"] : [".gitignore"]);
 });

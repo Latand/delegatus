@@ -65,6 +65,16 @@ test("a dirty worktree is reported as the paths the server saw, and the report i
   expect(provenance.outputs).toEqual([]);
 });
 
+test("provenance follows the branch the stage actually checked out and its PR", async () => {
+  const { exec, calls } = execWith({
+    "git branch --show-current": { stdout: "fix/stage-created\n" },
+    "git rev-parse HEAD": { stdout: HEAD },
+    "gh pr list": { stdout: '[{"url":"https://forge.example/x/pull/8","number":8,"state":"OPEN"}]' },
+  });
+  expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ branch: "fix/stage-created", pullRequest: { number: 8 } });
+  expect(calls.find((call) => call[0] === "gh")).toContain("fix/stage-created");
+});
+
 test("reads the server cannot make are null, never a claim and never a refusal", async () => {
   const { exec } = execWith({
     "git status --porcelain": { code: 128, stderr: "not a git repository" },

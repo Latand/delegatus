@@ -87,7 +87,10 @@ function pipeline(): Pipeline {
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = (await realExec("git", args, cwd));
+  const env: Partial<NodeJS.ProcessEnv> = {};
+  for (const key of ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"]) env[key] = undefined;
+  for (const key of Object.keys(process.env)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) env[key] = undefined;
+  const result = await realExec("git", args, cwd, env);
   if (result.code !== 0) throw new Error(result.stderr || result.stdout);
   return result.stdout.trim();
 }
@@ -100,7 +103,7 @@ async function isolatedIdentityRepo() {
   for (const directory of [home, xdg, repo]) fs.mkdirSync(directory);
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_)/.test(key)) delete env[key];
+    if (/^GIT_(?:AUTHOR_|COMMITTER_|CONFIG_|ALTERNATE_OBJECT_DIRECTORIES$|OBJECT_DIRECTORY$|DIR$|WORK_TREE$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|INDEX_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$|COMMON_DIR$)/.test(key)) delete env[key];
   }
   Object.assign(env, { HOME: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig") });
   const exec: ExecPort = (command, args, cwd, overrides) => {

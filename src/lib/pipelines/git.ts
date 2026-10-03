@@ -17,6 +17,8 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectEx
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
   preservedLocalRef?: PreservedProvisionRef;
+  /** The controller must retry this committing attempt after collecting fresh evidence. */
+  deferred?: true;
 };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
@@ -891,7 +893,8 @@ export async function mapReplayPatchLocation(
     ancestry does. Merge commits have no cherry patch-id; unique merge content
     therefore needs the controlled tree proof. Record the builder's unchanged
     tree with both parents, then CAS the ref. Delivery still owns publication. */
-export async function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort): Promise<PipelineGitResult> {
+export async function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort,
+  destination?: { branch: string; head: string; prepared: (sha: string) => void | Promise<void> }): Promise<PipelineGitResult> {
   const accepted = pipeline.lastPassedCommit;
   if (!/^[0-9a-f]{40}$/i.test(head) || !/^[0-9a-f]{40}$/i.test(accepted)) {
     return { ok: false, error: "reconciling stage history requires exact commit SHAs" };
@@ -1031,7 +1034,10 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   if (currentBranch.code !== 0 || currentBranch.stdout.trim() !== ref) {
     return { ok: false, error: "the stage branch moved during history reconciliation" };
   }
-  const update = (await exec("git", ["update-ref", "-m", "pipeline: reconcile rebased stage", ref, sha, head], pipeline.worktreeDir));
+  // Branch adoption preserves the stage's own ref. Its caller owns and fences
+  // the destination, and durably records this merge before changing that ref.
+  await destination?.prepared(sha);
+  const update = await exec("git", ["update-ref", "-m", "pipeline: reconcile rebased stage", destination ? `refs/heads/${destination.branch}` : ref, sha, destination?.head ?? head], pipeline.worktreeDir);
   if (update.code !== 0) return failure("fencing the stage reconciliation merge", update);
   return { ok: true, sha };
 }

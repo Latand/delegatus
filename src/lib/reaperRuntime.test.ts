@@ -891,7 +891,7 @@ test("an unknown missing transcript reaches the dead-transcript TTL in productio
   process.env.LLV_STATE_DIR = directory;
   delete process.env.LLV_REAPER_ENABLED;
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "Test worker" });
+  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "Missing transcript worker" });
   const receipt = registry.beginSpawn("codex", "/repo", profile);
   registry.completeSpawn(receipt.launchId, {
     key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: "/repo", accountId: "default",
@@ -1924,7 +1924,7 @@ test("Viewer flow deliveries are discounted from transcript authorship", async (
   process.env.LLV_STATE_DIR = directory;
   delete process.env.LLV_REAPER_ENABLED;
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "Test worker" });
+  const profile = emptyLaunchProfile({ cwd: "/repo", role: "worker", title: "Flow delivery probe" });
   const receipt = registry.beginSpawn("codex", "/repo", profile);
   registry.completeSpawn(receipt.launchId, {
     key: { engine: "codex", sessionId },
@@ -2355,7 +2355,7 @@ test("the reaper actuates a due pinned tmux queue exactly once without a runtime
     accountId: "account-a",
     accountPin: true,
     clientAttemptId: "reaper_tmux_pin_20260824",
-    launchProfile: emptyLaunchProfile({ cwd: directory, title: "Test queued worker" }),
+    launchProfile: emptyLaunchProfile({ cwd: directory, title: "Queued account probe" }),
   });
   if (begun.kind !== "created") throw new Error("expected queued tmux receipt");
   registry.queuePinnedSpawn(begun.receipt.launchId, {
@@ -2368,7 +2368,7 @@ test("the reaper actuates a due pinned tmux queue exactly once without a runtime
       command: "claude",
       cwd: directory,
       windowName: "queued-pin",
-      launchProfile: emptyLaunchProfile({ cwd: directory, title: "Test queued worker" }),
+      launchProfile: emptyLaunchProfile({ cwd: directory, title: "Queued account probe" }),
     },
     ["prompt"]: "continue",
     imageRefs: [],

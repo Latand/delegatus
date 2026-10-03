@@ -68,7 +68,8 @@ test("archive route configuration loads in Node build workers without loading Bu
       outdir: root, root: "src/app/api/review-history", target: "node", format: "cjs", external: ["next/*", "bun:*"],
     });
     expect(result.success).toBe(true);
-    const node = process.env.LLV_TEST_NODE_BIN || "/usr/bin/node";
+    const node = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+    if (!node) throw new Error("archive import check requires Node on PATH");
     const probe = Bun.spawnSync({ cmd: [node, "-e", "for (const file of process.argv.slice(1)) require(file);", ...result.outputs.map(output => output.path)],
       env: { ...process.env, NODE_PATH: path.resolve("node_modules"), HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"), TMPDIR: root, NODE_ENV: "production" },
       stdout: "pipe", stderr: "pipe" });

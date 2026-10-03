@@ -451,6 +451,18 @@ export type PipelineStageAttempt = {
       witness the controller has that a deploy cut its turn. Absent on attempts
       recorded before the field existed and on pane-hosted ones. */
   hostEpoch?: number;
+  /** One durable automatic replacement attempt per interrupted attempt and boot. */
+  restartRecovery?: {
+    bootId: string;
+    requestedAt: string;
+    /** Present only on compatibility records written by the continuation implementation. */
+    clientMessageId?: string;
+    lastRecordAt: number | null;
+    replacementAttempt?: number;
+    replacedAttempt?: number;
+  };
+  /** Prompt context for a fresh attempt created after this attempt was interrupted. */
+  restartContext?: { previousAttempt: number; transcriptPath: string };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
@@ -515,6 +527,9 @@ export type PipelineStageAttempt = {
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Persisted before switching away from a stage-created branch, so a
+      controller restart must finish adopting this head before acceptance. */
+  branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
   error: string | null;
   /** Set when a `needs_decision` verdict that carried findings was routed along
       this stage's fail edge as a fail (#1785). The verdict keeps the status the

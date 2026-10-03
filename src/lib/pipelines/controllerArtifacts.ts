@@ -135,11 +135,14 @@ async function protectControllerArtifactIndex(worktreeDir: string, exec: ExecPor
     const directory = path.join(repo, namespace);
     // A repository-controlled ancestor must not redirect ignore repair into
     // another directory. Check every component before any filesystem writes.
-    let component = repo;
-    for (const part of namespace.split("/")) {
-      component = path.join(component, part);
-      assertDirectoryOrMissing(component);
-    }
+    const assertAncestors = () => {
+      let component = repo;
+      for (const part of namespace.split("/")) {
+        component = path.join(component, part);
+        assertDirectoryOrMissing(component);
+      }
+    };
+    assertAncestors();
     if (fs.existsSync(directory) && fs.readdirSync(directory)
       .some((entry) => entry !== ".gitignore" && entry !== "private")) {
       // Older releases wrote handoffs directly beneath the tracked ignore.
@@ -157,6 +160,9 @@ async function protectControllerArtifactIndex(worktreeDir: string, exec: ExecPor
           throw new Error("tracked ancestor ignore prevents safe legacy controller handoff protection");
         }
       }
+      // Git awaits let repository-controlled parents change. O_NOFOLLOW on
+      // the ignore file protects its final component, so recheck parents too.
+      assertAncestors();
       ensureIgnoreRules(ancestorIgnore, ["/.gitignore", "/pipeline-stage-inputs/"]);
     }
     const privateDirectory = path.join(directory, "private");
@@ -170,6 +176,7 @@ async function protectControllerArtifactIndex(worktreeDir: string, exec: ExecPor
         : ["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--", namespace], repo));
       if (unstage.status !== 0) throw new Error("cannot unstage private controller artifacts before launch");
     }
+    assertAncestors();
     if (fs.existsSync(directory)) ensureCatchAllIgnore(path.join(directory, ".gitignore"));
   }
 }
