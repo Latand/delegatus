@@ -1591,9 +1591,10 @@ export class SelfUpdateService {
       const pointer = new ReleasePointer(record.releasePointer, record.checkout).current();
       installed = pointer.sha ? await this.describe(record.checkout, pointer.sha) : (this.slice.installed ?? UNKNOWN_REVISION);
     } else {
-      try { const pointer = JSON.parse(readFileSync(record.releasePointer, "utf8"));
-        installed = { version: pointer.version, sha: pointer.sha, short: pointer.sha.slice(0, 7), date: "" };
-      } catch { installed = this.slice.installed ?? { ...UNKNOWN_REVISION, version: packageVersion(packageRoot(record)) }; }
+      const pointer = new ReleasePointer(record.releasePointer, packageRoot(record)).current();
+      const version = packageVersion(pointer.dir);
+      installed = pointer.sha ? { version, sha: pointer.sha, short: pointer.sha.slice(0, 7), date: "" }
+        : this.slice.installed?.version === version ? this.slice.installed : { ...UNKNOWN_REVISION, version };
       if (installed.sha) this.described.set(installed.sha, installed);
     }
     let health: RuntimeHostHealth | null = null;

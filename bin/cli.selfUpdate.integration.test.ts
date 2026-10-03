@@ -26,6 +26,10 @@ afterEach(async () => {
     const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     child.kill("SIGTERM");
     await Promise.race([exited, Bun.sleep(4_000)]);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await Promise.race([exited, Bun.sleep(1_000)]);
+    }
   }
   children.clear();
 }, 10_000);
@@ -471,6 +475,28 @@ test(`a recovery Viewer takeover requires its start identity, shape=${shape}, ma
   expect(await served(port)).toBe(fixture.checkout);
 }, 30_000);
 }
+
+test("recovery takeover retires its recorded Viewer after the listener closes during shutdown", async () => {
+  const fixture = install();
+  const port = await availablePort();
+  const socket = path.join(fixture.state, "runtime-host-fixture.sock");
+  const entry = path.join(fixture.checkout, "node_modules", ".bin", "next");
+  writeFileSync(entry, STUB_NEXT(false).replace("server.stop(true); process.exit(0);", "server.stop(true); setInterval(() => {}, 1_000);"));
+  const orphan = spawn(process.execPath, ["--bun", entry], {
+    cwd: fixture.checkout, env: { ...fixture.env, PORT: String(port), LLV_RUNTIME_HOST_SOCKET: socket }, stdio: "ignore",
+  });
+  children.add(orphan);
+  await Bun.sleep(200);
+  expect(await served(port)).toBe(fixture.checkout);
+  const pid = orphan.pid!;
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  const adopt = path.join(fixture.state, "adopt.json");
+  writeFileSync(adopt, JSON.stringify({ pid, startIdentity: stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19], port, socket }));
+  const { ensureWebPortFree } = await import("./launcher-adoption.mjs");
+  expect(await ensureWebPortFree({ adopt }, port, socket)).toBe(true);
+  await Bun.sleep(100);
+  expect(existsSync(`/proc/${pid}/stat`)).toBe(false);
+}, 20_000);
 
 test("overlapping starts retain one launcher while recovery adoption waits", async () => {
   const fixture = install();

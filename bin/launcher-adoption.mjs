@@ -60,14 +60,18 @@ function matchingProcess(candidate, socket, port = null, installRoot = null, rel
 async function stopRecorded(candidate, socket, port = null, installRoot = null, releasePointer = null) {
   if (!matchingProcess(candidate, socket, port, installRoot, releasePointer)) return false;
   const signal = value => {
-    if (!matchingProcess(candidate, socket, port, installRoot, releasePointer)) return;
+    // Custody was established before shutdown. The listener can close during
+    // teardown; the recorded start identity still fences escalation to its PID.
+    if (!alive(candidate.pid, candidate.startIdentity)) return;
     try { process.kill(candidate.pid, value); } catch (error) { if (error.code !== "ESRCH") throw error; }
   };
   signal("SIGTERM");
   const deadline = Date.now() + 10_000;
   while (alive(candidate.pid, candidate.startIdentity) && Date.now() < deadline) await wait(50);
   if (alive(candidate.pid, candidate.startIdentity)) signal("SIGKILL");
-  return true;
+  const killedDeadline = Date.now() + 5_000;
+  while (alive(candidate.pid, candidate.startIdentity) && Date.now() < killedDeadline) await wait(50);
+  return !alive(candidate.pid, candidate.startIdentity);
 }
 function json(file) {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; }

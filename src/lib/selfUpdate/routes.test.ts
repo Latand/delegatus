@@ -1001,6 +1001,35 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
 });
 
 
+test.each(["manual-upgrade", "missing-artifact", "valid"] as const)("package snapshots validate the installed pointer: %s", async shape => {
+  const dir = mkdtempSync(join(root, "package-pointer-"));
+  const installRoot = join(dir, "package"); const cached = join(dir, "cached");
+  const rootVersion = shape === "manual-upgrade" ? "1.0.2" : "1.0.0";
+  for (const directory of [installRoot, join(cached, "dist", "standalone")]) mkdirSync(directory, { recursive: true });
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: rootVersion }));
+  writeFileSync(join(cached, "package.json"), JSON.stringify({ version: "1.0.1" }));
+  writeFileSync(join(cached, "dist", "standalone", "server.js"), "fixture");
+  if (shape !== "missing-artifact") writeFileSync(join(cached, "dist", "runtime-host.mjs"), "fixture");
+  const record = { version: 1, checkout: null, installRoot, releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
+    port: 3000, socket: join(dir, "host.sock"), launcher: { pid: 1, startIdentity: "1", relaunch: 1, state: "healthy" },
+    web: { state: "healthy", pid: 2, startIdentity: "2", revision: tipSha.slice(0, 7), error: null }, runtimeHost: { state: "healthy", pid: 3, startIdentity: "3", revision: tipSha.slice(0, 7), error: null } } as LauncherRecord;
+  writeFileSync(record.releasePointer, JSON.stringify({ kind: "package", version: "1.0.1", sha: tipSha, dir: cached, baseVersion: "1.0.0" }));
+  writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: { version: "1.0.1", sha: tipSha, short: tipSha.slice(0, 7), date: "" } } }));
+  const expectedVersion = shape === "valid" ? "1.0.1" : rootVersion;
+  const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
+  const registry = spyOn(globalThis, "fetch").mockImplementation(async input => {
+    const version = String(input).split("/").pop();
+    return Response.json({ version: version === "latest" ? "1.0.3" : version, gitHead: version === "1.0.1" ? tipSha : "c".repeat(40) });
+  });
+  try {
+    const before = await service.snapshot();
+    expect(before.installed.version).toBe(expectedVersion);
+    if (shape !== "valid") expect(before.installed.sha).not.toBe(tipSha);
+    await service.check();
+    expect((await service.snapshot()).installed).toMatchObject({ version: expectedVersion, sha: shape === "valid" ? tipSha : "c".repeat(40) });
+  } finally { service.stop(); registry.mockRestore(); }
+});
+
 for (const operation of ["update", "retry"] as const) {
   test.each(["red", "pending", "unknown", "green"] as const)(`package ${operation} admits only a green published source: %s`, async verdict => {
     const dir = mkdtempSync(join(root, "package-green-")); const installRoot = join(dir, "package"); mkdirSync(installRoot);

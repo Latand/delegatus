@@ -71,3 +71,11 @@ test.each(["linux", "win32"] as const)("an old packaged bootstrap starts the ver
   expect(command).toContain("LLV_LAUNCHER_INSTALL_ROOT"); expect(command).toContain(root);
   expect(command).toContain("--port"); expect(command).toContain("45678");
 });
+
+
+test.each(["darwin", "win32"] as const)("legacy bootstrap retains Viewer bind when native argv is unavailable: %s", platform => {
+  const action = installAction({ mode: "checkout", record: { ...record, port: 45678 } } as never,
+    { cgroup: () => "", ready: () => true, platform, argv: () => [], env: { HOSTNAME: "0.0.0.0" } });
+  expect(action?.command).toContain("'--port' '45678'");
+  expect(action?.command).toContain("'--hostname' '0.0.0.0'");
+});

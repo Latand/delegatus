@@ -45,12 +45,12 @@ export function installAction(decision: ModeDecision, ports: { cgroup(pid: numbe
     else if (arg === "--tailscale" || arg.startsWith("--port=") || arg.startsWith("--hostname=")) args.push(arg);
   }
   if (decision.record?.port && !args.some(arg => ["--port", "-p"].includes(arg) || arg.startsWith("--port="))) args.push("--port", String(decision.record.port));
+  const env = ports.env ?? process.env;
   if (!decision.record) {
-    const env = ports.env ?? process.env;
     const port = Number(env.PORT);
     if (Number.isInteger(port) && port > 0 && port <= 65_535) args.push("--port", String(port));
-    if (env.HOSTNAME?.trim()) args.push("--hostname", env.HOSTNAME);
   }
+  if (env.HOSTNAME?.trim() && !args.some(arg => ["--hostname", "-H"].includes(arg) || arg.startsWith("--hostname="))) args.push("--hostname", env.HOSTNAME);
   const windows = (ports.platform ?? process.platform) === "win32";
   let command = (windows ? "& " : "") + [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"]
     .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
