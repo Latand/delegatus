@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 
 import type { FileEntry } from "@/lib/types";
 import { realExec } from "@/lib/workflows/provision";
+import type { Pipeline } from "./types";
 
 /* Graph slice 2 (#1730): a stage attempt reports its own completion through one
    MCP call. Host and account ports are mocks. Artifact reads inspect only the
