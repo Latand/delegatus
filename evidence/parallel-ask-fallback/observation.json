@@ -1,0 +1,117 @@
+{
+  "base": "3f84ab0d202de024c629afbe79cef1604fa2d650",
+  "rootCause": "The command used seatTurnProgressing, a monitor-tick progress predicate; the composer used runtime turn=running. The tick predicate requires a positive liveness verdict and never reads owned background work after a settled turn.",
+  "observations": [
+    {
+      "runtime": {
+        "host": "hosted",
+        "turn": "running"
+      },
+      "tick": {
+        "turn": "busy",
+        "activity": null
+      },
+      "formerBusy": false,
+      "busy": true
+    },
+    {
+      "runtime": {
+        "host": "hosted",
+        "turn": "running"
+      },
+      "tick": {
+        "turn": "busy",
+        "lifecycle": "stalled"
+      },
+      "formerBusy": false,
+      "busy": true
+    },
+    {
+      "runtime": {
+        "host": "hosted",
+        "turn": "idle"
+      },
+      "ownedBackground": "command or unexpired monitor",
+      "formerBusy": false,
+      "busy": true
+    },
+    {
+      "clientRuntimeTurn": "running",
+      "serverBusy": false,
+      "result": "one ordinary direct message; retained draft until admission"
+    }
+  ],
+  "scope": "Controlled runtime/transcript and component reproductions. The exact photographed live seat was not reconstructed.",
+  "regression": {
+    "baseComposer": "six fallback regressions fail",
+    "fixedComposer": "fallback, refusal, repeated submit, image-only, card switch, remount, structured pending and same-key refusal retry covered"
+  },
+  "busyTests": "src/lib/orchestrator/deputySeatBusy.test.ts",
+  "componentTests": "src/components/TmuxComposer.parallel.dom.test.tsx",
+  "seatRootObservation": {
+    "method": "read-only lstat and legacy source validation on this machine; no operator permission changes",
+    "components": [
+      {
+        "component": "native Claude config directory",
+        "mode": "0700",
+        "owned": true,
+        "symlink": false
+      },
+      {
+        "component": "native Claude projects root",
+        "mode": "0700",
+        "owned": true,
+        "symlink": false
+      },
+      {
+        "component": "seat project directory",
+        "mode": "0775",
+        "owned": true,
+        "symlink": false
+      },
+      {
+        "component": "seat transcript",
+        "mode": "0600",
+        "owned": true,
+        "symlink": false
+      }
+    ],
+    "legacyValidation": "unsafe-root at the seat project directory",
+    "fix": "Shared history validation permits owned group-write behind an owned owner-only ancestor that prevents peer traversal. Peer-accessible group-write, foreign owners, symlinks, hardlinks and world-write remain refused; destination files remain 0600.",
+    "regressionTests": "src/lib/accounts/migration/safeHistoryCopy.test.ts"
+  },
+  "accountRootObservation": {
+    "method": "read-only lstat on two installed Codex account histories and source validation; no operator permission changes",
+    "components": [
+      {
+        "component": "account home",
+        "mode": "0700",
+        "owned": true,
+        "symlink": false
+      },
+      {
+        "component": "sessions root and date hierarchy",
+        "mode": "0775",
+        "owned": true,
+        "symlink": false
+      },
+      {
+        "component": "rollout transcript",
+        "mode": "0664",
+        "owned": true,
+        "symlink": false,
+        "links": 1
+      }
+    ],
+    "legacyValidation": "unsafe-root at sessions root; strict file check also rejects 0664 after directory traversal",
+    "fixedValidation": "representative source history from both installed account roots accepted without copying or modifying it",
+    "regressionTests": "src/lib/accounts/migration/safeHistoryCopy.test.ts"
+  },
+  "failedSwitchHold": {
+    "checked": [
+      "src/lib/runtime/structuredDeliveryQueue.ts",
+      "src/lib/agent/registry.ts"
+    ],
+    "left": "The delivery queue intentionally establishes failed-switch holds. Automatic release requires a separate queue/registry ownership change and is outside the optional small same-file fix."
+  }
+}
