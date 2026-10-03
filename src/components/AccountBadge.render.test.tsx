@@ -7,8 +7,8 @@ import { AccountBadge } from "./AccountBadge";
 // chip variant. The hover/focus Hint is closed during server rendering.
 
 test("desktop chip shows the @-prefixed account id and a deterministic hue dot", () => {
-  const html = renderToStaticMarkup(<AccountBadge engine="claude" accountId="botfatherdev-2" />);
-  expect(html).toContain("@ botfatherdev-2");
+  const html = renderToStaticMarkup(<AccountBadge engine="claude" accountId="fixture-acct-2" />);
+  expect(html).toContain("@ fixture-acct-2");
   // The leading dot's fill is a color-mix over a theme token — never a raw hex.
   expect(html).toContain("color-mix(in srgb, hsl(");
   expect(html).not.toMatch(/background-color:\s*#/i);
