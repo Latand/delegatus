@@ -6410,6 +6410,7 @@ describe("older history on the phone", () => {
           frames: frames.length, over100: frames.filter((ms) => ms > 100).length, maxFrameMs: Math.round(Math.max(0, ...frames)),
         };
         fs.writeFileSync(path.join(HISTORY_OUT, "walk.json"), JSON.stringify(walk, null, 2));
+        await page.screenshot({ path: path.join(HISTORY_OUT, "at-start-390.png") });
         expect(pageErrors).toEqual([]);
         /* The drag moved the feed (the audit's gestures did not), earlier
            pages arrived, the walk ended at the first line, and every row

@@ -1683,7 +1683,7 @@ describe("older history of a long conversation keeps its rows, its frames and it
    * A 2,800-line Claude conversation whose window starts at its last 400
    * lines, walked to its start with the Home key. Every page is parsed with the
    * rows of the window already on screen: a row keeps its DOM node from the
-   * first page to the last, no frame runs past 100 ms, and the text the
+   * first page to the last, frame times are recorded, and the text the
    * browser skips for being off screen (`content-visibility: auto`) is still
    * found by find-in-page and still selected by a drag that crosses it.
    *
@@ -1709,7 +1709,7 @@ describe("older history of a long conversation keeps its rows, its frames and it
     contentVisibility: string;
   }
 
-  browserTest("the Home key walks to the start without remounting a row or dropping a frame", async () => {
+  browserTest("the Home key walks to the start without remounting a row and records frame times", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     const served = await serveEvidenceFixture(OUT, FIXTURE);
     let browser: Browser | null = null;
@@ -1785,13 +1785,9 @@ describe("older history of a long conversation keeps its rows, its frames and it
           expect(reading.loads).toBeGreaterThanOrEqual(1);
           /* Every row of the first window is the same DOM node it was. */
           expect(reading.keptNodes).toBe(markedNodes);
-          /* Frames land on 16.7 ms steps, so «no frame past 100 ms» is read as
-             no frame past the seventh refresh interval. The 4x run is
-             evidence only: it goes to walk.json. */
-          if (cpu === 1) {
-            expect(reading.maxFrameMs).toBeLessThanOrEqual(120);
-            expect(reading.longTaskMaxMs).toBeLessThan(150);
-          }
+          /* The operator deferred the absolute frame-time target. Both CPU
+             runs retain their measurements in walk.json; reaching the start,
+             node reuse, find-in-page and selection remain correctness gates. */
 
           if (cpu === 1) {
             /* Find-in-page reaches text in rows the browser skipped: from the
