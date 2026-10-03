@@ -620,6 +620,14 @@ function maskApprovedPublicValues(text: string): string {
       before = previous.before;
     }
   }
+  // A Markdown link with an unquoted HTTP destination puts the rest of its
+  // physical line inside // in the JavaScript lexical view. Inline code in
+  // that prose cannot be an executable tag. Do not generalize this to links
+  // containing quotes, escapes, comments or a subsequent physical line.
+  const markdownProseTemplateStarts = new Set<number>();
+  for (const prose of text.matchAll(/^[\t ]*(?:[\p{L}\p{N}_-][\p{L}\p{N}_ -]*:[\t ]*)?\[[\p{L}\p{N}_ -]+\]\(https?:\/\/[-a-zA-Z0-9.:/_?=&%#]+\)(?:[\t ]+[\p{L}\p{N}_-]+)*[\t ]+`/gmu)) {
+    markdownProseTemplateStarts.add(prose.index + prose[0].length - 1);
+  }
   function advanceRawGroups(end: number): void {
     while (rawCursor < end) {
       if (rawCommentFrame && rawCursor >= rawCommentFrame.end) {
@@ -639,20 +647,17 @@ function maskApprovedPublicValues(text: string): string {
           const completed = rawCommentFrame?.completed ?? completedRawGroups;
           const callee = completed.get(calleeSpan.before);
           const preceding = skipRawTrivia(rawQuote.index - 1);
-          const calleeBoundary = skipRawTrivia(calleeSpan.before);
-          const sourcePrefix = text.slice(0, calleeSpan.before + 1);
-          const sourceOperand = calleeBoundary.before < 0
-            || /[=(:,[{!&|?+*%^~<>;]/.test(text[calleeBoundary.before] ?? "")
-            || /\b(?:return|yield|await|throw|case|new)\s*$/.test(sourcePrefix);
-          const escapedIdentifierPart = String.raw`\\u(?:[\da-fA-F]{4}|\{[\da-fA-F]{1,6}\})`;
-          const identifierBeforeTemplate = text.slice(0, preceding.before + 1).match(new RegExp(
-            String.raw`(?:[$_\p{ID_Start}]|${escapedIdentifierPart})(?:[$_\u200c\u200d\p{ID_Continue}]|${escapedIdentifierPart})*$`,
-            "u",
-          ))?.[0];
-          tagged = callee !== undefined
-            || (identifierBeforeTemplate !== undefined
-              && (identifierBeforeTemplate.includes("\\u") || /[^\x00-\x7f]/.test(identifierBeforeTemplate)))
-            || (calleeSpan.before < preceding.before && sourceOperand);
+          // Tag ownership depends on the immediately preceding expression,
+          // after trivia, in every statement/keyword context. Looking before
+          // the tag for an operand introducer loses ownership at control flow,
+          // export and commented keywords. Ambiguous expression endings also
+          // withhold approval; this is a publication lexer, not an evaluator.
+          const finalUnit = text.charCodeAt(preceding.before);
+          const expressionEnd = text.slice(preceding.before - (finalUnit >= 0xdc00 && finalUnit <= 0xdfff ? 1 : 0), preceding.before + 1);
+          // A slash can end an unflagged regex. When source context cannot
+          // distinguish it from division, neither interpretation grants prose.
+          tagged = !markdownProseTemplateStarts.has(rawQuote.index)
+            && (callee !== undefined || /[$_\u200c\u200d\p{ID_Continue})\]}>'"`!/]/u.test(expressionEnd));
           // A call or computed receiver used as a tag transforms its result.
           // Keep that ownership attached to values in its completed arguments.
           if (callee) callee.attached = true;

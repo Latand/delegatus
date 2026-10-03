@@ -1547,6 +1547,36 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           name: `review tagged template identifier regression ${form} ${kind}`,
           text: `${tag}${tick}${value}${tick}`, pass: false,
         })),
+        ...["new f", "export default f", "return f", "if(x) f", "typeof f", "void f", "delete f", "x in f", "x instanceof f"]
+          .flatMap((tag, context) => ["", " ", " /*c*/ ", " //c\n ", "\n", " /*c*/\n //c\n ", "\r\n"].map((gap, trivia) => ({
+            name: `review tagged template context regression ${form} ${context} ${trivia}`,
+            text: `${tag}${gap}${tick}${value}${tick}`, pass: false,
+          }))),
+        ...["new /*c*/ f", "export /*c*/ default /*c*/ f", "return /*c*/ f", "if(x) /*c*/ f",
+          "typeof /*c*/ f", "void /*c*/ f", "delete /*c*/ f", "x in /*c*/ f", "x instanceof /*c*/ f"]
+          .map((tag, context) => ({
+            name: `review tagged template keyword trivia regression ${form} ${context}`,
+            text: `${tag} ${tick}${value}${tick}`, pass: false,
+          })),
+        ...["if(x) {} else f", "while(x) f", "for(;;) f", "with(x) f", "do f", "await /*c*/ f", "yield /*c*/ f", "throw /*c*/ f"]
+          .flatMap((tag, context) => [" ", " /*c*/ ", " //c\n "].map((gap, trivia) => ({
+            name: `review tagged template additional context regression ${form} ${context} ${trivia}`,
+            text: `${tag}${gap}${tick}${value}${tick}`, pass: false,
+          }))),
+        ...["helpers.tag", "(f)", "x[0]", "get()", `${tick}unused${tick}`, "function(){}", "class {}",
+          "π", "𐐀", String.raw`\u{10400}`, "f<T>", "f!", "/x/", "/x/g", '"unused"', "42"]
+          .flatMap((tag, expression) => [" ", " /*c*/ ", " //c\n "].map((gap, trivia) => ({
+            name: `review tagged template expression regression ${form} ${expression} ${trivia}`,
+            text: `export default ${tag}${gap}${tick}${value}${tick}`, pass: false,
+          }))),
+        ...["π", "𐐀", String.raw`\u0074`, String.raw`\u{10400}`].map((member, expression) => ({
+          name: `review tagged template receiver ownership regression ${form} ${expression}`,
+          text: `get("${value}").${member} /*c*/ ${tick}unused${tick}`, pass: false,
+        })),
+        { name: `review tagged template plain prose ${form}`, text: `Relay: ${tick}${value}${tick}`, pass: true },
+        { name: `review tagged template Markdown prose ${form}`, text: `[Relay](https://example.invalid) and ${tick}${value}${tick}`, pass: true },
+        { name: `review tagged template Markdown next line ${form}`, text: `[Relay](https://example.invalid)\nf ${tick}${value}${tick}`, pass: false },
+        { name: `review tagged template Markdown comment end ${form}`, text: `/* [Relay](https://example.invalid) */ f ${tick}${value}${tick}`, pass: false },
         ...["", " /*tag trivia*/ ", "\n"].flatMap((gap, trivia) => [
           {
             name: `review returned call tagged suffix regression ${form} ${trivia}`,
@@ -2057,6 +2087,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }
       return environment;
     }
+    test("tagged constructors and default exports fail the real CLI with the committed catalog", () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+      temporaryDirectories.push(directory);
+      const paths = [host, origin, discovery].flatMap((value, form) => [
+        `function f(parts) { return class { endpoint = parts[0] + "/private"; }; }\nnew /*c*/ f /*c*/ ${tick}${value}${tick};`,
+        `function f(parts) { return parts[0] + "/private"; }\nexport default f /*c*/ ${tick}${value}${tick};`,
+      ].map((contents, kind) => {
+        const path = join(directory, `endpoint-${form}-${kind}.js`);
+        // Parse the actual JavaScript; the regression must represent a valid
+        // executable transformation rather than an arbitrary malformed token.
+        expect(new Bun.Transpiler({ loader: "js" }).transformSync(contents).length).toBeGreaterThan(0);
+        writeFileSync(path, contents);
+        return path;
+      }));
+      const result = runGateArguments(["--require-known-values", "--paths", ...paths], {
+        LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(import.meta.dir, "privacy-known-value-fingerprints.json"),
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 6\n");
+      expect(result.stderr.toString()).toBe("");
+    });
     const boundedCases = [
       ...[
         ["block comments", "/* ".repeat(200_000)],
@@ -2068,6 +2120,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "unclosed regex classes", text: `${"/[".repeat(100_000)} "${host}"`, pass: false, budget: 10_000 },
       { name: "long identifiers", text: `${"a".repeat(200_000)},"${host}"`, pass: true, budget: 10_000 },
       { name: "repeated declarations", text: `${"const a: ".repeat(30_000)}"${host}"`, pass: true, budget: 10_000 },
+      { name: "long template identifiers", text: `export default ${"a".repeat(200_000)} /*c*/ ${tick}${host}${tick}`, pass: false, budget: 10_000 },
+      { name: "long prose whitespace", text: " ".repeat(200_000) + host, pass: true, budget: 10_000 },
       { name: "large unquoted tokens", text: `(${host})`.repeat(4000), pass: false, budget: 3000 },
       { name: "large chained calls", text: `relay${`("${host}")`.repeat(100_000)};`, pass: false, budget: 10_000 },
       { name: "large quoted JSON", text: JSON.stringify(Array(10_000).fill(host)), pass: true, budget: 3000 },

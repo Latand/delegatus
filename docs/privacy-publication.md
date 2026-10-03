@@ -185,6 +185,16 @@ A separator inside that span cannot conceal the raw character before the callee.
 operand checks and decoded inspection views can revoke a raw-approved candidate
 when it belongs to an extended email, host, URI or concatenated expression.
 They cannot grant an exemption to a spelling or boundary introduced by decoding.
+Template ownership uses the expression ending immediately before the opening
+backtick after skipping whitespace, line breaks and comments. Identifier endings
+(including Unicode and escaped names), closed groups, calls, members and earlier
+literals withhold approval regardless of the surrounding keyword or statement.
+Returned call/index operands keep that ownership too. Explicit Markdown prose
+with an unquoted HTTP link on the same physical line keeps its inline-code
+exemption; quotes, escapes, comment delimiters and a new line cannot create that
+prose classification. The lexer does not evaluate callable values or fully parse
+JavaScript/TypeScript: ambiguous expression endings conservatively withhold
+approval, including identifier-shaped prose that could be an executable tag.
 The former NFKC whitespace-preservation workaround is removed: Unicode
 neighbours are rejected before normalization. JSON escapes still receive an
 additional inspection view, and other privacy rules still read the original.
