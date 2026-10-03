@@ -301,39 +301,89 @@ export class MemoryIndex {
     finally { db.exec("PRAGMA busy_timeout = 5000"); }
   }
 
+  private terminalFallback(id: string) {
+    return path.join(statePath("memory-terminal-pending"), crypto.createHash("sha256").update(id).digest("hex") + ".json");
+  }
+
+  private replayTerminalDeliveries(db: BunDatabase) {
+    const directory = statePath("memory-terminal-pending");
+    let files: string[];
+    try { files = fsSync.readdirSync(directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+    // An incomplete replay cannot establish operator authorship. Fail open
+    // without memory if evidence exceeds the optional bookkeeping budget.
+    if (files.length > 256) throw Error("memory receipt replay budget");
+    const deadline = performance.now() + 100;
+    for (const name of files) {
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+      if (performance.now() >= deadline) throw Error("memory receipt replay budget");
+      const filename = path.join(directory, name);
+      const stat = fsSync.lstatSync(filename);
+      if (!stat.isFile() || stat.size > 16000) throw Error("invalid memory receipt evidence");
+      const row = JSON.parse(fsSync.readFileSync(filename, "utf8"));
+      if (typeof row.id !== "string" || this.terminalFallback(row.id) !== filename
+        || typeof row.conversation !== "string" || !/^[a-f0-9]{64}$/.test(row.digest)
+        || typeof row.origin !== "string" || !(row.transcript === null || typeof row.transcript === "string")
+        || !(row.offset === null || Number.isSafeInteger(row.offset) && row.offset >= 0)) throw Error("invalid memory receipt evidence");
+      db.query("INSERT OR IGNORE INTO memory_terminal_deliveries VALUES (?, ?, ?, ?, NULL, ?, ?)")
+        .run(row.id, row.conversation, row.digest, row.origin, row.transcript, row.offset);
+      fsSync.unlinkSync(filename);
+    }
+  }
+
   recordTerminalDelivery(id: string, conversation: string, prompt: string, origin: string, transcript?: string | null) {
     let offset: number | null = null;
     try { if (transcript) offset = fsSync.statSync(transcript).size; } catch { /* A launch can precede its journal. */ }
-    this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_terminal_deliveries VALUES (?, ?, ?, ?, NULL, ?, ?)")
-      .run(id, conversation, messageTextDigest(prompt), origin, transcript ?? null, offset));
+    const digest = messageTextDigest(prompt);
+    try {
+      this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_terminal_deliveries VALUES (?, ?, ?, ?, NULL, ?, ?)")
+        .run(id, conversation, digest, origin, transcript ?? null, offset));
+    } catch (error) {
+      // Authorship is required even when the rebuildable SQLite derivative is
+      // contended. A private digest-only receipt survives process/release reload.
+      const filename = this.terminalFallback(id);
+      fsSync.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+      const temporary = filename + "." + crypto.randomUUID() + ".tmp";
+      try {
+        fsSync.writeFileSync(temporary, JSON.stringify({ id, conversation, digest, origin, transcript: transcript ?? null, offset }), { mode: 0o600 });
+        fsSync.renameSync(temporary, filename);
+      } finally { fsSync.rmSync(temporary, { force: true }); }
+      throw error;
+    }
   }
 
   forgetTerminalDelivery(id: string) {
+    fsSync.rmSync(this.terminalFallback(id), { force: true });
     this.hookDatabase(db => db.query("DELETE FROM memory_terminal_deliveries WHERE id = ? AND request IS NULL").run(id));
   }
 
   terminalOrigin(conversation: string, request: string, prompt: string, transcript?: string, engine?: "claude" | "codex"): string | null {
-    return this.hookDatabase(db => db.transaction(() => {
-      const existing = db.query<{ origin: string }, [string, string]>("SELECT origin FROM memory_terminal_deliveries WHERE conversation = ? AND request = ?").get(conversation, request);
-      if (existing) return existing.origin;
-      const deliveries = db.query<{ id: string; origin: string; transcript: string | null; offset: number | null }, [string, string]>("SELECT id, origin, transcript, offset FROM memory_terminal_deliveries WHERE conversation = ? AND request IS NULL AND digest = ? ORDER BY rowid LIMIT 256").all(conversation, messageTextDigest(prompt));
-      const cursor = transcript && engine ? nativeHookCursor(transcript, engine, request.slice("native:".length)) : null;
-      for (const delivery of deliveries) {
-        const journal = delivery.transcript ?? (delivery.id.startsWith("spawn:") ? transcript : undefined);
-        if (journal && engine) {
-          const journaled = nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt));
-          if (journaled && journaled.key !== cursor?.key) {
-            // Retire only the matching delivery occurrence. Unrelated queued
-            // records can precede actuation and carry no receipt evidence.
-            db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(journaled.key, delivery.id);
-            continue;
+    return this.hookDatabase(db => {
+      // Replay before the binding transaction: a receipt file is removed only
+      // after its independent SQLite insert committed successfully.
+      this.replayTerminalDeliveries(db);
+      return db.transaction(() => {
+        const existing = db.query<{ origin: string }, [string, string]>("SELECT origin FROM memory_terminal_deliveries WHERE conversation = ? AND request = ?").get(conversation, request);
+        if (existing) return existing.origin;
+        const deliveries = db.query<{ id: string; origin: string; transcript: string | null; offset: number | null }, [string, string]>("SELECT id, origin, transcript, offset FROM memory_terminal_deliveries WHERE conversation = ? AND request IS NULL AND digest = ? ORDER BY rowid LIMIT 256").all(conversation, messageTextDigest(prompt));
+        const cursor = transcript && engine ? nativeHookCursor(transcript, engine, request.slice("native:".length)) : null;
+        for (const delivery of deliveries) {
+          const journal = delivery.transcript ?? (delivery.id.startsWith("spawn:") ? transcript : undefined);
+          if (journal && engine) {
+            const journaled = nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt));
+            if (journaled && journaled.key !== cursor?.key) {
+              // Retire only the matching delivery occurrence. Unrelated queued
+              // records can precede actuation and carry no receipt evidence.
+              db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(journaled.key, delivery.id);
+              continue;
+            }
           }
+          db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(request, delivery.id);
+          return delivery.origin;
         }
-        db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(request, delivery.id);
-        return delivery.origin;
-      }
-      return null;
-    })());
+        return null;
+      })();
+    });
   }
 
   recordNativeTurn(conversation: string, request: string, transcript: string, offset: number, prompt: string) {

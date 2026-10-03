@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { Database } from "bun:sqlite";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { memoryIndex } from "./service";
@@ -238,7 +239,7 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
 });
 
-for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) test(`${engine} native tmux ${mode} deliveries abstain while identical typed operator occurrences receive memory`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} deliveries abstain while identical typed operator occurrences receive memory`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
   process.env.OPENROUTER_API_KEY = "fixture";
@@ -273,11 +274,16 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   if (mode === "relay") { fs.writeFileSync(child, ""); registry.ensureConversation(engine, child, "default"); }
   const entry = { path: transcript, root, engine, title: "Synthetic terminal" } as FileEntry;
   const childEntry = { ...entry, path: child, parent: transcript };
-  const result = await deliverConversationMessage({ path: mode === "relay" ? child : transcript, pid: process.pid, text: prompt, images: [],
+  const lock = contended ? new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite")) : null;
+  lock?.exec("BEGIN IMMEDIATE");
+  let result;
+  try { result = await deliverConversationMessage({ path: mode === "relay" ? child : transcript, pid: process.pid, text: prompt, images: [],
     origin: { kind: mode === "relay" ? "operator" : "agent" } }, { recover: async () => null, targetForKnownPid: async () => "%synthetic",
     pathAllowed: () => true, listFiles: async () => mode === "relay" ? [entry, childEntry] : [entry],
     resumeSpecFor: (_root, pathname) => mode === "relay" && pathname === child ? null : ({ command: "synthetic", engine, cwd: root, transcript, windowName: "synthetic", launchProfile: emptyLaunchProfile({ cwd: root }) }),
-    deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } });
+    deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } }); }
+  finally { lock?.exec("ROLLBACK"); lock?.close(); }
+  memoryIndex().close();
   expect(result.ok).toBe(true);
   // Another submission queued before actuation can journal after this receipt.
   fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
