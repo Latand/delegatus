@@ -807,9 +807,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {!collapsed ? <CardDrafts ids={card.drafts} /> : null}
 
-      {!collapsed && card.past.length ? (
+      {!collapsed && (card.past.length || card.notLoadedRefs.length) ? (
         <PastAttempts
           rows={card.past}
+          elsewhere={card.notLoadedRefs}
           names={new Map(card.pipelines.map((summary) => [summary.pipeline.id, stageNames(t, summary.pipeline)] as const))}
           nowMs={nowMs}
           onOpen={props.onOpenAttempt}
@@ -820,18 +821,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <UnstartedLaunches card={card} title={title} nowMs={nowMs} onOpen={props.onOpenMember} onDismiss={props.onDismissLaunch} />
       ) : null}
 
-      {!collapsed && (card.mirrors.length || card.notLoadedRefs.length || card.otherSurfaces) ? (
+      {!collapsed && (card.mirrors.length || card.otherSurfaces) ? (
         <div className="refs">
           {card.mirrors.map((mirror) => (
             <button key={mirror.key} type="button" className="ref" onClick={() => props.onFocusCard(mirror.primaryCardId)}>
               {t("kanban.alsoOn", { title: cleanTitle(mirror.file.title ?? "", 48) || t("kanban.untitledConversation"), card: mirror.primaryTitle })}
-            </button>
-          ))}
-          {/* Each conversation the card lists opens on its own, loaded here or
-              not; a stage's opens from its pipeline's chips and Past attempts. */}
-          {card.notLoadedRefs.map((ref) => (
-            <button key={ref.key} type="button" className="ref quiet" data-not-loaded={ref.key} onClick={() => props.onOpenAttempt({ path: ref.path, conversationId: ref.conversationId })}>
-              {t("kanban.notLoadedOpen")}
             </button>
           ))}
           {card.otherSurfaces ? (
