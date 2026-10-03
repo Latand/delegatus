@@ -1411,6 +1411,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     reasons.push({ kind: "interval", detail: "open work changed since its last delivered wake" });
   }
 
+  // Reporting is a separate obligation from the agenda already delivered.
+  // Only matching report/answer evidence clears it; board movement and the
+  // agenda retry guard cannot discharge it. Reminders keep the configured floor.
+  if (seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs)
+    && reasons.length === 0 && input.reports?.bridgeReports
+    && ((observed.reportsOwed?.length ?? 0) > 0 || (observed.asksOwed?.length ?? 0) > 0)) {
+    reasons.push({ kind: "interval", detail: "bridge outcome or question reports remain owed" });
+  }
+
   /* What this check could not read, said once on the board and on every wake
      that goes out while it stands (#1298). The card is the "once": a source
      that has been failing since before the wake interval is not a blip, and
@@ -1668,12 +1677,19 @@ export function seatTickReportLines(
       lines.push("Nothing is running now: the report says so.");
     }
   }
-  for (const ask of state.asksOwed ?? []) {
-    lines.push(`Ask owed: you asked the operator at ${clock(ask.at)} and filed no question report. File one with key ${ask.key} and the ask in the decision section.`);
+  const asks = state.asksOwed ?? [];
+  if (asks.length > 1) {
+    // Keep all durable keys visible without repeating the same bridge action
+    // sixteen times in the reserved tail of a bounded wake.
+    lines.push(`Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: ${asks.map(ask => ask.key).join(", ")}.`);
+  } else for (const ask of asks) {
+    lines.push(`Question report owed: the question offered at ${clock(ask.at)} has no matching bridge report. File bridge_report with class: question, key ${ask.key} and the question in the decision section.`);
   }
   const lastReport = instant(reports.lastReportAt);
   const quietForInterval = !Number.isFinite(lastReport) || input.now - lastReport >= input.settings.wakeIntervalMs;
-  if (reasons.some((reason) => reason.kind === "interval") && quietForInterval
+  // An outcome report already calls for this turn's status. Avoid a second
+  // digest obligation and reserve the bounded tail for outstanding keys.
+  if (owed.length === 0 && items.length > 0 && reasons.some((reason) => reason.kind === "interval") && quietForInterval
     && boardFingerprint(input.changeFingerprint) !== (state.reportFingerprint ?? null)) {
     const since = reports.lastReportAt ? `no report since ${clock(reports.lastReportAt)}` : "no report yet";
     lines.push(`Digest due${language}: ${since} and the board moved. File one status report (key digest:${new Date(input.now).toISOString().slice(0, 16)}) with the whole state: in progress, next, needs a decision.`);
@@ -1931,47 +1947,53 @@ export function seatTickWakeCommitPlan(
     /** The project's Bridge reports setting: off, the landing records no
         owed outcome (docs/design/orchestrator-reports.md §5.1). */
     bridgeReports?: boolean;
+    /** Exact rendered payload, before reserving any outcome acknowledgments. */
+    frozenText?: string;
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = context.noteShown === undefined ? {} : { noteShown: context.noteShown };
   if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
+  const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
+  const items = framed === null ? verdict.items : verdict.items.filter(item =>
+    framed.includes(`\n${redactMonitorText(seatTickBullet(item))}\n`));
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
      moved since (#1783 round two). It is recorded by the landing and by
      nothing else: a wake the layer never delivered showed the seat nothing. */
   const shownChildren = [...new Set([
-    ...verdict.items.flatMap((item) => item.stateTokens ?? []),
+    ...items.flatMap((item) => item.stateTokens ?? []),
     /* A child named as unreadable was shown its reason (#1881), and is not
        named again until the reason changes. */
-    ...(verdict.unreadableChildren ?? []).map((child) => child.stateToken),
+    ...(verdict.unreadableChildren ?? []).filter(child => framed === null
+      || framed.includes(`\n${redactMonitorText(`- ${child.conversationId} — ${child.title}: ${child.reason}`)}\n`)).map((child) => child.stateToken),
   ])];
   /* Every outcome the line stood for, not just the one that described it
      (#1783): a child the wake showed once with its latest state was shown all
      of what it was owed on, so a landing acknowledges all of it. Leaving the
      rest owed is what put the same child on the next wake unchanged. */
-  const children = verdict.items
+  const children = items
     .filter((item) => item.kind === "child")
     .flatMap((item) => (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id]))
     .filter((id) => terminal.has(id));
   /* Read off the items the wake actually CARRIES, never off the check's own
      list (#2081): a settled lane the per-wake bound held back was not
      announced. A pull request line can carry its lane's settlement too. */
-  const announcedLanes = verdict.items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
+  const announcedLanes = items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
-  const announcedMaintenance = verdict.items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
-  const announcedDeploys = verdict.items.filter((item) => item.kind === "deploy").map((item) => item.id);
+  const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
+  const announcedDeploys = items.filter((item) => item.kind === "deploy").map((item) => item.id);
   /* The outcomes the report log is owed once this wake lands (§5.1). */
-  const reportsOwed = context.bridgeReports ? seatTickOwedOutcomes(verdict.items) : [];
+  const reportsOwed = context.bridgeReports ? seatTickOwedOutcomes(items) : [];
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
-  const reportedStalls = verdict.items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
+  const reportedStalls = items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
   return {
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
-    itemsShown: verdict.items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
-    itemLines: verdict.items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
+    itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
+    itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
   };

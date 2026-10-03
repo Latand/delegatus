@@ -1864,3 +1864,28 @@ test("later deploy resume instructions drain every previously shown paused lane"
   const finished = seatTickWakeCommit(next.state, plan(next.verdict, "fp-1", 0), NOW + 180 * MINUTE);
   expect(seatTickDecision(input({ now: NOW + 270 * MINUTE, state: finished, pipelines })).verdict.kind).toBe("quiet");
 });
+
+test("cropped outcome bullets leave child, deployment and maintenance obligations unacknowledged", () => {
+  const verdict: Extract<SeatTickVerdict, { kind: "wake" }> = {
+    kind: "wake", reasons: [{ kind: "own-lane-settled", detail: "settled outcomes" }], deferred: 0,
+    items: [
+      { kind: "pipeline", id: "visible-lane", label: "completed", laneAnnouncement: "visible-lane:completed", itemVersion: "lane@one" },
+      { kind: "child", id: "cropped-child", label: "long child result ".repeat(500), outcomeIds: ["child-outcome"], stateTokens: ["cropped-child@one"], stallToken: "child-stall" },
+      { kind: "deploy", id: "cropped-deploy", label: "deploy settled", deploy: { deploymentId: "cropped-deploy", phase: "succeeded", sha: "a".repeat(40), error: null } },
+      { kind: "maintenance", id: "cropped-maintenance", label: "maintenance finished", maintenance: { runId: "cropped-maintenance" } },
+    ],
+  };
+  const text = seatTickWakeMessage({ project: "fixture-project", reasons: verdict.reasons, items: verdict.items, deferred: 0, signals: [] });
+  expect(text).toContain("…");
+  const plan = seatTickWakeCommitPlan(verdict, { fingerprint: "unchanged", eventsThrough: 0, bridgeReports: true,
+    terminalChildren: ["child-outcome"], frozenText: text,
+  })!;
+  const landed = seatTickWakeCommit(emptySeatTickState(), plan, Date.parse("2026-10-03T12:00:00Z"));
+  expect(landed.announcedLanes).toEqual(["visible-lane:completed"]);
+  expect(landed.harvestedChildren).toEqual([]);
+  expect(landed.childrenShown).toEqual([]);
+  expect(landed.announcedDeploys).toEqual([]);
+  expect(landed.announcedMaintenance).toEqual([]);
+  expect(landed.reportedStalls ?? []).toEqual([]);
+  expect(landed.reportsOwed!.map(outcome => outcome.key)).toEqual(["lane:visible-lane:completed"]);
+});

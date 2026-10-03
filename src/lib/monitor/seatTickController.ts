@@ -1307,6 +1307,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
+  const renderedVerdict = verdict.kind === "wake" ? { ...verdict, items: withChildFinalMessages(verdict.items) } : verdict;
   const text = verdict.kind === "wake"
     ? seatTickWakeMessage({
       project: input.project,
@@ -1314,7 +1315,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       reasons: verdict.reasons,
       /* A settled child's final message rides on its line (#1881), read from
          its transcript's tail now that the wake is going out. */
-      items: withChildFinalMessages(verdict.items),
+      items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
       deferred: verdict.deferred,
       /* Said once, as counts (#1749, #1783): the children this check declined
          to list because their outcomes are a retired seat's, not this one's,
@@ -1344,12 +1345,13 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
     });
-  const commit = seatTickWakeCommitPlan(verdict, {
+  const commit = seatTickWakeCommitPlan(renderedVerdict, {
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
     noteShown,
     bridgeReports: input.reports?.bridgeReports === true,
+    frozenText: text,
   });
   return { text, commit: commit! };
 }

@@ -6683,6 +6683,108 @@ function reportPort(log: () => import("@/lib/bridge/types").BridgeReportV1[]) {
   };
 }
 
+test("a chat-filed question owes a bridge question report, and only matching durable report evidence clears it", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const transcript = path.join(SESSIONS, "seat-question.jsonl");
+  const question = "Should the prepared release proceed?";
+  fs.writeFileSync(transcript, JSON.stringify({ type: "message", timestamp: new Date(NOW).toISOString(),
+    message: { role: "assistant", content: [{ type: "text", text: question }] },
+  }) + "\n");
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: transcript },
+    settings: { ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: 10 },
+    state: { lastWakeAt: new Date(NOW).toISOString(), lastProposalAt: new Date(NOW).toISOString() },
+  });
+  const setId = "rsg_chat_question";
+  const key = `ask:${setId}`;
+  const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  rig.deps.sources!.reports = { ...reportPort(() => log), suggestions: () => ({ admissions: [], sets: [{
+    conversationId: CONVERSATION, setId, at: new Date(NOW).toISOString(),
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+    replies: [{ label: "Proceed", text: "Proceed with the release" }],
+  }] }) };
+  const fileReport = (reportKey: string, seq: number) => log.push({
+    id: scopedReportId(PROJECT, reportKey), key: reportKey, seq, at: new Date(NOW + 16 * MINUTE).toISOString(),
+    class: "question", body: question, project: PROJECT,
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+  });
+  rig.deps.sources!.now = () => NOW + 15 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).not.toContain("Ask owed");
+  expect(rig.sent[0]!.text).toContain("Question report owed");
+  expect(rig.sent[0]!.text).toContain(`bridge_report with class: question, key ${key}`);
+  fileReport("ask:rsg_other", 1);
+  rig.deps.sources!.now = () => NOW + 30 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.written.at(-1)!.asksOwed!.map(ask => ask.key)).toEqual([key]);
+  fileReport(key, 2);
+  rig.deps.sources!.now = () => NOW + 45 * MINUTE;
+  expect((await runSeatTickCheck(PROJECT, rig.deps))!.verdict).toBe("quiet");
+  expect(rig.written.at(-1)!.asksOwed).toEqual([]);
+  expect(rig.sent).toHaveLength(2);
+});
+
+test.each([false, true])("five production-size settlements credit only complete rendered items and deliver the cropped remainder later (held: %s)", async (held) => {
+  const ids = Array.from({ length: 5 }, (_, index) => [String(index).padStart(8, "0"), "0000", "4000", "8000", "0".repeat(12)].join("-"));
+  const lanes = ids.map(id => ({
+    ...pipelineRecord({ ...settledLane, id }),
+    task: "Settlement title ".padEnd(119, "s"),
+    taskFinishWaits: [{ taskId: "waiting-task", open: ["other-lane-a", "other-lane-b"] }],
+  }));
+  const rig = harness({ ...(held ? { delivery: HELD } : {}), settings: { ...defaultSeatTickSettings(PROJECT),
+    monitorPrompt: "Standing monitor note ".padEnd(7_622, "n"), reason: "Operator instructions ".padEnd(500, "i"),
+  } });
+  rig.deps.sources!.pipelines = () => lanes as never;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const text = rig.sent[0]!.text;
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  const complete = ids.filter(id => agendaOf(text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
+  expect(complete).toHaveLength(4);
+  if (held) {
+    expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
+    expect(rig.written.at(-1)!.outstandingWake!.commit.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
+    rig.deps.sources!.wakeState = async () => "landed";
+    rig.deps.sources!.now = () => NOW + MINUTE;
+    await runSeatTickCheck(PROJECT, rig.deps);
+    rig.deps.deliver = async message => {
+      rig.sent.push(message);
+      return { ok: true, target: "structured", outcome: "delivered", structured: true };
+    };
+  }
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
+  const unseen = ids.filter(id => !complete.includes(id));
+  rig.deps.sources!.now = () => NOW + 70 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(2);
+  for (const id of unseen) expect(agendaOf(rig.sent[1]!.text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines"))).toBe(true);
+  expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
+});
+
+test("the controller keeps unpaid report reminders after the delivered agenda drains, until its matching bridge report lands", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const rig = harness({ pipelines: [settledLane, ...OPEN_LANE] });
+  const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  rig.deps.sources!.reports = reportPort(() => log);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  const key = `lane:${settledLane.id}:completed`;
+  for (let round = 1; round <= DEFAULT_SEAT_TICK_POLICY.retryGuard + 2; round++) {
+    rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent).toHaveLength(round + 1);
+    expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([]);
+    expect(rig.sent.at(-1)!.text).toContain(`key ${key}`);
+  }
+  log.push({ id: scopedReportId(PROJECT, key), key, seq: 1, at: new Date(NOW + 500 * MINUTE).toISOString(),
+    class: "completed", body: "Outcome reported", project: PROJECT,
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+  });
+  rig.deps.sources!.now = () => NOW + 510 * MINUTE;
+  expect((await runSeatTickCheck(PROJECT, rig.deps))!.verdict).toBe("quiet");
+  expect(rig.written.at(-1)!.reportsOwed).toEqual([]);
+});
+
 test("deploy snapshots are taken in the pass before the decision and the send, whether or not a wake goes out", async () => {
   const order: string[] = [];
   const rig = harness({ ...reportDeploys, state: { lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString() } });

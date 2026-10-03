@@ -111,19 +111,6 @@ export function renderMonitorReport(input: ReportInput): string {
 const SEAT_TICK_MESSAGE_LIMIT = 4_000;
 
 /**
- * The least the agenda is left, whatever the reserved half costs.
- *
- * The subtraction in {@link boundedSeatTickMessage} cannot reach this today:
- * the reserved half includes bounded operator instructions, the contract
- * pointer and a prompt preview capped at {@link SEAT_TICK_PROMPT_PREVIEW_LIMIT}.
- * It is here so a future growth of either can only shorten the
- * agenda, never produce a nonsense budget. And it floors the agenda while
- * leaving the total free, deliberately: a wake missing part of its contract is
- * the failure this change exists to end, and holding the limit is worth less.
- */
-const SEAT_TICK_DYNAMIC_FLOOR = 1_000;
-
-/**
  * Bound the wake without ever bounding what the wake MEANS (#1280).
  *
  * The message has two halves. The dynamic one — the reasons, the items, the
@@ -150,8 +137,9 @@ const SEAT_TICK_DYNAMIC_FLOOR = 1_000;
  */
 function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly string[]): string {
   const tail = `\n${redactMonitorText(reserved.join("\n")).trimEnd()}`;
-  const budget = Math.max(SEAT_TICK_MESSAGE_LIMIT - tail.length, SEAT_TICK_DYNAMIC_FLOOR);
+  const budget = Math.max(SEAT_TICK_MESSAGE_LIMIT - tail.length, 0);
   const head = redactMonitorText(dynamic.join("\n")).trimStart();
+  if (budget === 0) return tail.trimStart();
   return head.length <= budget ? `${head}${tail}` : `${head.slice(0, budget - 1).trimEnd()}…${tail}`;
 }
 
