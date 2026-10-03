@@ -343,7 +343,7 @@ export class MemoryIndex {
 
   nativeTurns(conversation: string, transcript: string) {
     return this.database().query<{ request: string; offset: number; digest: string; occurrence: string | null }, [string, string]>(
-      "SELECT request, offset, digest, occurrence FROM memory_native_turns WHERE conversation = ? AND transcript = ? ORDER BY rowid"
+      "SELECT request, offset, digest, occurrence FROM memory_native_turns WHERE conversation = ? AND (transcript = ? OR transcript = '') ORDER BY rowid"
     ).all(conversation, transcript);
   }
 

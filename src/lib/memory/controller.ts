@@ -73,7 +73,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         origin = queued.entry.origin?.kind ?? "unknown"; requestId = queued.entry.id;
       }
     }
-    const transcript = generation?.path;
+    const transcript = generation?.path ?? receipt?.artifactPath ?? undefined;
     if (!requestId) {
       if (receipt?.transport !== "tmux") return "";
       const nativeId = engine === "claude" ? input.prompt_id : input.turn_id;
@@ -83,12 +83,15 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       // A retry of this native id keeps the same receipt; repeated words on a
       // later id do not consume it again.
       origin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine) ?? "operator";
-      if (origin !== "operator" || !transcript || !transcript.includes(input.session_id)) return "";
-      const priorTurns = memoryTurnContext(transcript, engine, prompt);
-      if (!priorTurns.length && !(receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt)) return "";
-      const cursor = nativeHookCursor(transcript, engine, nativeId);
+      const initialOperator = receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt;
+      if (origin !== "operator" || (transcript ? !transcript.includes(input.session_id) : !initialOperator)) return "";
+      const priorTurns = transcript ? memoryTurnContext(transcript, engine, prompt) : [];
+      if (!priorTurns.length && !initialOperator) return "";
+      const cursor = transcript ? nativeHookCursor(transcript, engine, nativeId) : { offset: 0, digest: undefined };
       if (cursor.digest && cursor.digest !== messageTextDigest(prompt)) return "";
-      index.recordNativeTurn(conversationId, requestId, transcript, cursor.offset, prompt);
+      // The receipt authenticates an initial launch before scanner settlement.
+      // An unknown artifact gets its occurrence join when it materializes.
+      index.recordNativeTurn(conversationId, requestId, transcript ?? "", cursor.offset, prompt);
     }
     if (origin !== "operator" || !sharedMemoryEnabled(project)) return "";
     const key = readOpenRouterApiKey();

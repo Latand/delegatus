@@ -306,3 +306,41 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   expect(lookup.memoryFor!(users[0].item)).toEqual(offers[offeredKey]);
   expect(lookup.memoryFor!(users[1].item)).toEqual([]);
 });
+
+
+for (const engine of ["claude", "codex"] as const) for (const materialization of ["present", "pending", "unknown path"] as const) for (const origin of ["operator", "agent"] as const) test(`${engine} receipt-only native launch ${materialization} keeps ${origin} authorship and deferred offer names`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-launch-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl"), prompt = "Update widget parser";
+  const begun = registry.beginSpawnRequest({ engine, cwd: root, transport: "tmux", expectedArtifactPath: materialization === "unknown path" ? undefined : transcript,
+    launchDisplay: { prompt, images: 0, echo: prompt }, launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic native launch" }) });
+  if (begun.kind !== "created") throw Error("Synthetic launch refused");
+  const receipt = begun.receipt, capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  expect(registry.readOnlySnapshot().conversations[receipt.conversationId]).toBeUndefined();
+  if (materialization === "present") fs.writeFileSync(transcript, "");
+  memoryIndex().recordTerminalDelivery(`spawn:${receipt.launchId}`, receipt.conversationId, prompt, origin, materialization === "unknown path" ? null : transcript);
+  const project = projectInfoFromCwd(root)!.project; setSharedMemoryEnabled(project, true);
+  const source = path.join(root, "cross.md");
+  fs.writeFileSync(source, engine === "claude" ? "v1\n## User preferences\n- Widget parser uses escaped delimiters.\n"
+    : "---\nname: Widget parser\ndescription: Widget parser uses escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n");
+  await memoryIndex().refresh([{ path: source, engine: engine === "claude" ? "codex" : "claude", sourceKind: engine === "claude" ? "codex_summary" : "claude_memory", project }]);
+  let calls = 0;
+  globalThis.fetch = (async (_url, init) => {
+    calls++; const body = JSON.parse(String(init?.body));
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
+  }) as typeof fetch;
+  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, prompt_id: "synthetic-initial", turn_id: "synthetic-initial" };
+  const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+  const block = await offerForHook(request, input);
+  expect(Boolean(block)).toBe(origin === "operator");
+  expect(calls).toBe(origin === "operator" ? 1 : 0);
+  const line = JSON.stringify(engine === "claude" ? { type: "user", uuid: "synthetic-initial", message: { role: "user", content: prompt } }
+    : { type: "response_item", payload: { type: "message", turn_id: "synthetic-initial", role: "user", content: [{ type: "input_text", text: prompt }] } });
+  fs.writeFileSync(transcript, line + "\n");
+  registry.settleSpawn(receipt.launchId, { key: { engine, sessionId: session }, artifactPath: transcript, cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  memoryIndex().close();
+  const offers = offeredMemoryForTranscript(transcript);
+  expect(offers[`native:${messageTextDigest(line)}`]?.length ?? 0).toBe(origin === "operator" ? 1 : 0);
+});

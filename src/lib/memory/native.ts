@@ -52,5 +52,8 @@ export function nativeHookCursor(filename: string, engine: "claude" | "codex", n
       offset += Buffer.byteLength(line) + 1;
     }
     return { offset: size, key: undefined, digest: undefined };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { offset: 0, key: undefined, digest: undefined };
+    throw error;
   } finally { if (fd !== undefined) fs.closeSync(fd); }
 }

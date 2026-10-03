@@ -1,7 +1,7 @@
 import path from "node:path";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
-import { nativeOccurrenceAfter } from "./native";
+import { nativeHookCursor, nativeOccurrenceAfter } from "./native";
 import { memoryIndex } from "./service";
 
 /** Keys are the engine's occurrence identity, never the operator's words. */
@@ -15,7 +15,9 @@ export function offeredMemoryForTranscript(filename: string): Record<string, str
     for (const turn of index.nativeTurns(conversation.id, filename)) {
       let key = turn.occurrence;
       if (!key) {
-        const occurrence = nativeOccurrenceAfter(filename, conversation.engine as "claude" | "codex", turn.offset, turn.digest);
+        const engine = conversation.engine as "claude" | "codex";
+        const cursor = !turn.offset ? nativeHookCursor(filename, engine, turn.request.slice("native:".length)) : null;
+        const occurrence = cursor?.key && cursor.digest === turn.digest ? cursor : nativeOccurrenceAfter(filename, engine, turn.offset, turn.digest);
         if (occurrence?.digest === turn.digest && index.bindNativeTurn(conversation.id, turn.request, occurrence.key)) key = occurrence.key;
       }
       if (key) native.set(turn.request, key);
