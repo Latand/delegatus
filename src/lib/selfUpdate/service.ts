@@ -329,6 +329,14 @@ export class SelfUpdateService {
       && (decision.supervision === "adopted" || !!this.deps.env.LLV_TOKEN);
   }
 
+  private handManagedCheckout(record: LauncherRecord): boolean {
+    if (!record.checkout) return false;
+    try {
+      const raw = JSON.parse(readFileSync(record.releasePointer, "utf8")) as { checkoutHead?: string };
+      return !raw.checkoutHead || raw.checkoutHead !== headOf(record.checkout);
+    } catch { return existsSync(record.releasePointer); }
+  }
+
   private autoAvailability(decision: ModeDecision): AutoView["availability"] {
     if (decision.mode === "managed") {
       try { if (!this.deps.releaseTarget()?.revision) return "no-release-target"; }
@@ -336,10 +344,7 @@ export class SelfUpdateService {
     } else {
       if (decision.mode !== "checkout" || !decision.record?.checkout) return decision.mode === "package" ? "packaged" : "launcher-upgrade";
       if (decision.record.launcher.autoAdmission !== 1 || this.unsafeLegacyAuto(decision)) return "launcher-upgrade";
-      try {
-        const raw = JSON.parse(readFileSync(decision.record.releasePointer, "utf8")) as { checkoutHead?: string };
-        if (!raw.checkoutHead || raw.checkoutHead !== headOf(decision.record.checkout)) return "hand-managed";
-      } catch { if (existsSync(decision.record.releasePointer)) return "hand-managed"; }
+      if (this.handManagedCheckout(decision.record)) return "hand-managed";
     }
     if (!githubRepositoryOfRemote(this.deps.remote)) return "not-github";
     if (["ahead", "diverged"].includes(this.slice.check.relation ?? "")) return "diverged";
@@ -1181,18 +1186,16 @@ export class SelfUpdateService {
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
     if (this.apply.current?.state === "ready") return refuse(409, "cannot-update", "Restart the launcher using the install action before another update");
-    const available = this.slice.available;
-    if (!available && decision.mode === "checkout" && decision.record && this.autoAvailability(decision) === "hand-managed"
-      && this.slice.check.relation === "equal" && snapshot.installed.sha) {
-      this.startCheckout(decision.record, snapshot.installed);
-      return { ok: true };
-    }
-    if (this.slice.check.state !== "update-available" || !available) return refuse(409, "no-update", "No update is available; run a check first");
-    if (decision.mode === "checkout" && decision.record?.checkout && githubRepositoryOfRemote(this.deps.remote)) {
-      const green = await this.greenReader.read(this.deps.remote, this.deps.branch, available.sha, decision.record.checkout);
-      if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
-    }
+    let available = this.slice.available;
+    const rebuild = !available && decision.mode === "checkout" && decision.record && this.handManagedCheckout(decision.record)
+      && this.slice.check.relation === "equal" && !!snapshot.installed.sha;
+    if (rebuild) available = snapshot.installed;
+    if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
     if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
+      const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
+      if (refusal) return refusal;
+      const fresh = await this.snapshot();
+      if (fresh.busy) return busy(fresh.busy);
       this.startCheckout(decision.record, available);
       return { ok: true };
     }
@@ -1207,10 +1210,10 @@ export class SelfUpdateService {
       const snapshot = await this.snapshot();
       if (snapshot.busy) return busy(snapshot.busy);
       if (runner.state.state !== "failed" && this.apply.current?.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
-      if (decision.record.checkout && githubRepositoryOfRemote(this.deps.remote)) {
-        const green = await this.greenReader.read(this.deps.remote, this.deps.branch, runner.state.target!, decision.record.checkout);
-        if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
-      }
+      const refusal = await this.operatorRevisionAdmission(decision.record, runner.state.target!);
+      if (refusal) return refusal;
+      const fresh = await this.snapshot();
+      if (fresh.busy) return busy(fresh.busy);
       this.apply.begin(decision.record, runner.state.target!, "operator");
       const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
       void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
@@ -1223,6 +1226,14 @@ export class SelfUpdateService {
       return this.deploy(described ?? { version: record.targetVersion ?? "", sha: record.target, short: record.targetShort, date: "" }, clientKey);
     }
     return refuse(409, "cannot-update", "This install cannot update itself");
+  }
+
+  private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult | null> {
+    if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? null
+      : refuse(409, "deployment-refused", "The selected revision is not green", "unknown");
+    const repo = record.checkout ?? await this.deps.prepareCheckRepo();
+    const green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
+    return green.state === "green" ? null : refuse(409, "deployment-refused", "The selected revision is not green", green.state);
   }
 
   private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): void {

@@ -1,6 +1,6 @@
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
 import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -25,7 +25,9 @@ import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, p
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { UpdateRunner, type StepPorts } from "./steps";
-import type { Snapshot } from "./types";
+import { idleUpdate, type Snapshot } from "./types";
+import { initialCheck } from "./checkState";
+import type { LauncherRecord } from "./launcher";
 
 /*
  * #2007: the Update surface's routes in both install modes, end to end
@@ -777,6 +779,27 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(existsSync(record.requestFile)).toBe(false);
   });
 
+  for (const legacyToken of [false, true]) test.each(["red", "green"] as const)(`hand-managed rebuild verifies the installed SHA before dispatch, legacyToken=${legacyToken}: %s`, async verdict => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: firstSha, dir: checkout, checkoutHead: tipSha }));
+    const target = await readRevision(checkout, "HEAD");
+    if (legacyToken) h.deps.env = { LLV_TOKEN: "fixture-bearer" };
+    h.deps.remote = "https://github.com/example/fixture.git";
+    h.deps.check = async () => ({ ok: true, installed: target, available: null, relation: "equal", ahead: 0, behind: 0, delta: null });
+    const reads: unknown[][] = []; let builds = 0;
+    h.deps.green = { read: async (...args: unknown[]) => { reads.push(args); return { state: verdict }; } } as unknown as GreenReader;
+    h.deps.createRunner = () => ({ state: idleUpdate(["fetch", "install", "build", "ready"]), restore() {}, logPath: () => "",
+      async start() { builds++; }, async retry() { throw new Error("not a retry"); } });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await h.service.check();
+    expect((await h.service.snapshot()).auto?.availability).toBe(legacyToken ? "launcher-upgrade" : "hand-managed");
+    const result = await h.service.startUpdate("manual-rebuild");
+    expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: "red" });
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(builds).toBe(verdict === "green" ? 1 : 0);
+    await Bun.sleep(10);
+  });
+
   test("a hand-managed checkout at the tracked tip can be rebuilt from the dialog", async () => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8")) as { releasePointer: string };
@@ -955,3 +978,35 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect((JSON.parse(data) as Snapshot).mode).toBe("checkout");
   });
 });
+
+
+for (const operation of ["update", "retry"] as const) {
+  test.each(["red", "pending", "unknown", "green"] as const)(`package ${operation} admits only a green published source: %s`, async verdict => {
+    const dir = mkdtempSync(join(root, "package-green-")); const installRoot = join(dir, "package"); mkdirSync(installRoot);
+    writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "1.0.0" }));
+    const record = { version: 1, checkout: null, installRoot, releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request-fixture.json"),
+      port: 3000, socket: join(dir, "host.sock"), launcher: { pid: 1, startIdentity: "1", relaunch: 1, state: "healthy" },
+      web: { state: "healthy", pid: 2, startIdentity: "2", revision: firstSha.slice(0, 7), error: null }, runtimeHost: { state: "healthy", pid: 3, startIdentity: "3", revision: firstSha.slice(0, 7), error: null } } as LauncherRecord;
+    const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
+    const slice = { ...initialCheck(), available: target, check: { ...initialCheck().check, state: "update-available", at: new Date().toISOString() } };
+    const update = operation === "retry" ? { ...idleUpdate(["fetch", "install", "ready"]), state: "failed", target: target.sha, targetVersion: target.version } : null;
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ slice, update }));
+    const reads: unknown[][] = [];
+    const deps = baseDeps(dir, { remote: "https://github.com/example/fixture.git", mode: async () => ({ mode: "package", reason: null, record }), prepareCheckRepo: async () => checkout,
+      green: { read: async (...args: unknown[]) => { reads.push(args); return { state: verdict }; } } as unknown as GreenReader });
+    const service = new SelfUpdateService(deps);
+    // Delivery is forbidden before admission. A green case stops at this
+    // fixture boundary instead of reaching the registry or package manager.
+    const registry = spyOn(globalThis, "fetch").mockRejectedValue(new Error("fixture delivery boundary"));
+    try {
+      const result = operation === "update" ? await service.startUpdate("package-update") : await service.retry("package-retry");
+      expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: verdict });
+      expect(reads).toEqual([[deps.remote, deps.branch, target.sha, checkout]]);
+      expect(registry.mock.calls.length).toBe(verdict === "green" ? 1 : 0);
+      await Bun.sleep(10);
+      expect(existsSync(record.releasePointer)).toBe(false);
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(existsSync(join(dir, "apply.json"))).toBe(verdict === "green");
+    } finally { await Bun.sleep(10); registry.mockRestore(); service.stop(); }
+  });
+}
