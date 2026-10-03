@@ -87,8 +87,24 @@ export function initialProjectFromState(hash: string, storedProject: string | nu
   return parseConversationHash(hash).project ?? storedProject ?? OVERVIEW;
 }
 
-export function filesRequestPin(pendingHash: ConversationHash | null, retainedPath: string | null): string | null {
-  return pendingHash?.filePath ?? pendingHash?.conversationId ?? retainedPath;
+/** The transcript the catalog request pins, or null for the plain catalog.
+    The plain catalog is the one every board poll already holds, so a request
+    that changes nothing about it is answered by a version check or a delta; a
+    pin is a new request scope with nothing cached behind it, so the whole
+    catalog comes down again. A link therefore pins only what the plain catalog
+    could not resolve: `hashPinWanted` says the plain catalog was asked and had
+    no answer, and `retainedPath` is the open conversation that needed a pin of
+    its own. */
+export function filesRequestPin(pendingHash: ConversationHash | null, retainedPath: string | null, hashPinWanted = true): string | null {
+  const hashPin = hashPinWanted ? pendingHash?.filePath ?? pendingHash?.conversationId : null;
+  return hashPin ?? retainedPath;
+}
+
+/** Whether the plain catalog holds `file`, so opening it needs no pin of its
+    own. An archived predecessor is held only while the catalog cap lets it
+    stay, so it is pinned like a row the catalog lacks. */
+export function catalogHoldsWithoutPin(file: FileEntry, unpinnedPaths: ReadonlySet<string>): boolean {
+  return unpinnedPaths.has(file.path) && !isArchivedPredecessor(file);
 }
 
 /** Every fragment key this app speaks, each with a payload: conversation
@@ -103,20 +119,23 @@ export function recognizedFragment(hash: string, { phone = false }: { phone?: bo
   return phone && /^#(?:(?:task|pipeline)=.|(?:pipelines|accounts)$)/.test(hash);
 }
 
-export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null } | null;
+/** `requested`: the catalog request names this path. False while the plain
+    catalog holds the conversation; it turns true when a confirmed payload no
+    longer carries it, and the pinned payload that follows decides its fate. */
+export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null; requested: boolean } | null;
 export type CatalogPinEvent =
-  | { kind: "open"; path: string; conversationId?: string }
-  | { kind: "resolve"; path: string; conversationId?: string }
+  | { kind: "open"; path: string; conversationId?: string; unpinned?: boolean }
+  | { kind: "resolve"; path: string; conversationId?: string; unpinned?: boolean }
   | { kind: "release"; path?: string }
   | { kind: "files"; paths: ReadonlySet<string>; pending: boolean; currentPath?: string };
 
 export function reduceCatalogPin(state: CatalogPinState, event: CatalogPinEvent): CatalogPinState {
-  if (event.kind === "open") return { path: event.path, hydrated: false, conversationId: event.conversationId ?? null };
-  if (event.kind === "resolve") return { path: event.path, hydrated: true, conversationId: event.conversationId ?? null };
+  if (event.kind === "open") return { path: event.path, hydrated: false, conversationId: event.conversationId ?? null, requested: !event.unpinned };
+  if (event.kind === "resolve") return { path: event.path, hydrated: true, conversationId: event.conversationId ?? null, requested: !event.unpinned };
   if (event.kind === "release") return !event.path || state?.path === event.path ? null : state;
   if (!state) return state;
   const current = event.currentPath && event.currentPath !== state.path ? { ...state, path: event.currentPath } : state;
-  if (current.hydrated && !event.pending && !event.paths.has(current.path)) return null;
+  if (current.hydrated && !event.pending && !event.paths.has(current.path)) return current.requested ? null : { ...current, requested: true };
   return current;
 }
 
@@ -218,7 +237,12 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { systemHealth, files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  /* The link whose target the plain catalog could not resolve, and which
+     therefore asks for the exact transcript. Held by identity: a new link is a
+     new object and starts without a pin. */
+  const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
+  const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -255,16 +279,32 @@ function ViewerApp() {
      pinned row cannot duplicate a card, and the moment a current generation
      arrives the pin retargets to it (see the catalog-pin files effect) and the
      predecessor folds away again. */
+  /* The open conversation as the catalog last carried it. A conversation the
+     plain catalog held can age out of a later payload; this keeps its row on
+     the board for the one fetch that asks for it by name, instead of closing
+     the pane under the reader and reopening it. */
+  const openedRow = catalogPin ? allFiles.find((file) => file.path === catalogPin.path) : undefined;
+  const [lastOpenedRow, setLastOpenedRow] = useState<FileEntry | null>(null);
+  if (openedRow && openedRow !== lastOpenedRow) setLastOpenedRow(openedRow);
   const files = useMemo(() => {
     const folded = withoutArchivedPredecessors(allFiles);
     const pinnedPath = catalogPin?.path;
     if (!pinnedPath || folded.some((file) => file.path === pinnedPath)) return folded;
     const pinned = allFiles.find((file) => file.path === pinnedPath);
-    if (!pinned || !isArchivedPredecessor(pinned)) return folded;
+    if (!pinned) {
+      return catalogPin?.hydrated && lastOpenedRow?.path === pinnedPath ? [...folded, lastOpenedRow] : folded;
+    }
+    if (!isArchivedPredecessor(pinned)) return folded;
     const currentGenerationPresent = Boolean(pinned.conversationId)
       && folded.some((file) => file.conversationId === pinned.conversationId);
     return currentGenerationPresent ? folded : [...folded, pinned];
-  }, [allFiles, catalogPin]);
+  }, [allFiles, catalogPin, lastOpenedRow]);
+  /* The paths the plain catalog carries: the payload without the rows only a
+     pin admitted. */
+  const unpinnedPaths = useMemo(() => {
+    const pinOnly = new Set(pinOverlayPaths);
+    return new Set(allFiles.filter((file) => !pinOnly.has(file.path)).map((file) => file.path));
+  }, [allFiles, pinOverlayPaths]);
   const isMobile = useIsMobile();
   /* The phone's Overview is a board under a stack (#2098): a card opens its
      task, its pipeline or its conversation as a screen over it, and that
@@ -462,9 +502,13 @@ function ViewerApp() {
      multi-entry jump (which fires no hashchange) cannot leave a stale arm that
      swallows the next genuine hashchange — see `createTraversalFence`. */
   const traversalFenceRef = useRef(createTraversalFence());
+  const unpinnedPathsRef = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     filesRef.current = files;
   }, [files]);
+  useEffect(() => {
+    unpinnedPathsRef.current = unpinnedPaths;
+  }, [unpinnedPaths]);
   useEffect(() => {
     pendingHashRef.current = pendingHash;
   }, [pendingHash]);
@@ -753,14 +797,16 @@ function ViewerApp() {
 
   /* Full-catalog list/search rows can sit beyond the scheme window. Their path
      stays pinned for the displayed conversation so recurring polls preserve
-     the node after the transient hash intent resolves. */
+     the node after the transient hash intent resolves. A conversation the
+     plain catalog already carries is not pinned: the pin is a request scope of
+     its own and brings the whole catalog down again. */
   const openPinnedFile = useCallback((file: FileEntry, hydrated = false) => {
     /* On the phone's Overview every landing (a replay, a search result, a
        pasted link, a catalog row) opens the conversation as a screen over it
        and keeps the Overview, so ‹ comes back to it (#2098). */
     if (overviewPhoneRef.current) {
       setStaleFocusNotice(false);
-      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
+      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current) });
       openOverOverview(file, { catalog: true });
       return;
     }
@@ -769,7 +815,7 @@ function ViewerApp() {
        viewer is now showing a conversation, so the failure claim is over. */
     setStaleFocusNotice(false);
     queueColumnOpen(key, file.path, isChildConversation(file));
-    dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
+    dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current) });
     setProject(key);
     localStorage.setItem(PROJECT_KEY, key);
     setOpenNonce((value) => value + 1);
@@ -835,6 +881,14 @@ function ViewerApp() {
       setPendingHash(null);
     }
   }, [pendingHash, allFiles, conversationAliases, launchRoutes, openPinnedFile]);
+  /* The plain catalog answered and does not carry the target (a conversation
+     beyond its cap, an archived predecessor, an id it has never seen): only
+     now does the link ask for the exact transcript. */
+  useEffect(() => {
+    if (!pendingHash || wantsHashPin || !loaded || !scopeCertified) return;
+    if (resolveConversationTarget(allFiles, pendingHash, conversationAliases, launchRoutes)) return;
+    setHashPinFor(pendingHash);
+  }, [pendingHash, wantsHashPin, loaded, scopeCertified, allFiles, conversationAliases, launchRoutes]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   /* A deep-link intent no payload resolves (the id is absent from the corpus
@@ -847,16 +901,18 @@ function ViewerApp() {
      `loaded` and says nothing about the target, so it must not start the
      clock: a pinned fetch slower than the deadline would otherwise be reported
      stale before it could answer. The popstate path arms its own
-     identity-checked timer — for a replayed entry both reach the same notice. */
+     identity-checked timer — for a replayed entry both reach the same notice.
+     The clock starts on the payload certified for the pinned scope, which only
+     exists once the plain catalog has failed to resolve the target. */
   useEffect(() => {
-    if (!pendingHash || !loaded || !scopeCertified) return;
+    if (!pendingHash || !wantsHashPin || !loaded || !scopeCertified) return;
     const timer = window.setTimeout(() => {
       setPendingHash(null);
       dispatchCatalogPin({ kind: "release" });
       setStaleFocusNotice(true);
     }, STALE_FOCUS_REPLAY_MS);
     return () => window.clearTimeout(timer);
-  }, [pendingHash, loaded, scopeCertified]);
+  }, [pendingHash, wantsHashPin, loaded, scopeCertified]);
 
   const releaseCatalogFile = useCallback((path: string) => {
     dispatchCatalogPin({ kind: "release", path });

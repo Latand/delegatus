@@ -120,7 +120,7 @@ export const TELEGRAM_BOT_LIMITS: readonly string[] = [
 
 export const RECEIVING_NOTES: Record<TelegramBotReceiving, string> = {
   polling: "Receiving messages.",
-  webhook_elsewhere: "This bot delivers its updates to a webhook set by another program, so Delegatus can post but cannot read. Remove the webhook (deleteWebhook) to read here.",
+  webhook_elsewhere: "This bot delivers its updates to a webhook set by another program, so Telegram replies cannot reach Delegatus here.",
   another_reader: "Another program is reading this bot's updates with the same token. Stop it, or give Delegatus its own bot.",
   token_rejected: "Telegram rejected the token. Paste a new one from @BotFather in the Telegram panel.",
   network_error: "Telegram cannot be reached right now; Delegatus keeps retrying.",
@@ -172,6 +172,8 @@ export type TelegramBotStatusPayload = {
       false while the operator has set none and the default applies. Absent
       while no bot is connected. */
   documents?: { roots: string[]; custom: boolean };
+  /** Identity is kept in the private team record; only readiness crosses here. */
+  reportReplies?: "ready" | "operator_unlinked" | "receiving_unavailable";
   limits: readonly string[];
 };
 

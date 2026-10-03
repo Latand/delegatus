@@ -8,6 +8,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, readDeputies, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
+import { resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } from "@/lib/scanner/scanCache";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { writeSessionTitle } from "@/lib/session/titleStore";
 
@@ -18,11 +19,14 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 let registry: AgentRegistry;
 
 beforeEach(() => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => null);
   process.env.LLV_STATE_DIR = sandbox;
   registry = new AgentRegistry(path.join(sandbox, "registry.json"));
   setAgentRegistryForTests(registry);
 });
 afterEach(() => {
+  setFileCatalogMembershipProbeForTests(null);
   replaceConversationCatalog([]);
   setAgentRegistryForTests(null);
   fs.rmSync(path.join(sandbox, "session-titles.json"), { force: true });
