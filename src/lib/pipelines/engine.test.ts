@@ -18862,3 +18862,25 @@ test("terminal continuation refuses stale budget metadata after a newer review b
   const resumed = await patchPipeline(blocked.id, { action: "resume" }, h.ports);
   expect(resumed.pipeline!.stateDetail).not.toContain("continue-review");
 });
+
+
+test.each([false, true])("consecutive terminal grants each buy two reviews on unchanged heads (nested repairs: %s)", async (nested) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, ...(nested ? { onFail: { to: "repair", maxRounds: 3 } } : {}) },
+    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
+  ] as never);
+  let parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  for (let grant = 0; grant < 2; grant++) {
+    expect((await continueReview(parked, `successive-${grant}`, 2)).error).toBeUndefined();
+    parked = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && (n === 2 || n === 4))).pipeline;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4 + grant * 2);
+    expect(parked.reviewGrants).toHaveLength(grant + 1);
+    expect(parked.reviewPending?.currentHead).toBe(ORIGIN_MAIN_SHA);
+  }
+});

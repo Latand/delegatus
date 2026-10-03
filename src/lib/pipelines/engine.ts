@@ -2787,25 +2787,25 @@ function terminalReviewGrantForFix(
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
 ): PipelineReviewGrant | null {
-  for (const grant of pipeline.reviewGrants ?? []) {
-    if (grant.terminalAttempt === undefined) continue;
-    const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
-    if (!review?.onFail || stage.id === review.id) continue;
-
-    let current: PipelineStageAttempt | undefined = attempt;
-    const visited = new Set<string>();
-    while (current) {
-      const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
-      if (!activation) break;
-      if (activation.edge === "fail" && activation.stageId === grant.stageId
-        && activation.attempt === grant.terminalAttempt) return grant;
-
-      const key = `${activation.stageId}:${activation.attempt}`;
-      if (visited.has(key)) break;
-      visited.add(key);
-      current = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
-        .find((candidate) => candidate.n === activation.attempt && !candidate.historical);
+  let current: PipelineStageAttempt | undefined = attempt;
+  const visited = new Set<string>();
+  while (current?.activatedBy) {
+    const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+    // The nearest continuation root owns this work. Never trace through it
+    // into an older grant whose rounds are already exhausted.
+    const grant = activation.edge === "fail"
+      ? pipeline.reviewGrants?.find((candidate) => candidate.stageId === activation.stageId
+        && candidate.terminalAttempt === activation.attempt)
+      : null;
+    if (grant) {
+      const review = pipeline.stages.find((candidate) => candidate.id === grant.stageId);
+      return review?.onFail && stage.id !== review.id ? grant : null;
     }
+    const key = `${activation.stageId}:${activation.attempt}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    current = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
+      .find((candidate) => candidate.n === activation.attempt && !candidate.historical);
   }
   return null;
 }
