@@ -564,7 +564,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     controller.patch({ state: "switching" });
     record.launcher = { ...record.launcher, relaunch: 1, state: "healthy", revision: firstSha, requestId: controller.current!.requestId };
     writeFileSync(h.recordFile, JSON.stringify(record));
-    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid), hostEpoch: 1 });
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)!, hostEpoch: 1 });
     h.service.stop(); h.service = new SelfUpdateService(h.deps);
     try {
       const healthy = await h.service.snapshot();

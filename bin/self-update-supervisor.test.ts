@@ -342,7 +342,7 @@ test("macOS orphan takeover verifies the kernel fence and retains legacy launche
   const root = mkdtempSync(join(tmpdir(), "macos-orphan-fence-"));
   try {
     const pid = 42420; const buffer = Buffer.alloc(136);
-    buffer.writeUInt32LE(pid, 12); buffer.writeBigUInt64LE(1_700_000_000n, 120); buffer.writeBigUInt64LE(123456n, 128);
+    buffer.writeUInt32LE(pid, 12); buffer.writeBigUInt64LE(BigInt(1_700_000_000), 120); buffer.writeBigUInt64LE(BigInt(123456), 128);
     const kernel = parseDarwinProcBsdInfoIdentity(pid, buffer, 136)!;
     const { parseDarwinIdentity } = await import("./darwin-process-identity.mjs");
     expect(parseDarwinIdentity(pid, buffer, 136)).toBe(kernel);
