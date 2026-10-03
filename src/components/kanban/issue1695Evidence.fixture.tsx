@@ -1,3 +1,9 @@
+import { DeputyBlock } from "@/components/conversation/DeputyBlock";
+import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
+import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
+import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { translate } from "@/lib/i18n";
+import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
@@ -86,10 +92,12 @@ const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
    so the pill draws its structured face. */
 const SEAT_NOISE = SCENARIO === "seat-noise";
 const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
+/* #2218: `&streaming=1` hosts every working conversation on a structured session and lets the driver push runtime events down the stream (`window.runtimeEmit`), so the board can be measured while agents stream. */
+const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || FIRST_MESSAGE;
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -345,7 +353,12 @@ function structuredSnapshot() {
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }] : [])],
+    }] : []), ...(STREAMING ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path).map((file) => ({
+      conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
+      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: file.path,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+    })) : [])],
     attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
   };
 }
@@ -2037,7 +2050,24 @@ class QuietEventSource {
   removeEventListener() {}
   close() {}
 }
-Object.assign(window, { EventSource: QuietEventSource });
+/* The runtime stream, when the driver pushes events: `runtimeEmit` delivers one envelope exactly as the SSE route frames it. */
+class StreamEventSource extends QuietEventSource {
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onopen: (() => void) | null = null;
+  constructor(url: string | URL) {
+    super(url);
+    if (String(url).startsWith("/api/runtime/stream")) {
+      openStream(this);
+      setTimeout(() => this.onopen?.(), 0);
+    }
+  }
+}
+let streamSource: StreamEventSource | null = null;
+const openStream = (source: StreamEventSource) => { streamSource = source; };
+Object.assign(window, {
+  EventSource: STREAMING ? StreamEventSource : QuietEventSource,
+  runtimeEmit: (envelope: unknown) => streamSource?.onmessage?.({ data: JSON.stringify(envelope) }),
+});
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -2826,7 +2856,22 @@ else localStorage.setItem("llvProject", PROJECT);
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
 if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
-createRoot(document.getElementById("root")!).render(SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+const queueTask = { id: "task_native", title: "Fix __init__.py (#42)" };
+const queueTaskText = taskReferencePrelude([queueTask]) + "\nstart this one";
+const taskDeputy: SeatDeputyView = { askId: "deputy_task", seatConversationId: "conversation_seat_task", deputyConversationId: "conversation_parallel_task",
+  ask: { text: queueTaskText, images: 0, sender: null, origin: { kind: "operator" } }, artifactPath: null, forkRecordCount: 0, forkBytes: 0,
+  state: "ended", startedAt: "2026-10-02T09:00:00.000Z", activatedAt: null, endedAt: "2026-10-02T09:01:00.000Z", outcome: "done",
+  touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: { line: "Done", finalText: "Done" } };
+const queueTaskPreview = <div className="p-3"><NativeQueuePanel
+  view={{ rows: [{ entryId: "entry-task", clientUserMessageId: "client-task", nativeSubmissionId: "native-task", revision: 1, text: queueTaskText,
+    selectedContext: { version: 1, state: "none", capturedAt: "2026-10-02T09:00:00.000Z", tasks: [queueTask] }, images: [], imageCount: 0, state: "queued", reason: null,
+    busy: false, observedInNative: true, dispatchedRevision: null, proven: false, requestedRuntime: null, actions: ["edit", "delete"], blocked: null }],
+    nativeStale: false, canStart: false, activeTurnId: null, reorderable: [], notice: null }}
+  unresolved={[{ key: "unknown-task", text: queueTaskText, imageCount: 0 }, { key: "refused-task", text: queueTaskText, imageCount: 0, refused: "refused" }]}
+  error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
+  submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
+/><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

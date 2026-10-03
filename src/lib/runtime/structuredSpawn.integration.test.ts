@@ -960,6 +960,59 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
+test.each([false, true])("structured Claude symlink materialization with precomputed transcript=%s", async (precomputed) => {
+  const id = crypto.randomUUID();
+  const directory = path.join(sandbox, `symlink-${id}`);
+  const real = path.join(directory, "disk", "repository-pipeline");
+  const link = path.join(directory, "Projects");
+  fs.mkdirSync(real, { recursive: true });
+  fs.symlinkSync(path.dirname(real), link, "junction");
+  const cwd = path.join(link, "repository-pipeline");
+  const home = path.join(directory, "home", ".claude");
+  const projects = path.join(home, "projects");
+  // Independent of Delegatus's predictor: the host writes at its physical cwd.
+  const artifactPath = path.join(projects, fs.realpathSync.native(cwd).replace(/[^A-Za-z0-9]/g, "-"), `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "claude", cwd, transport: "structured", accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd }),
+  });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  const host = new RoundTripHost("claude", artifactPath, id);
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+  try {
+    const response = await spawnStructuredConversation({
+      engine: "claude", receipt: begun.receipt,
+      spec: { command: "claude", cwd, engine: "claude", windowName: "symlink",
+        ...(precomputed ? { transcript: claudeTranscriptPath(cwd, id, projects) } : {}) },
+      account: { engine: "claude", accountId: "account-a", kind: "managed", home, transcriptRoot: projects, env: { NODE_ENV: "test" } },
+      "prompt": "materialize through the symlink", registry, client,
+    }, {
+      startHost: async () => host,
+      bindHost: async (targetRegistry, key, runningHost, claimOwner, claimEpoch) => {
+        const state = await runningHost.health();
+        targetRegistry.setStructuredHostClaimed(key, {
+          kind: "claude-broker", endpoint: state.endpoint,
+          process: { pid: process.pid, startIdentity: "test-process" },
+          eventCursor: state.eventCursor, protocolVersion: state.protocolVersion,
+          writerClaimEpoch: claimEpoch, activeTurnRef: state.activeTurnRef,
+          pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+        }, "idle", claimOwner, claimEpoch);
+        return () => {};
+      },
+      processIdentity: () => ({ pid: process.pid, startIdentity: "test-process" }),
+      durableSetupTimeoutMs: 2_000,
+    });
+    expect(response).toMatchObject({ launched: true, state: "settled", initialMessage: "delivered", path: artifactPath });
+    expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "completed", artifactPath });
+  } finally {
+    await host.release();
+    journal.close();
+  }
+});
+
 class RoundTripHost implements SpawnedStructuredHost {
   readonly sent: QueueEntry[] = [];
   readonly answers: Array<{ id: string; value: unknown }> = [];

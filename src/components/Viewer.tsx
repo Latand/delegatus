@@ -60,6 +60,7 @@ import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import { overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
 import { dropPendingSeatConfirmOutside, onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
+import { onOrchestratorFocusRequest } from "./orchestrator/taskChips";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
@@ -705,6 +706,15 @@ function ViewerApp() {
     setOrchestratorOpenProject(request.project);
     setOrchestratorOpen(true);
   }), [isMobile, selectProject]);
+  /* A card's «Ask» button attached a task to this project's orchestrator
+     composer: show that composer. The kanban seat expands itself; here the
+     dock opens for a board that has no seat on it. The shell stays on the
+     project it is on, so the board does not move away from the card. */
+  useEffect(() => onOrchestratorFocusRequest((requested) => {
+    if (isMobile || requested !== project) return;
+    rememberDockOpen(project, true);
+    setOrchestratorOpen(true);
+  }), [isMobile, project]);
   /* A confirm the guide asked for belongs to the project it named: moving to
      another one drops it, so a later visit designates nothing by itself. */
   useEffect(() => dropPendingSeatConfirmOutside(project), [project]);

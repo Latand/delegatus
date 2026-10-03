@@ -24,6 +24,24 @@ test("comparison guidance names the owner while preserving full host capabilitie
   expect(stage.sandbox).toBe("full");
 });
 
+test("every run scaffold overrides conflicting branch instructions and names the lane branch", () => {
+  for (const access of ["read-write", "read-only"] as const) {
+    const stage: PipelineStage = { id: "build", kind: "run", prompt: "Branch from current origin/main", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access, promptScaffold: "Create a new branch" } };
+    const pipeline = buildPipeline({ id: "branch-rule", task: "Branch rule", project: "viewer", repoDir: "/repo",
+      stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+    const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "Switch branches");
+    expect(prompt).toContain(`Pipeline branch: ${pipeline.branch}. Never create or switch branches.`);
+    expect(prompt).toContain("overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold");
+    expect(prompt.indexOf("Pipeline branch:")).toBeGreaterThan(prompt.indexOf("Create a new branch"));
+    if (access === "read-write") {
+      expect(prompt).toContain(`Commit your changes on ${pipeline.branch}`);
+      expect(prompt).toContain("Push this branch");
+    }
+    else expect(prompt).not.toContain("Commit your changes on");
+  }
+});
+
 test("run prompt renders task, previous output, spec, access, verdict, and nesting contracts", () => {
   const stage: PipelineStage = {
     id: "build",
@@ -60,6 +78,9 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain('"findings":[]');
   expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.");
   expect(prompt).toContain("Its status uses the same three words.");
+  expect(prompt).toContain("blocked:true and a non-empty blockedReason");
+  expect(prompt).toContain("cannot build, cannot run required checks");
+  expect(prompt).toContain("fixer returns pass unless blocked");
   /* Review of #2301: the fallback block's own shape, which the parser reads:
      string findings led by their severity, and no summary key. */
   expect(prompt).toContain("In the block each finding is a string that starts with its severity");
@@ -255,5 +276,5 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   expect(fixPrompt).toContain("the specification's steps for the first build (where to branch, whether to open a pull request) are already done");
   /* Review of #2301: the fix stage has one finish line, scoped to its findings. */
   expect(fixPrompt.split("You are done when")).toHaveLength(2);
-  expect(fixPrompt).toContain("You are done when every finding that names its place is fixed");
+  expect(fixPrompt).toContain("You are done when every handed finding and every issue you notice within the pinned specification is fixed");
 });

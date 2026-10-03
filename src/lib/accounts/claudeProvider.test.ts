@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -286,7 +287,7 @@ test("provider headers stay private and shared settings cannot replace its routi
   fs.writeFileSync(shared, JSON.stringify({ apiKeyHelper: "echo wrong", model: "wrong-model", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1", ANTHROPIC_AUTH_TOKEN: "wrong", SAFE: "yes" } }));
   const policy = applyClaudeSpawnPolicy(added.home, { baseSettingsPath: shared, providerAccount: true });
   const settings = JSON.parse(fs.readFileSync(policy.settingsPath, "utf8")) as { env: Record<string, string> };
-  expect(settings.env).toEqual({ SAFE: "yes" });
+  expect(settings.env).toEqual({ SAFE: "yes", ...agentPublicationIdentityEnv(process.env) });
   expect(settings).not.toHaveProperty("apiKeyHelper");
   expect(settings).not.toHaveProperty("model");
   expect(fs.readFileSync(policy.settingsPath, "utf8")).not.toContain(token);

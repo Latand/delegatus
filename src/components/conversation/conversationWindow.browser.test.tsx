@@ -1158,7 +1158,7 @@ describe("send latency slice 3: one message, one row", () => {
           expect({ suffix, phase: unknown.phase }).toEqual({ suffix, phase: "pending" });
           expect(unknown.aside).toContain(translate(lang, "outbox.awaitingConfirmation"));
           const unknownOpen = at(`lost-acknowledgement-lost-acknowledgement-open-${suffix}`);
-          expect(unknownOpen.aside).toContain(translate(lang, "orchPanel.errorUnknownTitle"));
+          expect(unknownOpen.aside).toContain(translate(lang, "composer.deliveryChecking"));
           expect(unknownOpen.controls).toContain(translate(lang, "outbox.action.checkStatus"));
           expect(unknownOpen.controls).not.toContain(translate(lang, "outbox.action.takeBack"));
           expect(unknownOpen.controls).not.toContain(translate(lang, "outbox.action.retry"));
@@ -1831,4 +1831,52 @@ describe("older history of a long conversation keeps its rows, its frames and it
       served.stop();
     }
   }, 300_000);
+});
+
+describe("delivery outcome settlement", () => {
+  browserTest("plain delivery status at phone and desktop disappears after confirmation", async () => {
+    const out = path.resolve(".artifacts/delivery-outcome");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {};
+    try {
+      for (const width of [390, 1440]) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=delivery-settlement&lang=${lang}`, { width, height: 900 }, "dark", lang,
+          "reduce", width === 390);
+        const key = `${width}-${lang}`;
+        try {
+          const line = page.locator("[data-delivery-notice-cause]");
+          await line.waitFor();
+          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryChecking"));
+          expect(await page.locator("[data-delivery-notice-retry]").getAttribute("aria-label"))
+            .toBe(translate(lang, "composer.payloadRecheck"));
+          await page.locator("[data-delivery-notice-retry]").click();
+          expect(await page.locator("[data-fixture-sends]").textContent()).toBe("0");
+          await page.screenshot({ path: path.join(out, `checking-${key}.png`), fullPage: true });
+          await page.locator("[data-confirm-delivery]").click();
+          await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
+          await page.screenshot({ path: path.join(out, `delivered-${key}.png`), fullPage: true });
+          await page.locator("[data-refuse-delivery]").click();
+          await line.waitFor();
+          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryNotDelivered"));
+          await page.locator("[data-delivery-notice-retry]").click();
+          expect(await page.locator("[data-fixture-sends]").textContent()).toBe("1");
+          const geometry = await line.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return { width: rect.width, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth), text: element.textContent };
+          });
+          expect(geometry.overflowX).toBe(0);
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+          evidence[key] = geometry;
+          await page.screenshot({ path: path.join(out, `not-delivered-${key}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/delivery-outcome", { recursive: true });
+      fs.writeFileSync("evidence/delivery-outcome/receipts.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 120_000);
 });

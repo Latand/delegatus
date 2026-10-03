@@ -12,7 +12,7 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
@@ -27,7 +27,7 @@ import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
-import { TmuxComposer } from "@/components/TmuxComposer";
+import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
@@ -74,6 +74,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "delivery-settlement"
   | "lifecycle"
   | "long-history"
   | "queued"
@@ -1054,8 +1055,31 @@ function AgentImagesFixture() {
   );
 }
 
+function DeliverySettlementFixture() {
+  const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
+  const [sends, setSends] = useState(0);
+  const receipt: RuntimeReceipt = {
+    operationId: "settlement-operation", idempotencyKey: "settlement-key",
+    conversationId: "conversation_settlement", kind: "send", status: status === "checking" ? "failed" : status,
+    text: "Please check the release.", at: new Date().toISOString(), revision: 1,
+    reason: status === "checking" ? "delivery was started by an earlier executor" : null,
+    resend: status === "failed" ? "safe" : status === "delivered" ? "not-needed" : "verify-first",
+  };
+  return <div data-evidence-case="delivery-settlement" className="min-h-dvh bg-canvas p-4 text-primary">
+    <div className="mb-3 rounded-surface border border-border p-3">Please check the release.</div>
+    <RuntimeComposerReceipts receipts={[receipt]} onRetry={() => setSends(count => count + 1)}
+      onRecheck={() => {}} onEdit={() => {}} />
+    <div className="mt-8 flex gap-4">
+      <button data-confirm-delivery onClick={() => setStatus("delivered")}>Confirm</button>
+      <button data-refuse-delivery onClick={() => setStatus("failed")}>Refuse</button>
+      <span data-fixture-sends>{sends}</span>
+    </div>
+  </div>;
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
+  if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;

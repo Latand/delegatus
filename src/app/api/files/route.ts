@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import { bridgeReportLogSignature } from "@/lib/bridge/store";
 import { stateDir, statePath } from "@/lib/configDir";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES, type StateWriteHealth } from "@/lib/state/diskFull";
@@ -555,7 +556,7 @@ export async function GET(request: Request): Promise<Response> {
   // This live health poll must work while writes and durable events are refused.
   // Return before presence, scans, migrations and projection-worker transport.
   if (url.searchParams.get("view") === "storage-health") {
-    return Response.json(currentWriteHealth(), { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ...currentWriteHealth(), registryIssues: pipelineRegistryHealth() }, { headers: { "Cache-Control": "no-store" } });
   }
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
