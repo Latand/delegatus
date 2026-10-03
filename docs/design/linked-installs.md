@@ -523,7 +523,7 @@ install"):
     bind), would otherwise come back from a restart open to that proxy.
     Whoever authenticates against a release it did not start (the runtime
     host's trusted local entry, the deploy adapter's health probes) finds
-    that key through `viewerBootGateKey` (`src/lib/access/phoneAccessBootGate.ts:45-57`,
+    that key through `viewerBootGateKey` (`bin/viewerGateKey.mjs`,
     used by `viewerReleaseCredentialResolver`, `deploymentProxy.ts:176-201`),
     which today reads the key file only while the phone-access flag exists.
     It gains the second condition, read from the same root: a saved

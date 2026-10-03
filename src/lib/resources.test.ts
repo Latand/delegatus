@@ -5,10 +5,14 @@ import path from "node:path";
 
 import { createTranscriptHostObserver, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
+import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
 import { allowedKillTarget, applyResourceTargets, buildResourceSnapshot, canonicalResourceEntry, conflictingResourceHost, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES } from "./resources";
+
+const nodeExecutable = Bun.which("node");
+if (!nodeExecutable) throw new Error("resource tests require Node on PATH");
 
 const SESSION_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const SECOND_SESSION_ID = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
@@ -432,7 +436,7 @@ describe("resource observation", () => {
         delete env.XDG_CACHE_HOME;
         delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
         delete env.LLV_RESOURCE_OBSERVATION_WORKER;
-        const child = Bun.spawn(["/usr/bin/node", path.join(directory, bundleName)], {
+        const child = Bun.spawn([nodeExecutable, path.join(directory, bundleName)], {
           cwd: process.cwd(),
           env,
           stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"identityEpoch\":null,\"files\":[],\"hosts\":[]}\n"]),
@@ -1638,7 +1642,7 @@ describe("resource recurring reads", () => {
           const escapedReady = path.join(directory, "term-escaped-ready");
           const memberReady = path.join(directory, "term-member-ready");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/node',
+            `#!${nodeExecutable}`,
             'const fs = require("node:fs");',
             'const [pidFile, readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
@@ -1650,7 +1654,7 @@ describe("resource recurring reads", () => {
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/node',
+            `#!${nodeExecutable}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedReady, memberReady, pipes] = process.argv.slice(2);',
@@ -1670,7 +1674,7 @@ describe("resource recurring reads", () => {
           return [
             `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
             `trap 'exit 0' TERM INT`,
-            `/usr/bin/node "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedReady}" "${memberReady}" "${pipes}" &`,
+            `${shellQuote(nodeExecutable)} "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedReady}" "${memberReady}" "${pipes}" &`,
             "member_pid=$!",
             `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
             "sleep 0.08",
@@ -1773,7 +1777,7 @@ describe("resource recurring reads", () => {
           const transitionArmed = path.join(directory, "owner-transition-armed");
           const transitionOrder = path.join(directory, "owner-transition-order");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/node',
+            `#!${nodeExecutable}`,
             'const fs = require("node:fs");',
             'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
@@ -1786,7 +1790,7 @@ describe("resource recurring reads", () => {
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/node',
+            `#!${nodeExecutable}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedNamespace, escapedReady, memberReady, ownerMode, transitionOrder] = process.argv.slice(2);',
@@ -1812,7 +1816,7 @@ describe("resource recurring reads", () => {
             `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
             `readlink /proc/self/ns/pid > "${path.join(directory, "root-namespace")}"`,
             `trap 'printf "root\\n" >> "${transitionOrder}"; exit 0' TERM INT`,
-            `/usr/bin/node "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedNamespace}" "${escapedReady}" "${memberReady}" "${owner}" "${transitionOrder}" &`,
+            `${shellQuote(nodeExecutable)} "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedNamespace}" "${escapedReady}" "${memberReady}" "${owner}" "${transitionOrder}" &`,
             "member_pid=$!",
             `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
             `: > "${transitionArmed}"`,
@@ -1904,7 +1908,7 @@ describe("resource recurring reads", () => {
       const escapedScript = path.join(directory, "retained-namespace-child.cjs");
       const memberScript = path.join(directory, "retained-namespace-member.cjs");
       writeFileSync(escapedScript, [
-        '#!/usr/bin/node',
+        `#!${nodeExecutable}`,
         'const fs = require("node:fs");',
         'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
         'process.on("SIGTERM", () => {});',
@@ -1916,7 +1920,7 @@ describe("resource recurring reads", () => {
         '',
       ].join("\n"));
       writeFileSync(memberScript, [
-        '#!/usr/bin/node',
+        `#!${nodeExecutable}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [escapedScript, pidFile, namespaceFile, readyFile, memberReady] = process.argv.slice(2);',
@@ -1936,7 +1940,7 @@ describe("resource recurring reads", () => {
       return [
         `readlink /proc/self/ns/pid > "${path.join(directory, "root-namespace")}"`,
         "trap 'exit 0' TERM INT",
-        `/usr/bin/node "${memberScript}" "${escapedScript}" "${path.join(directory, "escaped-pid")}" "${path.join(directory, "escaped-namespace")}" "${path.join(directory, "escaped-ready")}" "${path.join(directory, "member-ready")}" &`,
+        `${shellQuote(nodeExecutable)} "${memberScript}" "${escapedScript}" "${path.join(directory, "escaped-pid")}" "${path.join(directory, "escaped-namespace")}" "${path.join(directory, "escaped-ready")}" "${path.join(directory, "member-ready")}" &`,
         `while [ ! -e "${path.join(directory, "member-ready")}" ]; do sleep 0.005; done`,
         `while [ ! -e "${path.join(directory, "release")}" ]; do sleep 0.005; done`,
         `printf '%s\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
@@ -1992,7 +1996,7 @@ describe("resource recurring reads", () => {
     await withResourceWorkerScript((directory) => {
       const memberScript = path.join(directory, "concurrent-term-member.cjs");
       writeFileSync(memberScript, [
-        '#!/usr/bin/node',
+        `#!${nodeExecutable}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [directory, key] = process.argv.slice(2);',
@@ -2023,7 +2027,7 @@ describe("resource recurring reads", () => {
         `printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
         `readlink /proc/self/ns/pid > "${directory}/$host_pid.root-namespace"`,
         "trap 'exit 0' TERM INT",
-        `/usr/bin/node "${memberScript}" "${directory}" "$host_pid" &`,
+        `${shellQuote(nodeExecutable)} "${memberScript}" "${directory}" "$host_pid" &`,
         `while [ ! -e "${directory}/$host_pid.member" ]; do sleep 0.005; done`,
         `while [ ! -e "${directory}/$host_pid.release" ]; do sleep 0.005; done`,
         `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
@@ -2138,6 +2142,9 @@ describe("resource recurring reads", () => {
 
   test("cleanup never adopts a recycled process group after the original leader exits", async () => {
     await withResourceWorkerScript([
+      // Consume the request before exiting so this exercises exit cleanup,
+      // rather than racing the input write and reporting EPIPE.
+      "cat > /dev/null",
       "exit 0",
     ], async () => {
       let leaderPid = 0;
@@ -2405,7 +2412,7 @@ describe("resource recurring reads", () => {
       `);
       const built = await Bun.build({ entrypoints: [entrypoint], outdir: directory, target: "node", format: "esm", naming: path.basename(bundle) });
       expect(built.success).toBeTrue();
-      const child = Bun.spawn(["node", bundle], {
+      const child = Bun.spawn([nodeExecutable, bundle], {
         cwd: process.cwd(),
         env: { ...process.env, LLV_RESOURCE_COLLECTOR_EXECUTABLE: path.join(directory, "fixture-worker"), PATH: "/usr/bin:/bin" },
         stdout: "pipe",

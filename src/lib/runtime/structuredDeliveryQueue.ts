@@ -44,7 +44,7 @@ export interface StructuredDeliveryQueuePort {
   /** A terminal provider turn engages an account pick immediately (#1983).
       Live host health still fences a newer turn before applying it. */
   terminalTurn?(conversationId: string): boolean;
-  nativeQueueExecute?(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void>;
+  nativeQueueExecute?(command: NativeQueueCommand & { operationId: string; eventSeq: number }, refusalReason?: string): Promise<void | false>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
@@ -61,6 +61,8 @@ export interface StructuredDeliveryQueuePort {
     status: StructuredDeliveryTransition,
     details?: RuntimeTransitionDetails,
   ): Promise<void>;
+  /** Persist the concrete generation a fresh retry is about to reach. */
+  bindDeliveryGeneration?(operationId: string, generationId: string): boolean | Promise<boolean>;
   /** The durable receipt state, when the port can read it. The compact control
       needs it to tell a control it must issue from one an earlier executor
       already issued and never settled (#862), and the message path reads the
@@ -879,7 +881,10 @@ export class StructuredDeliveryQueue {
     if (!retry.ready()) { this.retrySoon(); return false; }
     try {
       if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
-      await this.port.nativeQueueExecute(effect, reason);
+      if (await this.port.nativeQueueExecute(effect, reason) === false) {
+        this.retrySoon();
+        return false;
+      }
       this.nativeExecutionRetries.delete(effect.conversationId);
       return true;
     } catch (error) {
@@ -1199,6 +1204,17 @@ export class StructuredDeliveryQueue {
         : undefined;
       if (!firstDispatch) this.firstDispatches.delete(effect.operationId);
       const routedTurnId = recordsRoute && shouldInterrupt ? health.activeTurnRef! : null;
+      if (this.port.bindDeliveryGeneration) {
+        try {
+          if (!await this.port.bindDeliveryGeneration(effect.operationId, health.sessionKey)) {
+            this.retrySoon();
+            return true;
+          }
+        } catch {
+          this.retrySoon();
+          return true;
+        }
+      }
       if (!await this.transitionUnlessSettled(
         effect.operationId,
         "delivering",

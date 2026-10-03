@@ -188,7 +188,7 @@ export function transportLine(
      the transport genuinely does not know, and the disclosure says exactly
      that. The row above it still reads "waiting for confirmation": unknown is
      not delivered and it is not lost. */
-  if (entry.deliveryUncertain) return { label: t("orchPanel.errorUnknownTitle"), wait: "uncertain" };
+  if (entry.deliveryUncertain) return { label: t("composer.deliveryChecking"), wait: "uncertain" };
   /* The queue is re-attempting this delivery on its own because the agent was
      busy. That used to be a separate optimistic row beside the composer; it is
      evidence about THIS message, so it reads on this message's disclosure in

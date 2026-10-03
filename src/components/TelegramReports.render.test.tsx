@@ -236,7 +236,7 @@ test("the prompt editor is a plain textarea with save and reset, and states the 
   expect(html).toContain("Write the report in Ukrainian.");
   expect(html).toContain("Save prompt");
   expect(html).toContain("Reset to default");
-  expect(html).toContain("The Viewer always adds the window");
+  expect(html).toContain("Delegatus always adds the window");
   /* The editor replaces the settings view rather than opening a second one. */
   expect(html).not.toContain("Run now");
 });
@@ -254,7 +254,7 @@ test("a save the editor could not complete is announced in the editor", () => {
   ));
   expect(html).toContain("<textarea");
   expect(html).toContain("role=\"alert\"");
-  expect(html).toContain("The Viewer server");
+  expect(html).toContain("The Delegatus server");
   expect(html).toContain("respond. Try again.");
   /* The operator's text is still there to retry with. */
   expect(html).toContain("Write the report in Ukrainian.");
@@ -287,7 +287,7 @@ test("after a reload, a run the history row cannot name is still linked from the
     transport: "structured",
     clientAttemptId: reportAttemptId(runId),
     explicitProject: TELEGRAM_REPORT_PROJECT,
-    launchProfile: emptyLaunchProfile({ cwd }),
+    launchProfile: emptyLaunchProfile({ cwd, title: "Daily report" }),
   });
   if (begun.kind !== "created") throw new Error("expected a report-run reservation");
   new AgentRegistry(registryFile).settleSpawn(begun.receipt.launchId, {
@@ -295,7 +295,7 @@ test("after a reload, a run the history row cannot name is still linked from the
     artifactPath: path.join(cwd, `${sessionId}.jsonl`),
     cwd,
     accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd }),
+    launchProfile: emptyLaunchProfile({ cwd, title: "Daily report" }),
     status: "idle",
     host: null,
     claimEpoch: 0,

@@ -3,8 +3,8 @@
     "viewport": 390,
     "scheme": "light",
     "idle": {
-      "x": 296,
-      "right": 340,
+      "x": 1,
+      "right": 45,
       "width": 44,
       "height": 44,
       "barHeight": 52,
@@ -17,8 +17,8 @@
     "viewport": 390,
     "scheme": "dark",
     "idle": {
-      "x": 296,
-      "right": 340,
+      "x": 1,
+      "right": 45,
       "width": 44,
       "height": 44,
       "barHeight": 52,
@@ -29,7 +29,7 @@
   },
   {
     "pcmOutput": {
-      "firstSample": 17888,
+      "firstSample": 16224,
       "expectedSamples": 172800,
       "mismatches": 0,
       "sampleRate": 24000,
@@ -40,11 +40,11 @@
       "The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately.",
       "Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken."
     ],
-    "stopClock": 8.106666666666667,
+    "stopClock": 8.026666666666667,
     "cachedReplayRequests": 0,
     "finalQuantumSilent": true,
     "samplesBeyondStopClock": 0,
-    "baseLatency": 0.042666666666666665,
-    "outputLatency": 0.128
+    "baseLatency": 0.010041666666666667,
+    "outputLatency": 0.032
   }
 ]
