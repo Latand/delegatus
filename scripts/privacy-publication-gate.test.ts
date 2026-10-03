@@ -573,7 +573,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   });
 
   // OCR-bearing cases run alone, including fixture generation before the CLI.
-  // Keep the default 5-second deadline and overlap only the text-only cases.
+  // Overlap only the text-only cases; generation-heavy OCR gets a case budget.
   test.serial("blocks an unsafe live raster without provenance using redacted diagnostics", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
@@ -721,7 +721,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
     expect(result.stderr.toString()).toBe("");
-  });
+  }, 6_000);
 
   test.serial("detects private text in raster pixels without echoing OCR content", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
@@ -2395,6 +2395,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     for (const exactOnly of [true, false]) {
       for (const contiguous of [true, false]) {
+        // Serial pressure peak: 3260.03 ms; 6 s leaves 45.67% headroom.
         test.serial(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, async () => {
           const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
           temporaryDirectories.push(directory);
@@ -2421,7 +2422,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           expect(output).not.toContain(ocrText);
           expect(output).not.toContain(value);
           expect(result.stderr.toString()).toBe("");
-        });
+        }, 6_000);
       }
     }
 

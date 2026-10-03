@@ -173,7 +173,7 @@ jobs:
 
       # Candidate code runs last, after all trusted inspection and cache writes.
       # It receives no credentials and cannot alter a later trusted verdict.
-      # Serial OCR preserves case deadlines. A 44.90 s local suite at the 1.9
+      # Serial OCR prevents CLI overlap. A 44.90 s local suite at the 1.9
       # hosted factor needs ceil((44.90 * 1.9) / 0.7 / 10) * 10 = 130 s.
       - name: Verify candidate privacy gate behavior within budget
         working-directory: candidate
