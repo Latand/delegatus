@@ -8,8 +8,9 @@ const waiting: Array<() => void> = [];
 
 export async function runPrivacyTestProcess(options: {
   cmd: string[];
-  cwd: string;
-  env: Record<string, string | undefined>;
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  stdin?: Uint8Array;
   stderr: "pipe";
   stdout: "pipe";
 }) {
