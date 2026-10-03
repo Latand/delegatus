@@ -74,7 +74,7 @@ function writeCodexEntry(name: string, payload: Record<string, unknown>, mtime: 
   return entryFor(pathname, mtime);
 }
 
-test("a review round captures its clean commit immediately before launch", () => {
+test("a review round captures its clean commit immediately before launch", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-reviewed-head-"));
   try {
     expect(spawnSync("git", ["init", "-b", "main"], { cwd: directory }).status).toBe(0);
@@ -96,16 +96,16 @@ test("a review round captures its clean commit immediately before launch", () =>
 
     const round = newRound(flow, "marker", null);
     expect(round.reviewHeadSha).toBeNull();
-    expect(captureReviewHead(flow, round)).toBe(headSha);
+    expect(await captureReviewHead(flow, round)).toBe(headSha);
     expect(round.reviewHeadSha).toBe(headSha);
     fs.writeFileSync(path.join(directory, "work.txt"), "uncommitted\n");
-    expect(() => captureReviewHead(flow, newRound(flow, "marker", null))).toThrow("review requires a clean committed HEAD");
+    await expect(captureReviewHead(flow, newRound(flow, "marker", null))).rejects.toThrow("review requires a clean committed HEAD");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("issue 533: a repair review parks when its remote branch is behind the captured head", () => {
+test("issue 533: a repair review parks when its remote branch is behind the captured head", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-remote-head-"));
   const directory = path.join(root, "worktree");
   const remote = path.join(root, "origin.git");
@@ -131,14 +131,14 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
       }, rounds: [],
     } as unknown as Flow;
 
-    expect(() => captureReviewHead(flow, newRound(flow, "marker", null)))
-      .toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
+    await expect(captureReviewHead(flow, newRound(flow, "marker", null)))
+      .rejects.toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("a pipeline flow that does not publish captures its clean local head without reading any remote (#1692)", () => {
+test("a pipeline flow that does not publish captures its clean local head without reading any remote (#1692)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-internal-head-"));
   const directory = path.join(root, "worktree");
   fs.mkdirSync(directory);
@@ -160,12 +160,12 @@ test("a pipeline flow that does not publish captures its clean local head withou
     } as unknown as Flow;
 
     const internal = newRound(flow, "marker", null);
-    expect(captureReviewHead(flow, internal)).toBe(headSha);
+    expect(await captureReviewHead(flow, internal)).toBe(headSha);
     expect(internal.reviewHeadSha).toBe(headSha);
 
     const publishing = { ...flow, requireRemoteHead: true } as Flow;
-    expect(() => captureReviewHead(publishing, newRound(publishing, "marker", null)))
-      .toThrow("review remote head is unavailable before launch: origin/main");
+    await expect(captureReviewHead(publishing, newRound(publishing, "marker", null)))
+      .rejects.toThrow("review remote head is unavailable before launch: origin/main");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -208,6 +208,7 @@ test("issue 532: a marker-created pipeline round captures its published repair h
       createdAt: "2026-07-21T00:00:00Z",
     });
 
+    saveFlows([flow]);
     expect(await tickFlow(flow, [current], new Map([[current.path, current]]), () => {})).toBe(true);
     expect(flow).toMatchObject({
       state: "spawning",
@@ -249,6 +250,7 @@ test("issue 532: a dirty marker-time checkout parks with an actionable decision"
       createdAt: "2026-07-21T00:00:00Z",
     });
 
+    saveFlows([flow]);
     expect(await tickFlow(flow, [current], new Map([[current.path, current]]), () => {})).toBe(true);
     expect(flow).toMatchObject({
       state: "needs_decision",
@@ -260,7 +262,7 @@ test("issue 532: a dirty marker-time checkout parks with an actionable decision"
   }
 });
 
-test("a review round parks when clean HEAD advances past its synchronized target before launch (#522)", () => {
+test("a review round parks when clean HEAD advances past its synchronized target before launch (#522)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-target-head-"));
   try {
     expect(spawnSync("git", ["init", "-b", "main"], { cwd: directory }).status).toBe(0);
@@ -285,7 +287,7 @@ test("a review round parks when clean HEAD advances past its synchronized target
     } as unknown as Flow;
     const round = newRound(flow, "button", null);
 
-    expect(() => captureReviewHead(flow, round)).toThrow(`review target changed before launch: expected ${targetSha}, found ${advancedSha}`);
+    await expect(captureReviewHead(flow, round)).rejects.toThrow(`review target changed before launch: expected ${targetSha}, found ${advancedSha}`);
     expect(round.reviewHeadSha).toBeNull();
     expect(flow).toMatchObject({
       state: "needs_decision",
@@ -293,6 +295,55 @@ test("a review round parks when clean HEAD advances past its synchronized target
     });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "close", "cycle"] as const).map((action) => [boundary, action] as const)))("async flow %s head capture respects %s", async (boundary, action) => {
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const git = await import("./git");
+  const exec = await import("./exec");
+  const decisions = await import("./decisions");
+  const { patchFlow, closeFlow } = await import("./commands");
+  const root = process.env.LLV_STATE_DIR!;
+  const implementer = writeCodexEntry(`head-control-${boundary}-${action}.jsonl`, { id: crypto.randomUUID(), cwd: root }, Date.now() / 1_000);
+  const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
+    home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
+  const choose = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account });
+  const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "head-control-session", reviewerPath: null });
+  const status = spyOn(exec, "headlessReviewStatus").mockReturnValue(null);
+  const turn = spyOn(decisions, "flowTurn").mockResolvedValue({ state: "terminal", successful: true,
+    message: { text: "REVIEW_READY: current work", ts: Date.now() }, backgroundTasks: [] } as never);
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const head = spyOn(git, "resolveCleanFlowHead").mockImplementation(async () => { enter(); await held; return "a".repeat(40); });
+  const flow = raceFlow({ id: `flow-head-${boundary}-${action}`, cwd: root, implementerPath: implementer.path,
+    baseRef: "a".repeat(40), state: boundary === "marker" ? "waiting_ready" : "spawning",
+    stateDetail: "resumed by operator", headRef: "main", requireRemoteHead: false });
+  if (boundary === "launch") {
+    flow.rounds = [newRound(flow, "button", null)];
+    flow.rounds[0]!.accountId = "account-a";
+  }
+  saveFlows([flow]);
+  const receiptsBefore = Object.keys(agentRegistry().snapshot().receipts);
+  let tick: Promise<unknown> | undefined;
+  try {
+    tick = tickFlows([implementer]);
+    await entered;
+    if (action === "close") expect((await closeFlow(flow.id)).flow?.state).toBe("closed");
+    else {
+      expect(patchFlow(flow.id, { action: "pause" }).flow?.state).toBe("paused");
+      if (action === "cycle") expect(patchFlow(flow.id, { action: "resume" }).error).toBeUndefined();
+    }
+    release(); await tick;
+    expect(launch).not.toHaveBeenCalled();
+    expect(Object.keys(agentRegistry().snapshot().receipts)).toEqual(receiptsBefore);
+    expect(loadFlows()[0]!.state).toBe(action === "cycle" ? flow.state : action === "close" ? "closed" : "paused");
+    expect(loadFlows()[0]!.rounds).toHaveLength(boundary === "marker" ? 0 : 1);
+    expect(loadFlows()[0]!.rounds[0]?.reviewHeadSha ?? null).toBeNull();
+  } finally {
+    release(); await tick;
+    head.mockRestore(); turn.mockRestore(); status.mockRestore(); launch.mockRestore(); choose.mockRestore();
   }
 });
 
@@ -1493,6 +1544,7 @@ test.each(["pane", "headless"] as const)("automatic update holds a fresh %s revi
   const entries = [implementer];
   const byPath = new Map([[implementer.path, implementer]]);
   flow.rounds = [newRound(flow, "marker", "ready")];
+  saveFlows([flow]);
   const before = structuredClone(flow);
   writeDrain(drainFile(), { id: "flow-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
   try {

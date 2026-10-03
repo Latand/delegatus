@@ -696,6 +696,43 @@ export async function bindStructuredDeliveryQueue(
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
     },
+    succession: (conversationId, binding, admittedAt) => {
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      if (!conversation || conversation.engine !== "codex") return { status: "refused", reason: "native queue conversation is unavailable" };
+      const migration = conversation.migration;
+      const generations = conversation.generations;
+      const sourceIndex = generations.findIndex(generation => generation.id === binding.threadId && generation.accountId === binding.accountId);
+      const migrationSourceIndex = generations.findLastIndex(generation => generation.id === migration?.sourceGenerationId
+        && (migration?.phase !== "committed" || generation.archivedAt !== null));
+      if (!migration || sourceIndex < 0 || migrationSourceIndex < sourceIndex) return null;
+      const source = generations[sourceIndex]!;
+      const current = generations.at(-1);
+      // Terminal migration residue applies only to entries already admitted
+      // when this migration began, regardless of who requested the switch.
+      // A reused intent can predate this conversation's migration.
+      const terminal = migration.phase === "rolled-back" || migration.phase === "failed-recoverable";
+      if (terminal && current === source && !conversation.switchHold && admittedAt !== undefined) {
+        const startedAt = migration.startedAt ?? registry.readOnlySnapshot().migrationIntents[migration.intentId]?.createdAt;
+        if (Date.parse(admittedAt) > Date.parse(startedAt ?? "")) return null;
+      }
+      // Each committed edge archives its predecessor at the successor's birth.
+      // Keep that evidence when a newer migration replaces the previous receipt.
+      for (let index = sourceIndex; index < migrationSourceIndex; index++) {
+        if (!generations[index]!.archivedAt || generations[index]!.archivedAt !== generations[index + 1]!.createdAt) {
+          return { status: "refused", reason: "runtime switch successor chain is unproven" };
+        }
+      }
+      if (conversation.switchHold) return { status: "refused", reason: `account switch failed: ${conversation.switchHold.reason}` };
+      if (conversation.reconfigure?.status === "cancelled" || migration.phase === "rolled-back") return { status: "refused", reason: "runtime switch cancelled" };
+      if (conversation.reconfigure?.status === "failed" || migration.phase === "failed-recoverable") {
+        return { status: "refused", reason: `runtime switch failed: ${conversation.reconfigure?.error ?? migration.error ?? "successor is unavailable"}` };
+      }
+      if (migration.phase !== "committed" || conversation.reconfigure?.status === "applying") return { status: "pending" };
+      if (!source.archivedAt || !current || current.id !== migration.providerReceipt?.nativeId || current.accountId !== migration.targetId) {
+        return { status: "refused", reason: "runtime switch successor is unproven" };
+      }
+      return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
+    },
   });
   const queue = new StructuredDeliveryQueue(
     {

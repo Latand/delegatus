@@ -7,24 +7,26 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
 import { renderStagePrompt } from "./prompts";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
+import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 /** Compose the launch message before spawn admission. The shared UI renderer
     remains pure; this server path materializes oversized parts, falling back
     to the complete rendered prompt when substitutions or framing do not fit. */
-export function composeStageInput(
+export async function composeStageInput(
   pipeline: Pipeline,
   stage: PipelineStage,
   role: EffectivePipelineRole,
   previousOutput: string,
   worktreeDir: string = pipeline.worktreeDir,
-): string {
+  exec: ExecPort = realExec,
+): Promise<string> {
   const inline = renderStagePrompt(pipeline, stage, role, previousOutput);
   if (Buffer.byteLength(inline, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
-    protectExistingControllerArtifacts(worktreeDir);
+    await protectExistingControllerArtifacts(worktreeDir, exec);
     return inline;
   }
 
-  const directory = prepareControllerArtifactDirectory(worktreeDir);
+  const directory = await prepareControllerArtifactDirectory(worktreeDir, exec);
 
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
   const artifact = (label: string, text: string) => {

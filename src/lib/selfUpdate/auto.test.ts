@@ -9,7 +9,7 @@ import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { targetOnCurrentBranch } from "./git";
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
-import { activeRestartGate, endRestartGate, restartGateFile } from "./restartGate";
+import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 import { startCurrentReleaseControllers } from "../viewerInstrumentation";
 import { GreenReader } from "./green";
@@ -560,16 +560,26 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
   h.deps.requestPipelineTick = () => { ticks++; };
   let finishCheck!: () => void;
   let newer = target;
+  let firstCheck = true;
   h.deps.check = async () => {
-    await new Promise<void>((resolve) => { finishCheck = resolve; });
+    if (firstCheck) {
+      firstCheck = false;
+      await new Promise<void>((resolve) => { finishCheck = resolve; });
+    }
     return { ok: true, installed: revision(old), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null };
   };
   const service = new SelfUpdateService(h.deps);
   const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const waitForTick = async () => {
+    const controller = service as unknown as { autoRunning: boolean };
+    for (let i = 0; i < 200 && controller.autoRunning; i++) await Bun.sleep(1);
+    expect(controller.autoRunning).toBe(false);
+  };
+  const tick = async () => { await waitForTick(); await service.autoTick(); await waitForTick(); };
   try {
     const checking = service.check();
     for (let i = 0; i < 100 && !finishCheck; i++) await Bun.sleep(1);
-    await service.autoTick();
+    await tick();
     const drain = held()!;
     expect(drain.target).toBe(target);
     expect(runner.state.state).toBe("idle");
@@ -579,31 +589,35 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
     for (let i = 0; i < 100 && runner.state.state !== "done" && runner.state.state !== "failed"; i++) await Bun.sleep(1);
     expect(runner.state.state).toBe("done");
     expect(runner.state.target).toBe(target);
+    // Publishing now awaits Git, and the post-build check also runs async.
+    // Let that observation settle before asking the final restart fence.
+    for (let i = 0; i < 100 && service.active(); i++) await Bun.sleep(1);
+    expect(service.active()).toBe(false);
     expect(holds.length).toBeGreaterThan(3);
     expect(holds.every((id) => id === drain.id)).toBe(true);
     expect((await service.snapshot()).available?.sha).toBe(newer);
     expect(h.pending()).toBeNull();
     h.setTurn(false);
     for (const role of ["web", "runtime-host"] as const) {
-      await service.autoTick();
+      await tick();
       h.advance(60_000);
-      await service.autoTick();
+      await tick();
       const pending = h.pending()!;
       expect(pending.role).toBe(role);
       expect(held()?.id).toBe(drain.id);
       endRestartGate(restartGateFile(h.record.requestFile), JSON.parse(readFileSync(h.record.requestFile, "utf8")).autoGateId);
       rmSync(h.record.requestFile);
       h.record[role === "web" ? "web" : "runtimeHost"] = { ...h.record[role === "web" ? "web" : "runtimeHost"], revision: target.slice(0, 7), requestId: pending.requestId };
-      await service.autoTick();
+      await tick();
       expect(held()?.id).toBe(drain.id);
     }
     // Matching cached revisions alone cannot prove the succession completed.
     h.deps.hostHealth = async () => { throw new Error("candidate host health unavailable"); };
-    await service.autoTick();
+    await tick();
     expect(held()?.id).toBe(drain.id);
     expect(ticks).toBe(0);
     h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
-    await service.autoTick();
+    await tick();
     expect(held()).toBeNull();
     expect(ticks).toBe(1);
   } finally { service.stop(); }
@@ -663,6 +677,247 @@ async function postTypingPresence(role: string): Promise<void> {
   expect((await postPresence(request)).status).toBe(200);
   expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
 }
+
+test.each(["accepted-disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission rechecks %s after its Git observation", async (change) => {
+  const h = scenario();
+  const checkout = join(h.dir, "admission-checkout"); mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha, dir: checkout }));
+  const requestId = "final-admission-request";
+  const pending = { role: "web", requestId, target: sha, launcherPid: h.record.launcher.pid, at: new Date().toISOString(), from: sha };
+  const available = { sha: "c".repeat(40), short: "c".repeat(7), version: "2", date: "" };
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: change.endsWith("-build")
+    ? { ...initialCheck(), check: { ...idleCheck(), state: "update-available" }, available } : initialCheck(), update: null, autoPending: pending }));
+  let finishBuild!: () => void;
+  const buildWait = new Promise<void>((resolve) => { finishBuild = resolve; });
+  const runner = { state: idleUpdate(), start: async () => {
+    runner.state = { ...idleUpdate(), state: "running", trigger: "operator" };
+    await buildWait; runner.state = idleUpdate();
+  }, retry: async () => {}, restore: () => {}, logPath: () => "" };
+  h.deps.buildEnv = () => ({});
+  h.deps.createRunner = () => runner;
+  const service = h.service();
+  const originalSnapshot = service.snapshot;
+  let snapshots = 0;
+  service.snapshot = async () => {
+    const view: Snapshot = { ...await originalSnapshot(), installed: { sha, short: sha.slice(0, 7), version: "1", date: "" },
+      update: structuredClone(runner.state), busy: runner.state.state === "running" ? "update" : null };
+    // A real snapshot computes busy before awaiting autoView's Git probe.
+    if (change === "snapshot-build" && ++snapshots === 1) await headOf(checkout);
+    return view;
+  };
+  // The switch's view is independent of the held final admission probe.
+  (service as unknown as { buildSnapshot: () => Promise<Snapshot> }).buildSnapshot = service.snapshot;
+  const gateFile = restartGateFile(h.record.requestFile), gateId = beginRestartGate(gateFile)!;
+  const bin = join(h.dir, "admission-bin"); mkdirSync(bin);
+  const entered = join(bin, "entered"), released = join(bin, "released");
+  const count = join(bin, "count");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$ADMISSION_COUNT" ] || n=$(cat "$ADMISSION_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$ADMISSION_COUNT"\nif [ "$n" = "$ADMISSION_HOLD" ]; then touch "$ADMISSION_ENTERED"; while [ ! -f "$ADMISSION_RELEASED" ]; do sleep 0.01; done; fi\nexec "$ADMISSION_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, ADMISSION_ENTERED: process.env.ADMISSION_ENTERED, ADMISSION_RELEASED: process.env.ADMISSION_RELEASED,
+    ADMISSION_GIT: process.env.ADMISSION_GIT, ADMISSION_COUNT: process.env.ADMISSION_COUNT, ADMISSION_HOLD: process.env.ADMISSION_HOLD };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, ADMISSION_ENTERED: entered, ADMISSION_RELEASED: released, ADMISSION_GIT: git,
+    ADMISSION_COUNT: count, ADMISSION_HOLD: change === "snapshot-build" ? "2" : change === "quiet-build" ? "0" : "1" });
+  if (change === "quiet-build") h.deps.quiet!.runtimeSnapshot = async () => {
+    writeFileSync(entered, "");
+    while (!existsSync(released)) await Bun.sleep(5);
+    return { sessions: [] };
+  };
+  let admission: ReturnType<SelfUpdateService["admitAutoRestart"]> | undefined;
+  try {
+    admission = service.admitAutoRestart(requestId, gateId);
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    if (change === "accepted-disable") {
+      expect(await service.setAuto(false)).toMatchObject({ ok: true });
+      expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    } else if (change.endsWith("-build")) {
+      expect(await service.startUpdate("manual-build-during-admission")).toMatchObject({ ok: true });
+      expect((await service.snapshot()).busy).toBe("update");
+    } else h.setStage(true);
+    writeFileSync(released, "");
+    // A persisted accepted request owns custody after switch-off. New work,
+    // builds and restarts still veto admission after the last observation.
+    expect(await admission).toBe(change === "accepted-disable");
+    if (change === "accepted-disable") expect(h.pending()?.requestId).toBe(requestId);
+    else expect(h.pending()).toBeNull();
+  } finally {
+    writeFileSync(released, ""); await admission;
+    await service.setAuto(false);
+    finishBuild(); await buildWait; await Bun.sleep(0);
+    endRestartGate(gateFile, gateId); service.stop();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("automatic build admission rechecks a manual restart during snapshot Git", async () => {
+  const h = scenario();
+  const checkout = join(h.dir, "build-admission-checkout"); mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha, dir: checkout }));
+  const available = { sha: TARGET, short: TARGET.slice(0, 7), version: "2", date: "" };
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), available }, update: null, autoPending: null }));
+  let starts = 0, finishBuild!: () => void;
+  const buildWait = new Promise<void>((resolve) => { finishBuild = resolve; });
+  const runner = { state: idleUpdate(), start: async () => {
+    starts++; runner.state = { ...idleUpdate(), state: "running", trigger: "auto" }; await buildWait;
+  }, retry: async () => {}, restore: () => {}, logPath: () => "" };
+  h.deps.buildEnv = () => ({}); h.deps.createRunner = () => runner;
+  h.deps.requestRestart = () => { writeFileSync(h.record.requestFile, "manual request"); return "manual-restart"; };
+  const service = h.service(), originalSnapshot = service.snapshot;
+  let snapshots = 0;
+  service.snapshot = async () => {
+    const view = { ...await originalSnapshot(), installed: { sha, short: sha.slice(0, 7), version: "1", date: "" } };
+    if (++snapshots === 2) await headOf(checkout);
+    return view;
+  };
+  (service as unknown as { buildSnapshot: () => Promise<Snapshot> }).buildSnapshot = service.snapshot;
+  const bin = join(h.dir, "build-admission-bin"); mkdirSync(bin);
+  const entered = join(bin, "entered"), released = join(bin, "released"), count = join(bin, "count");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$BUILD_ADMISSION_COUNT" ] || n=$(cat "$BUILD_ADMISSION_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$BUILD_ADMISSION_COUNT"\nif [ "$n" = 2 ]; then touch "$BUILD_ADMISSION_ENTERED"; while [ ! -f "$BUILD_ADMISSION_RELEASED" ]; do sleep 0.01; done; fi\nexec "$BUILD_ADMISSION_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, BUILD_ADMISSION_COUNT: process.env.BUILD_ADMISSION_COUNT,
+    BUILD_ADMISSION_ENTERED: process.env.BUILD_ADMISSION_ENTERED, BUILD_ADMISSION_RELEASED: process.env.BUILD_ADMISSION_RELEASED,
+    BUILD_ADMISSION_GIT: process.env.BUILD_ADMISSION_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, BUILD_ADMISSION_COUNT: count, BUILD_ADMISSION_ENTERED: entered,
+    BUILD_ADMISSION_RELEASED: released, BUILD_ADMISSION_GIT: git });
+  let tick: ReturnType<SelfUpdateService["autoTick"]> | undefined;
+  try {
+    tick = service.autoTick();
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    expect(await service.restart("web")).toMatchObject({ ok: true });
+    expect(service.active()).toBe(true);
+    writeFileSync(released, ""); await tick;
+    expect(starts).toBe(0);
+    expect(readFileSync(h.record.requestFile, "utf8")).toBe("manual request");
+  } finally {
+    writeFileSync(released, ""); await tick; await service.setAuto(false);
+    finishBuild(); await buildWait; await Bun.sleep(0); service.stop();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test.each(["build", "restart"] as const)("disabling auto during Git prevents a new automatic %s", async (action) => {
+  const h = scenario();
+  const checkout = join(h.dir, "tick-checkout"); mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha: OLD, dir: checkout }));
+  writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [TARGET]: { state: "green" } }, rollbackCaptured: false });
+  const revision = { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" };
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), available: revision }, update: null, autoPending: null }));
+  let starts = 0;
+  h.deps.buildEnv = () => ({});
+  h.deps.createRunner = () => ({ state: idleUpdate(), start: async () => { starts++; }, retry: async () => {}, restore: () => {}, logPath: () => "" }) as ReturnType<ServiceDeps["createRunner"]>;
+  const service = h.service();
+  const snapshot = service.snapshot;
+  if (action === "build") service.snapshot = async () => ({ ...await snapshot(), installed: { ...revision, sha, short: sha.slice(0, 7) } });
+  (service as unknown as { buildSnapshot: () => Promise<Snapshot> }).buildSnapshot = service.snapshot;
+  if (action === "restart") { await service.autoTick(); h.advance(60_000); }
+  const bin = join(h.dir, "tick-bin"); mkdirSync(bin);
+  const entered = join(bin, "entered"), released = join(bin, "released"), count = join(bin, "count");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$TICK_COUNT" ] || n=$(cat "$TICK_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$TICK_COUNT"\nif [ "$n" = "$TICK_HOLD" ]; then touch "$TICK_ENTERED"; while [ ! -f "$TICK_RELEASED" ]; do sleep 0.01; done; fi\nexec "$TICK_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, TICK_ENTERED: process.env.TICK_ENTERED, TICK_RELEASED: process.env.TICK_RELEASED, TICK_COUNT: process.env.TICK_COUNT, TICK_HOLD: process.env.TICK_HOLD, TICK_GIT: process.env.TICK_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, TICK_ENTERED: entered, TICK_RELEASED: released, TICK_COUNT: count, TICK_HOLD: action === "build" ? "1" : "2", TICK_GIT: git });
+  let tick: ReturnType<SelfUpdateService["autoTick"]> | undefined;
+  try {
+    tick = service.autoTick();
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    expect(await service.setAuto(false)).toMatchObject({ ok: true });
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    writeFileSync(released, ""); await tick;
+    expect(starts).toBe(0);
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(h.pending()).toBeNull();
+  } finally {
+    writeFileSync(released, ""); await tick; service.stop();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("a delayed final Git observation cannot let an older switch overwrite a newer disable", async () => {
+  const h = scenario();
+  const checkout = join(h.dir, "checkout");
+  mkdirSync(checkout);
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: checkout, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+  const sha = run("rev-parse", "HEAD");
+  h.record.checkout = checkout;
+  writeFileSync(h.record.releasePointer, JSON.stringify({ checkoutHead: sha, sha, dir: checkout }));
+  const revision = { sha, short: sha.slice(0, 7), version: "1", date: "" };
+  h.deps.describe = async () => revision;
+  h.deps.check = async () => ({ ok: true, installed: revision, available: revision, relation: "equal", ahead: 0, behind: 0, delta: null });
+  h.deps.buildEnv = () => ({});
+  h.deps.createRunner = () => ({ state: idleUpdate(), start: async () => {}, retry: async () => {}, restore: () => {}, logPath: () => "" }) as ReturnType<ServiceDeps["createRunner"]>;
+  h.deps.processAlive = () => true;
+  h.deps.hostHealth = async () => null;
+  h.deps.web = { pid: 101, port: 0, startedAt: "" };
+  h.setStage(true);
+  const service = new SelfUpdateService(h.deps);
+  const bin = join(h.dir, "bin");
+  mkdirSync(bin);
+  const count = join(h.dir, "git-count");
+  const entered = join(h.dir, "git-entered");
+  const released = join(h.dir, "git-released");
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nn=0\n[ ! -f "$FIXTURE_COUNT" ] || n=$(cat "$FIXTURE_COUNT")\nn=$((n+1))\nprintf "%s" "$n" > "$FIXTURE_COUNT"\nif [ "$n" = 4 ]; then touch "$FIXTURE_ENTERED"; while [ ! -f "$FIXTURE_RELEASED" ]; do sleep 0.01; done; fi\nexec "$FIXTURE_GIT" "$@"\n', { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, FIXTURE_COUNT: process.env.FIXTURE_COUNT, FIXTURE_ENTERED: process.env.FIXTURE_ENTERED, FIXTURE_RELEASED: process.env.FIXTURE_RELEASED, FIXTURE_GIT: process.env.FIXTURE_GIT };
+  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, FIXTURE_COUNT: count, FIXTURE_ENTERED: entered, FIXTURE_RELEASED: released, FIXTURE_GIT: git });
+  let older: ReturnType<SelfUpdateService["setAuto"]> | undefined;
+  try {
+    older = service.setAuto(true);
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    expect(await service.setAuto(false)).toMatchObject({ ok: true });
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+    writeFileSync(released, "");
+    expect(await older).toMatchObject({ ok: false, code: "auto-switch-superseded" });
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+  } finally {
+    writeFileSync(released, "");
+    await older;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    service.stop();
+  }
+});
 
 test.each(["web", "runtime-host"] as const)("an old launcher cannot receive an automatic %s request", async (role) => {
   const h = scenario();
@@ -907,7 +1162,7 @@ test.each(["pending", "red", "unknown"] as const)("launcher admission refuses a 
 
 test("a web fallback restores the pointer and turns the switch off", async () => {
   const h = scenario();
-  writeFileSync(h.record.releasePointer, JSON.stringify({ sha: TARGET, dir: h.record.releasesDir, checkoutHead: headOf(process.cwd()) }));
+  writeFileSync(h.record.releasePointer, JSON.stringify({ sha: TARGET, dir: h.record.releasesDir, checkoutHead: await headOf(process.cwd()) }));
   let service = h.service();
   await service.autoTick();
   h.advance(60_000);
