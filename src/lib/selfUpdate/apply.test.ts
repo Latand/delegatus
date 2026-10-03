@@ -137,3 +137,30 @@ test.each([null, JSON.stringify({ sha: "b".repeat(40) }) + "\n"])("a verified le
   expect(JSON.parse(readFileSync(join(dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "rolled-back", terminal: true });
   expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull(); expect(existsSync(trial)).toBe(false);
 });
+
+
+test.each(["done", "failed"] as const)("a verified Windows terminal successor settles without execve: %s", outcome => {
+  const dir = mkdtempSync(join(root, "windows-terminal-")); const r = record(dir); const c = new ApplyController(dir);
+  c.begin(r, "a".repeat(40), "operator"); c.patch({ state: "ready", externalRestart: true });
+  const next = { ...r, launcher: { pid: 6, startIdentity: "6:133000000000000000", protocol: "delegatus-launcher-relaunch-v1", state: "healthy",
+    error: outcome === "failed" ? { kind: "fell-back" as const, revision: "aaaaaaa", detail: "failed candidate" } : null } };
+  expect(c.observe({ ...next, launcher: { ...next.launcher, protocol: "unknown" } })).toBeNull();
+  expect(c.observe(next, false)).toBeNull();
+  expect(c.observe(next, true)).toBe(outcome);
+});
+
+
+test("an unpublished legacy package rollback settles only the captured install version", () => {
+  const dir = mkdtempSync(join(root, "legacy-package-")); const r = record(dir);
+  const installRoot = join(dir, "package"); mkdirSync(installRoot); writeFileSync(join(installRoot, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  r.checkout = null; r.installRoot = installRoot; r.web.revision = r.runtimeHost.revision = null;
+  const c = new ApplyController(dir); c.begin(r, "a".repeat(40), "seat"); c.patch({ state: "ready", externalRestart: true });
+  const trial = r.requestFile.replace("request-", "trial-");
+  writeFileSync(trial, JSON.stringify({ requestId: c.current!.requestId, target: c.current!.target, rollbackPointer: null,
+    previousEntry: join(installRoot, "bin", "cli.mjs"), state: "rolled-back" }));
+  const legacy = { ...r, launcher: { pid: 6, startIdentity: "8", autoAdmission: 1 as const } };
+  const cold = new ApplyController(dir);
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ version: "1.0.1" })); expect(cold.observe(legacy)).toBeNull();
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ version: "1.0.0" })); expect(cold.observe(legacy, false)).toBeNull();
+  expect(cold.observe(legacy, true)).toBe("failed"); expect(cold.current).toMatchObject({ state: "failed", rolledBack: true });
+});

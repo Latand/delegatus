@@ -1,9 +1,9 @@
 /* Recovery processes are taken over only by their recorded identity and the
    install socket in their own environment. An occupied port alone owns no PID. */
 import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import net from "node:net";
-import { readStartIdentity } from "./self-update-supervisor.mjs";
+import { installedRelease, readStartIdentity } from "./self-update-supervisor.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function alive(pid, identity) {
@@ -12,24 +12,33 @@ function alive(pid, identity) {
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return fields[0] !== "Z" && fields[0] !== "X" && fields[19] === identity;
   } catch {
-    if (process.platform === "darwin" && readStartIdentity(pid) === identity) { try { process.kill(pid, 0); return true; } catch { return false; } }
+    if (process.platform !== "linux" && readStartIdentity(pid) === identity) { try { process.kill(pid, 0); return true; } catch { return false; } }
     return false;
   }
 }
-function matchingProcess(candidate, socket, port = null) {
+function matchingProcess(candidate, socket, port = null, installRoot = null, releasePointer = null) {
   if (!Number.isSafeInteger(candidate?.pid) || candidate.pid <= 1 || candidate.pid === process.pid
     || typeof candidate.startIdentity !== "string" || !alive(candidate.pid, candidate.startIdentity)) return false;
   try {
     const env = process.platform === "darwin"
       ? spawnSync("ps", ["eww", "-p", String(candidate.pid), "-o", "command="], { encoding: "utf8", timeout: 2_000 }).stdout.trim().split(/\s+/)
       : readFileSync(`/proc/${candidate.pid}/environ`, "utf8").split("\0");
-    return env.includes(`LLV_RUNTIME_HOST_SOCKET=${socket}`) && (port === null || env.includes(`PORT=${port}`));
+    if (port !== null && !env.includes(`PORT=${port}`)) return false;
+    if (env.includes(`LLV_RUNTIME_HOST_SOCKET=${socket}`)) return true;
+    // A manually started first-party Viewer has no host socket marker. Its
+    // declared owner, recorded root and kernel cwd provide the missing proof.
+    if (port === null || !installRoot || candidate.installRoot !== installRoot || !env.includes("LLV_STATE_OWNER=viewer")) return false;
+    const cwd = process.platform === "darwin"
+      ? spawnSync("lsof", ["-a", "-p", String(candidate.pid), "-d", "cwd", "-Fn"], { encoding: "utf8", timeout: 2_000 }).stdout.split("\n").find(line => line.startsWith("n"))?.slice(1)
+      : readlinkSync(`/proc/${candidate.pid}/cwd`);
+    const release = releasePointer ? installedRelease(releasePointer, installRoot).dir : installRoot;
+    return !!cwd && [installRoot, release].some(root => realpathSync(root) === cwd);
   } catch { return false; }
 }
-async function stopRecorded(candidate, socket, port = null) {
-  if (!matchingProcess(candidate, socket, port)) return false;
+async function stopRecorded(candidate, socket, port = null, installRoot = null, releasePointer = null) {
+  if (!matchingProcess(candidate, socket, port, installRoot, releasePointer)) return false;
   const signal = value => {
-    if (!matchingProcess(candidate, socket, port)) return;
+    if (!matchingProcess(candidate, socket, port, installRoot, releasePointer)) return;
     try { process.kill(candidate.pid, value); } catch (error) { if (error.code !== "ESRCH") throw error; }
   };
   signal("SIGTERM");
@@ -54,10 +63,10 @@ export function portFree(port, hostname = "127.0.0.1") {
     server.listen(port, hostname, () => server.close(() => resolve(true)));
   });
 }
-export async function ensureWebPortFree(paths, port, socket, hostname = "127.0.0.1") {
+export async function ensureWebPortFree(paths, port, socket, hostname = "127.0.0.1", installRoot = null) {
   if (await portFree(port, hostname)) return true;
   const candidate = json(paths.adopt);
-  if (candidate?.port !== port || candidate?.socket !== socket || !await stopRecorded(candidate, socket, port)) return false;
+  if (candidate?.port !== port || candidate?.socket !== socket || !await stopRecorded(candidate, socket, port, installRoot, paths.releasePointer)) return false;
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (await portFree(port, hostname)) { rmSync(paths.adopt, { force: true }); return true; }

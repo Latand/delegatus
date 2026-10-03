@@ -1072,7 +1072,7 @@ async function main() {
   }
 
   assertLauncherAvailable(selfUpdate);
-  if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
+  if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
     fail(m.portBusy(options.port));
   }
 
@@ -1239,7 +1239,7 @@ async function main() {
      a checkout: a packaged install is updated by its package manager. */
   {
     const attemptWeb = async (release, verifyPage = true) => {
-      if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
+      if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
         return "port-in-use";
       }
       if (!recoverWeb) return "shutdown";
@@ -1287,7 +1287,7 @@ async function main() {
       const previousRelease = serverRef.release;
       record.set("web", { state: "stopping" });
       await stopChild(previous);
-      if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname)) {
+      if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
         record.set("web", { state: "failed", error: { kind: "port-in-use", port: options.port } });
         scheduleWebRecovery(previousRelease);
         return;

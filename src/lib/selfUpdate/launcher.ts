@@ -32,7 +32,7 @@ export interface LauncherProcess {
 
 export interface LauncherRecord {
   version: 1;
-  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1; relaunch?: 1; revision?: string | null;
+  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1; relaunch?: 1; protocol?: string; revision?: string | null;
     requestId?: string | null; state?: string; error?: ProcessError | null };
   installRoot?: string;
   /** null for a packaged install: it is updated by its package manager. */
@@ -82,6 +82,7 @@ export function readLauncherRecord(file: string): LauncherRecord | null {
     launcher: { pid: launcher.pid, startIdentity: typeof launcher.startIdentity === "string" ? launcher.startIdentity : null,
       ...(launcher.autoAdmission === 1 ? { autoAdmission: 1 as const } : {}),
       ...(launcher.relaunch === 1 ? { relaunch: 1 as const } : {}),
+      ...(typeof launcher.protocol === "string" ? { protocol: launcher.protocol } : {}),
       revision: launcher.revision ?? null, requestId: launcher.requestId ?? null, state: launcher.state, error: launcher.error ?? null },
     ...(typeof parsed.installRoot === "string" ? { installRoot: parsed.installRoot } : {}),
     checkout: typeof parsed.checkout === "string" ? parsed.checkout : null,

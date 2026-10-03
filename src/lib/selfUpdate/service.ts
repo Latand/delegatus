@@ -1044,6 +1044,9 @@ export class SelfUpdateService {
     const now = this.deps.now();
     if (this.decision?.value.mode === "managed" && now - this.decision.at < MODE_TTL_MS) return this.decision.value;
     const value = await this.deps.mode();
+    if (value.mode === "package" && value.record && !value.record.installRoot) {
+      value.record = { ...value.record, installRoot: packageRoot(value.record) };
+    }
     if (!value.record && this.deps.env.LLV_RUNTIME_HOST_SOCKET && this.deps.web.port) {
       const socket = this.deps.env.LLV_RUNTIME_HOST_SOCKET;
       const id = /runtime-host-([a-f0-9]+)\.sock$/.exec(socket)?.[1];
@@ -1054,7 +1057,8 @@ export class SelfUpdateService {
     if (value.supervision === "adopted" && value.record) {
       const identity = readStartIdentity(this.deps.web.pid);
       if (identity) writeAtomic(launcherControlFile(value.record.requestFile, "adopt"),
-        { pid: this.deps.web.pid, startIdentity: identity, port: value.record.port, socket: value.record.socket });
+        { pid: this.deps.web.pid, startIdentity: identity, port: value.record.port, socket: value.record.socket,
+          installRoot: value.record.checkout ?? value.record.installRoot });
     }
     /* A host that does not answer is a moment, never a fact about the
        install: a deployment's own handover replaces the host, and a web
@@ -1283,7 +1287,7 @@ export class SelfUpdateService {
   }
 
   private actionFor(decision: ModeDecision): InstallAction | null {
-    return this.deps.install ? this.deps.install.action(decision) : installAction(decision);
+    return this.deps.install ? this.deps.install.action(decision) : installAction(decision, undefined, decision.record?.checkout ?? (decision.record ? packageRoot(decision.record) : decision.installRoot));
   }
 
   async performInstallAction(): Promise<ActionResult> {

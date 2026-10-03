@@ -3,6 +3,7 @@
    time in clock ticks), the same identity `bin/self-update-supervisor.mjs`
    records, so a PID reused after an exit never matches its record. */
 import { spawnSync } from "node:child_process";
+import { windowsStartIdentity } from "../../../bin/windows-process-identity.mjs";
 import { readFileSync } from "node:fs";
 
 export interface RecordedPid { pid: number; startIdentity: string }
@@ -17,11 +18,12 @@ function statFields(pid: number): string[] | null {
   }
 }
 
-export function readStartIdentity(pid: number): string | null {
+export function readStartIdentity(pid: number, platform: NodeJS.Platform = process.platform, run: typeof spawnSync = spawnSync): string | null {
+  if (platform === "win32") return windowsStartIdentity(pid, run);
   const identity = statFields(pid)?.[19];
   if (identity) return identity;
-  if (process.platform === "darwin") {
-    const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+  if (platform === "darwin") {
+    const result = run("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
     return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
   }
   return null;

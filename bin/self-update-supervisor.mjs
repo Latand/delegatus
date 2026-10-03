@@ -28,6 +28,7 @@
 /* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
    environment (docs/design/rename-delegatus.md §5). */
 import "./envAlias.mjs";
+import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -58,13 +59,14 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
 /** Field 22 of /proc/<pid>/stat: the start time in clock ticks. Null where
     there is no /proc (the record then carries no identity, and the Viewer
     treats the process as unverifiable rather than as the same process). */
-export function readStartIdentity(pid) {
+export function readStartIdentity(pid, platform = process.platform, run = spawnSync) {
+  if (platform === "win32") return windowsStartIdentity(pid, run);
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
   } catch {
-    if (process.platform === "darwin") {
-      const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+    if (platform === "darwin") {
+      const result = run("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
       return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
     }
     return null;

@@ -105,3 +105,19 @@ test("Docker without deployments has its specific prerequisite", async () => {
   expect(await detectMode(ports({ env: { LLV_DOCKER_NSENTER_SHIMS: "1" } })))
     .toMatchObject({ mode: "unsupported", reason: "docker-deployments" });
 });
+
+
+test("Windows mode validates the kernel identity written by the launcher", async () => {
+  const { readStartIdentity: writer } = await import("../../../bin/self-update-supervisor.mjs");
+  const { readStartIdentity: reader } = await import("./pid");
+  const { launcherAlive } = await import("./launcher");
+  let running = true;
+  const run = () => ({ status: running ? 0 : 1, stdout: "133000000000000001" });
+  const value = record("/srv/windows-checkout"); value.launcher.startIdentity = writer(value.launcher.pid, "win32", run as never);
+  const live = ports({ env: { LLV_SELF_UPDATE_RECORD: "/s/launcher.json" }, readRecord: () => value,
+    alive: candidate => launcherAlive(candidate, identity => reader(identity.pid, "win32", run as never) === identity.startIdentity) });
+  expect(value.launcher.startIdentity).toBe("9:133000000000000001");
+  expect(await detectMode(live)).toMatchObject({ mode: "checkout", supervision: "launcher" });
+  running = false;
+  expect(await detectMode(live)).toMatchObject({ mode: "unsupported", reason: "no-launcher" });
+});

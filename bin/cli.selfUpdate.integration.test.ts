@@ -89,7 +89,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean;
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "windows-process-identity.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -411,33 +411,34 @@ test("rollback retains the cold-restart readiness budget for the previous releas
   expect(child.exitCode).toBeNull();
 }, 30_000);
 
-for (const matchingIdentity of [true, false]) {
-test(`a recovery Viewer takeover requires its start identity, matching=${matchingIdentity}`, async () => {
+for (const shape of ["socket", "manual-port", "foreign-port"] as const) for (const matchingIdentity of [true, false]) {
+test(`a recovery Viewer takeover requires its start identity, shape=${shape}, matching=${matchingIdentity}`, async () => {
   const fixture = install();
   const port = await availablePort();
   const installId = createHash("sha256").update(path.resolve(fixture.checkout)).digest("hex").slice(0, 16);
   const socket = path.join(fixture.state, `runtime-host-${installId}.sock`);
   const orphan = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "node_modules", ".bin", "next")], {
-    cwd: fixture.checkout, env: { ...fixture.env, PORT: String(port), LLV_RUNTIME_HOST_SOCKET: socket }, stdio: "ignore",
+    cwd: shape === "foreign-port" ? fixture.root : fixture.checkout,
+    env: { ...fixture.env, PORT: String(port), ...(shape === "socket" ? { LLV_RUNTIME_HOST_SOCKET: socket } : { LLV_STATE_OWNER: "viewer" }) }, stdio: "ignore",
   });
   children.add(orphan);
   await until(() => orphan.pid && existsSync(`/proc/${orphan.pid}/stat`));
   await Bun.sleep(200);
-  expect(await served(port)).toBe(fixture.checkout);
+  expect(await served(port)).toBe(shape === "foreign-port" ? fixture.root : fixture.checkout);
   const stat = readFileSync(`/proc/${orphan.pid}/stat`, "utf8");
   const startIdentity = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
   const base = path.join(fixture.state, "self-update");
   mkdirSync(base, { recursive: true });
-  writeFileSync(path.join(base, `adopt-${installId}.json`), JSON.stringify({ pid: orphan.pid, startIdentity: matchingIdentity ? startIdentity : "0", port, socket }));
+  writeFileSync(path.join(base, `adopt-${installId}.json`), JSON.stringify({ pid: orphan.pid, startIdentity: matchingIdentity ? startIdentity : "0", port, socket, installRoot: fixture.checkout }));
   const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], {
     cwd: fixture.checkout, env: fixture.env, stdio: "ignore",
   });
   children.add(child);
-  if (!matchingIdentity) {
+  if (!matchingIdentity || shape === "foreign-port") {
     await until(() => child.exitCode !== null);
     expect(child.exitCode).toBe(1);
     expect(orphan.exitCode).toBeNull();
-    expect(await served(port)).toBe(fixture.checkout);
+    expect(await served(port)).toBe(shape === "foreign-port" ? fixture.root : fixture.checkout);
     return;
   }
   const record = await until(() => {
@@ -1161,4 +1162,35 @@ const legacySource = process.env.LLV_REHEARSAL_LEGACY;
   expect(cold.current).toMatchObject({ state: "failed", rolledBack: true });
   expect(JSON.parse(readFileSync(path.join(directory, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "rolled-back", terminal: true });
   expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull(); expect(existsSync(trial)).toBe(false);
+}, 90_000);
+
+for (const broken of [false, true]) (legacySource ? test : test.skip)(`actual legacy package terminal handoff settles rollback=${broken}`, async () => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { installAction } = await import("../src/lib/selfUpdate/actions");
+  const fixture = install();
+  for (const name of readdirSync(path.join(fixture.checkout, "bin"))) {
+    const source = path.join(legacySource!, "bin", name); if (existsSync(source)) copyFileSync(source, path.join(fixture.checkout, "bin", name));
+  }
+  writeFileSync(path.join(fixture.checkout, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.0" }));
+  mkdirSync(path.join(fixture.checkout, "dist", "standalone"), { recursive: true });
+  writeFileSync(path.join(fixture.checkout, "dist", "standalone", "server.js"), STUB_NEXT(false));
+  renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
+  const candidateFixture = install(); const candidate = release(candidateFixture, "package-handoff", { brokenHost: broken });
+  writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
+  mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false));
+  const running = await start(fixture);
+  const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const record = { ...before, installRoot: fixture.checkout } as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;
+  const controller = new ApplyController(path.dirname(before.requestFile)); controller.begin(record, candidate.sha, "operator"); controller.patch({ state: "ready", externalRestart: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ kind: "package", version: "0.0.1", baseVersion: "0.0.0", dir: candidate.dir, sha: candidate.sha }));
+  writeFileSync(before.requestFile.replace("request-", "trial-"), JSON.stringify({ requestId: controller.current!.requestId, target: candidate.sha,
+    rollbackPointer: null, previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "starting", at: controller.current!.startedAt }));
+  const action = installAction({ mode: "package", reason: null, record }, { cgroup: () => "", ready: () => true, argv: () => [] });
+  const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
+  const child = spawn("sh", ["-c", action!.command!], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" }); children.add(child);
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy"
+    && (broken ? !existsSync(before.releasePointer) : r.launcher.requestId === controller.current!.requestId) ? r : null; }, 60_000);
+  expect(await served(running.port)).toBe((broken ? fixture.checkout : candidate.dir) + "/dist/standalone");
+  const cold = new ApplyController(path.dirname(before.requestFile)); expect(cold.observe(after as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, await socketAnswers(after.socket))).toBe(broken ? "failed" : "done");
+  expect(cold.current).toMatchObject({ state: broken ? "failed" : "done", rolledBack: broken });
 }, 90_000);

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { launcherControlFile } from "./launcher";
 import { ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
@@ -29,7 +30,7 @@ function serviceFor(root: string): string | null {
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean; argv?(pid: number): string[]; env?: { PORT?: string; HOSTNAME?: string } } = {
+export function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean; argv?(pid: number): string[]; env?: { PORT?: string; HOSTNAME?: string }; platform?: NodeJS.Platform } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): InstallAction | null {
@@ -50,9 +51,29 @@ export function installAction(decision: ModeDecision, ports: { cgroup(pid: numbe
     if (Number.isInteger(port) && port > 0 && port <= 65_535) args.push("--port", String(port));
     if (env.HOSTNAME?.trim()) args.push("--hostname", env.HOSTNAME);
   }
-  const command = [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"].map(quote).join(" ");
+  const windows = (ports.platform ?? process.platform) === "win32";
+  let command = (windows ? "& " : "") + [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"]
+    .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
   if (decision.record) {
     if (!ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
+    if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
+      const next = new ReleasePointer(decision.record.releasePointer, root).current();
+      if (next.dir !== root) {
+        let requestId: string | undefined;
+        try {
+          const trial = JSON.parse(read(launcherControlFile(decision.record.requestFile, "trial")));
+          if (trial.target === next.sha && typeof trial.requestId === "string") requestId = trial.requestId;
+        } catch { /* An already built pointer can predate apply custody. */ }
+        const invocation = [process.execPath, join(next.dir, "bin", "cli.mjs"), ...args, "--no-open"]
+          .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
+        const environment = { LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: root, ...(requestId ? { LLV_LAUNCHER_TRIAL: requestId } : {}) };
+        if (windows) {
+          const script = Object.entries(environment).map(([name, value]) => `$env:${name}='${value.replaceAll("'", "''")}'`).join("; ")
+            + `; & ${invocation}; if($LASTEXITCODE -eq 75){ & ${command.slice(2)} }`;
+          command = `& powershell.exe -NoProfile -EncodedCommand '${Buffer.from(script, "utf16le").toString("base64")}'`;
+        } else command = "env " + Object.entries(environment).map(([name, value]) => `${name}=${quote(value)}`).join(" ") + " " + invocation;
+      }
+    }
     const unit = userUnit(ports.cgroup(decision.record.launcher.pid));
     return unit ? { id: "restart-service", button: true, unit }
       : { id: "restart-terminal", button: false, command };

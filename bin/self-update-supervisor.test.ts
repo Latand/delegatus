@@ -120,7 +120,7 @@ describe("paths, entry and identity", () => {
   });
 
   test("this process has a start identity, and a PID that does not exist has none", () => {
-    expect(readStartIdentity(process.pid)).toMatch(/^\d+$/);
+    expect(readStartIdentity(process.pid)).toMatch(process.platform === "win32" ? /^\d+:\d+$/ : process.platform === "darwin" ? /^ps:/ : /^\d+$/);
     expect(readStartIdentity(2 ** 30)).toBeNull();
   });
 
@@ -301,4 +301,18 @@ test("a packaged pointer survives bootstrap until a manual package upgrade", () 
     writeFileSync(join(base, "package.json"), JSON.stringify({ version: "1.0.2" }));
     expect(installedRelease(pointer, base)).toMatchObject({ dir: base, published: false });
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("Windows launcher and Viewer identities agree on the kernel creation token", async () => {
+  const { readStartIdentity: viewerIdentity } = await import("../src/lib/selfUpdate/pid");
+  const pid = 2147483000; const calls: unknown[][] = [];
+  const run = (...args: unknown[]) => { calls.push(args); return { status: 0, stdout: "133000000000000001\r\n" }; };
+  expect(readStartIdentity(pid, "win32", run as never)).toBe(`${pid}:133000000000000001`);
+  expect(viewerIdentity(pid, "win32", run as never)).toBe(`${pid}:133000000000000001`);
+  expect(calls.length).toBe(2);
+  const script = Buffer.from((calls[0]![1] as string[]).at(-1)!, "base64").toString("utf16le");
+  expect(script).toContain("GetProcessById"); expect(script).toContain("StartTime.ToFileTimeUtc()"); expect(script).toContain("HasExited");
+  expect(readStartIdentity(pid, "win32", (() => ({ status: 1, stdout: "133000000000000001" })) as never)).toBeNull();
+  expect(readStartIdentity(pid, "win32", (() => ({ status: 0, stdout: "1" })) as never)).toBeNull();
 });
