@@ -417,7 +417,7 @@ test("an idle snapshot retains observed text until its own echo arrives", () => 
   paint();
   expect(host.querySelector("[data-live-turn]")).toBe(original);
   expect(host.querySelector("[data-live-turn-caret]")).toBeNull();
-  tailState.lines.push(JSON.stringify({ type: "assistant", uuid: "settled-draft", timestamp: AT(3), message: { content: [{ type: "text", text: "Partial draft completed" }] } }));
+  tailState.lines = [...tailState.lines, JSON.stringify({ type: "assistant", uuid: "settled-draft", timestamp: AT(3), message: { content: [{ type: "text", text: "Partial draft completed" }] } })];
   paint();
   expect(host.querySelector('[data-feed-source-id="settled-draft"]')).toBe(original);
   expect(original?.textContent).toContain("Partial draft completed");
