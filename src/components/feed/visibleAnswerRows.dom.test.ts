@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
-import { measureVisibleAnswerRows, trackVisibleAnswerRows } from "./visibleAnswerRows";
+import { measureVisibleAnswerRows, trackVisibleAnswerRows, visibleRowArea } from "./visibleAnswerRows";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, Node: dom.Node, HTMLElement: dom.HTMLElement });
@@ -20,6 +20,7 @@ class FakeIntersectionObserver {
 const CLIP = { left: 0, top: 0, right: 100, bottom: 100 };
 let rectReads = 0;
 const nativeRects = dom.Range.prototype.getClientRects;
+const nativeCaret = document.caretRangeFromPoint;
 let viewport: HTMLElement;
 
 function proseRow(index: number): HTMLElement {
@@ -54,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   dom.Range.prototype.getClientRects = nativeRects;
+  document.caretRangeFromPoint = nativeCaret;
   Object.assign(globalThis, { IntersectionObserver: undefined });
   document.body.replaceChildren();
 });
@@ -134,4 +136,102 @@ test("without IntersectionObserver every row is still measured, as before", () =
   expect(measureVisibleAnswerRows(tracked, CLIP)).toHaveLength(6);
   expect(rectReads).toBe(6);
   tracked.disconnect();
+});
+
+test("an element whose box is outside the screen is not read; one inside it still is", () => {
+  const prose = proseRow(7);
+  const body = prose.querySelector("[data-tts-body]")!;
+  const place = (top: number) => {
+    const span = document.createElement("span");
+    span.append(document.createTextNode(`at ${top}`));
+    span.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 60, width: 60, height: 20 }) as DOMRect;
+    body.append(span);
+  };
+  place(-400);
+  place(10);
+  place(900);
+  viewport.append(prose);
+  const tracked = trackVisibleAnswerRows(viewport, () => undefined);
+  FakeIntersectionObserver.current!.report([prose], true);
+  rectReads = 0;
+  const [fragment] = measureVisibleAnswerRows(tracked, CLIP);
+  /* The body's own "Answer 7" text and the span on screen; the two spans
+     above and below the screen are never measured. */
+  expect(rectReads).toBe(2);
+  expect(fragment!.area).toBe(2 * 50 * 20);
+  tracked.disconnect();
+});
+
+test("one answer of thousands of text nodes costs a bounded number of reads", () => {
+  const prose = proseRow(8);
+  const body = prose.querySelector("[data-tts-body]")!;
+  for (let index = 0; index < 5_000; index += 1) body.append(document.createTextNode(`token ${index} `));
+  viewport.append(prose);
+  const tracked = trackVisibleAnswerRows(viewport, () => undefined);
+  FakeIntersectionObserver.current!.report([prose], true);
+  rectReads = 0;
+  expect(measureVisibleAnswerRows(tracked, CLIP)[0]!.area).toBeGreaterThan(0);
+  expect(rectReads).toBeLessThanOrEqual(400);
+  tracked.disconnect();
+});
+
+for (const unspoken of [false, true]) {
+  test(`a tall paragraph finds visible text past the read budget (unspoken=${unspoken})`, () => {
+    const prose = proseRow(9);
+    const body = prose.querySelector<HTMLElement>("[data-tts-body]")!;
+    body.replaceChildren();
+    body.getBoundingClientRect = () => ({ left: 0, right: 100, top: -10_000, bottom: 100,
+      width: 100, height: 10_100 }) as DOMRect;
+    for (let i = 0; i < 450; i++) {
+      body.append(document.createTextNode(`offscreen ${i}`));
+      const emphasis = document.createElement("strong");
+      emphasis.textContent = "offscreen emphasis";
+      emphasis.getBoundingClientRect = () => ({ left: 0, right: 100, top: -20, bottom: -10,
+        width: 100, height: 10 }) as DOMRect;
+      body.append(emphasis);
+    }
+    const tail = document.createElement(unspoken ? "code" : "span");
+    const text = document.createTextNode("visible tail");
+    tail.append(text); body.append(tail); viewport.append(prose);
+    document.caretRangeFromPoint = () => {
+      const caret = document.createRange(); caret.setStart(text, 0); return caret;
+    };
+    (dom.Range.prototype as { getClientRects: () => unknown[] }).getClientRects = function () {
+      rectReads++;
+      const selected = (this as unknown as Range).startContainer;
+      return [{ left: 0, right: 100, top: selected === text ? 10 : -20,
+        bottom: selected === text ? 30 : -10 }];
+    };
+    expect(visibleRowArea(prose, CLIP)).toBe(unspoken ? 0 : 2000);
+    expect(rectReads).toBeLessThanOrEqual(400);
+  });
+}
+
+
+test("a small visible prefix does not hide the dominant tail or count the prefix twice", () => {
+  const prose = proseRow(10);
+  const body = prose.querySelector<HTMLElement>("[data-tts-body]")!;
+  body.replaceChildren();
+  body.getBoundingClientRect = () => ({ left: 0, right: 100, top: -10_000, bottom: 100,
+    width: 100, height: 10_100 }) as DOMRect;
+  for (let i = 0; i < 390; i++) body.append(document.createTextNode(`offscreen ${i}`));
+  const prefix = document.createTextNode("visible sliver");
+  const tail = document.createTextNode("dominant visible tail");
+  body.append(prefix, tail);
+  const competitor = proseRow(11);
+  viewport.append(prose, competitor);
+  document.caretRangeFromPoint = (_x, y) => {
+    const caret = document.createRange(); caret.setStart(y < 40 ? prefix : tail, 0); return caret;
+  };
+  (dom.Range.prototype as { getClientRects: () => unknown[] }).getClientRects = function () {
+    rectReads++;
+    const text = (this as unknown as Range).startContainer;
+    const [top, bottom] = text === prefix ? [0, 1] : text === tail ? [1, 80]
+      : competitor.contains(text) ? [80, 100] : [-20, -10];
+    return [{ left: 0, right: 100, top, bottom }];
+  };
+  const dominantArea = visibleRowArea(prose, CLIP);
+  expect(dominantArea).toBe(8000);
+  expect(rectReads).toBeLessThanOrEqual(400);
+  expect(dominantArea).toBeGreaterThan(visibleRowArea(competitor, CLIP));
 });

@@ -6772,3 +6772,90 @@ describe("launching an agent on the phone", () => {
     } finally { await browser.close(); stop(); }
   }, 90_000);
 });
+
+describe("older history on the phone", () => {
+  /*
+   * A real touch drag toward the start of an 800-line conversation, on a
+   * phone at 4x CPU slowdown. The audit that found the desktop walk slow could
+   * not say anything about the phone, because its synthetic touch gestures did
+   * not move the feed; `Input.dispatchTouchEvent` does, and this case drives
+   * it. The feed pages in earlier history as the reader nears the top, every
+   * row the reader had on screen keeps its DOM node, and the walk ends at the
+   * first line. The readings go to `.artifacts/phone-older-history/walk.json`.
+   */
+  const HISTORY_OUT = path.resolve(".artifacts/phone-older-history");
+
+  browserTest("a touch drag brings the earlier pages in without remounting what the reader has", async () => {
+    fs.mkdirSync(HISTORY_OUT, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(HISTORY_OUT, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=200&window=120&page=100`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+        await pause(page, 600);
+        const marked = await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+          for (const row of rows) row.setAttribute("data-first-window", "1");
+          const state: number[] = [];
+          (window as unknown as { __frames: number[] }).__frames = state;
+          let last = performance.now();
+          const tick = (now: number) => { state.push(now - last); last = now; requestAnimationFrame(tick); };
+          requestAnimationFrame(tick);
+          return rows.length;
+        });
+        const rect = await rectOf(page, "[data-log-feed-scroller]");
+        if (!rect) throw new Error("no feed");
+        const x = rect.x + rect.width / 2;
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const earlier = [...feed.querySelectorAll("button")].some((button) => /earlier|loading/i.test(button.textContent ?? ""));
+          return {
+            top: Math.round(feed.scrollTop),
+            rows: feed.querySelectorAll("[data-feed-key]").length,
+            kept: feed.querySelectorAll("[data-first-window]").length,
+            loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+            atStart: !earlier,
+          };
+        });
+        const first = await read();
+        let gestures = 0;
+        let last = first;
+        const startedAt = Date.now();
+        for (; gestures < 400; gestures += 1) {
+          await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 10));
+          await pause(page, 120);
+          last = await read();
+          if (last.atStart && last.top < 5) break;
+        }
+        const reachedStartMs = Date.now() - startedAt;
+        const frames = await page.evaluate(() => (window as unknown as { __frames: number[] }).__frames.slice(1));
+        const walk = {
+          gestures, reachedStartMs, loads: last.loads, rows: last.rows, kept: last.kept, marked,
+          frames: frames.length, over100: frames.filter((ms) => ms > 100).length, maxFrameMs: Math.round(Math.max(0, ...frames)),
+        };
+        fs.writeFileSync(path.join(HISTORY_OUT, "walk.json"), JSON.stringify(walk, null, 2));
+        await page.screenshot({ path: path.join(HISTORY_OUT, "at-start-390.png") });
+        expect(pageErrors).toEqual([]);
+        /* The drag moved the feed (the audit's gestures did not), earlier
+           pages arrived, the walk ended at the first line, and every row
+           that was on screen at the start is still the same node. */
+        expect(last.top).toBeLessThan(first.top);
+        expect(last.loads).toBeGreaterThanOrEqual(1);
+        expect(last.atStart).toBe(true);
+        expect(last.kept).toBe(marked);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 300_000);
+});
