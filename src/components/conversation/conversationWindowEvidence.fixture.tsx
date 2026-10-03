@@ -36,6 +36,7 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
 import { LiveTurnRows } from "./LiveTurnRows";
+import { mountOwnMessagesPrototype } from "./ownMessages.prototype";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
   enqueueOutbox,
@@ -77,6 +78,7 @@ export type ConversationWindowCase =
   | "delivery-settlement"
   | "lifecycle"
   | "long-history"
+  | "own-messages"
   | "queued"
   | "receipt-delivered"
   | "retired-on-transcript"
@@ -1190,4 +1192,6 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
+/* A design prototype, not a product surface: docs/design/own-message-navigation.md. */
+else if (root && requested === "own-messages") mountOwnMessagesPrototype(root, Number(params.get("variant") ?? 1));
 else if (root) createRoot(root).render(<Fixture id={requested} />);

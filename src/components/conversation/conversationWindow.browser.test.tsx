@@ -1876,3 +1876,168 @@ describe("delivery outcome settlement", () => {
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
 });
+
+describe("own-message navigation design variants", () => {
+  /*
+   * A design lane's frames, not a product gate: four prototypes of "jump
+   * between my own messages and see the replies to them"
+   * (docs/design/own-message-navigation.md), mounted by the fixture's
+   * `own-messages` case. Each frame has its variant number printed large in a
+   * band above the conversation, at 1440 px and at 390 px, dark theme. Frames
+   * go to `.artifacts/own-message-navigation/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/own-message-navigation");
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, phone: false },
+    { name: "phone-390", width: 390, height: 844, phone: true },
+  ] as const;
+
+  browserTest("every variant is numbered, steps between own messages and fits both widths", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | undefined;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const variant of [1, 2, 3, 4] as const) for (const viewport of VIEWPORTS) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=own-messages&variant=${variant}&lang=uk`,
+          { width: viewport.width, height: viewport.height }, "dark", "uk", "reduce", viewport.phone);
+        const shot = (state: string) => page.screenshot({ path: path.join(OUT, `variant-${variant}-${viewport.name}-${state}.png`) });
+        const count = (selector: string) => page.locator(selector).count();
+        /* The turn whose message sits at the top of the feed. */
+        const topTurn = () => page.evaluate(() => {
+          const box = document.querySelector<HTMLElement>("[data-own-scroller]")!;
+          const first = [...box.querySelectorAll<HTMLElement>("[data-turn-id]")].find((turn) => turn.offsetTop - 8 >= box.scrollTop - 2);
+          return first ? { id: first.dataset.turnId!, sender: first.dataset.turnSender! } : null;
+        });
+        try {
+          await page.locator(`[data-own-proto="${variant}"]`).waitFor();
+          expect(await page.locator("[data-own-variant-number]").textContent()).toBe(String(variant));
+          const number = (await page.locator("[data-own-variant-number]").boundingBox())!;
+          expect(number.height).toBeGreaterThanOrEqual(36);
+          expect(await count('[data-turn-sender="operator"]')).toBe(7);
+          expect(await count("[data-turn-id]") - 7).toBe(32);
+
+          /* The keyboard step is shared by every variant. */
+          await page.keyboard.press("Alt+ArrowUp");
+          await page.keyboard.press("Alt+ArrowUp");
+          await page.keyboard.press("Alt+ArrowUp");
+          expect((await topTurn())?.sender).toBe("operator");
+
+          if (variant === 1) {
+            const counter = page.locator("[data-own-counter]");
+            const before = await counter.textContent();
+            await page.locator('[data-own-step="next"]').click();
+            expect(await counter.textContent()).not.toBe(before);
+            await page.locator('[data-own-step="prev"]').click();
+            expect(await counter.textContent()).toBe(before);
+            expect(await count('[data-own-reply="own"]')).toBe(7);
+            await shot("stepped");
+            for (let press = 0; press < 8 && await counter.textContent() !== "1 / 7+"; press++) await page.locator('[data-own-step="prev"]').click();
+            expect(await counter.textContent()).toBe("1 / 7+");
+            await shot("oldest-loaded");
+            await page.locator('[data-own-step="prev"]').click();
+            expect(await counter.textContent()).toBe("2 / 9");
+            expect((await topTurn())?.sender).toBe("operator");
+          }
+
+          if (variant === 2) {
+            const toggle = viewport.phone ? page.locator("[data-own-mode-chip]") : page.locator('[data-own-mode="own"]');
+            await shot("full");
+            await toggle.click();
+            expect(await count("[data-turn-id]")).toBe(7);
+            expect(await count("[data-own-run]")).toBeGreaterThanOrEqual(6);
+            expect((await topTurn())?.sender).toBe("operator");
+            await shot("mode");
+            await page.locator("[data-own-run]").last().click();
+            expect(await count("[data-turn-id]")).toBeGreaterThan(7);
+            await shot("run-open");
+            /* One action back to the whole conversation. */
+            await (viewport.phone ? toggle : page.locator('[data-own-mode="all"]')).click();
+            expect(await count("[data-turn-id]")).toBe(39);
+          }
+
+          if (variant === 3) {
+            const opacity = () => page.locator('[data-turn-sender="seat-tick"]').first().evaluate((element) => getComputedStyle(element).opacity);
+            expect(await opacity()).toBe("0.5");
+            await shot("stepped");
+            const tick = (await page.locator("[data-own-tick]").nth(2).boundingBox())!;
+            const rail = (await page.locator("[data-own-rail]").boundingBox())!;
+            await page.mouse.move(rail.x + rail.width / 2, tick.y + 1);
+            await page.locator("[data-own-preview]").waitFor();
+            await shot("preview");
+            await page.mouse.down();
+            await page.mouse.up();
+            const landed = await topTurn();
+            expect(landed?.sender).toBe("operator");
+            expect(landed?.id ?? null).toBe(await page.locator("[data-own-tick]").nth(2).getAttribute("data-own-tick"));
+            await page.mouse.move(10, viewport.height / 2);
+            await page.locator("[data-own-dim-toggle]").click();
+            expect(await opacity()).toBe("1");
+            await page.locator("[data-own-load-older-rail]").click();
+            expect(await count("[data-own-tick]")).toBe(9);
+            expect(rail.width).toBeGreaterThanOrEqual(viewport.phone ? 44 : 30);
+          }
+
+          if (variant === 4) {
+            if (viewport.phone) {
+              await page.locator("[data-own-panel-toggle]").click();
+              await page.locator("[data-own-sheet]").waitFor();
+              await shot("sheet");
+            }
+            expect(await count("[data-own-outline-entry]")).toBe(9);
+            expect(await count('[data-own-outline-loaded="no"]')).toBe(2);
+            const fourth = page.locator("[data-own-outline-entry]").nth(4);
+            const id = await fourth.getAttribute("data-own-outline-entry");
+            await fourth.click();
+            expect((await topTurn())?.id ?? null).toBe(id);
+            expect(await count('[data-own-reply="own"]')).toBe(1);
+            if (viewport.phone) expect(await count("[data-own-sheet]")).toBe(0);
+            await shot("jumped");
+            if (viewport.phone) await page.locator("[data-own-panel-toggle]").click();
+            /* An entry outside the loaded window loads the history and lands. */
+            const first = page.locator("[data-own-outline-entry]").first();
+            const older = await first.getAttribute("data-own-outline-entry");
+            await first.click();
+            expect((await topTurn())?.id ?? null).toBe(older);
+            expect(await count('[data-own-outline-loaded="no"]')).toBe(0);
+            if (!viewport.phone) {
+              await shot("older-loaded");
+              await page.locator("[data-own-panel-close]").click();
+              expect(await count("[data-own-panel]")).toBe(0);
+            }
+          }
+
+          /* What reads badly: a sideways scroll, a control over the composer,
+             a touch target under 44 px, a control the thumb cannot reach. */
+          const geometry = await page.evaluate(() => {
+            const rect = (selector: string) => {
+              const element = document.querySelector(selector);
+              if (!element) return null;
+              const box = element.getBoundingClientRect();
+              return { top: box.top, bottom: box.bottom, left: box.left, right: box.right, height: box.height };
+            };
+            return {
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+              composer: rect("[data-own-composer]")!,
+              control: rect("[data-own-stepper]") ?? rect("[data-own-mode-chip]") ?? rect("[data-own-panel-toggle]") ?? rect("[data-own-dim-toggle]"),
+            };
+          });
+          expect(geometry.overflowX).toBe(0);
+          if (viewport.phone) {
+            expect(geometry.control).not.toBeNull();
+            expect(geometry.control!.height).toBeGreaterThanOrEqual(44);
+            expect(geometry.control!.bottom).toBeLessThanOrEqual(geometry.composer.top);
+            expect(geometry.control!.right).toBeLessThanOrEqual(viewport.width);
+            expect(geometry.control!.top).toBeGreaterThan(viewport.height / 2);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
