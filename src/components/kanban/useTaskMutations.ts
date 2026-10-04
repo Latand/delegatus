@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
-import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 
 /**
  * Optimistic status moves for the kanban board (#1695 K2).
@@ -101,7 +101,7 @@ export type FieldEditOutcome =
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
-export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { text: string } | { details: string });
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { text: string } | { details: string });
 
 export interface TaskMutationPorts {
   patch(id: string, body: PatchBody): Promise<PatchResult>;
@@ -162,7 +162,7 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
 }
 
 /** The edits a board shows ahead of the poll, per task. */
-export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; text?: string; details?: string }>;
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; text?: string; details?: string; hold?: TaskHold | null }>;
 
 /**
  * The tasks a board draws: the stored rows with the edits this device has sent
@@ -183,6 +183,7 @@ export function drawnTasks(tasks: readonly BoardTask[], edits: FieldEdits, stamp
       return task;
     }
     const next: BoardTask = { ...task };
+    if ("hold" in edit) { if (edit.hold) next.hold = edit.hold; else delete next.hold; }
     if ("color" in edit) {
       if (edit.color) next.color = edit.color;
       else delete next.color;
@@ -225,6 +226,8 @@ export function revisionOf(task: BoardTask): string | null {
    as the fence would be. */
 const NO_FENCE: PatchResult = { ok: false, status: 409, error: "no write of this board to fence on", code: "TASK_REVISION_MISMATCH" };
 
+export interface StatusMoveOptions { fenced?: boolean; lineage?: number; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null }
+
 export class TaskStatusMutations {
   private readonly overrides = new Map<string, Override>();
   private readonly chains = new Map<string, Promise<unknown>>();
@@ -237,6 +240,12 @@ export class TaskStatusMutations {
   private snapshot: ReadonlyMap<string, TaskStatus> = new Map();
   private readonly fieldOverrides = new Map<string, Map<TaskField, FieldOverride>>();
   private fieldSnapshot: FieldEdits = new Map();
+  /** Server-stamped hold snapshots stay drawn until their revision is polled. */
+  private readonly holdViews = new Map<string, { value: TaskHold | null; revision: string | null }>();
+
+  holdFor(task: BoardTask): TaskHold | undefined {
+    return this.holdViews.has(task.id) ? this.holdViews.get(task.id)!.value ?? undefined : task.hold;
+  }
   /** The revision this controller's own latest saved write produced, per task:
       the fence an undo or a redo of this board's edits is written against. */
   private readonly own = new Map<string, string>();
@@ -268,6 +277,9 @@ export class TaskStatusMutations {
   private emit(): void {
     this.snapshot = new Map([...this.overrides].map(([id, override]) => [id, override.status] as const));
     this.fieldSnapshot = new Map([...this.fieldOverrides].map(([id, fields]) => [id, Object.fromEntries([...fields].map(([field, override]) => [field, override.value]))] as const));
+    const fields = new Map(this.fieldSnapshot);
+    for (const [id, hold] of this.holdViews) fields.set(id, { ...fields.get(id), hold: hold.value });
+    this.fieldSnapshot = fields;
     for (const listener of this.listeners) listener();
   }
 
@@ -285,6 +297,8 @@ export class TaskStatusMutations {
       /* The stored project is kept: a poll row carries the display-remapped
          project name, which the guard must not adopt. */
       this.known.set(id, { revision, project: known.project, status: row.status });
+      this.holdViews.delete(id);
+      changed = true;
     }
     for (const [id, override] of this.overrides) {
       if (override.pending > 0) continue;
@@ -316,6 +330,16 @@ export class TaskStatusMutations {
         }
       }
       if (!fields.size) this.fieldOverrides.delete(id);
+    }
+    for (const [id, hold] of this.holdViews) {
+      if (this.pending(id)) continue;
+      const row = byId.get(id);
+      const revision = row ? revisionOf(row) : null;
+      if (revision && this.replaced.get(id)?.has(revision)) continue;
+      if (!row || (revision !== null && (revision === hold.revision || revision !== this.known.get(id)?.revision))) {
+        this.holdViews.delete(id);
+        changed = true;
+      }
     }
     if (changed) this.emit();
   }
@@ -450,11 +474,12 @@ export class TaskStatusMutations {
 
   /** Move `task` to `to`. Resolves once the server has answered. A `fenced`
       move is guarded by this controller's own last revision and a 409 is final. */
-  move(task: BoardTask, to: TaskStatus, options: { fenced?: boolean; lineage?: number } = {}): Promise<StatusMoveOutcome> {
+  move(task: BoardTask, to: TaskStatus, options: StatusMoveOptions = {}): Promise<StatusMoveOutcome> {
     const id = task.id;
+    if (task.hold && !this.holdViews.has(id)) this.holdViews.set(id, { value: task.hold, revision: revisionOf(task) });
     const current = this.overrides.get(id);
     const from = current?.status ?? task.status;
-    if (from === to && !current?.pending && !options.fenced) return Promise.resolve({ kind: "noop" });
+    if (from === to && !current?.pending && !options.fenced && !Object.hasOwn(options, "hold")) return Promise.resolve({ kind: "noop" });
     const override: Override = current ?? { status: to, pending: 0, baseRevision: revisionOf(task), confirmedRevision: null };
     override.status = to;
     override.pending += 1;
@@ -462,7 +487,7 @@ export class TaskStatusMutations {
     this.emit();
 
     const previous = this.chains.get(id) ?? Promise.resolve();
-    const write = () => this.write(task, from, to, options.fenced === true, options.lineage);
+    const write = () => this.write(task, from, to, options);
     const run = previous.then(write, write);
     this.chains.set(id, run);
     void run.finally(() => {
@@ -488,6 +513,7 @@ export class TaskStatusMutations {
       this.replaced.set(task.id, set);
     }
     this.known.set(task.id, { revision, project: task.project, status: task.status });
+    if (task.hold || this.holdViews.has(task.id)) this.holdViews.set(task.id, { value: task.hold ?? null, revision });
   }
 
   /** The guard of a fenced write: this controller's own last revision, with
@@ -522,7 +548,9 @@ export class TaskStatusMutations {
     this.emit();
   }
 
-  private async write(task: BoardTask, from: TaskStatus, to: TaskStatus, fenced: boolean, lineage?: number): Promise<StatusMoveOutcome> {
+  private async write(task: BoardTask, from: TaskStatus, to: TaskStatus, options: StatusMoveOptions): Promise<StatusMoveOutcome> {
+    const { fenced, lineage } = options;
+    const holdPatch = Object.hasOwn(options, "restoreHold") ? { restoreHold: options.restoreHold } : Object.hasOwn(options, "hold") ? { hold: options.hold } : {};
     const id = task.id;
     let guard = fenced ? this.fenceFor(task, lineage) : this.guardFor(task);
     if (!guard && !fenced) {
@@ -531,7 +559,7 @@ export class TaskStatusMutations {
       this.remember(stored);
       guard = this.guardFor(stored)!;
     }
-    const first = guard ? await this.patchSafely(id, { status: to, expectedProject: guard.project, expectedRevision: guard.revision }) : NO_FENCE;
+    const first = guard ? await this.patchSafely(id, { status: to, ...holdPatch, expectedProject: guard.project, expectedRevision: guard.revision }) : NO_FENCE;
     if (first.ok) return this.saved(first.task, from, to, guard!.revision);
     if (first.status !== 409) return this.fail(id, from, to, first.status, first.error);
 
@@ -543,13 +571,13 @@ export class TaskStatusMutations {
       this.ports.changed();
       return { kind: "conflict", task: stored, from, to, serverStatus: stored.status };
     }
-    if (stored.status === to) {
+    if (stored.status === to && !Object.hasOwn(options, "hold")) {
       this.settle(id, to, revisionOf(stored), true);
       this.ports.changed();
       return { kind: "settled", task: stored, from, to };
     }
-    if (stored.status === from || revisionOf(stored) === guard?.revision) {
-      const retry = await this.patchSafely(id, { status: to, expectedProject: stored.project, expectedRevision: revisionOf(stored) ?? "" });
+    if (!Object.hasOwn(options, "hold") && (stored.status === from || revisionOf(stored) === guard?.revision)) {
+      const retry = await this.patchSafely(id, { status: to, ...holdPatch, expectedProject: stored.project, expectedRevision: revisionOf(stored) ?? "" });
       if (retry.ok) return this.saved(retry.task, from, to, revisionOf(stored));
       return this.fail(id, from, to, retry.status, retry.error);
     }

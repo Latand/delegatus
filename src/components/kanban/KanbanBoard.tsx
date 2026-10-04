@@ -10,7 +10,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
-import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
@@ -41,7 +41,7 @@ import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./Kanban
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
-import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
+import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
 import { reuseKanbanModel } from "./reuseKanbanModel";
 import { useStableCallback } from "./useStableCallback";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
@@ -216,6 +216,8 @@ const NO_READERS: readonly OpenReader[] = [];
 const NO_REMOTE_AGENTS: readonly RemoteAgentView[] = [];
 const NO_REMOTE_FOR_CARD: readonly RemoteAgentView[] = [];
 /** Parts of the board's root that belong to the Viewer, where the board answers no key. */
+/** Least space the full attention chip leaves the bar's ⋯ menu before it drops its label. */
+const CHIP_CLEARANCE = 8;
 const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
@@ -336,8 +338,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The header bar's tier (#1801): labelled controls from BAR_WIDE_MIN of bar, icons below. */
   const [barWide, setBarWide] = useState(true);
   const [barWrap, setBarWrap] = useState(false);
+  const [reasonsBelowBar, setReasonsBelowBar] = useState(false);
+  /* The full attention chip would reach into ⋯ (measured, so it follows the locale's label and the
+     digits of the count); the chip then keeps its dot and count, as it does in a compact bar. */
+  const [chipCrowded, setChipCrowded] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
+  const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
   const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
   /* The other machines' agents and lanes. On the Overview the feed
@@ -440,11 +447,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const previousModel = useRef<KanbanModel | null>(null);
   // eslint-disable-next-line react-hooks/refs -- Identity cache: the ref only decides which equal object is kept, never what the model holds.
   const model: KanbanModel = useMemo(() => {
-    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
+    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, reasonFilter, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
     const shared = reuseKanbanModel(previousModel.current, built);
     previousModel.current = shared;
     return shared;
-  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, unfoldedReaders, modelNow]);
+  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);
@@ -651,6 +658,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       setMode(kanbanLayoutModeBeside(beside, seatWidth + (railShown ? OPEN_RAIL_WIDTH[tier] : 0)));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
+      setReasonsBelowBar(barWidth < 1168);
     };
     apply();
     if (typeof ResizeObserver !== "function") return;
@@ -660,6 +668,33 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (seat) observer.observe(seat);
     return () => observer.disconnect();
   }, [hasAside, seatSide, railShown]);
+
+  /* The chip is fixed over the bar's right reserve and the bar's groups can run into it (the uk
+     label is the widest). With the bar's own filters in the row, measure the chip in its full form
+     against ⋯ and compact it only when they would touch. Measuring takes the attribute off and puts
+     it back inside one task, so nothing is drawn between and the verdict does not depend on the
+     last one. */
+  useLayoutEffect(() => {
+    const bar = rootRef.current?.querySelector<HTMLElement>('.bar[data-bar="project"]');
+    if (!bar || reasonsBelowBar) { setChipCrowded(false); return; }
+    const fit = () => {
+      const chip = bar.querySelector<HTMLElement>("[data-attention-count]");
+      const more = bar.querySelector<HTMLElement>('[data-bar-group="more"]');
+      if (!chip || !more) return;
+      const compact = bar.hasAttribute("data-bar-compact");
+      bar.removeAttribute("data-bar-compact");
+      const crowded = chip.getBoundingClientRect().left < more.getBoundingClientRect().right + CHIP_CLEARANCE;
+      if (compact) bar.setAttribute("data-bar-compact", "");
+      setChipCrowded(crowded);
+    };
+    fit();
+    if (typeof ResizeObserver !== "function") return;
+    const resize = new ResizeObserver(fit);
+    resize.observe(bar);
+    const mutation = typeof MutationObserver === "function" ? new MutationObserver(fit) : null;
+    mutation?.observe(bar, { childList: true, subtree: true, characterData: true });
+    return () => { resize.disconnect(); mutation?.disconnect(); };
+  }, [reasonsBelowBar, barWide, barWrap, locale, hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -753,7 +788,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!raw) return { target, kind: "conflict" as const, error: "" };
       let outcome: StatusMoveOutcome | FieldEditOutcome;
       const fence = { fenced: true, lineage: entry.lineages?.get(target.taskId) };
-      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, fence);
+      if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { ...fence, ...(Object.hasOwn(entry, "fromHold") ? { restoreHold: undoing ? entry.fromHold ?? null : entry.toHold ?? null } : {}) });
       else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, fence);
       else {
         const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: chain });
@@ -827,21 +862,21 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return true;
   };
 
-  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
+  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
     const from = card.status;
-    if (from === to) return;
+    if (from === to && !Object.hasOwn(options, "hold")) return;
     const title = card.titlePending ? t("kanban.untitled") : card.title;
     const short = clipTitle(title);
     const written = settles();
-    const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, settled: written.promise };
+    const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, fromHold: controller.holdFor(task) ?? null, toHold: null, settled: written.promise };
     historyRef.current.record(entry);
     const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
     if (options.focus) focusMoved(card.id, to);
-    void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
-      if (outcome.kind === "saved") entry.lineages = new Map([[task.id, outcome.lineage]]);
+    void controller.move(task, to, Object.hasOwn(options, "hold") ? { hold: options.hold } : {}).then((outcome: StatusMoveOutcome) => {
+      if (outcome.kind === "saved") { entry.lineages = new Map([[task.id, outcome.lineage]]); entry.toHold = outcome.task.hold ?? null; }
       written.resolve(outcome.kind === "saved");
       /* The server already held the status: nothing of this board's is left to undo. */
       if (outcome.kind === "settled") dismiss(receiptId);
@@ -852,7 +887,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           label: t("kanban.retry"),
           run: () => {
             const current = cardsByIdRef.current.get(card.id);
-            if (current) move(current, to);
+            if (current) move(current, to, options);
           },
         }, { error: true });
       } else if (outcome.kind === "conflict") {
@@ -862,7 +897,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           label: t("kanban.moveAnyway"),
           run: () => {
             const current = cardsByIdRef.current.get(card.id);
-            if (current) move(current, to);
+            if (current) move(current, to, options);
           },
         }, { error: true });
       }
@@ -1291,14 +1326,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [model]);
 
   /* ── Menus ───────────────────────────────────────────────────────────── */
-  const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => KANBAN_STATUSES.map((status) => ({
-    type: "radio" as const,
-    status,
-    label: statusLabel(t, status),
-    why: hints ? t(`kanban.statusHint.${status}`) : null,
-    checked: card.status === status,
-    onSelect: () => move(card, status, { focus: true }),
-  })), [move, t]);
+  const [holdEditing, setHoldEditing] = useState<string | null>(null);
+  const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => [
+    ...KANBAN_STATUSES.map((status): KanbanMenuItem => ({
+      type: "radio", status, label: statusLabel(t, status),
+      why: hints ? t(`kanban.statusHint.${status}`) : null,
+      checked: card.status === status,
+      onSelect: () => move(card, status, { focus: true }),
+    })),
+    { type: "item", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing(card.id) },
+  ], [move, t]);
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
     if (!open) return null;
@@ -2404,7 +2441,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The Overview narrows permanently, so its columns read «3 of 41» and an
      empty one says so, exactly as they do under a search. */
   const searching = query.trim().length > 0;
-  const filtering = searching || Boolean(props.overview);
+  const filtering = searching || Boolean(props.overview) || Boolean(reasonFilter);
   /* What an empty column says depends on WHICH narrowing emptied it: a search
      the operator typed is advice about the search, the Overview's permanent
      filter is not (#696 — a filtered-out board and a fruitless search must not
@@ -2586,6 +2623,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const cardFocus = useStableCallback(focusCard);
   const cardOpenAttempt = useStableCallback(openRecorded);
   const cardOpenConversations = useStableCallback(onOpenConversations);
+  const cardSaveHold = useStableCallback((card: KanbanCardModel, hold: Partial<TaskHold> | null) => {
+    setHoldEditing(null);
+    const hasOwner = card.task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
+    move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true });
+  });
+  const cardCancelHold = useStableCallback(() => { const id = holdEditing; setHoldEditing(null); if (id) focusCard(id); });
 
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
@@ -2637,6 +2680,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onHide: hideCard,
         onDismiss: dismissCard,
         onUndoDismiss: undoDismissCard,
+        holdEditingId: holdEditing,
+        onSaveHold: cardSaveHold,
+        onCancelHold: cardCancelHold,
         onIconMenu: openIconMenu,
         graphChoices,
         onToggleGraph: toggleGraph,
@@ -2694,6 +2740,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
       />
     </label>
   );
+  const representedReasons = [...new Set(KANBAN_STATUSES.flatMap((status) => model.columns[status].cards.flatMap(taskReasonFiltersOfCard)))];
+  const reasonFilterControls = (belowBar = false) => representedReasons.length ? (
+    <div className={`reason-filters${belowBar ? " reason-filter-row" : ""}`} role="group" aria-label={t("kanban.filterReasons")} data-reason-filters="">
+      {representedReasons.map((reason) => (
+        <button key={reason} type="button" className="reason-filter" data-reason-filter={reason} aria-pressed={reasonFilter === reason}
+          onClick={() => setReasonFilter((current) => current === reason ? undefined : reason)}>
+          {t(`kanban.filterReason.${reason}`)}
+        </button>
+      ))}
+    </div>
+  ) : null;
+  const searchTools = (group?: string) => (
+    <div className="bar-find" data-bar-group={group}>
+      {searchField()}
+      {props.overview || !reasonsBelowBar ? reasonFilterControls() : null}
+    </div>
+  );
   /* Narrow, the project's pill is icon and count, the shape Tasks has (#1801), and its name moves to the tooltip. */
   const hiddenPill = (labelled: boolean) => (
     <button
@@ -2739,7 +2802,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           {reachStatus}
           <span className="grow" />
           <div className="bar-tools">
-            {searchField()}
+            {searchTools()}
             {hiddenPill(true)}
             {viewSwitch ? <span className="view-switch">{viewSwitch}</span> : null}
           </div>
@@ -2752,7 +2815,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           ) : null}
         </header>
       ) : (
-        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
+        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar || chipCrowded ? "" : undefined}>
           {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
           <span className="summary" data-bar-group="status">
             {reachStatus ?? (
@@ -2764,7 +2827,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             )}
           </span>
           <span className="grow" />
-          {searchField("find")}
+          {searchTools("find")}
           <div className="bar-group" data-bar-group="view">
             {hiddenPill(barWide)}
             {viewSwitch ? <span className="bar-slot view-switch">{viewSwitch}</span> : null}
@@ -2784,6 +2847,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
           <BarIslandSlot />
         </header>
       )}
+
+      {!props.overview && reasonsBelowBar ? reasonFilterControls(true) : null}
 
       <div className={`kb-body${seatSide ? " seat-side" : ""}`}>
       {seatSide && seatView}
@@ -2990,8 +3055,8 @@ type CardHandlers = Pick<
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onDismiss" | "onUndoDismiss" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
-  | "projectNames" | "onOpenProject"
->;
+  | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
+> & { holdEditingId?: string | null };
 
 function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
@@ -3031,6 +3096,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   cardProps: CardHandlers;
 }) {
   const { t } = useLocale();
+  const { holdEditingId, ...cardHandlers } = cardProps;
   const column = model.columns[status];
   const shown = column.shown;
   const renderCard = (card: KanbanCardModel) => (
@@ -3050,13 +3116,14 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       editing={editing.get(card.id) ?? null}
       failedEdit={failedEdits.get(card.id) ?? null}
       incomingEdit={incomingEdits.get(card.id) ?? null}
-      {...cardProps}
+      {...cardHandlers}
+      holdEditing={holdEditingId === card.id}
     />
   );
-  // Keep the existing idle divider only around a trailing idle suffix. It
-  // must never move an older or unknown-work card above newer execution.
+  // Motion ordering keeps stopped work in a trailing suffix, including
+  // tasks whose finished conversations are still attached.
   let split = shown.length;
-  if (status === "assigned") while (split > 0 && shown[split - 1]!.idle) split -= 1;
+  if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
   const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned")) : [];
@@ -3097,6 +3164,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
         <span className="n num">{filtering ? t("kanban.columnCount", { shown: shown.length, total: column.cards.length }) : column.cards.length}</span>
         {column.working ? <span className="live num" data-count={column.working} title={t("kanban.columnWorking", { count: column.working })}><span className="ct">{t("kanban.columnWorking", { count: column.working })}</span></span> : null}
         {column.needsYou ? <span className="needs num" data-count={column.needsYou} title={t("kanban.columnNeeds", { count: column.needsYou })}><span className="ct">{t("kanban.columnNeeds", { count: column.needsYou })}</span></span> : null}
+        {status === "assigned" && column.stopped ? <span className="stopped num" data-column-stopped={column.stopped} title={t("kanban.columnStopped", { count: column.stopped })}>{t("kanban.columnStopped", { count: column.stopped })}</span> : null}
+        {status === "blocked" && column.noReason ? <span className="no-reason num" data-count={column.noReason} data-column-no-reason={column.noReason} title={t("kanban.columnNoReason", { count: column.noReason })}>{t("kanban.columnNoReason", { count: column.noReason })}</span> : null}
         <span className="spacer" />
         {widths && widths.wide === status ? (
           <button
@@ -3149,7 +3218,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
           <>
             <div className="divider">
               <span role="separator" aria-label={t("kanban.idleAria", { count: idle.length })}>{t("kanban.idleDivider", { count: idle.length })}</span>
-              {idle.some((card) => card.task && !card.holdsSeat) ? (
+              {idle.some((card) => card.task && card.idle && !card.holdsSeat) ? (
                 <button type="button" data-hide-idle="" title={t("kanban.hideIdleWhy")} onClick={onHideIdle}>{t("kanban.hideIdleShort")}</button>
               ) : null}
             </div>

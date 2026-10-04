@@ -30,8 +30,11 @@ export function pipelineRepository(
     ?? githubRepositoryOfRemote(recorded(pipeline.project));
 }
 
-export function taskRepository(task: Pick<BoardTask, "project">): string | null {
-  return githubRepositoryOfRemote(recordedProjectRemote(task.project));
+export function taskRepository(
+  task: Pick<BoardTask, "project">,
+  recorded: (project: string) => string | null = recordedProjectRemote,
+): string | null {
+  return githubRepositoryOfRemote(recorded(task.project));
 }
 
 /** What the cache says a number is, for normalizing a bare attach. */
@@ -57,8 +60,10 @@ export function pipelineWorkLinks(
 }
 
 export function taskWorkLinks(task: BoardTask, pipelines: readonly Pipeline[], cache: ForgeCacheView = forgeCacheView()): ResolvedWorkLinks {
-  const carried = pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id)).map((pipeline) => pipelineWorkLinks(pipeline, cache));
-  return resolveTaskLinks(task, carried, cache);
+  const linked = pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id));
+  const carried = linked.map((pipeline) => pipelineWorkLinks(pipeline, cache));
+  const repository = taskRepository(task) ?? linked.map((pipeline) => pipelineRepository(pipeline)).find(Boolean) ?? null;
+  return resolveTaskLinks(task, carried, cache, repository);
 }
 
 /** The cards that aggregate a pipeline's links, keyed by task id, so an edit on
@@ -86,14 +91,19 @@ export function pullRequestSummary(resolved: ResolvedWorkLinks): string | null {
 
 /** `/api/files`' map, over exactly the records the response carries, keeping
     only the entries with something to draw. */
-export function workLinksForBoard(pipelines: readonly Pipeline[], tasks: readonly BoardTask[], cache: ForgeCacheView = forgeCacheView()): FilesWorkLinks {
+export function workLinksForBoard(
+  pipelines: readonly Pipeline[],
+  tasks: readonly BoardTask[],
+  cache: ForgeCacheView = forgeCacheView(),
+  resolveRecordedRemote: (project: string) => string | null = recordedProjectRemote,
+): FilesWorkLinks {
   const byPipeline = new Map<string, ResolvedWorkLinks>();
   const byTask = new Map<string, ResolvedWorkLinks[]>();
   const out: FilesWorkLinks = { pipelines: {}, tasks: {} };
   /* One ledger lookup per project, not per pipeline. */
   const remotes = new Map<string, string | null>();
   const recorded = (project: string) => {
-    if (!remotes.has(project)) remotes.set(project, recordedProjectRemote(project));
+    if (!remotes.has(project)) remotes.set(project, resolveRecordedRemote(project));
     return remotes.get(project)!;
   };
   for (const pipeline of pipelines) {
@@ -108,9 +118,13 @@ export function workLinksForBoard(pipelines: readonly Pipeline[], tasks: readonl
   }
   for (const task of tasks) {
     const carried = byTask.get(task.id) ?? [];
-    if (!carried.length && !task.workLinks?.length) continue;
-    const resolved = resolveTaskLinks(task, carried, cache);
-    if (resolved.links.length) out.tasks[task.id] = resolved;
+    const numberedHold = (task.hold?.kind === "pr" || task.hold?.kind === "issue") && /^\d+$/.test(task.hold.ref ?? "");
+    if (!carried.length && !task.workLinks?.length && !numberedHold) continue;
+    const repository = taskRepository(task, recorded)
+      ?? pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id)).map((pipeline) => pipelineRepository(pipeline, recorded)).find(Boolean)
+      ?? null;
+    const resolved = resolveTaskLinks(task, carried, cache, repository);
+    if (resolved.links.length || (numberedHold && resolved.repository)) out.tasks[task.id] = resolved;
   }
   return out;
 }

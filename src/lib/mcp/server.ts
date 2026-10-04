@@ -35,6 +35,7 @@ import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
+import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
 import { TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
@@ -3047,6 +3048,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Create a durable board task.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
     "Write `text` in the operator's interface language (operatorLocale in get_orchestrator); `details` stays in whatever language serves the agent. A `text` in another language is stored with a warning.",
@@ -3057,6 +3060,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has. `text` and `refine.text` are written in the operator's interface language; another language is stored with a warning.",
     "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
@@ -3373,6 +3378,21 @@ function boundedNumericInput(toolName: McpToolName, fieldPath: string): z.ZodTyp
   );
 }
 
+const taskHoldInputSchema = z.object({
+  kind: z.string().describe("Why work is waiting: operator, task, PR, issue, worker, resource, limit, postponed, external, or unstated. Unknown kinds normalize to unstated."),
+  ref: z.union([z.string(), z.number().int().positive()]).optional().describe("Task id, PR or issue number, or external URL when the kind uses a reference."),
+  note: z.string().optional().describe("One short sentence saying what ends the wait; whitespace is normalized and text clamps to 200 characters. Omitted when no reason is known."),
+  until: z.string().optional().describe("ISO date for limit or postponed waits."),
+}).describe("Structured reason a task or checklist step is waiting. Provenance and since are assigned by the server.");
+
+const taskStepsInputSchema = z.array(z.object({
+  id: z.string().min(1).max(40),
+  text: z.string().trim().min(1).max(120),
+  state: z.enum(["done", "open", "dropped"]),
+  ref: z.union([z.string(), z.number()]).optional(),
+  hold: taskHoldInputSchema.nullable().optional().describe("Why this open step is not moving; null clears its reason."),
+})).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
+
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3431,6 +3451,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().min(1),
     text: z.string().min(1).describe("The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
+    hold: taskHoldInputSchema.optional(),
+    steps: taskStepsInputSchema.optional(),
     details: z.string().optional()
       .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
@@ -3462,6 +3484,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedProject: z.string().min(1).optional().describe("Required for pos or placement updates: copy the current task project exactly."),
     expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
     text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
+    hold: taskHoldInputSchema.nullable().optional(),
+    steps: taskStepsInputSchema.nullable().optional(),
     details: z.string().nullable().optional()
       .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending. To change one line, send replaceLine, removeLine or appendLine instead."),
     replaceLine: z.object({
