@@ -21,17 +21,12 @@ afterAll(() => {
 });
 
 const LLV_PROJECT = "-agents-tools-live-log-viewer-next";
-const REPOSITORY = path.join(SANDBOX, "repository");
-fs.mkdirSync(path.join(REPOSITORY, ".git"), { recursive: true });
-fs.writeFileSync(path.join(REPOSITORY, ".git", "HEAD"), "ref: refs/heads/main\n");
-fs.writeFileSync(path.join(REPOSITORY, ".git", "config"), '[remote "origin"]\n\turl = https://example.invalid/team/fixture.git\n');
-const LLV_CANONICAL_PROJECT = projectInfoFromCwd(REPOSITORY)!.project;
-const LLV_WORKTREE_CWD = path.join(
-  REPOSITORY,
-  ".claude",
-  "worktrees",
-  "pipeline-315-explicit-ownership",
-);
+const FIXTURE_REPO = path.join(SANDBOX, "repo");
+fs.mkdirSync(path.join(FIXTURE_REPO, ".git"), { recursive: true });
+fs.writeFileSync(path.join(FIXTURE_REPO, ".git", "HEAD"), "ref: refs/heads/main\n");
+fs.writeFileSync(path.join(FIXTURE_REPO, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/fixture.git\n');
+const LLV_CANONICAL_PROJECT = projectInfoFromCwd(FIXTURE_REPO)!.project;
+const LLV_WORKTREE_CWD = path.join(FIXTURE_REPO, ".claude", "worktrees", "pipeline-315-explicit-ownership");
 
 function operatorOwnership(project: string) {
   return { project, source: "operator" as const, setAt: "2026-07-16T12:00:00.000Z", operationId: "launch-1" };

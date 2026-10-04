@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -38,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });

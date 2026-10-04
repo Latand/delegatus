@@ -1,3 +1,6 @@
+import { Database } from "bun:sqlite";
+import fs from "node:fs";
+import path from "node:path";
 import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 
 import {
@@ -77,4 +80,27 @@ export function clearAccountFixture(name: AccountSourceName, directory = account
 export function persistedCodexLoginAttempts(directory: string): Record<string, { state?: string }> {
   const body = persistedAccountSource(CODEX_LOGIN_SOURCE, directory) as { attempts?: Record<string, { state?: string }> } | undefined;
   return body?.attempts ?? {};
+}
+
+/** Clear an isolated fixture without unlinking the database held by task-store
+ * readers. Bumping each revision invalidates their snapshots between cases. */
+export function clearAccountTestState(directory: string): void {
+  if (process.env.NODE_ENV !== "test" || directory !== process.env.LLV_STATE_DIR) {
+    throw new Error("account fixture reset requires the isolated test state");
+  }
+  if (!fs.existsSync(directory)) return;
+  const database = path.join(directory, "state.sqlite");
+  if (fs.existsSync(database)) {
+    const db = new Database(database);
+    try {
+      db.transaction(() => {
+        db.exec("DELETE FROM state_rows; DELETE FROM state_changes; DELETE FROM state_leases;");
+        db.exec("UPDATE state_collections SET revision = revision + 1, change_floor = revision + 1;");
+      })();
+    } finally { db.close(); }
+  }
+  for (const entry of fs.readdirSync(directory)) {
+    if (["state.sqlite", "state.sqlite-wal", "state.sqlite-shm"].includes(entry)) continue;
+    fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+  }
 }

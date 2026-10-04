@@ -427,7 +427,7 @@ function arrayEvidence(value: unknown, field: string): unknown[] {
   return value;
 }
 
-/** Strict, lossless read used only by the one-time identity wave. Runtime
+/** Strict, lossless read shared by the identity wave and retirement guard. Runtime
     authority keeps its fail-closed tolerant reader, while this path refuses to
     publish a rewritten file when any sibling evidence would be discarded. */
 function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvidence {
@@ -520,6 +520,17 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
     });
   }
   return { raw, normalized };
+}
+
+/** Automatic retirement must retain malformed evidence. The tolerant authority
+    reader can drop a damaged row to deny authority, but that cannot prove a
+    host seat-free. Reuse the lossless read; any incomplete record defers signals. */
+export function readOrchestratorSeatRetirementEvidenceOrNull(): OrchestratorSeatFile | null {
+  try {
+    return readOrchestratorSeatMigrationEvidence().normalized;
+  } catch {
+    return null;
+  }
 }
 
 function writeSeatFile(file: OrchestratorSeatFile): void {

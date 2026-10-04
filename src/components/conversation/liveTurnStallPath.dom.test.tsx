@@ -166,6 +166,7 @@ function snapshotBody() {
     filesRevision: 1,
     sessions: [{
       conversationId: CONVERSATION,
+      sessionKey: { engine: "claude", sessionId: "fixture-stall" },
       artifactPath: FILE.path,
       host: "hosted",
       hostKind: "claude-code",

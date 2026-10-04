@@ -57,6 +57,10 @@ async function runConcurrentWriters(
       { sqliteMode: "sqlite" },
     ).ensureConversation("codex", creatorPath, null);
   }
+  const claudeHome = path.join(sandbox, "claude");
+  fs.mkdirSync(claudeHome, { recursive: true });
+  // Start admission is exercised with injected launch ports, never a real CLI.
+  fs.writeFileSync(path.join(claudeHome, ".credentials.json"), "{}", { mode: 0o600 });
   const fixture = path.join(import.meta.dir, "writerConcurrencyChild.ts");
   const writers = ["http", "mcp"].map((writer) => {
     const ready = path.join(sandbox, `${writer}.ready`);
@@ -67,6 +71,7 @@ async function runConcurrentWriters(
       env: {
         ...process.env,
         LLV_STATE_DIR: sandbox,
+        LLV_CLAUDE_HOME: claudeHome,
         LLV_WRITER_KIND: kind,
         LLV_WRITER_INTERFACE: writer,
         LLV_WRITER_OPERATION: operation,
@@ -79,14 +84,15 @@ async function runConcurrentWriters(
       stdout: "ignore",
       stderr: "pipe",
     }));
-    return { child, ready, release };
+    const errors = new Response(child.stderr).text();
+    return { child, ready, release, errors };
   });
 
   await Promise.race([
     Promise.any(writers.map(({ ready }) => waitFor(ready))),
-    Promise.all(writers.map(async ({ child }) => {
+    Promise.all(writers.map(async ({ child, errors }) => {
       await child.exited;
-      throw new Error((await new Response(child.stderr).text()) || "writer exited before reaching the barrier");
+      throw new Error((await errors) || "writer exited before reaching the barrier");
     })),
   ]);
   const first = writers.find(({ ready }) => fs.existsSync(ready))!;
@@ -99,7 +105,7 @@ async function runConcurrentWriters(
 
   const exitCodes = await Promise.all(writers.map(({ child }) => child.exited));
   if (exitCodes.some((code) => code !== 0)) {
-    const errors = await Promise.all(writers.map(({ child }) => new Response(child.stderr).text()));
+    const errors = await Promise.all(writers.map(({ errors }) => errors));
     throw new Error(errors.filter(Boolean).join("\n"));
   }
   return {
@@ -202,6 +208,10 @@ test("an aged live writer without process identity retains the transaction until
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-live-owner-writers-"));
   sandboxes.push(sandbox);
   const stateFile = path.join(sandbox, "tasks.json");
+  const claudeHome = path.join(sandbox, "claude");
+  fs.mkdirSync(claudeHome, { recursive: true });
+  // Start admission is exercised with injected launch ports, never a real CLI.
+  fs.writeFileSync(path.join(claudeHome, ".credentials.json"), "{}", { mode: 0o600 });
   const fixture = path.join(import.meta.dir, "writerConcurrencyChild.ts");
   fs.writeFileSync(stateFile, "{\"tasks\":[]}\n", "utf8");
 
@@ -214,6 +224,7 @@ test("an aged live writer without process identity retains the transaction until
       env: {
         ...process.env,
         LLV_STATE_DIR: sandbox,
+        LLV_CLAUDE_HOME: claudeHome,
         LLV_WRITER_KIND: "task",
         LLV_WRITER_INTERFACE: writer,
         LLV_WRITER_READY: ready,

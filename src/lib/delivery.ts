@@ -1,3 +1,4 @@
+import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
@@ -935,7 +936,12 @@ async function actuateConversationMessage(
     !outcome.ok && outcome.actuation === "started" && acceptedOperationId
       ? { ...outcome, operationId: acceptedOperationId, resend: "verify-first" as const }
       : outcome;
+  const terminalIds: string[] = [];
+  const discardTerminal = () => {
+    for (const id of terminalIds) try { memoryIndex().forgetTerminalDelivery(id); } catch { /* Optional bookkeeping cannot block delivery. */ }
+  };
   const settle = (outcome: DeliveryOutcome): DeliveryOutcome => {
+    if (!outcome.ok && outcome.actuation !== "started") discardTerminal();
     try {
       if (deliveryId) {
         /* An actuated write stays `delivery-uncertain` on purpose, and stays
@@ -958,6 +964,20 @@ async function actuateConversationMessage(
      the images hit disk deletes them so a retry cannot duplicate files. */
   let imagePaths: string[] = [];
   const materializePayload = () => (overrides.buildImagePayload ?? buildImagePayload)(text, images);
+  const recordTerminal = (payload: string, targetPath = filePath, relay = false) => {
+    const targetConversation = targetPath ? registry.conversationForPath(targetPath) : conversationForTerminal;
+    if (!targetConversation) return;
+    const delivery = deliveryId ? registry.readOnlySnapshot().heldDeliveries[deliveryId] : null;
+    // Persist the actual payload and receiving conversation before transport
+    // can invoke the native hook; a relay is always machine-authored.
+    const id = delivery?.command.operationId ?? crypto.randomUUID();
+    terminalIds.push(id);
+    try {
+      memoryIndex().recordTerminalDelivery(id, targetConversation.id,
+        payload, relay ? "agent" : delivery?.command.origin?.kind ?? message.origin?.kind ?? "unknown", targetPath);
+    } catch { /* The hook also fails open if its derivative is unavailable. */ }
+  };
+  const conversationForTerminal = message.conversationId ? registry.conversation(message.conversationId as `conversation_${string}`) : null;
   const recordArtifacts = () => {
     if (deliveryId && imagePaths.length > 0) registry.recordDeliveryArtifacts(deliveryId, imagePaths);
   };
@@ -975,6 +995,7 @@ async function actuateConversationMessage(
       const bundle = materializePayload();
       imagePaths = bundle.imagePaths;
       recordArtifacts();
+      recordTerminal(bundle.payload);
       await (overrides.sendText ?? sendText)(target, bundle.payload);
       actuation = "completed";
       return settle({ ok: true, target, ...(imagePaths.length ? { imagePaths } : {}) });
@@ -1016,6 +1037,7 @@ async function actuateConversationMessage(
       const bundle = materializePayload();
       imagePaths = bundle.imagePaths;
       recordArtifacts();
+      recordTerminal(bundle.payload);
       const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload }));
       if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
       actuation = "completed";
@@ -1059,6 +1081,7 @@ async function actuateConversationMessage(
     recordArtifacts();
     const relayText = `User message for your branch «${entry.title.slice(0, 100)}» — forward it or handle it yourself:\n${bundle.payload}`;
     const imageField = imagePaths.length ? { imagePaths } : {};
+    recordTerminal(relayText, root.path, true);
     const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText }));
     if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
     actuation = "completed";
@@ -1066,6 +1089,7 @@ async function actuateConversationMessage(
   } catch (error) {
     const uncertain = actuation === "completed" || error instanceof TmuxDeliveryUncertainError;
     if (!uncertain) {
+      discardTerminal();
       if (deliveryId) try { registry.discardDelivery(deliveryId); } catch { /* the original registry failure remains actionable */ }
       deleteInboxImages(imagePaths);
     }

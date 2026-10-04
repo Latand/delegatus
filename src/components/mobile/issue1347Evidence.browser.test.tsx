@@ -339,7 +339,7 @@ async function measureControls(page: import("playwright-core").Page, scheme: "li
     const rotate = document.querySelector("[data-orchestrator-rotate]");
     const draft = document.querySelector("[data-orchestrator-draft='rotate']");
     /* What the card leads on the board: the first conversation row under it. */
-    const firstRow = document.querySelector("[data-mobile2-row='conversation']");
+    const firstRow = document.querySelector("[data-phone-card-kind='conversation']");
     return {
       scrollWidth: document.documentElement.scrollWidth,
       cardBox: card ? box(card) : null,

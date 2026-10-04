@@ -165,3 +165,15 @@ test("steer-or-queue parses and refuses any turn fence", () => {
     expect(() => parseRuntimeCommand("send", {...request, turnId})).toThrow("takes no fence");
   }
 });
+
+
+test("automatic kill preserves its idle fence and rejects malformed conditions", () => {
+  const command = { conversationId: "conversation-one", operationId: "retire-one",
+    sessionKey: { engine: "codex", sessionId: "generation-one" } };
+  expect(parseRuntimeCommand("kill", { ...command, onlyIfIdle: { revision: 4, writerClaim: "owner:1" } }))
+    .toMatchObject({ onlyIfIdle: { revision: 4, writerClaim: "owner:1" } });
+  for (const onlyIfIdle of [null, {}, true, { revision: 0, writerClaim: "owner:1" },
+    { revision: 4, writerClaim: "" }, { revision: "4", writerClaim: "owner:1" }]) {
+    expect(() => parseRuntimeCommand("kill", { ...command, onlyIfIdle })).toThrow();
+  }
+});

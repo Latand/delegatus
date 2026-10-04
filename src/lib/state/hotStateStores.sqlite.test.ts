@@ -692,13 +692,36 @@ test("complete durable markers let a later cutover bypass damaged JSON mirrors",
   }
 });
 
+test.each([
+  { collection: "flows", load: loadFlows },
+  { collection: "workflows", load: loadWorkflows },
+])("malformed $collection records are preserved outside executable snapshots", ({ collection, load }) => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-preserved-record-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  const record = { malformedFixture: collection };
+  const source = JSON.stringify({ [collection]: [record] });
+  const sourceFile = path.join(sandbox, `${collection}.json`);
+  fs.writeFileSync(sourceFile, source);
+  const logged = spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    expect(load()).toEqual([]);
+    expect(logged).toHaveBeenCalled();
+    expect(readStateCollectionRows(path.join(sandbox, "state.sqlite"), collection)).toEqual([record]);
+    expect(fs.readFileSync(sourceFile, "utf8")).toBe(source);
+  } finally {
+    logged.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("malformed legacy sources stay unchanged and receive no migration marker", () => {
   const previous = process.env.LLV_STATE_DIR;
   const cases = [
     { filename: "flows.json", source: "{", collection: "flows", load: loadFlows },
-    { filename: "flows.json", source: JSON.stringify({ flows: [{}] }), collection: "flows", load: loadFlows },
     { filename: "workflows.json", source: "{", collection: "workflows", load: loadWorkflows },
-    { filename: "workflows.json", source: JSON.stringify({ workflows: [{}] }), collection: "workflows", load: loadWorkflows },
   ] as const;
   try {
     for (const fixture of cases) {
@@ -907,10 +930,11 @@ test("authoritative row corruption fails active stores and stays observable for 
     fs.writeFileSync(path.join(archiveSandbox, "pipelines-archive.json"), JSON.stringify({ schemaVersion: 4, pipelines: [] }));
     expect(loadArchivedPipelines()).toEqual([]);
     insertCorruptRow(archiveSandbox, "pipelines_archive", "corrupt-row");
-    const logged = spyOn(console, "error").mockImplementation(() => undefined);
-    expect(loadArchivedPipelines()).toEqual([]);
-    expect(logged).toHaveBeenCalled();
-    logged.mockRestore();
+    expect(loadArchivedPipelines).toThrow();
+    const archiveDb = new Database(path.join(archiveSandbox, "state.sqlite"), { readonly: true });
+    try {
+      expect(archiveDb.query("SELECT value_json FROM state_rows WHERE collection = 'pipelines_archive' AND row_key = 'corrupt-row'").get()).toEqual({ value_json: "{" });
+    } finally { archiveDb.close(); }
     fs.rmSync(archiveSandbox, { recursive: true, force: true });
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
