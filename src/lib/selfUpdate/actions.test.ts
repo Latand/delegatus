@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { installAction, runInstallAction } from "./actions";
 const record = { launcher: { pid: 12, startIdentity: "7" }, checkout: "/srv/checkout", releasePointer: "/state/release.json" };
 test("legacy systemd launcher offers one external restart", async () => {
@@ -98,5 +98,15 @@ test.each(["linux", "win32"] as const)("terminal context escapes state/config an
 test.each(["linux", "win32"] as const)("an env-only gate with unavailable private storage refuses its command: %s", async platform => {
   const action = await installAction({ mode: "unsupported", record: null, reason: "no-launcher", installRoot: "/srv/nonexistent-fixture" },
     { cgroup: () => "", ready: () => false, platform, env: { LLV_TOKEN: "synthetic-key" } });
+  expect(action).toEqual({ id: "secure-handoff", button: false });
+});
+
+test("a leftover custody module cannot make an old CLI a credential reader", async () => {
+  const root = mkdtempSync("/var/tmp/legacy-custody-reader-"); packageFixtures.push(root);
+  mkdirSync(join(root, "bin")); mkdirSync(join(root, "state"));
+  writeFileSync(join(root, "bin", "cli.mjs"), "// legacy launcher without a custody reader\n");
+  copyFileSync(resolve("bin/launcher-credentials.mjs"), join(root, "bin", "launcher-credentials.mjs"));
+  const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: root },
+    { cgroup: () => "", ready: () => false, env: { LLV_STATE_DIR: join(root, "state"), LLV_TOKEN: "synthetic-key" } });
   expect(action).toEqual({ id: "secure-handoff", button: false });
 });

@@ -70,12 +70,15 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   const fallbackCommand = (windows ? "& " : "") + [process.execPath, join(root, "bin", "cli.mjs"), ...args, "--no-open"]
     .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
   let command = withContext(fallbackCommand);
+  let credentialReader = join(root, "bin", "cli.mjs");
+  let credentialFallback: string | null = null;
   if (decision.record) {
     if (!await ports.ready(decision.record.releasePointer, root)) return { id: "update-first", button: true };
     const next = await new ReleasePointer(decision.record.releasePointer, root).current();
     const terminalEntry = join(next.dir, "bin", "launcher-relaunch.mjs");
     if (read(terminalEntry).includes("delegatus-terminal-bootstrap-v1") && next.dir !== root) {
       const record = decision.record;
+      credentialReader = terminalEntry;
       // Old code can publish B and switch only web. Its resident host still
       // identifies A, so the current pointer cannot supply rollback custody.
       let rollbackPointer: string | null | undefined;
@@ -112,6 +115,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
       if (windows) command += "; exit $LASTEXITCODE";
     } else if (!decision.record.checkout && !read(join(root, "bin", "cli.mjs")).includes("delegatus-launcher-relaunch-v1")) {
       if (next.dir !== root) {
+        credentialReader = join(next.dir, "bin", "cli.mjs");
         let requestId: string | undefined;
         try {
           const trial = JSON.parse(read(launcherControlFile(decision.record.requestFile, "trial")));
@@ -121,6 +125,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
           .map(value => windows ? `'${value.replaceAll("'", "''")}'` : quote(value)).join(" ");
         const environment = { ...context, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: root, ...(requestId ? { LLV_LAUNCHER_TRIAL: requestId } : {}) };
         if (windows) {
+          credentialFallback = join(root, "bin", "cli.mjs");
           const script = Object.entries(environment).map(([name, value]) => `$env:${name}='${value.replaceAll("'", "''")}'`).join("; ")
             + `; & ${invocation}; if($LASTEXITCODE -eq 75){ & ${fallbackCommand.slice(2)} }`;
           command = `& powershell.exe -NoProfile -EncodedCommand '${Buffer.from(script, "utf16le").toString("base64")}'`;
@@ -131,8 +136,9 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     if (!unit) {
       try {
         if (prepareLauncherCredentials(root, env)) {
-          const entry = command.includes("--terminal") ? join(next.dir, "bin", "launcher-credentials.mjs") : join(root, "bin", "launcher-credentials.mjs");
-          if (!read(entry).includes("delegatus-launcher-credential-custody-v1")) throw new Error("prerequisite");
+          if (!read(credentialReader).includes("restoreLauncherCredentials(")
+            || credentialFallback && !read(credentialFallback).includes("restoreLauncherCredentials(")
+            || !read(join(dirname(credentialReader), "launcher-credentials.mjs")).includes("delegatus-launcher-credential-custody-v1")) throw new Error("prerequisite");
           command = withContext(command, { LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" });
         }
       } catch { return { id: "secure-handoff", button: false }; }
@@ -144,7 +150,8 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   if (!unit) {
     try {
       if (prepareLauncherCredentials(root, env)) {
-        if (!read(join(root, "bin", "launcher-credentials.mjs")).includes("delegatus-launcher-credential-custody-v1")) throw new Error("prerequisite");
+        if (!read(credentialReader).includes("restoreLauncherCredentials(")
+          || !read(join(dirname(credentialReader), "launcher-credentials.mjs")).includes("delegatus-launcher-credential-custody-v1")) throw new Error("prerequisite");
         command = withContext(command, { LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" });
       }
     } catch { return { id: "secure-handoff", button: false }; }
