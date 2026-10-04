@@ -357,6 +357,18 @@ export class MemoryIndex {
     }
   }
 
+  hasTerminalDelivery(id: string): boolean {
+    return this.hookDatabase(db => {
+      this.replayTerminalDeliveries(db);
+      return !!db.query("SELECT 1 FROM memory_terminal_deliveries WHERE id = ?").get(id);
+    });
+  }
+
+  hasTerminalPrompt(conversation: string, prompt: string): boolean {
+    return this.hookDatabase(db => !!db.query("SELECT 1 FROM memory_terminal_deliveries WHERE conversation = ? AND digest = ?")
+      .get(conversation, messageTextDigest(prompt)));
+  }
+
   forgetTerminalDelivery(id: string) {
     fsSync.rmSync(this.terminalFallback(id), { force: true });
     this.hookDatabase(db => db.query("DELETE FROM memory_terminal_deliveries WHERE id = ? AND request IS NULL").run(id));

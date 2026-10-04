@@ -344,6 +344,81 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
 });
 
 
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) test(`${engine} native tmux ${mode} lost receipt abstains across reload using independent registry evidence`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
+  process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
+  const begun = registry.beginSpawnRequest({ engine, cwd: root, transport: "tmux", launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic terminal conversation" }) });
+  if (begun.kind !== "created") throw new Error("Synthetic terminal launch refused");
+  const receipt = begun.receipt;
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const project = projectInfoFromCwd(root)!.project; setSharedMemoryEnabled(project, true);
+  const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+  const prompt = "Update widget parser";
+  fs.writeFileSync(transcript, JSON.stringify(engine === "claude"
+    ? { type: "user", message: { role: "user", content: "Earlier synthetic task" } }
+    : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Earlier synthetic task" }] } }) + "\n");
+  registry.settleSpawn(receipt.launchId, { key: { engine, sessionId: session }, artifactPath: transcript, cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const source = path.join(root, "cross.md");
+  fs.writeFileSync(source, engine === "claude"
+    ? "v1\n## User preferences\n- Widget parser uses escaped delimiters.\n"
+    : "---\nname: Widget parser\ndescription: Widget parser uses escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n");
+  await memoryIndex().refresh([{ path: source, engine: engine === "claude" ? "codex" : "claude",
+    sourceKind: engine === "claude" ? "codex_summary" : "claude_memory", project }]);
+  let calls = 0;
+  globalThis.fetch = (async (_url, init) => {
+    calls++; const body = JSON.parse(String(init?.body));
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
+  }) as typeof fetch;
+  const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+  let wire = "";
+  const child = path.join(root, "synthetic-child.jsonl");
+  if (mode === "relay") { fs.writeFileSync(child, ""); registry.ensureConversation(engine, child, "default"); }
+  const entry = { path: transcript, root, engine, title: "Synthetic terminal" } as FileEntry;
+  const childEntry = { ...entry, path: child, parent: transcript };
+  // The earlier operator hook ran before its journal row materialized.
+  const lock = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  lock?.exec("BEGIN IMMEDIATE");
+  const originalWrite = fs.writeFileSync;
+  const pending = path.join(process.env.LLV_STATE_DIR!, "memory-terminal-pending");
+  fs.writeFileSync = ((filename, ...args) => {
+    if (String(filename).startsWith(pending + path.sep)) throw Object.assign(Error("Synthetic receipt storage unavailable"), { code: "ENOSPC" });
+    return originalWrite(filename, ...args);
+  }) as typeof fs.writeFileSync;
+  let result;
+  try { result = await deliverConversationMessage({ path: mode === "relay" ? child : transcript, pid: process.pid, text: prompt, images: [],
+    origin: { kind: mode === "relay" ? "operator" : "agent" } }, { recover: async () => null, targetForKnownPid: async () => "%synthetic",
+    pathAllowed: () => true, listFiles: async () => mode === "relay" ? [entry, childEntry] : [entry],
+    resumeSpecFor: (_root, pathname) => mode === "relay" && pathname === child ? null : ({ command: "synthetic", engine, cwd: root, transcript, windowName: "synthetic", launchProfile: emptyLaunchProfile({ cwd: root }) }),
+    deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } }); }
+  finally { fs.writeFileSync = originalWrite; lock?.exec("ROLLBACK"); lock?.close(); }
+  memoryIndex().close();
+  expect(result.ok).toBe(true);
+  setAgentRegistryForTests(new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }));
+  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+    ...(engine === "claude" ? { source: "user" } : {}),
+    prompt_id: "synthetic-machine", turn_id: "synthetic-machine", prompt: wire };
+  expect(await offerForHook(request, input)).toBe("");
+  expect(calls).toBe(0);
+  expect(memoryIndex().turnOffers(receipt.conversationId)).toEqual([]);
+  memoryIndex().close();
+  expect(await offerForHook(request, input)).toBe("");
+  expect(calls).toBe(0);
+  if (mode === "followup") {
+    // Losing machine authorship keeps identical native text ambiguous, while
+    // independently authored structured operator input remains eligible.
+    const deliveryId = crypto.randomUUID();
+    const typed = engine === "codex" ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(deliveryId).digest("hex")) : prompt;
+    if (engine === "claude") new FileClaudeDeliveryLedger().recordQueued(session, { id: deliveryId, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt: typed, ...(engine === "claude" ? { delegatus_delivery_id: deliveryId } : {}) })).toContain("Delegatus shared memory");
+    expect(calls).toBe(1);
+  }
+});
+
+
 for (const engine of ["claude", "codex"] as const) for (const materialization of ["present", "pending", "unknown path"] as const) for (const origin of ["operator", "agent"] as const) test(`${engine} receipt-only native launch ${materialization} keeps ${origin} authorship and deferred offer names`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-launch-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";

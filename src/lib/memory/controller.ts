@@ -1,3 +1,4 @@
+import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -83,7 +84,23 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       // Consume launch authorship even before its transcript is materialized.
       // A retry of this native id keeps the same receipt; repeated words on a
       // later id do not consume it again.
-      origin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine) ?? "operator";
+      const terminalOrigin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine);
+      if (terminalOrigin === null) {
+        // Delivery can proceed after both optional receipt stores fail. The
+        // registry reservation predates transport and survives reload; without
+        // its matching receipt, native authorship remains unproven. Explicit
+        // structured operator metadata above needs no such inference.
+        const contentDigest = structuredContent(prompt, []).contentDigest;
+        const missingMachineReceipt = Object.values(snapshot.heldDeliveries).some(delivery =>
+          delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
+          && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
+          && !index.hasTerminalDelivery(delivery.command.operationId));
+        const relay = /^User message for your branch «[^\n]*» — forward it or handle it yourself:\n/.test(prompt)
+          && !index.hasTerminalPrompt(conversationId, prompt);
+        const missingLaunchReceipt = (receipt.delegationDepth ?? 1) > 0 && !index.hasTerminalDelivery(`spawn:${receipt.launchId}`);
+        if (missingMachineReceipt || missingLaunchReceipt || relay) return "";
+      }
+      origin = terminalOrigin ?? "operator";
       const initialOperator = receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt;
       if (origin !== "operator" || (transcript ? !transcript.includes(input.session_id) : !initialOperator)) return "";
       const priorTurns = transcript ? memoryTurnContext(transcript, engine, prompt, conversationId) : [];
