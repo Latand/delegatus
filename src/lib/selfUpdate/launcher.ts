@@ -5,7 +5,7 @@
    file; it never signals a process itself. The two sides agree on the JSON
    shape alone. */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { sameProcess } from "./pid";
@@ -102,12 +102,19 @@ export function launcherAlive(record: LauncherRecord, same: typeof sameProcess =
   return record.launcher.startIdentity !== null && same({ pid: record.launcher.pid, startIdentity: record.launcher.startIdentity });
 }
 
+/** Publish atomically without replacing another process's durable custody. */
+export function publishLauncherRequest(file: string, request: unknown): void {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(request)}\n`, { mode: 0o600, flag: "wx" });
+    linkSync(temporary, file);
+  } finally { rmSync(temporary, { force: true }); }
+}
+
 /** Files one restart request for the launcher to pick up. Answers its id. */
 export function requestRestart(record: LauncherRecord, role: LauncherRole): string {
   const requestId = randomUUID();
-  mkdirSync(dirname(record.requestFile), { recursive: true, mode: 0o700 });
-  const temporary = `${record.requestFile}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ requestId, role, requestedAt: new Date().toISOString() })}\n`, { mode: 0o600 });
-  renameSync(temporary, record.requestFile);
+  publishLauncherRequest(record.requestFile, { requestId, role, requestedAt: new Date().toISOString() });
   return requestId;
 }

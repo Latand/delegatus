@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, resolve, sep } from "node:path";
 import type { GreenVerdict } from "./green";
-import type { LauncherRecord, LauncherRole } from "./launcher";
+import { publishLauncherRequest, type LauncherRecord, type LauncherRole } from "./launcher";
 import type { QuietBlockers } from "./quiet";
 import type { Revision } from "./types";
 import { runGit } from "./git";
@@ -93,10 +93,7 @@ export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, t
     rollbackPointer, from: role === "web" ? record.web.revision : record.runtimeHost.revision, target,
   };
   persist(pending);
-  mkdirSync(dirname(record.requestFile), { recursive: true, mode: 0o700 });
-  const temporary = `${record.requestFile}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ requestId: pending.requestId, role, requestedAt: pending.at, autoGateId: gateId })}\n`, { mode: 0o600 });
-  renameSync(temporary, record.requestFile);
+  publishLauncherRequest(record.requestFile, { requestId: pending.requestId, role, requestedAt: pending.at, autoGateId: gateId });
   return pending;
 }
 export function restorePointer(file: string, raw: string | null): void {

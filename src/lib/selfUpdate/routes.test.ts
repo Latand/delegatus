@@ -495,7 +495,7 @@ describe("managed install: an update is one Viewer deployment", () => {
 describe("checkout install: a staged build and restarts by the launcher", () => {
   interface Harness { service: SelfUpdateService; deps: ServiceDeps; recordFile: string; spawned: string[][]; releaseBuild: (() => void) | null }
 
-  function harness(options: { holdBuild?: boolean; failBuildOnce?: boolean; remote?: string } = {}): Harness {
+  function harness(options: { holdBuild?: boolean; failBuildOnce?: boolean; relaunch?: boolean; remote?: string } = {}): Harness {
     const dir = mkdtempSync(join(root, "checkout-"));
     const state = join(dir, "state");
     mkdirSync(state, { recursive: true });
@@ -505,7 +505,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const entry = (revision: string) => ({ state: "healthy", pid, startIdentity, startedAt: new Date().toISOString(), revision, error: null, requestId: null });
     writeFileSync(recordFile, JSON.stringify({
       version: 1,
-      launcher: { pid, startIdentity, autoAdmission: 1 },
+      launcher: { pid, startIdentity, autoAdmission: 1, ...(options.relaunch ? { relaunch: 1, state: "healthy" } : {}) },
       checkout,
       releasesDir: join(dir, "releases"),
       releasePointer: join(state, "release.json"),
@@ -625,6 +625,61 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       releaseObservation(); h.releaseBuild?.(); h.service.stop();
     }
   });
+
+  const custodyActions = ["Update", "Retry", "web", "runtime-host"] as const;
+  for (const delayed of custodyActions) for (const accepted of custodyActions) {
+    if (delayed === accepted && (delayed === "Update" || delayed === "Retry")) continue;
+    // Update and Retry have different initial prerequisites; their identical
+    // apply reservation is exercised above with two eligible callers.
+    if ([delayed, accepted].includes("Retry") && [delayed, accepted].includes("Update")) continue;
+    test(`final custody gate preserves accepted ${accepted} against delayed ${delayed}`, async () => {
+      const retry = [delayed, accepted].includes("Retry");
+      const h = harness({ holdBuild: true, failBuildOnce: retry, relaunch: true });
+      setSelfUpdateServiceForTests(h.service);
+      let releaseObservation = () => {};
+      const observation = new Promise<void>(resolve => { releaseObservation = resolve; });
+      let reached = () => {};
+      const barrier = new Promise<void>(resolve => { reached = resolve; });
+      let reads = 0;
+      const invoke = (action: typeof delayed) => action === "Update" || action === "Retry"
+        ? updatePost(post("/update", { key: action, retry: action === "Retry" }))
+        : postRestart(post("/restart", { role: action, confirm: true }));
+      try {
+        await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+        if (retry) {
+          expect((await updatePost(post("/update", { key: "failed-first" }))).status).toBe(202);
+          await until(next => next.update.state === "failed");
+        }
+        h.deps.quiet = {
+          pipelines: () => [], presence: () => [], registryHealth: () => [],
+          runtimeSnapshot: async () => {
+            reads++;
+            if (reads === (delayed === "Update" || delayed === "Retry" ? 2 : 1)) { reached(); await observation; }
+            return { sessions: [] };
+          },
+        };
+        const losing = invoke(delayed);
+        await Promise.race([barrier, Bun.sleep(3000).then(() => { throw new Error("Admission observation missed barrier"); })]);
+        expect((await invoke(accepted)).status).toBe(202);
+        if (accepted === "Update" || accepted === "Retry") {
+          await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+          await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+        }
+        const requestFile = readLauncherRecord(h.recordFile)!.requestFile;
+        const original = readFileSync(requestFile, "utf8");
+        const applyFile = join(h.deps.dir, "apply.json");
+        const intent = existsSync(applyFile) ? readFileSync(applyFile, "utf8") : null;
+        releaseObservation();
+        const response = await losing;
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: `busy-${accepted === "Update" || accepted === "Retry" ? "update" : `restart-${accepted}`}` });
+        expect(readFileSync(requestFile, "utf8")).toBe(original);
+        if (intent) expect(readFileSync(applyFile, "utf8")).toBe(intent);
+        else expect(existsSync(applyFile)).toBe(false);
+        expect(JSON.parse(original).role).toBe(accepted === "Update" || accepted === "Retry" ? "relaunch" : accepted);
+      } finally { releaseObservation(); h.releaseBuild?.(); h.service.stop(); }
+    });
+  }
 
   test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
     const { procBackend } = await import("@/lib/proc");

@@ -543,9 +543,11 @@ export class SelfUpdateService {
         this.auto = { ...this.auto, rollbackPointer: existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null, rollbackCaptured: true };
         this.saveAuto();
       }
-      void runner.start(target.sha, { short: target.short, version: target.version, trigger: "auto" })
-        .catch((error) => console.error("[self-update] automatic build failed", error instanceof Error ? error.name : "unknown"))
-        .finally(() => this.afterUpdate());
+      this.reserve(record, () => {
+        void runner.start(target.sha, { short: target.short, version: target.version, trigger: "auto" })
+          .catch((error) => console.error("[self-update] automatic build failed", error instanceof Error ? error.name : "unknown"))
+          .finally(() => this.afterUpdate());
+      });
       return;
     }
     const quiet = this.deps.quiet;
@@ -607,21 +609,24 @@ export class SelfUpdateService {
         || admissionSnapshot.serving.web?.sha !== finalSnapshot.serving.web?.sha
         || admissionSnapshot.serving.runtimeHost?.sha !== finalSnapshot.serving.runtimeHost?.sha) return;
       if (this.unsafeLegacyAuto(admissionDecision)) return;
-      this.beginAutoCustody(target);
-      this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
-      if (record.launcher.relaunch === 1) {
-        this.apply.begin(record, target.sha, "auto", undefined, { rollbackPointer, state: "ready", autoGateId: gateId });
-        this.apply.send(record, gateId);
+      const occupied = this.reserve(record, () => {
+        this.beginAutoCustody(target);
+        this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
+        if (record.launcher.relaunch === 1) {
+          this.apply.begin(record, target.sha, "auto", undefined, { rollbackPointer, state: "ready", autoGateId: gateId });
+          this.apply.send(record, gateId);
+          requested = true;
+          this.changes.emit();
+          return;
+        }
+        requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
+          this.auto = { ...this.auto, pending: request };
+          this.persistNow();
+        });
         requested = true;
         this.changes.emit();
-        return;
-      }
-      requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
-        this.auto = { ...this.auto, pending: request };
-        this.persistNow();
       });
-      requested = true;
-      this.changes.emit();
+      if (occupied) return;
     } finally {
       if (!requested) endRestartGate(gateFile, gateId);
     }
@@ -1234,6 +1239,23 @@ export class SelfUpdateService {
 
   /* ---------- actions ---------- */
 
+  /** No await may separate this check from the custody write it admits. */
+  private reserve(record: LauncherRecord, write: () => void, ownedApply?: string): ActionResult | null {
+    const intent = this.apply.current;
+    if (this.runner?.state.state === "running" || managedActive(this.managed)
+      || intent && ["building", "ready", "switching"].includes(intent.state) && intent.requestId !== ownedApply) return busy("update");
+    if (this.pendingRestart) return busy(this.pendingRestart.role === "web" ? "restart-web" : "restart-runtime-host");
+    if (this.auto.pending) return busy(this.auto.pending.role === "web" ? "restart-web" : "restart-runtime-host");
+    if (existsSync(record.requestFile)) {
+      let role: string | undefined;
+      try { role = JSON.parse(readFileSync(record.requestFile, "utf8")).role; } catch { /* Unreadable custody remains occupied. */ }
+      return busy(role === "web" ? "restart-web" : role === "runtime-host" ? "restart-runtime-host" : "update");
+    }
+    if (this.checking) return busy("update");
+    write();
+    return null;
+  }
+
   async startUpdate(clientKey: string): Promise<ActionResult> {
     const decision = await this.decide();
     const snapshot = await this.snapshot();
@@ -1250,10 +1272,7 @@ export class SelfUpdateService {
       if (refusal) return refusal;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
-      // Snapshot observation awaits; reserve only against current custody.
-      if (this.runner?.state.state === "running" || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
-      this.startCheckout(decision.record, available);
-      return { ok: true };
+      return this.startCheckout(decision.record, available);
     }
     if (decision.mode === "managed") return this.deploy(available, clientKey);
     return refuse(409, "cannot-update", "This install cannot update itself");
@@ -1270,9 +1289,8 @@ export class SelfUpdateService {
       if (refusal) return refusal;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
-      // Snapshot observation awaits; reserve only against current custody.
-      if (this.runner?.state.state === "running" || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
-      this.apply.begin(decision.record, runner.state.target!, "operator");
+      const occupied = this.reserve(decision.record, () => this.apply.begin(decision.record!, runner.state.target!, "operator"));
+      if (occupied) return occupied;
       const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
       void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
       return { ok: true };
@@ -1302,11 +1320,13 @@ export class SelfUpdateService {
     return this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
   }
 
-  private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): void {
-    this.apply.begin(record, target.sha, trigger, deploymentId);
+  private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): ActionResult {
+    const occupied = this.reserve(record, () => this.apply.begin(record, target.sha, trigger, deploymentId));
+    if (occupied) return occupied;
     const runner = this.runnerFor(record);
     void runner.start(target.sha, { short: target.short, version: target.version, trigger })
       .then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
+    return { ok: true };
   }
 
   private failApply(error: unknown): void {
@@ -1324,7 +1344,10 @@ export class SelfUpdateService {
     this.apply.patch({ state: "ready" });
     const current = await this.decide();
     if (!current.record) throw new Error("The launcher is unavailable");
-    if (current.record.launcher.relaunch === 1) this.apply.send(current.record);
+    if (current.record.launcher.relaunch === 1) {
+      const occupied = this.reserve(current.record, () => this.apply.send(current.record!), this.apply.current!.requestId);
+      if (occupied) throw new Error(occupied.ok ? "Apply reservation failed" : occupied.error);
+    }
     else {
       const intent = this.apply.current!;
       let previousEntry: string | undefined;
@@ -1379,8 +1402,9 @@ export class SelfUpdateService {
         }) : null;
         if (rollbackPointer === undefined) return refuse(409, "cannot-restart", "The prior serving release cannot be verified");
         if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
-        this.apply.begin(record, release.sha, "operator", undefined, { rollbackPointer,
-          rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "building" });
+        const occupied = this.reserve(record, () => this.apply.begin(record, release.sha, "operator", undefined, { rollbackPointer,
+          rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "building" }));
+        if (occupied) return occupied;
         this.apply.patch({ externalRestart: true });
         // An old bootstrap cannot read the trial if the new entry fails before
         // loading its recovery code. Reject that entry before stopping anything.
@@ -1471,7 +1495,7 @@ export class SelfUpdateService {
       const current = await this.decide();
       if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
       const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
-      if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state) || admitted)
+      if (this.reserve(record, () => {}) || admitted)
         return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
       const serving = current.record!;
       const alreadyServing = serving.launcher.state === "healthy" && !serving.launcher.error && serving.launcher.revision === target
@@ -1484,7 +1508,10 @@ export class SelfUpdateService {
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
         phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
         health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
-      try { if (!alreadyServing) this.startCheckout(record, revision, "seat", deploymentId); }
+      try { if (!alreadyServing) {
+        const started = this.startCheckout(record, revision, "seat", deploymentId);
+        if (!started.ok) throw new Error(started.error);
+      } }
       catch (error) {
         const row = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === deploymentId)!;
         saveCheckoutDeployment(this.deps.dir, { ...row, phase: "failed", terminal: true, error: error instanceof Error ? error.message : String(error), updatedAt: new Date(this.deps.now()).toISOString(), revisionNumber: row.revisionNumber + 1 });
@@ -1551,8 +1578,11 @@ export class SelfUpdateService {
       return refuse(409, "cannot-restart", "Upgrade the launcher using the install action first");
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
-    const requestId = this.deps.requestRestart(decision.record, role);
-    this.pendingRestart = { role, requestId, at: this.deps.now(), from: role === "web" ? decision.record.web.revision : decision.record.runtimeHost.revision, target: snapshot.installed.sha };
+    const occupied = this.reserve(decision.record, () => {
+      const requestId = this.deps.requestRestart(decision.record!, role);
+      this.pendingRestart = { role, requestId, at: this.deps.now(), from: role === "web" ? decision.record!.web.revision : decision.record!.runtimeHost.revision, target: snapshot.installed.sha };
+    });
+    if (occupied) return occupied;
     this.saveNow();
     this.changes.emit();
     return { ok: true };
@@ -1672,7 +1702,10 @@ export class SelfUpdateService {
           if (intent.trigger === "auto") {
             if (!intent.autoGateId || activeRestartGate(restartGateFile(record.requestFile), this.deps.now()) !== intent.autoGateId) {
               this.apply.restoreUntaken(record); this.apply.patch({ state: "failed", admissionRefused: true, detail: "The automatic admission expired during recovery" });
-            } else this.apply.send(record, intent.autoGateId);
+            } else {
+              const occupied = this.reserve(record, () => this.apply.send(record, intent.autoGateId), intent.requestId);
+              if (occupied) throw new Error(occupied.ok ? "Apply reservation failed" : occupied.error);
+            }
           } else await this.applyBuilt();
         } catch (error) { this.failApply(error); }
       }

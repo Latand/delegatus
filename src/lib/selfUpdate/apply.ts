@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { releaseDrain, writeDrain } from "./drain";
-import { launcherControlFile, type LauncherRecord } from "./launcher";
+import { launcherControlFile, publishLauncherRequest, type LauncherRecord } from "./launcher";
 export interface ApplyIntent {
   requestId: string; target: string; releasePointer?: string; rollbackPointer: string | null; launcherPid: number; launcherIdentity: string | null;
   rollbackWebRevision?: string | null; rollbackHostRevision?: string | null; rollbackPackage?: { root: string; version: string };
@@ -58,7 +58,7 @@ export class ApplyController {
     rmSync(`${record.requestFile}.result.json`, { force: true });
     this.patch({ state: "switching", switchedAt: new Date().toISOString() });
     try {
-      writeAtomic(record.requestFile, { requestId: intent.requestId, role: "relaunch", target: intent.target,
+      publishLauncherRequest(record.requestFile, { requestId: intent.requestId, role: "relaunch", target: intent.target,
         rollbackPointer: intent.rollbackPointer, requestedAt: intent.startedAt, ...(autoGateId ? { autoGateId } : {}) });
     } catch (error) {
       this.restoreUntaken(record);
