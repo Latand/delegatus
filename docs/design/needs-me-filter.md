@@ -176,6 +176,15 @@ are a sibling `<div>` (`:523`).
 
 Do not touch `data-needs` or `data-phone-card`. Existing tests read them.
 
+The funnel lives in the ⚠ sheet, so a closed sheet needs its own sign that the
+filter is on: the phone has no hover to bring a dimmed card back, and a working
+agent's card otherwise reads as switched off. `MobileShellHost.filterActive`
+(`MobileShell.tsx`) carries the state to the ⚠ badge, which swaps its triangle
+for a funnel and its warning tone for the pressed tone (`BAR_PRESSED`), sets
+`data-mobile2-filter`, and adds `mobile2.bar.filterOn` to its `aria-label`. The
+pill keeps its height, padding and glyph size, so the bar and the cards do not
+move. The funnel shows only while the queue is non-empty, as the filter does.
+
 ---
 
 ## 5. Where the toggle state lives, and how each control reaches it

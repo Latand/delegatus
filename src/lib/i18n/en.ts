@@ -3314,6 +3314,7 @@ export const en = {
      Keys are append-only per lane, prefixed by surface. */
   "mobile2.bar.back": "Back",
   "mobile2.bar.switchProject": "Switch project",
+  "mobile2.bar.filterOn": "showing only those waiting on you",
   "mobile2.bar.attention": { one: "{count} needs you", other: "{count} need you" },
   "mobile2.bar.search": "Find your messages",
   "mobile2.bar.more": "More actions",

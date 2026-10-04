@@ -3249,6 +3249,7 @@ export const uk: Record<keyof typeof en, Message> = {
      примітиви аркуша й квитанції, перемикач проєктів і меню дошки. */
   "mobile2.bar.back": "Назад",
   "mobile2.bar.switchProject": "Змінити проєкт",
+  "mobile2.bar.filterOn": "показано лише тих, хто чекає на вас",
   "mobile2.bar.attention": { one: "{count} чекає на вас", few: "{count} чекають на вас", many: "{count} чекають на вас", other: "{count} чекає на вас" },
   "mobile2.bar.search": "Знайти ваші повідомлення",
   "mobile2.bar.more": "Більше дій",

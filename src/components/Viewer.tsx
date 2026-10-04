@@ -1543,6 +1543,7 @@ function ViewerApp() {
     return {
       attentionCount: shellQueueCount,
       noticeDot: phoneNotices.unseen,
+      filterActive: needsOnly && needsOnlyAvailable,
       arrival: toastFile ? (
         <AttentionToast
           file={toastFile}

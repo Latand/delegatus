@@ -31,6 +31,54 @@
       ],
       "overflow": 0
     },
+    "barOff": {
+      "marked": false,
+      "label": "2 need you",
+      "glyph": "lucide lucide-triangle-alert h-[13px] w-[13px]",
+      "pill": "oklab(0.517981 0.0226654 0.105616 / 0.45)|rgb(255, 244, 221)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
+    },
+    "barOn": {
+      "marked": true,
+      "label": "2 need you, showing only those waiting on you",
+      "glyph": "lucide lucide-funnel h-[13px] w-[13px]",
+      "pill": "oklab(0.530663 0.0339187 -0.206729 / 0.45)|oklab(0.530663 0.0339187 -0.206729 / 0.1)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
+    },
     "before": [
       {
         "waits": true,
@@ -250,6 +298,54 @@
         }
       ],
       "overflow": 0
+    },
+    "barOff": {
+      "marked": false,
+      "label": "2 need you",
+      "glyph": "lucide lucide-triangle-alert h-[13px] w-[13px]",
+      "pill": "oklab(0.777895 0.0167479 0.131943 / 0.45)|rgb(43, 35, 18)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
+    },
+    "barOn": {
+      "marked": true,
+      "label": "2 need you, showing only those waiting on you",
+      "glyph": "lucide lucide-funnel h-[13px] w-[13px]",
+      "pill": "oklab(0.686886 0.0401993 -0.166043 / 0.45)|oklab(0.686886 0.0401993 -0.166043 / 0.1)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
     },
     "before": [
       {
@@ -471,6 +567,54 @@
       ],
       "overflow": 0
     },
+    "barOff": {
+      "marked": false,
+      "label": "2 чекають на вас",
+      "glyph": "lucide lucide-triangle-alert h-[13px] w-[13px]",
+      "pill": "oklab(0.517981 0.0226654 0.105616 / 0.45)|rgb(255, 244, 221)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
+    },
+    "barOn": {
+      "marked": true,
+      "label": "2 чекають на вас, показано лише тих, хто чекає на вас",
+      "glyph": "lucide lucide-funnel h-[13px] w-[13px]",
+      "pill": "oklab(0.530663 0.0339187 -0.206729 / 0.45)|oklab(0.530663 0.0339187 -0.206729 / 0.1)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
+    },
     "before": [
       {
         "waits": true,
@@ -690,6 +834,54 @@
         }
       ],
       "overflow": 0
+    },
+    "barOff": {
+      "marked": false,
+      "label": "2 чекають на вас",
+      "glyph": "lucide lucide-triangle-alert h-[13px] w-[13px]",
+      "pill": "oklab(0.777895 0.0167479 0.131943 / 0.45)|rgb(43, 35, 18)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
+    },
+    "barOn": {
+      "marked": true,
+      "label": "2 чекають на вас, показано лише тих, хто чекає на вас",
+      "glyph": "lucide lucide-funnel h-[13px] w-[13px]",
+      "pill": "oklab(0.686886 0.0401993 -0.166043 / 0.45)|oklab(0.686886 0.0401993 -0.166043 / 0.1)",
+      "badge": {
+        "left": 242,
+        "top": 3.5,
+        "width": 52,
+        "height": 44
+      },
+      "pillBox": {
+        "left": 245.15625,
+        "top": 11.5,
+        "width": 45.6875,
+        "height": 28
+      },
+      "title": {
+        "left": 4,
+        "top": 3.5,
+        "width": 236,
+        "height": 44
+      }
     },
     "before": [
       {

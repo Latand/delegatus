@@ -15920,7 +15920,17 @@ describe("needs-you filter: the board dims every card that does not wait on the 
               const rect = el.getBoundingClientRect();
               return { waits: el.getAttribute("data-attention") === "needs", opacity: Number(style.opacity), filter: style.filter, left: rect.left, top: rect.top, width: rect.width, height: rect.height, text: (el.textContent ?? "").slice(0, 40) };
             }));
+            /* The ⚠ badge and the bar around it, with the sheet closed: the filter's
+               state has to read from the badge, and the bar must not move. */
+            const bar = () => page.evaluate(() => {
+              const badge = document.querySelector("[data-mobile2-attention-count]") as HTMLElement;
+              const title = document.querySelector("[data-mobile2-title]") as HTMLElement;
+              const pill = badge.firstElementChild as HTMLElement;
+              const box = (el: Element) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
+              return { marked: badge.hasAttribute("data-mobile2-filter"), label: badge.getAttribute("aria-label"), glyph: pill.querySelector("svg")?.getAttribute("class") ?? "", pill: getComputedStyle(pill).borderTopColor + "|" + getComputedStyle(pill).backgroundColor, badge: box(badge), pillBox: box(pill), title: box(title) };
+            });
             const before = await shells();
+            const barOff = await bar();
             await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
 
             await page.locator("[data-mobile2-attention-count]").first().click();
@@ -15945,6 +15955,7 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             await page.locator("[data-mobile2-close]").first().click();
             await page.waitForTimeout(900);
             const after = await shells();
+            const barOn = await bar();
             await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
             const dimToken = await token(page);
 
@@ -15954,7 +15965,7 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             await page.locator("[data-mobile2-close]").first().click();
             await page.waitForTimeout(900);
             const off = await shells();
-            readings.push({ label, token: dimToken, labelOff, labelOn, pressed, funnelHeight: funnelBox.height, funnelWidth: funnelBox.width, funnelWidthOn: funnelBoxOn.width, header, before, after, off, pageErrors });
+            readings.push({ label, token: dimToken, labelOff, labelOn, pressed, funnelHeight: funnelBox.height, funnelWidth: funnelBox.width, funnelWidthOn: funnelBoxOn.width, header, barOff, barOn, before, after, off, pageErrors });
             expect(pageErrors, `${label} page errors`).toEqual([]);
           } finally { await context.close(); }
         }
@@ -15963,7 +15974,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
     fs.writeFileSync(path.join(EVIDENCE, "geometry-phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
 
     type Shell = { waits: boolean; opacity: number; filter: string; left: number; top: number; width: number; height: number };
-    for (const entry of readings as Array<{ label: string; token: number; labelOff: string; labelOn: string; pressed: string; funnelHeight: number; funnelWidth: number; funnelWidthOn: number; header: { sheetLeft: number; sheetRight: number; parts: Array<{ left: number; right: number }>; overflow: number }; before: Shell[]; after: Shell[]; off: Shell[] }>) {
+    type Rect = { left: number; top: number; width: number; height: number };
+    type Bar = { marked: boolean; label: string; glyph: string; pill: string; badge: Rect; pillBox: Rect; title: Rect };
+    for (const entry of readings as Array<{ label: string; token: number; labelOff: string; labelOn: string; pressed: string; funnelHeight: number; funnelWidth: number; funnelWidthOn: number; barOff: Bar; barOn: Bar; header: { sheetLeft: number; sheetRight: number; parts: Array<{ left: number; right: number }>; overflow: number }; before: Shell[]; after: Shell[]; off: Shell[] }>) {
       const scheme = entry.label.includes("-dark-") ? "dark" : "light";
       const locale = entry.label.endsWith("-uk") ? "uk" : "en";
       expect(entry.token, `${entry.label} the token the stylesheet carries`).toBe(DIM_OPACITY[scheme]);
@@ -15973,6 +15986,17 @@ describe("needs-you filter: the board dims every card that does not wait on the 
       expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
       expect(entry.labelOff, `${entry.label} funnel label`).toBe(translate(locale, "attention.filterOnTouch"));
       expect(entry.labelOn, `${entry.label} funnel label when on`).toBe(translate(locale, "attention.filterOffTouch"));
+      expect(entry.barOff.marked, `${entry.label} the badge shows no filter while it is off`).toBe(false);
+      expect(entry.barOn.marked, `${entry.label} the badge shows the filter while the sheet is closed`).toBe(true);
+      expect(entry.barOn.label, `${entry.label} the badge says so to a screen reader`).toContain(translate(locale, "mobile2.bar.filterOn"));
+      expect(entry.barOff.label, `${entry.label} the badge says nothing of the filter while it is off`).not.toContain(translate(locale, "mobile2.bar.filterOn"));
+      expect(entry.barOn.glyph, `${entry.label} the funnel replaces the triangle`).not.toBe(entry.barOff.glyph);
+      expect(entry.barOn.pill, `${entry.label} the pressed tone replaces the warning tone`).not.toBe(entry.barOff.pill);
+      for (const key of ["left", "top", "width", "height"] as const) {
+        expect(Math.abs(entry.barOn.badge[key] - entry.barOff.badge[key]), `${entry.label} badge ${key} with the filter on`).toBeLessThan(0.01);
+        expect(Math.abs(entry.barOn.pillBox[key] - entry.barOff.pillBox[key]), `${entry.label} pill ${key} with the filter on`).toBeLessThan(0.01);
+        expect(Math.abs(entry.barOn.title[key] - entry.barOff.title[key]), `${entry.label} title cell ${key} with the filter on`).toBeLessThan(0.01);
+      }
       expect(entry.header.overflow, `${entry.label} the sheet header does not overflow`).toBeLessThanOrEqual(0);
       for (const part of entry.header.parts) {
         expect(part.left, `${entry.label} a header part starts inside the sheet`).toBeGreaterThanOrEqual(entry.header.sheetLeft - 0.5);
