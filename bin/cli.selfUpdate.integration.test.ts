@@ -1945,3 +1945,38 @@ test(`private terminal custody ${shape}/${alias}/${actionId}, rollback=${rollbac
   }
   expect(output.includes(key)).toBe(false);
 }, 60000);
+
+
+test.each(["gate-expired", "new-work", "launcher-changed"] as const)("resident relaunch fences the last awaited load preflight: %s", async change => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { beginRestartGate, restartGateFile } = await import("../src/lib/selfUpdate/restartGate");
+  const { writeDrain } = await import("../src/lib/selfUpdate/drain");
+  const { f, key } = await protectedInstall("checkout", "LLV_TOKEN");
+  const running = await start(f);
+  const before = await until(() => { const r = readRecord(f.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const candidate = release(f, "dispatch-load-fence");
+  const entered = path.join(f.root, "load-entered"), released = path.join(f.root, "load-released");
+  const entry = path.join(candidate.dir, "bin", "cli.mjs");
+  writeFileSync(entry, `if (process.argv.includes("--version")) { const fs = await import("node:fs"); fs.writeFileSync(${JSON.stringify(entered)}, String(process.pid)); while (!fs.existsSync(${JSON.stringify(released)})) await Bun.sleep(5); }\n`
+    + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
+  const dir = path.dirname(before.requestFile), apply = new ApplyController(dir);
+  const gateFile = restartGateFile(before.requestFile), gateId = beginRestartGate(gateFile)!;
+  apply.begin(before as never, candidate.sha, "auto", undefined, { autoGateId: gateId });
+  writeDrain(path.join(dir, "auto-drain.json"), { id: apply.current!.requestId, target: candidate.sha, since: apply.current!.startedAt, until: Date.now() + 600000, persistent: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: f.first }));
+  apply.send(before as never, gateId);
+  const originalApply = readFileSync(path.join(dir, "apply.json"), "utf8"), originalRequest = readFileSync(before.requestFile, "utf8");
+  await until(() => existsSync(entered));
+  if (change === "gate-expired") { const gate = JSON.parse(readFileSync(gateFile, "utf8")); writeFileSync(gateFile, JSON.stringify({ ...gate, until: 0 })); }
+  if (change === "new-work") writeFileSync(path.join(f.state, "agent-registry.json"), JSON.stringify({ admitted: "new-work-during-load" }));
+  if (change === "launcher-changed") { const r = readRecord(f.state); r.launcher.startIdentity = "foreign-custody"; writeFileSync(recordFile(f.state), JSON.stringify(r)); }
+  const finalGate = readFileSync(gateFile, "utf8"), finalOwner = readFileSync(recordFile(f.state), "utf8");
+  writeFileSync(released, "");
+  await until(() => { try { return JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8")).state === "rejected"; } catch { return false; } });
+  expect(readFileSync(path.join(dir, "apply.json"), "utf8")).toBe(originalApply);
+  expect(readFileSync(before.requestFile, "utf8")).toBe(originalRequest);
+  expect(readFileSync(gateFile, "utf8")).toBe(finalGate); expect(readFileSync(recordFile(f.state), "utf8")).toBe(finalOwner);
+  const after = readRecord(f.state);
+  expect(after.web.pid).toBe(before.web.pid); expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+  await perimeterRemains(running.port, key);
+}, 30000);
