@@ -23,7 +23,7 @@ import { realExec } from "@/lib/workflows/provision";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { IDLE_TURN_QUIET_MS } = engineModule;
+const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
 const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
@@ -18006,6 +18006,272 @@ test("a really interrupted idle turn is stopped by the product's own stop and re
   } finally {
     f.end();
   }
+});
+
+/** The runtime's own release as the delivery controller performs it: the
+    host's process ends, the host reports `unhosted` through its persistence
+    binding, and the row is asked to retire with no confirmed identities. */
+function runtimeReleaseOf(f: Awaited<ReturnType<typeof idleStageHostFixture>>, onReleased: () => void = () => {}) {
+  const retired: boolean[] = [];
+  return {
+    retired,
+    terminateOwnedHost: async (key: Parameters<typeof f.registry.terminateStructuredHost>[0], expected: Parameters<typeof f.registry.terminateStructuredHost>[1]) => {
+      // The fixture's own child, by the pid it recorded; its process probes then answer "gone".
+      process.kill(f.hostPid, "SIGKILL");
+      f.termination.signal(f.hostPid, "SIGKILL");
+      onReleased();
+      f.host.emit({ status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
+      retired.push(f.registry.terminateStructuredHost(key, expected));
+      return true;
+    },
+  };
+}
+
+test("an automatic stop whose first step is the runtime's own release still retires the row and replaces the attempt", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    const release = runtimeReleaseOf(f);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination, terminateOwnedHost: release.terminateOwnedHost } });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    // The runtime's own retirement was refused by the captured tree, and the host's terminal write moved the row.
+    expect(release.retired).toEqual([false]);
+    // The stop did not read its own consequences as somebody else's change: the ladder retired the row.
+    const row = f.row();
+    expect(row.status).toBe("dead");
+    expect(row.claimOwner).toBeNull();
+    expect(row.structuredHost?.process ?? null).toBeNull();
+    expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured"]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
+  } finally {
+    f.end();
+  }
+});
+
+test("a descendant that outlives the runtime's release is still signalled, and the attempt is replaced", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    /* A descendant that left the host's process group. It is a number only: no
+       such process is consulted, and every signal here is recorded, never sent. */
+    const CHILD = 4_190_001;
+    let rootGone = false;
+    let childGone = false;
+    const signals: string[] = [];
+    const release = runtimeReleaseOf(f, () => { rootGone = true; });
+    const termination = { ...f.termination,
+      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [CHILD, f.hostPid]]),
+      pidAlive: (pid: number) => (pid === CHILD && !childGone) || (pid === f.hostPid && !rootGone),
+      processIdentity: (pid: number) => pid === CHILD ? (childGone ? null : "child:start") : f.termination.processIdentity(pid),
+      signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); if (pid === CHILD) childGone = true; },
+      terminateOwnedHost: release.terminateOwnedHost };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(signals).toEqual([`SIGTERM:${CHILD}`]);
+    const row = f.row();
+    expect(row.status).toBe("dead");
+    expect(row.structuredHost?.process ?? null).toBeNull();
+    expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
+  } finally {
+    f.end();
+  }
+});
+
+test("a stop still withdraws when the host resumes before the runtime released anything", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    const before = structuredClone(f.row());
+    let asked = 0;
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination,
+        // The runtime holds nothing of this host, and the agent writes while it is asked.
+        terminateOwnedHost: async () => { asked += 1; fs.appendFileSync(f.transcriptPath, "the agent resumed work\n"); return false; } } });
+      expect(await production.stopInterruptedStageAgent!(f.target, { allowIdle: true })).toBeNull();
+    });
+    expect(asked).toBe(1);
+    expect(f.signals).toEqual([]);
+    expect(f.row()).toEqual(before);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured", "withdrawn"]);
+  } finally {
+    f.end();
+  }
+});
+
+const SILENT_RUN = [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }];
+
+/** A structured stage that started before the service restarted one minute
+    into it, and then worked on for half an hour under the new process. */
+async function attemptThatWorkedOnAfterRestart(h: ReturnType<typeof harness>) {
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const bootAt = Date.parse(attempt.startedAt!) + 60_000;
+  h.advanceWallClock(30 * 60_000);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  return { attempt, ports: (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => bootAt,
+    conversationTurnInterrupted: async () => interruption }) };
+}
+
+test("an attempt that worked on after a restart and is stopped for silence later is not called a restart", async () => {
+  const h = harness();
+  const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], ports("idle"));
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 was stopped by Delegatus after its turn went silent; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("was stopped by Delegatus after its turn went silent");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+});
+
+test("an attempt that worked on after a restart and whose host is found gone later is not called a restart", async () => {
+  const h = harness();
+  const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
+  await tickPipelines([entry(attempt.agentPath!)], ports("dead"));
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("lost its host while its turn was open");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+});
+
+test("an attempt whose transcript did not grow after the restart is still called a restart", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  // The newest record is from before the boot, one minute into the attempt.
+  const bootAt = Date.parse(attempt.startedAt!) + 60_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: bootAt - 1 });
+  h.advanceWallClock(30 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "boot-2", restartRecoveryBootStartedAt: () => bootAt, conversationTurnInterrupted: async () => "dead" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
+});
+
+test("retry-stage leaves an idle host whose transcript is still growing, and stops it once the transcript has been silent for the bound", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  const idle: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" };
+  const stops = () => h.calls.filter((call) => call.startsWith("stop-host:"));
+  // The continuation wrote a record two seconds ago.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(2_000);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  const young = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
+  expect(young).toMatchObject({ status: 409, error: "the running attempt is not confirmed stalled or has a pending delivery" });
+  expect(stops()).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  // The same record, a minute short of the bound and then past it.
+  h.advanceWallClock(IDLE_TURN_QUIET_MS - 62_000);
+  expect(await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle)).toMatchObject({ status: 409 });
+  expect(stops()).toEqual([]);
+  h.advanceWallClock(60_000);
+  await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
+  expect(stops()).toEqual([`stop-host:build:1:${attempt.conversationId}`]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "confirmed stalled attempt was stopped for retry" });
+});
+
+test("a recovery that parks names a restart only when the service restarted", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.setStageHost(attempt.conversationId!, { outcome: "unresolved", error: "1 process outlived the kill", survivors: [] });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  // The same boot the attempt started under: Delegatus's own stop of a silent host stayed unresolved.
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" });
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe("interrupted-turn recovery could not confirm termination of the interrupted stage host");
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(parked.stateDetail);
+  /* The reservation refusal needs a stage whose run record is missing, which no
+     tick reaches for the attempt it is replacing; its words are read here. */
+  for (const step of ["termination", "reservation"] as const) {
+    expect(interruptedTurnRecoveryParkDetail(step, false)).not.toContain("restart");
+    expect(interruptedTurnRecoveryParkDetail(step, true)).toStartWith("restart recovery could not ");
+  }
+  expect(interruptedTurnRecoveryParkDetail("reservation", false)).toBe("interrupted-turn recovery could not reserve a fresh stage attempt");
+});
+
+test("the same unresolved stop after a real restart keeps naming the restart", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.setStageHost(attempt.conversationId!, { outcome: "unresolved", error: "1 process outlived the kill", survivors: [] });
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) + 60_000,
+    conversationTurnInterrupted: async () => "dead" });
+  expect(loadPipelines()[0]!.stateDetail).toBe("restart recovery could not confirm termination of the interrupted stage host");
 });
 
 test("an OOM death retries once after headroom recovers in the same worktree, then parks", async () => {

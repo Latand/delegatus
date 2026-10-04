@@ -1005,6 +1005,8 @@ async function stopStageHostByRecordedIdentity(
   observationGuard?: () => { status: 409; error: string } | null,
   /** Told the tree capture this stop wrote, and null once it is withdrawn. */
   onCapture?: (capture: StructuredTerminationCapture | null) => void,
+  /** Told once the stop has released the host or is about to signal it. */
+  onFirstEffect?: () => void,
 ): Promise<PipelineStageStopResult> {
   const registry = agentRegistry();
   const refused = (reason: string): PipelineStageStopResult => ({
@@ -1065,6 +1067,10 @@ async function stopStageHostByRecordedIdentity(
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
     authorize,
+    onFirstEffect: () => {
+      termination.onFirstEffect?.();
+      onFirstEffect?.();
+    },
     ...(termination.persistCapturedTree ? {} : {
       persistCapturedTree: (identities: readonly ProcessIdentity[]) => {
         capture = registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source);
@@ -1351,13 +1357,22 @@ export function defaultPipelinePorts(
       if (stamp() !== observed) return null;
       if (!probe || !probe.resident()) return { outcome: "not-running" };
       let changed = false;
+      /* The stamp asks whether the host resumed work before this stop touched
+         it. Once the stop has released the host or signalled it, the row and
+         the claim move because of the stop itself: the host reports `unhosted`
+         and its binding gives the claim up. Reading that as somebody else's
+         change would leave a dead host's row behind with its captured tree and
+         its descendants unsignalled, so from the first effect on the ladder
+         runs to its end on the identity and row checks alone. */
+      let effectStarted = false;
       const guard = (): { status: 409; error: string } | null => {
-        if (stamp() === observed) return null;
+        if (effectStarted || stamp() === observed) return null;
         changed = true;
         return { status: 409, error: "stage host evidence changed before automatic termination" };
       };
       if (guard()) return null;
-      const stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, guard, (capture) => { ownCapture = capture; });
+      const stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, guard,
+        (capture) => { ownCapture = capture; }, () => { effectStarted = true; });
       // The runtime can retire its own row during termination. That revision
       // change is a completed stop when no captured process survived.
       if (stopped.outcome === "unresolved" && stopped.survivors.length === 0 && !probe.resident()) {
@@ -3815,6 +3830,16 @@ const INTERRUPTION_WORDS: Record<PipelineStageInterruptionCause, { error: string
   },
 };
 
+/** What the lane, the attempt and the card note say when the recovery of an
+    interrupted turn parks. A restart is named only when the service restarted
+    under the attempt, the same rule the replacement's words follow. */
+export function interruptedTurnRecoveryParkDetail(step: "termination" | "reservation", restarted: boolean): string {
+  const recovery = restarted ? "restart recovery" : "interrupted-turn recovery";
+  return step === "termination"
+    ? `${recovery} could not confirm termination of the interrupted stage host`
+    : `${recovery} could not reserve a fresh stage attempt`;
+}
+
 /** The turn evidence a replacement was decided on. */
 type InterruptedTurnEvidence = { kind: "idle" | "dead" | "stalled"; restarted: boolean };
 const recoveryHost = globalThis as typeof globalThis & {
@@ -3907,7 +3932,7 @@ async function replaceInterruptedStageAttempt(
     return false;
   }
   if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
-    park(pipeline, "restart recovery could not confirm termination of the interrupted stage host", attempt);
+    park(pipeline, interruptedTurnRecoveryParkDetail("termination", interruption.restarted), attempt);
     persist();
     return true;
   }
@@ -3921,7 +3946,7 @@ async function replaceInterruptedStageAttempt(
   attempt.error = `${INTERRUPTION_WORDS[cause].error}; replaced by a fresh stage attempt`;
   const replacement = newAttempt(pipeline, stage);
   if (!runFor(pipeline, stage.id) || !replacement) {
-    park(pipeline, "restart recovery could not reserve a fresh stage attempt", attempt);
+    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", interruption.restarted), attempt);
     persist();
     return true;
   }
@@ -3985,9 +4010,13 @@ async function recoverInterruptedStageTurn(
     persist();
   }
   /* The service restarted under this attempt when this process booted after
-     the attempt started, or the runtime host generation it launched under is
-     no longer the one answering. Anything else is not a restart. */
-  const restarted = bootStartedAt > unixMs(attempt.startedAt)
+     the attempt started and the transcript has not grown since that boot, or
+     the runtime host generation it launched under is no longer the one
+     answering. An attempt that worked on after a restart survived it: what
+     ends it later is a lost host or a stop, and is named as such. An undated
+     transcript proves no work after the boot. */
+  const newestRecordAt = recoveryEvidence.lastRecordAt ?? recoveryEvidence.message?.ts ?? null;
+  const restarted = (bootStartedAt > unixMs(attempt.startedAt) && (newestRecordAt === null || newestRecordAt <= bootStartedAt))
     || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch);
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null,
     { kind: latestInterrupted, restarted });
@@ -9710,12 +9739,12 @@ export async function patchPipeline(
       if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
         if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
           || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
-          return { error: "the restart-parked attempt still has a pending continuation", status: 409 };
+          return { error: "the attempt parked by turn recovery still has a pending continuation", status: 409 };
         }
         const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           persist();
-          return { error: "the restart-parked attempt host has not confirmed termination", status: 409 };
+          return { error: "the host of the attempt parked by turn recovery has not confirmed termination", status: 409 };
         }
       }
       if (pipeline.state === "running") {
@@ -9725,7 +9754,10 @@ export async function patchPipeline(
           || req.expectedStageId !== stage.id) return { error: "running retry requires the confirmed stalled stage and expectedAttempt", status: 409 };
         const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
         const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+        /* The same rule the automatic recovery reads: an idle host whose
+           transcript is still growing is an agent at work, never a stall. */
         if (!interrupted || durable?.turn !== "busy" || durable.launchOnly
+          || (interrupted === "idle" && !idleTurnSilent(durable, ports))
           || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
           || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           return { error: "the running attempt is not confirmed stalled or has a pending delivery", status: 409 };
