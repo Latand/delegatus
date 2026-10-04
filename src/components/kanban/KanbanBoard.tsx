@@ -3129,7 +3129,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
         <span className="n num">{filtering ? t("kanban.columnCount", { shown: shown.length, total: column.cards.length }) : column.cards.length}</span>
         {column.working ? <span className="live num" data-count={column.working} title={t("kanban.columnWorking", { count: column.working })}><span className="ct">{t("kanban.columnWorking", { count: column.working })}</span></span> : null}
         {column.needsYou ? <span className="needs num" data-count={column.needsYou} title={t("kanban.columnNeeds", { count: column.needsYou })}><span className="ct">{t("kanban.columnNeeds", { count: column.needsYou })}</span></span> : null}
-        {status === "assigned" && column.stopped ? <span className="stopped num" data-column-stopped={column.stopped} title={t("kanban.columnStopped", { count: column.stopped })}>{t("kanban.columnStopped", { count: column.stopped })}</span> : null}
+        {status === "assigned" && column.stopped ? <span className="stopped num" data-count={column.stopped} data-column-stopped={column.stopped} title={t("kanban.columnStopped", { count: column.stopped })}>{t("kanban.columnStopped", { count: column.stopped })}</span> : null}
         {status === "blocked" && column.noReason ? <span className="no-reason num" data-count={column.noReason} data-column-no-reason={column.noReason} title={t("kanban.columnNoReason", { count: column.noReason })}>{t("kanban.columnNoReason", { count: column.noReason })}</span> : null}
         <span className="spacer" />
         {widths && widths.wide === status ? (

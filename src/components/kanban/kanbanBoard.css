@@ -280,7 +280,7 @@
 /* The head is one line from a 220 px shelf up: the title, its count and the
    buttons keep their size, and the «working» and «waiting on you» counters
    end in an ellipsis before anything wraps; under 300 px they shorten to a
-   dot and their number. Each carries its full text as a title. */
+   sign and their number, the stopped and no-reason counters included. Each carries its full text as a title. */
 .kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
 /* While the layout helper scales the head surface and counter-scales its text
    layer, the end-aligned buttons sit at their final wide position. The head
@@ -298,15 +298,19 @@
 .kb .col-head :is(.live, .needs) > .ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @container col-head (max-width: 299.98px) {
   /* Shortened, the counters keep their number, and the title is what gives way last. */
-  .kb .col-head { gap: 6px; }
-  .kb .col-head > :is(.live, .needs, [data-column-no-reason]) { flex-shrink: 0; }
+  /* A container query reaches the head's descendants, never the head, so its 8 px gap stays. The
+     zero-width spacer would still take two of them; it shares one. */
+  .kb .col-head > .spacer { margin-left: -8px; }
+  .kb .col-head > :is(.live, .needs, [data-column-stopped], [data-column-no-reason]) { flex-shrink: 0; }
   .kb .col-head > h2 { flex-shrink: 1; }
   .kb .col-head :is(.live, .needs) > .ct { display: none; }
   .kb .col-head :is(.live, .needs)::after { content: attr(data-count); }
   .kb .col-head .needs::before { content: "⚠"; }
-  .kb .col-head [data-column-no-reason] { font-size: 0; }
-  .kb .col-head [data-column-no-reason]::before { content: "⏸"; font-size: var(--text-label); }
-  .kb .col-head [data-column-no-reason]::after { content: attr(data-count); font-size: var(--text-label); margin-left: 2px; }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason]) { font-size: 0; }
+  .kb .col-head [data-column-stopped]::before { content: "■"; }
+  .kb .col-head [data-column-no-reason]::before { content: "⏸"; }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason])::before { font-size: var(--text-label); }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason])::after { content: attr(data-count); font-size: var(--text-label); margin-left: 2px; }
 }
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's

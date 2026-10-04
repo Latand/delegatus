@@ -16057,6 +16057,46 @@ describe("task motion and waiting reasons", () => {
     expect(gaps).toEqual([]);
   }, 180_000);
 
+  /* A neighbour that took the wide share leaves Assigned a narrow column. Under 300 px every counter in its head
+     shortens to a sign and its number, so the stopped count gives no width to the title and the title stays whole.
+     Frames at 1440 in the grid, 1440 and 1280 with the project rail go to LLV_TASK_STATES_PNG_DIR. */
+  browserTest("a narrow In progress column keeps its whole title beside the stopped counter at 1440 in the grid and with the rail, and at 1280, in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const [width, hideRail] of [[1440, true], [1440, false], [1280, false]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width, height: 900 }, "light", locale, "reduce");
+        const label = `${width}${hideRail ? "-grid" : "-rail"}-${locale}`;
+        try {
+          await page.locator('.column[data-status="assigned"] [data-column-stopped]').waitFor();
+          if (hideRail && await page.locator("[data-rail-hide]").count()) await page.locator("[data-rail-hide]").click();
+          await page.locator('[data-col-width="inbox"]').click();
+          await page.waitForFunction(() => document.querySelector('.column[data-status="inbox"]')?.getAttribute("data-wide") === "1" && !document.querySelector("[data-column-layout]"));
+          const head = await page.locator('.column[data-status="assigned"] .col-head').evaluate((node) => {
+            const box = node.getBoundingClientRect();
+            const title = node.querySelector<HTMLElement>("h2")!;
+            const stopped = node.querySelector<HTMLElement>("[data-column-stopped]")!;
+            return {
+              width: box.width, titleScroll: title.scrollWidth, titleClient: title.clientWidth,
+              stopped: stopped.textContent, stoppedTitle: stopped.getAttribute("title"), stoppedCount: stopped.getAttribute("data-count"),
+              outside: [...node.children].filter((child) => { const rect = child.getBoundingClientRect(); return rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5); }).map((child) => child.className || child.tagName),
+            };
+          });
+          await page.locator('.column[data-status="assigned"]').screenshot({ path: path.join(out, `narrow-in-progress-${label}.png`) });
+          if (head.width >= 300) failures.push(`${label}: the head is ${head.width} px wide, not narrow`);
+          if (head.titleScroll > head.titleClient) failures.push(`${label}: the title shows ${head.titleClient} of ${head.titleScroll} px`);
+          if (head.outside.length) failures.push(`${label}: ${head.outside.join(", ")} leave the head`);
+          if (head.stoppedTitle !== translate(locale, "kanban.columnStopped", { count: Number(head.stoppedCount) })) failures.push(`${label}: the stopped counter lost its full text title`);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 180_000);
+
   /* A draft nothing has been sent from has started nothing, so its card carries no motion line: the line pushed
      the prompt field onto the window's bottom edge. Frames at 1440 in en and uk go to LLV_TASK_STATES_PNG_DIR. */
   browserTest("a card of unsent drafts carries no motion line and keeps its prompt field in the window at 1440 in en and uk", async () => {
