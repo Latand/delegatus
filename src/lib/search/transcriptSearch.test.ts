@@ -1040,6 +1040,97 @@ test("relevance keeps the denominator when only future or issuing messages compl
   expect(page.items[0].missing).toEqual(["api_id"]);
 });
 
+test("a second pass finds a compound term's parts near each other in one message", async () => {
+  const padding = Array.from({ length: 20 }, (_, i) => `pad${i}`).join(" ");
+  await rankedFixture([
+    ["near", ["the account for this project has a binding"]],
+    ["far", [`account ${padding} project ${padding} binding`]],
+    ["split", ["account alone", "project alone", "binding alone"]],
+  ]);
+  const page = searchTranscripts({ query: "account_project_binding", order: "relevance" });
+  expect(page.interpretedAs).toEqual({ units: ["account_project_binding~"], ignored: [] });
+  expect(page.total).toBe(1);
+  expect(page.strongTotal).toBe(1);
+  expect(page.items[0].transcriptPath).toEndWith("near.jsonl");
+  expect(page.items[0].matched).toEqual(["account_project_binding~"]);
+  expect(page.items[0].missing).toEqual([]);
+  expect(searchTranscripts({ query: '"account_project_binding"', order: "relevance" }).total).toBe(0);
+  expect(searchTranscripts({ query: "account_project_binding", order: "newest" }).total).toBe(0);
+});
+
+test("a widened unit joins the denominator, and without a strong match the literal page returns", async () => {
+  await rankedFixture([
+    ["strong", ["zircon report about the api gateway and its id"]],
+    ["other", ["quartz elsewhere"]],
+    ["lone", ["opal beryl and its id"]],
+  ]);
+  const page = searchTranscripts({ query: "zircon quartz api_gateway_id", order: "relevance" });
+  expect(page.interpretedAs).toEqual({ units: ["zircon*", "quartz*", "api_gateway_id~"], ignored: [] });
+  expect(page.strongTotal).toBe(1);
+  expect(page.items[0].transcriptPath).toEndWith("strong.jsonl");
+  expect(page.items[0].matched).toEqual(["zircon*", "api_gateway_id~"]);
+  expect(page.items[0].missing).toEqual(["quartz*"]);
+  const literal = searchTranscripts({ query: "zircon quartz opal_beryl_id", order: "relevance" });
+  expect(literal.interpretedAs).toEqual({ units: ["zircon*", "quartz*"], ignored: ["opal_beryl_id"] });
+  expect(literal.strongTotal).toBe(0);
+  expect(literal.total).toBe(2);
+});
+
+test("a strong literal match is never widened", async () => {
+  await rankedFixture([["literal", ["account_project_binding exact"]], ["near", ["the account for this project has a binding"]]]);
+  const page = searchTranscripts({ query: "account_project_binding", order: "relevance" });
+  expect(page.interpretedAs?.units).toEqual(["account_project_binding"]);
+  expect(page.total).toBe(1);
+  expect(page.items[0].transcriptPath).toEndWith("literal.jsonl");
+});
+
+test("numeric parts and function words are never widened", async () => {
+  await rankedFixture([["scattered", ["3 of 5 checks passed", "in the lobby there is a sign"]]]);
+  for (const query of ["5.3", "sign-in"]) {
+    const page = searchTranscripts({ query, order: "relevance" });
+    expect(page.total).toBe(0);
+    expect(page.interpretedAs?.units).toEqual([]);
+    expect(page.interpretedAs?.ignored).toHaveLength(1);
+  }
+});
+
+test("a second pass matches an identifier by prefix and leaves plain words alone", async () => {
+  await rankedFixture([["hash", ["commit 4f9a2c7d81b3 landed", "the migrator ran"]]]);
+  const page = searchTranscripts({ query: "4f9a2c7", order: "relevance" });
+  expect(page.interpretedAs?.units).toEqual(["4f9a2c7~"]);
+  expect(page.strongTotal).toBe(1);
+  expect(page.items[0].matched).toEqual(["4f9a2c7~"]);
+  expect(searchTranscripts({ query: "migration", order: "relevance" }).total).toBe(0);
+});
+
+test("a second-pass page continues by cursor, and forged wide units are rejected", async () => {
+  await rankedFixture(["first", "second", "third"].map((name) => [name, [`${name} account for the project binding`]]));
+  const options = { query: "account_project_binding", order: "relevance" as const, limit: 1 };
+  const first = searchTranscripts(options);
+  expect(first.strongTotal).toBe(3);
+  const paths = new Set(first.items.map((item) => item.transcriptPath));
+  let cursor = first.nextCursor;
+  while (cursor) {
+    const next = searchTranscripts({ ...options, cursor });
+    expect(next.interpretedAs).toEqual(first.interpretedAs!);
+    expect(next.items[0].matched).toEqual(["account_project_binding~"]);
+    paths.add(next.items[0].transcriptPath);
+    cursor = next.nextCursor;
+  }
+  expect(paths.size).toBe(3);
+  const parsed = JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString());
+  expect(parsed.version).toBe(6);
+  expect(parsed.units[0].wide).toBe(true);
+  for (const change of [
+    { expression: '("account_project_binding" OR NEAR("account" "project" "binding", 800))' },
+    { expression: 'NEAR("account" "project" "binding", 8)' },
+    { quoted: true },
+  ]) {
+    const forged = Buffer.from(JSON.stringify({ ...parsed, units: [{ ...parsed.units[0], ...change }] })).toString("base64url");
+    expect(() => searchTranscripts({ ...options, cursor: forged })).toThrow(InvalidTranscriptSearchCursorError);
+  }
+});
+
 test("relevance byte paging bounds long tokens and multibyte snippets without losing jump coordinates", async () => {
   const rows: Array<[string, string[]]> = Array.from({ length: 20 }, (_, i) => [
     `long-${i}-${"p".repeat(120)}`, [`cobalt ${i} ${"z".repeat(120000)}`, `quartz ${i} ${"界😀".repeat(30000)}`],
