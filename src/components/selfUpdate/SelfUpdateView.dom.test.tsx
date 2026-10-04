@@ -850,3 +850,26 @@ for (const locale of ["en", "uk"] as const) test(`Windows terminal prerequisite 
   expect(text(el)).toContain(locale === "en" ? "For each update" : "Для кожного оновлення");
   expect(text(el)).not.toContain(locale === "en" ? "once to enable one-click" : "один раз");
 });
+
+
+for (const locale of ["en", "uk"] as const) for (const actionId of ["restart-service", "restart-terminal", "windows-terminal", "full-apply"] as const)
+for (const state of ["ready", "done"] as const) test(`whole-installation ${actionId}/${state} has no partial update instruction in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ installed: NEW_REV, check: { ...idleCheck(), state: "up-to-date", at: AT },
+    action: actionId === "full-apply" ? null : { id: actionId === "windows-terminal" ? "restart-terminal" : actionId,
+      button: actionId === "restart-service", terminalEveryUpdate: actionId === "windows-terminal" },
+    update: { ...idleUpdate(CHECKOUT_STEPS), state: "done", target: NEW, targetShort: NEW.slice(0, 7), startedAt: AT, finishedAt: NEXT,
+      steps: [...pendingSteps(CHECKOUT_STEPS).map(step => ({ ...step, state: "done" as const })),
+        { ...pendingSteps(["switch"])[0]!, state: state === "done" ? "done" : "pending" }] } });
+  const el = render(s);
+  const copy = text(el.querySelector('[data-section="header"]')) + text(el.querySelector('[data-outcome="done"]'));
+  expect(copy).not.toMatch(/restart web|restart the runtime host|Restart web|перезапустіть веб|перезапустіть runtime host|Перезапустіть веб/);
+  for (const action of ["restart-web", "arm-host", "start-host", "confirm-host"]) expect(button(el, action)).toBeNull();
+});
+
+for (const locale of ["en", "uk"] as const) test(`coherent capable launcher retains per-role maintenance controls in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ action: null, installed: OLD_REV });
+  const el = render(s);
+  expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
+});

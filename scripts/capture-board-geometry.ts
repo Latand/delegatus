@@ -5687,6 +5687,15 @@ async function selfUpdateAutoMain(): Promise<void> {
     id: "restart-terminal", button: false, terminalEveryUpdate: true,
     command: "& 'bun' '$HOME/example install/bin/launcher-relaunch.mjs' --terminal '<synthetic-plan>' '$HOME/example release/bin/cli.mjs' --port=45678 --no-open; exit $LASTEXITCODE",
   } };
+  for (const shape of ["restart-service", "restart-terminal", "windows-terminal"] as const) {
+    const action = shape === "restart-service" ? { id: "restart-service" as const, button: true, unit: "delegatus.service" }
+      : states[shape === "windows-terminal" ? "install-windows-terminal" : "install-restart-terminal"]!.action;
+    states[`install-${shape}-ready`] = { ...base, action, auto: idleAuto,
+      update: { ...idleUpdate(), state: "done", target: next, targetShort: next.slice(0, 7),
+        startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
+        steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })),
+          { name: "switch", state: "pending", startedAt: null, durationMs: null, exitCode: null, tail: [], failure: null }] } };
+  }
   for (const rollback of [false, true]) {
     states[rollback ? "install-rollback" : "install-failed"] = { ...base, installed: revision(old), auto: { ...idleAuto,
       off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } },
@@ -5788,6 +5797,13 @@ async function selfUpdateAutoMain(): Promise<void> {
           const instruction = messages[lang]["selfUpdate.update.noteApply"];
           if (typeof instruction !== "string" || !installation.text?.includes(instruction)
             || /Nothing restarts|next quiet moment|Нічого не перезапускається|найближчу тиху хвилину/.test(installation.text ?? "")) report.failures.push(`${tag}: confirmed update copy contradicts immediate apply`);
+        }
+        if (/^install-(restart-service|restart-terminal|windows-terminal)-ready$/.test(name)) {
+          const partial = await page.locator('[data-section="header"], [data-outcome="done"]').allTextContents();
+          const controls = await page.locator('[data-action="restart-web"], [data-action="arm-host"], [data-action="start-host"], [data-action="confirm-host"]').count();
+          report.frames[`${tag}-whole-installation`] = { text: partial.join(" "), partialControls: controls };
+          if (controls || /restart web|restart the runtime host|Restart web|перезапустіть веб|перезапустіть runtime host|Перезапустіть веб/.test(partial.join(" ")))
+            report.failures.push(`${tag}: partial restart contradicts the installation action`);
         }
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
       }

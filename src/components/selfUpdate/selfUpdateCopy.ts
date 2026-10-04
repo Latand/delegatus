@@ -50,6 +50,14 @@ export function staleProcesses(s: Snapshot): { web: boolean; host: boolean } {
   };
 }
 
+/** Maintenance restarts remain available once no whole-installation apply is pending. */
+export function wholeInstallationPending(s: Snapshot): boolean {
+  const stale = staleProcesses(s);
+  const switching = s.update.steps.some(step => step.name === "switch" && ["pending", "running"].includes(step.state));
+  return s.mode !== "managed" && (!!s.action || s.update.steps.some(step => step.name === "switch"))
+    && (stale.web || stale.host || switching);
+}
+
 export interface HeaderStatus { icon: IconKind; text: string; next: string | null; edge: "warning" | "danger" | null }
 
 export function headerStatus(s: Snapshot, t: TFunction): HeaderStatus {
@@ -63,6 +71,7 @@ export function headerStatus(s: Snapshot, t: TFunction): HeaderStatus {
     const sha = s.installed.short;
     let text: string;
     if (s.mode === "managed") text = t("selfUpdate.stale.managedHost", { sha, host: s.serving.runtimeHost?.short ?? "", time });
+    else if (wholeInstallationPending(s)) text = t(s.action ? "selfUpdate.stale.action" : "selfUpdate.stale.installation", { sha, time });
     else if (stale.web && stale.host) text = t("selfUpdate.stale.both", { sha, time });
     else if (stale.web) text = s.serving.runtimeHost ? t("selfUpdate.stale.webBehind", { sha, time }) : t("selfUpdate.stale.web", { sha, time });
     else text = s.serving.web ? t("selfUpdate.stale.hostBehind", { sha, time }) : t("selfUpdate.stale.host", { sha, time });
@@ -110,6 +119,8 @@ export function appliedCopy(s: Snapshot, short: string, t: TFunction): string {
       ? t("selfUpdate.applied.both")
       : t("selfUpdate.applied.managedHostBehind", { host: s.processes.runtimeHost.revision });
   }
+  if (wholeInstallationPending(s)) return t(s.action ? "selfUpdate.applied.action" : "selfUpdate.applied.installation");
+  if (web && host && s.update.steps.some(step => step.name === "switch" && step.state === "done")) return t("selfUpdate.applied.installationDone");
   if (s.busy === "restart-web") return t("selfUpdate.applied.restartingWeb");
   if (s.busy === "restart-runtime-host") return t("selfUpdate.applied.restartingHost");
   if (web && host) return t("selfUpdate.applied.both");

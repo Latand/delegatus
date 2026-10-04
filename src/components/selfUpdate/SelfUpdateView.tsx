@@ -20,6 +20,7 @@ import {
   revisionText,
   runningStepNumber,
   staleProcesses,
+  wholeInstallationPending,
   stepLabel,
   stepFailureText,
   stepName,
@@ -592,7 +593,7 @@ function ProcessBlock({ s, role, state, actions, t }: { s: Snapshot; role: "web"
   const disabled = blocked || status.state === "stopping" || status.state === "starting";
 
   let action: ReactNode = null;
-  if (managed) {
+  if (managed || wholeInstallationPending(s)) {
     action = null;
   } else if (isHost && state.armed && !acting) {
     action = (
@@ -697,9 +698,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
       <InstallActionCard s={s} actions={actions} state={state} t={t} />
       <Header s={s} state={state} actions={actions} t={t} locale={locale} />
       <AutoSection s={s} state={state} actions={actions} t={t} locale={locale} />
-      {/* Two columns from 900 px; below that the restart blocks come first,
-          since they are what the operator reaches for after an update, and
-          the long log tails go last. */}
+      {/* On phones process health comes before the update log tails. */}
       <div className="flex flex-col gap-4 max-sm:gap-3 min-[900px]:grid min-[900px]:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] min-[900px]:items-start">
         <div className="contents min-[900px]:flex min-[900px]:min-w-0 min-[900px]:flex-col min-[900px]:gap-4">
           <div className="order-3 min-w-0 min-[900px]:order-none"><UpdateSection s={s} state={state} actions={actions} t={t} /></div>
