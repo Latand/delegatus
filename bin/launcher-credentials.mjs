@@ -69,7 +69,8 @@ function identity(root, env) {
   const stateRoot = realpathSync(state);
   const installId = createHash("sha256").update(installRoot).digest("hex").slice(0, 16);
   const directory = join(stateRoot, `launcher-custody-${installId}`);
-  return { installRoot, realRoot: realpathSync(installRoot), rootDevice: String(rootStat.dev), rootInode: String(rootStat.ino), stateRoot,
+  const expectedKeyDigest = env.LLV_TOKEN ? createHash("sha256").update(env.LLV_TOKEN).digest("hex") : null;
+  return { expectedKeyDigest, installRoot, realRoot: realpathSync(installRoot), rootDevice: String(rootStat.dev), rootInode: String(rootStat.ino), stateRoot,
     directory, identityFile: join(directory, "identity.json"), file: join(directory, "environment.json") };
 }
 function metadata(id) {
@@ -83,11 +84,13 @@ function verifyIdentity(id) {
     sameEntry(entry, fstatSync(fd)); sameEntry(dir, privateEntry(id.directory, true));
     const record = JSON.parse(readFileSync(fd, "utf8"));
     for (const [name, value] of Object.entries(metadata(id))) if (record[name] !== value) fail();
+    if (!/^[a-f0-9]{64}$/.test(record.keyDigest ?? "") || id.expectedKeyDigest && record.keyDigest !== id.expectedKeyDigest) fail();
     sameEntry(entry, privateEntry(id.identityFile));
+    return record.keyDigest;
   } finally { closeSync(fd); }
 }
 function readVerified(id) {
-  verifyIdentity(id);
+  const keyDigest = verifyIdentity(id);
   const dir = privateEntry(id.directory, true);
   const file = privateEntry(id.file);
   const fd = openSync(id.file, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
@@ -97,6 +100,7 @@ function readVerified(id) {
     for (const [name, value] of Object.entries(metadata(id))) if (record[name] !== value) fail();
     if (!record.environment || Object.keys(record.environment).some(name => !SETTINGS.includes(name))
       || Object.values(record.environment).some(value => typeof value !== "string") || !record.environment.LLV_TOKEN) fail();
+    if (createHash("sha256").update(record.environment.LLV_TOKEN).digest("hex") !== keyDigest) fail();
     sameEntry(file, privateEntry(id.file)); sameEntry(dir, privateEntry(id.directory, true));
     return record.environment;
   } finally { closeSync(fd); }
@@ -127,7 +131,7 @@ export function prepareLauncherCredentials(root, environment) {
       try {
         if (process.platform === "win32") windowsAcl(id.identityFile, true);
         sameEntry(fstatSync(fd), privateEntry(id.identityFile)); privateEntry(id.directory, true);
-        writeFileSync(fd, JSON.stringify(metadata(id)) + "\n"); fsyncSync(fd);
+        writeFileSync(fd, JSON.stringify({ ...metadata(id), keyDigest: id.expectedKeyDigest }) + "\n"); fsyncSync(fd);
       } finally { closeSync(fd); }
     }
     syncDirectory(id.directory);

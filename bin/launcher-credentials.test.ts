@@ -180,11 +180,6 @@ for (const unsafe of ["readable", "writable", "directory", "link", "foreign-iden
   } else if (unsafe === "foreign-identity") {
     const identity = path.join(f.directory, "identity.json");
     const record = JSON.parse(readFileSync(identity, "utf8")); record.installRoot = path.join(f.root, "foreign-install"); writeFileSync(identity, JSON.stringify(record));
-  } else {
-    // Producer sees a different credential: no overwrite or fallback command.
-    const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: { ...f.env, LLV_TOKEN: randomBytes(32).toString("hex") } });
-    expect(action).toEqual({ id: "secure-handoff", button: false });
-    await gateIntact(port, f.key); expect(f.readRecord()?.launcher.pid).toBe(before.launcher.pid); return;
   }
   const preload = path.join(f.root, "read-observer.mjs");
   writeFileSync(preload, `
@@ -195,10 +190,18 @@ for (const unsafe of ["readable", "writable", "directory", "link", "foreign-iden
       readFileSync(file, ...args) { if (descriptors.has(file) || String(file).endsWith("environment.json")) fs.writeFileSync(${JSON.stringify(receipt)}, "read"); return fs.readFileSync(file, ...args); }
     }));
   `);
-  const run = spawnSync(process.execPath, ["--bun", "--preload", preload, path.join(f.base, "bin/cli.mjs"), "--version"], { cwd: f.base, env: { ...f.clean, LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" }, encoding: "utf8", timeout: 30000 });
+  const producer = path.join(f.root, "refusing-producer.mjs");
+  if (unsafe === "stale-key") writeFileSync(producer, `
+    import { prepareLauncherCredentials } from "./package/bin/launcher-credentials.mjs";
+    import { randomBytes } from "node:crypto";
+    import { fileURLToPath } from "node:url";
+    try { prepareLauncherCredentials(fileURLToPath(new URL("./package", import.meta.url)), { ...process.env, LLV_TOKEN: randomBytes(32).toString("hex") }); }
+    catch (error) { console.error(error.message); process.exit(1); }
+  `);
+  const run = spawnSync(process.execPath, ["--bun", "--preload", preload, unsafe === "stale-key" ? producer : path.join(f.base, "bin/cli.mjs"), "--version"], { cwd: f.base, env: { ...f.clean, LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" }, encoding: "utf8", timeout: 30000 });
   expect(run.status).toBe(1); expect(run.stderr.includes("Protected launcher handoff is unavailable")).toBe(true);
   expect(existsSync(receipt)).toBe(false); expect((run.stdout + run.stderr).includes(f.key)).toBe(false);
-  const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: f.env });
+  const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: unsafe === "stale-key" ? { ...f.env, LLV_TOKEN: randomBytes(32).toString("hex") } : f.env });
   expect(action).toEqual({ id: "secure-handoff", button: false });
   await gateIntact(port, f.key); expect(f.readRecord()?.launcher.pid).toBe(before.launcher.pid);
 }, 120000);
