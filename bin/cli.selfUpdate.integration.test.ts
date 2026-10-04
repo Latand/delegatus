@@ -1618,7 +1618,7 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   return env;
 }
 
-test.each(["consumed", "pending"] as const)("cold recovery retains the real apply across request consumption during load preflight: %s", async boundary => {
+for (const signal of ["SIGKILL", "SIGTERM", "SIGINT"] as const) test.each(["consumed", "pending"] as const)(`cold recovery retains the real apply across request consumption during load preflight (${signal}): %s`, async boundary => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
@@ -1638,7 +1638,9 @@ test.each(["consumed", "pending"] as const)("cold recovery retains the real appl
   if (boundary === "consumed") await until(() => existsSync(marker) && !existsSync(before.requestFile));
   else expect(existsSync(before.requestFile)).toBe(true);
   const killed = new Promise(resolve => running.child.once("exit", resolve));
-  process.kill(before.launcher.pid, "SIGKILL"); await killed;
+  process.kill(before.launcher.pid, signal);
+  if (boundary === "pending" && signal !== "SIGKILL") process.kill(before.launcher.pid, "SIGCONT");
+  await killed;
   // A crashed launcher leaves its recorded children. Stop only these fixture
   // PIDs; cold startup then exercises the durable handoff on the same install.
   for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");

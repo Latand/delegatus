@@ -192,8 +192,20 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
     remove() {
       try {
         const current = JSON.parse(readFileSync(file, "utf8"));
-        if (current?.launcher?.pid === record.launcher.pid
-          && current?.launcher?.startIdentity === record.launcher.startIdentity) rmSync(file, { force: true });
+        if (current?.launcher?.pid !== record.launcher.pid
+          || current?.launcher?.startIdentity !== record.launcher.startIdentity) return;
+        // Graceful shutdown can land after the Viewer published an apply but
+        // before its request became a durable trial. Keep the original owner
+        // fence until the apply settles; cold recovery must verify that owner.
+        let apply;
+        try { apply = JSON.parse(readFileSync(join(dirname(file), "apply.json"), "utf8")); }
+        catch (error) {
+          if (error.code !== "ENOENT") return; // Unreadable custody is retained.
+        }
+        if (apply?.state === "switching" && apply.launcherPid === record.launcher.pid
+          && apply.launcherIdentity === record.launcher.startIdentity
+          && apply.releasePointer === record.releasePointer) return;
+        rmSync(file, { force: true });
       } catch (error) {
         if (error.code !== "ENOENT") console.error("[self-update] could not remove the owned launcher record.");
       }
