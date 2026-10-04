@@ -260,6 +260,7 @@ export type PipelineGraphEdit = {
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
   summary: string;
+  runtimeSwitch?: { attempt: number; id: string };
 };
 
 /** What the server itself observed about a stage attempt's work at the moment
@@ -337,8 +338,29 @@ export type PipelineDecisionAnswer = {
   at: string;
 };
 
+export type PipelineRuntimeSeat = {
+  engine: FlowEngine; model: string | null; effort: string | null;
+  serviceTier: string | null; accountId: string | null;
+};
+export type PipelineRuntimeSwitch = {
+  id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
+  mode: "fork" | "handoff";
+  from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
+  to: PipelineRuntimeSeat & { accountPinned: boolean };
+  phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
+  cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  rollback?: boolean;
+  reconfigureNoop?: boolean;
+  continuationKey?: string;
+  launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
+  handoff?: { prompt: string; digest: string; bytes: number };
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  runtimeSwitches?: PipelineRuntimeSwitch[];
+  /** Explicit account policy for the live attempt after an apply-now edit. */
+  runtimeAccountPin?: string | null;
   /** Answer that created this continuation; forces lease-free activation. */
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -1137,6 +1159,7 @@ export type PatchPipelineRequest = {
   acceptedSha?: string;
   reason?: string;
   action: PipelineAction;
+  applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.

@@ -1,4 +1,5 @@
 "use client";
+import { StageRuntimeControl } from "@/components/pipelines/StageRuntimeControl";
 
 import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
@@ -364,6 +365,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const menu = useOverlay<
     { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
+    | { kind: "runtime"; pipelineId: string; stageId: string }
     | { kind: "account"; target: AccountTarget }
     | { kind: "links"; target: WorkLinkTarget }
     | { kind: "agents" }
@@ -1390,7 +1392,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon" || open.value.kind === "agents") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "runtime" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon" || open.value.kind === "agents") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1513,6 +1515,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       /* Retry and skip act on the stage the pipeline waits on, so a pane offers them only for that stage. */
       const forStage = (option: PipelineActionOption): PipelineActionOption => (option.refusal || option.stageId === stage.id ? option : { ...option, refusal: "other-stage" });
       const items: KanbanMenuItem[] = [{ type: "head", label: t("kanban.stages.stageMenuHead", { stage: name }) }];
+      if (stage.kind === "run" && latestAttempt(pipeline, stage.id)) {
+        const anchor = menu.open?.anchor;
+        if (anchor) items.push({ type: "item", label: t("stageRuntime.menu"), keepFocus: true,
+          onSelect: () => queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "runtime", pipelineId: pipeline.id, stageId: stage.id } })) });
+      }
       if (stageDraftable(pipeline, stage.id)) {
         const anchor = menu.open?.anchor;
         items.push({
@@ -3007,6 +3014,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
           />
         </KanbanPopover>
       ) : null}
+      {menu.open?.value.kind === "runtime" ? (() => {
+        const value = menu.open.value;
+        const pipeline = cards.flatMap(card => card.pipelines).find(entry => entry.pipeline.id === value.pipelineId)?.pipeline;
+        const stage = pipeline?.stages.find(stage => stage.id === value.stageId);
+        return pipeline && stage ? <KanbanPopover anchor={menu.open.anchor} within={menu.open.anchor.closest<HTMLElement>("[data-kanban-board]")} label={t("stageRuntime.menu")} onClose={menu.close} className="stage-runtime-popover" initialFocus="select">
+          <StageRuntimeControl pipeline={pipeline} stage={stage} ports={pipelinePorts} />
+        </KanbanPopover> : null;
+      })() : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
     </div>
     </KanbanDraftContext.Provider>

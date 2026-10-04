@@ -505,7 +505,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.",
+    "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt; add applyNow:true to move the running attempt now.",
     "- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round. normal: rows, effort low or medium. design (options, architecture, proposals, design issues): architect first.",
     "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
     "- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks. Never self-grade; fix discoveries and note out-of-spec. Fail only with blocked:true and blockedReason.",

@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
-import type { SuccessorProviderPort, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { LaunchProfile, SuccessorProviderPort, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { applyStructuredReconfigure } from "./structuredReconfigure";
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
@@ -20,7 +20,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null; serviceTier: string | null }> = {}, engine: "codex" | "copilot" = "codex") {
+function fixture(profile: Partial<LaunchProfile> = {}, engine: "claude" | "codex" | "copilot" = "codex") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-reconfigure-"));
   roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -32,7 +32,7 @@ function fixture(profile: Partial<{ model: string | null; effort: string | null;
     cwd: root,
     accountId: "source",
     transport: "structured",
-    launchProfile: { model: engine === "copilot" ? "gpt-5.4" : "gpt-5.5", effort: "medium", fast: false, ...profile },
+    launchProfile: { model: engine === "claude" ? "opus" : engine === "copilot" ? "gpt-5.4" : "gpt-5.5", effort: "medium", fast: false, ...profile },
   });
   if (begun.kind !== "created") throw new Error("fixture spawn was unavailable");
   const settled = registry.settleSpawn(begun.receipt.launchId, {
@@ -43,7 +43,7 @@ function fixture(profile: Partial<{ model: string | null; effort: string | null;
     status: "idle",
     host: null,
     structuredHost: {
-      kind: engine === "copilot" ? "copilot-acp" : "codex-app-server",
+      kind: engine === "claude" ? "claude-broker" : engine === "copilot" ? "copilot-acp" : "codex-app-server",
       endpoint: "test:host",
       process: { pid: process.pid, startIdentity: "test" },
       eventCursor: 1,
@@ -1297,3 +1297,33 @@ test("an effort edit from the pill keeps ultrafast after thread settings scroll 
   expect(recoveredTier).toBe("ultrafast");
   expect(registry.launchProfileForPath(transcript)).toMatchObject({ effort: "xhigh", fast: true, serviceTier: "ultrafast" });
 });
+
+for (const engine of ["claude", "codex"] as const) for (const sandbox of ["full", "restricted"] as const) {
+  test(`${engine}/${sandbox} runtime reconfigure preserves stage access and sandbox through account fork`, async () => {
+    const target = fixture({ readOnly: true, sandbox, permissionMode: "never", mcpServers: ["viewer"], plugins: [] }, engine);
+    const predecessor = target.registry.conversation(target.conversationId)!.generations.at(-1)!;
+    const successorPath = path.join(target.cwd, "successor.jsonl"); fs.writeFileSync(successorPath, "{}\n");
+    const released: string[] = [];
+    const request = effect({ conversationId: target.conversationId, accountId: "target", model: engine === "claude" ? "fable" : "gpt-6.1-sol", fast: engine === "codex" });
+    const outcome = await applyStructuredReconfigure(request, {
+      registry: target.registry, validateAccount: async () => {}, resolveAccount: () => ({ accountId: "target" }) as never,
+      releaseHost: async key => { released.push(key.sessionId); return true; },
+      migrate: async (conversationId, accountId, registry) => {
+        let migration = registry.conversation(conversationId)!.migration!;
+        if (migration.phase === "waiting-turn") migration = registry.transitionConversationMigration(conversationId, migration.revision, ["waiting-turn"], { phase: "requested" }).migration!;
+        migration = registry.transitionConversationMigration(conversationId, migration.revision, ["requested"], { phase: "preparing" }).migration!;
+        migration = registry.transitionConversationMigration(conversationId, migration.revision, ["preparing"], { phase: "successor-starting" }).migration!;
+        const receipt = { operationId: migration.operationId, nativeId: "native-successor", path: successorPath, continuityPaths: [successorPath], historyHash: "history", host: { kind: engine === "claude" ? "claude-fork" as const : "codex-app-server" as const, identity: "successor-host", epoch: 1, verifiedAt: "2026-10-02T10:00:00.000Z" } };
+        registry.persistMigrationProviderReceipt(conversationId, migration.revision, migration.operationId, receipt);
+        return registry.commitSuccessor(conversationId, { id: receipt.nativeId, path: receipt.path, accountId, historyHash: receipt.historyHash, host: receipt.host }, migration.revision, migration.operationId, receipt);
+      },
+    });
+    expect(outcome).toBe("applied"); expect(released).toEqual([predecessor.id]);
+    const conversation = target.registry.conversation(target.conversationId)!;
+    expect(conversation.generations).toHaveLength(2);
+    expect(conversation.generations.at(-1)).toMatchObject({ accountId: "target", launchProfile: { model: request.model, effort: "high", readOnly: true, sandbox, permissionMode: "never", mcpServers: ["viewer"], plugins: [] } });
+    expect(target.registry.snapshot().entries[`${engine}:${predecessor.id}`]?.structuredHost).toBeNull();
+    const replay = await applyStructuredReconfigure(request, { registry: target.registry, releaseHost: async () => { throw new Error("replay cannot release twice"); } });
+    expect(replay).toBe("applied"); expect(target.registry.conversation(target.conversationId)!.generations).toHaveLength(2);
+  });
+}

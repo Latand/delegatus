@@ -17953,3 +17953,57 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+
+describe("running stage runtime control", () => {
+  browserTest("apply now is readable on desktop and 390 px in en and uk", async () => {
+    const out = path.resolve(".artifacts/stage-runtime-control"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out); const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) {
+            await page.locator('[data-phone-card-pipeline="p-upload"]').click();
+            await page.locator('[data-phone-task-lane="p-upload"] [data-open-stages="p-upload"]').click();
+            await page.locator('[data-stage-runtime-open="build-ui"]').click();
+          } else {
+            await page.waitForSelector(`${card("t-upload")} [data-open-stages]`);
+            await page.locator(`${card("t-upload")} [data-open-stages]`).click();
+            await page.locator('[data-pane-menu="build-ui"]').click();
+            await page.getByText(lang === "en" ? "Change model or account…" : "Змінити модель чи акаунт…", { exact: true }).click();
+          }
+          const control = page.locator('[data-stage-runtime-control]').first(); await control.waitFor();
+          const reading = await control.evaluate(element => ({
+            width: element.getBoundingClientRect().width, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+            actions: [...element.querySelectorAll<HTMLElement>("[data-stage-runtime-action]")].map(button => ({ text: button.textContent, height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width, clipped: button.scrollWidth > button.clientWidth + 1 })),
+            consequence: element.textContent,
+          }));
+          expect(reading.scrollWidth).toBeLessThanOrEqual(reading.clientWidth + 1);
+          expect(reading.actions).toHaveLength(2);
+          expect(reading.actions.every(button => button.height >= 44 && button.width >= 44 && !button.clipped)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${lang}.png`), fullPage: true });
+          await control.locator("select").first().selectOption("fable");
+          await control.locator('[data-stage-runtime-action="now"]').click();
+          await page.locator('[data-stage-runtime-status="requested"]').first().waitFor();
+          const patch = await page.evaluate("window.evidence.pipelinePatches.at(-1).body") as Record<string, unknown>;
+          expect(patch).toMatchObject({ action: "override-stage", stageId: "build-ui", model: "fable", applyNow: true });
+          expect(patch.prompt).toBeUndefined(); expect(patch.role).toBeUndefined(); expect(patch.access).toBeUndefined();
+          const statuses: unknown[] = [];
+          for (const phase of ["requested", "committed", "rolled-back"] as const) {
+            await page.evaluate(({ phase }) => (window as unknown as { evidence: { setRuntimeSwitchPhase(p: string, s: string, phase: string): void } }).evidence.setRuntimeSwitchPhase("p-upload", "build-ui", phase), { phase });
+            const status = page.locator(`[data-stage-runtime-status="${phase}"]`).first(); await status.waitFor();
+            const geometry = await status.evaluate(element => ({ text: element.textContent, width: element.clientWidth, scrollWidth: element.scrollWidth }));
+            expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width + 1);
+            statuses.push({ phase, ...geometry });
+            await page.screenshot({ path: path.join(out, `${width}-${lang}-${phase}.png`), fullPage: true });
+          }
+          readings.push({ viewportWidth: width, lang, ...reading, patch, statuses }); expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/stage-runtime-control", { recursive: true });
+      fs.writeFileSync("evidence/stage-runtime-control/geometry.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

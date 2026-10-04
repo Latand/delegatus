@@ -1,0 +1,198 @@
+[
+  {
+    "viewportWidth": 1440,
+    "lang": "en",
+    "width": 342,
+    "scrollWidth": 342,
+    "clientWidth": 342,
+    "actions": [
+      {
+        "text": "Apply now",
+        "height": 44,
+        "width": 318,
+        "clipped": false
+      },
+      {
+        "text": "From the next attempt",
+        "height": 44,
+        "width": 318,
+        "clipped": false
+      }
+    ],
+    "consequence": "Current: claude · opus · Project's choiceClaudeCodexOpus 5.5FableSonnetClaude Sonnet 5.5Haiku 4.5lowmediumhighextra highmaxAccountProject's choiceAccount AAccount CAccount EApply nowStops this turn and continues the same attempt through native fork/resume. Work and receipts stay.From the next attempt",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "build-ui",
+      "expectedStageDigest": "a5e16495fc55c02afc1d13f377dbc920c26d2d61cce7fe7644e8a6af49bc048c",
+      "applyNow": true,
+      "model": "fable"
+    },
+    "statuses": [
+      {
+        "phase": "requested",
+        "text": "Switching to claude · fable…",
+        "width": 318,
+        "scrollWidth": 318
+      },
+      {
+        "phase": "committed",
+        "text": "Continued on claude · fable",
+        "width": 318,
+        "scrollWidth": 318
+      },
+      {
+        "phase": "rolled-back",
+        "text": "Stayed on claude · opus: Target account is unavailable",
+        "width": 318,
+        "scrollWidth": 318
+      }
+    ]
+  },
+  {
+    "viewportWidth": 390,
+    "lang": "en",
+    "width": 366,
+    "scrollWidth": 366,
+    "clientWidth": 366,
+    "actions": [
+      {
+        "text": "Apply now",
+        "height": 44,
+        "width": 342,
+        "clipped": false
+      },
+      {
+        "text": "From the next attempt",
+        "height": 44,
+        "width": 342,
+        "clipped": false
+      }
+    ],
+    "consequence": "Current: claude · opus · Project's choiceClaudeCodexOpus 5.5FableSonnetClaude Sonnet 5.5Haiku 4.5lowmediumhighextra highmaxAccountProject's choiceAccount AAccount CAccount EApply nowStops this turn and continues the same attempt through native fork/resume. Work and receipts stay.From the next attempt",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "build-ui",
+      "expectedStageDigest": "a5e16495fc55c02afc1d13f377dbc920c26d2d61cce7fe7644e8a6af49bc048c",
+      "applyNow": true,
+      "model": "fable"
+    },
+    "statuses": [
+      {
+        "phase": "requested",
+        "text": "Switching to claude · fable…",
+        "width": 366,
+        "scrollWidth": 366
+      },
+      {
+        "phase": "committed",
+        "text": "Continued on claude · fable",
+        "width": 366,
+        "scrollWidth": 366
+      },
+      {
+        "phase": "rolled-back",
+        "text": "Stayed on claude · opus: Target account is unavailable",
+        "width": 366,
+        "scrollWidth": 366
+      }
+    ]
+  },
+  {
+    "viewportWidth": 1440,
+    "lang": "uk",
+    "width": 342,
+    "scrollWidth": 342,
+    "clientWidth": 342,
+    "actions": [
+      {
+        "text": "Застосувати зараз",
+        "height": 44,
+        "width": 318,
+        "clipped": false
+      },
+      {
+        "text": "З наступної спроби",
+        "height": 44,
+        "width": 318,
+        "clipped": false
+      }
+    ],
+    "consequence": "Зараз: claude · opus · Вибір проєктуClaudeCodexOpus 5.5FableSonnetClaude Sonnet 5.5Haiku 4.5низькісереднівисокідуже високімаксимальніАкаунтВибір проєктуAccount AAccount CAccount EЗастосувати заразЗупиняє поточний хід і продовжує цю саму спробу через fork/resume. Робота й receipts зберігаються.З наступної спроби",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "build-ui",
+      "expectedStageDigest": "a5e16495fc55c02afc1d13f377dbc920c26d2d61cce7fe7644e8a6af49bc048c",
+      "applyNow": true,
+      "model": "fable"
+    },
+    "statuses": [
+      {
+        "phase": "requested",
+        "text": "Переходить на claude · fable…",
+        "width": 318,
+        "scrollWidth": 318
+      },
+      {
+        "phase": "committed",
+        "text": "Продовжує на claude · fable",
+        "width": 318,
+        "scrollWidth": 318
+      },
+      {
+        "phase": "rolled-back",
+        "text": "Лишився на claude · opus: Обраний акаунт недоступний",
+        "width": 318,
+        "scrollWidth": 318
+      }
+    ]
+  },
+  {
+    "viewportWidth": 390,
+    "lang": "uk",
+    "width": 366,
+    "scrollWidth": 366,
+    "clientWidth": 366,
+    "actions": [
+      {
+        "text": "Застосувати зараз",
+        "height": 44,
+        "width": 342,
+        "clipped": false
+      },
+      {
+        "text": "З наступної спроби",
+        "height": 44,
+        "width": 342,
+        "clipped": false
+      }
+    ],
+    "consequence": "Зараз: claude · opus · Вибір проєктуClaudeCodexOpus 5.5FableSonnetClaude Sonnet 5.5Haiku 4.5низькісереднівисокідуже високімаксимальніАкаунтВибір проєктуAccount AAccount CAccount EЗастосувати заразЗупиняє поточний хід і продовжує цю саму спробу через fork/resume. Робота й receipts зберігаються.З наступної спроби",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "build-ui",
+      "expectedStageDigest": "a5e16495fc55c02afc1d13f377dbc920c26d2d61cce7fe7644e8a6af49bc048c",
+      "applyNow": true,
+      "model": "fable"
+    },
+    "statuses": [
+      {
+        "phase": "requested",
+        "text": "Переходить на claude · fable…",
+        "width": 366,
+        "scrollWidth": 366
+      },
+      {
+        "phase": "committed",
+        "text": "Продовжує на claude · fable",
+        "width": 366,
+        "scrollWidth": 366
+      },
+      {
+        "phase": "rolled-back",
+        "text": "Лишився на claude · opus: Обраний акаунт недоступний",
+        "width": 366,
+        "scrollWidth": 366
+      }
+    ]
+  }
+]
