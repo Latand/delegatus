@@ -30,6 +30,7 @@ Object.assign(globalThis, {
 });
 
 const { SelfUpdateView } = await import("./SelfUpdateView");
+const { publishBlockerNames } = await import("./blockerNames");
 const { actionError, day } = await import("./selfUpdateCopy");
 type ActionError = import("./selfUpdateCopy").ActionError;
 const { setLocale } = await import("@/lib/i18n");
@@ -160,32 +161,112 @@ const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
 describe("automatic updates", () => {
-  test.each(["en", "uk"] as const)("named scheduled, draining and overrun states in %s", (locale) => {
+  test.each(["en", "uk"] as const)("named draining and overrun states in %s", (locale) => {
     setLocale(locale);
     const s = snapshot();
     s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: null, green: { state: "green" },
       blockers: { turns: 1, stages: 1, operatorActiveAt: null, busy: true, busyReason: "seat-tick", memoryMb: null, unreadable: null,
         turnList: [{ conversationId: "conversation_worker", engine: "codex", project: "Example", seat: false, stage: null }],
         stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_builder" }] },
-      waitingSince: AT, longWait: true, drain: { state: "scheduled", at: AT } };
-    for (const [state, phrase] of [["scheduled", locale === "en" ? "From" : "Від"], ["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
+      waitingSince: AT, longWait: true, drain: { state: "draining", at: AT } };
+    for (const [state, phrase] of [["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
       ["overran", locale === "en" ? "held the update for 6 h" : "оновлення вже 6 год"]] as const) {
-      s.auto.drain = { state, at: AT, nextAt: AT };
+      s.auto.drain = { state, at: AT };
       const copy = text(section(render(s), "auto"));
       expect(copy).toContain(phrase);
       expect(copy).toContain("build · Finish the feature");
-      expect(copy).toContain("codex · worker");
+      expect(copy).toContain(locale === "en" ? "Example · Codex agent" : "Example · Агент Codex");
+      // Rows that name the work replace the counts of the same work.
+      expect(copy).not.toContain(locale === "en" ? "Agent turns running" : "Працюють ходи агентів");
+      expect(copy).not.toContain(locale === "en" ? "Pipeline stages running" : "Працюють етапи пайплайна");
       expect(copy).toContain(locale === "en" ? "Orchestrator wake in progress" : "Триває пробудження оркестратора");
       flushSync(() => root!.unmount());
       host?.remove();
     }
   });
-  test.each(["keep-waiting", "deploy-now"] as const)("the six-hour %s choice posts its identity and broadcasts the accepted snapshot", async (choice) => {
+
+  /* What the server really sends: a project key and conversation ids. */
+  const KEY = "repo-0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const productionBlockers = () => ({ turns: 4, stages: 1, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+    stageList: [{ pipelineId: "pipeline_7c1d", stageId: "build", task: "Ship the billing export", cursor: "running", conversationId: "conversation_0d9c3b7e-51a4-4c2e-9f10-6b7a8c9d0e1f" }],
+    turnList: [
+      { conversationId: "conversation_0d9c3b7e-51a4-4c2e-9f10-6b7a8c9d0e1f", engine: "claude", project: KEY, seat: false, stage: { pipelineId: "pipeline_7c1d", stageId: "build" } },
+      { conversationId: "conversation_4f6d2a10-9b7e-4c55-8a31-2f0e6d7c9b12", engine: "claude", project: KEY, seat: false, stage: null },
+      { conversationId: "conversation_91a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a5b", engine: "codex", project: KEY, seat: false, stage: null },
+      { conversationId: "conversation_aa11bb22-cc33-4d44-8e55-ff6677889900", engine: "codex", project: KEY, seat: true, stage: null },
+    ] });
+  const decided = (): Snapshot => {
     const s = snapshot();
     s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: NEW_REV, green: { state: "green" },
-      blockers: null, waitingSince: AT, longWait: true,
-      decision: { id: "drain-current", at: AT, project: "Example", blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
-        turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", stage: null, seat: false }] } } };
+      blockers: productionBlockers(), waitingSince: AT, longWait: true, drain: { state: "overran", at: AT },
+      decision: { id: "drain-current", at: AT, project: KEY, blockers: productionBlockers() } };
+    return s;
+  };
+  const RAW = /repo-[0-9a-f]{16,}|conversation_[0-9a-f-]{8,}|[0-9a-f]{8}-[0-9a-f]{3}/;
+
+  test.each(["en", "uk"] as const)("the work an update interrupts is named in the operator's terms in %s", (locale) => {
+    setLocale(locale);
+    publishBlockerNames({ projects: { [KEY]: "Billing" }, conversations: { "conversation_4f6d2a10-9b7e-4c55-8a31-2f0e6d7c9b12": "Reconcile the March invoices" } });
+    try {
+      const card = render(decided()).querySelector("[data-auto-drain-decision]")!;
+      const rows = [...card.querySelectorAll("li")].map((row) => text(row));
+      // The stage's own turn folds into its stage row: four pieces of work, four rows.
+      expect(rows).toEqual(["build · Ship the billing export", "Billing · Reconcile the March invoices",
+        locale === "en" ? "Billing · Codex agent" : "Billing · Агент Codex", locale === "en" ? "Billing · orchestrator" : "Billing · оркестратор"]);
+      expect(text(card)).not.toMatch(RAW);
+      flushSync(() => root!.unmount());
+      host?.remove();
+      // After «Keep waiting» the dialog's own list names the same work the same way.
+      const kept = decided();
+      kept.auto!.decision = null;
+      kept.auto!.drain = { state: "overran", at: AT, choice: "keep-waiting" };
+      const list = [...render(kept).querySelectorAll("[data-auto-blockers] li")].map((row) => text(row));
+      expect(list).toEqual(rows);
+    } finally { publishBlockerNames({ projects: {}, conversations: {} }); }
+  });
+
+  test("a project and a conversation nobody has named yet still show no key and no id", () => {
+    const card = render(decided()).querySelector("[data-auto-drain-decision]")!;
+    expect([...card.querySelectorAll("li")].map((row) => text(row))).toEqual(["build · Ship the billing export", "Claude agent", "Codex agent", "Orchestrator"]);
+    expect(text(card)).not.toMatch(RAW);
+  });
+
+  test("a pending decision lists the blocking work once and without counts", () => {
+    const el = render(decided());
+    expect(el.querySelector("[data-auto-blockers]")).toBeNull();
+    const copy = text(section(el, "auto"));
+    expect(copy.split("build · Ship the billing export")).toHaveLength(2);
+    expect(copy).not.toContain("Agent turns running");
+    expect(copy).not.toContain("Pipeline stages running");
+    expect(el.querySelector("[data-drain-state]")).toBeNull();
+  });
+
+  test.each(["en", "uk"] as const)("an answered overrun says what was chosen and offers no choice in %s", (locale) => {
+    setLocale(locale);
+    const pending = text(render(decided()).querySelector("[data-auto-drain-decision]"));
+    flushSync(() => root!.unmount());
+    host?.remove();
+    const choice = locale === "en" ? /Deploy now may interrupt|keep waiting lets/ : /Оновлення зараз може перервати|очікування дозволяє/;
+    expect(pending).toMatch(choice);
+    for (const [chosen, phrase] of [["keep-waiting", locale === "en" ? "You chose to keep waiting" : "Ви обрали чекати далі"],
+      ["deploy-now", locale === "en" ? "You chose to deploy now" : "Ви обрали оновити зараз"]] as const) {
+      const s = decided();
+      s.auto!.decision = null;
+      s.auto!.drain = { state: "overran", at: AT, choice: chosen };
+      const el = render(s);
+      const line = text(el.querySelector(`[data-drain-state="overran"][data-drain-choice="${chosen}"]`));
+      expect(line).toContain(phrase);
+      expect(pending).not.toContain(line);
+      expect(text(section(el, "auto"))).not.toMatch(choice);
+      expect(button(el, "deploy-now")).toBeNull();
+      expect(button(el, "keep-waiting")).toBeNull();
+      flushSync(() => root!.unmount());
+      host?.remove();
+    }
+  });
+
+  test.each(["keep-waiting", "deploy-now"] as const)("the six-hour %s choice posts its identity and broadcasts the accepted snapshot", async (choice) => {
+    const s = decided();
     const savedFetch = globalThis.fetch;
     const posted: unknown[] = [];
     let accepted: unknown;
@@ -197,7 +278,6 @@ describe("automatic updates", () => {
     }) as typeof fetch;
     try {
       const el = render(s);
-      expect(el.querySelector("[data-auto-drain-decision]")?.textContent).toContain("conversation_long_turn");
       expect(text(section(el, "auto"))).not.toContain("Waiting over");
       button(el, choice)!.click();
       await Bun.sleep(0);
@@ -207,6 +287,45 @@ describe("automatic updates", () => {
       globalThis.fetch = savedFetch;
       window.removeEventListener("llv:auto-drain-decision", observe);
     }
+  });
+
+  test("a refused decision takes the snapshot the refusal carries and asks for no retry", async () => {
+    const s = decided();
+    const current = { ...s, auto: { ...s.auto!, decision: null, drain: { state: "overran" as const, at: AT, choice: "keep-waiting" as const } } };
+    const savedFetch = globalThis.fetch;
+    // The feed re-renders the surface from the snapshot it is handed.
+    const observe = (event: Event) => {
+      flushSync(() => root!.unmount());
+      host?.remove();
+      render((event as CustomEvent<Snapshot>).detail);
+    };
+    window.addEventListener("llv:auto-drain-decision", observe);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: current }), { status: 409 })) as unknown as typeof fetch;
+    try {
+      button(render(s), "keep-waiting")!.click();
+      await Bun.sleep(0);
+      await Bun.sleep(0);
+      expect(host!.querySelector("[data-auto-drain-decision]")).toBeNull();
+      expect(text(host)).not.toContain("Try again");
+      expect(text(host)).toContain("You chose to keep waiting");
+    } finally {
+      globalThis.fetch = savedFetch;
+      window.removeEventListener("llv:auto-drain-decision", observe);
+    }
+  });
+
+  test("a decision the network lost keeps the card and asks to try again", async () => {
+    const savedFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new TypeError("network"); }) as unknown as typeof fetch;
+    try {
+      const el = render(decided());
+      button(el, "deploy-now")!.click();
+      await Bun.sleep(0);
+      await Bun.sleep(0);
+      const card = el.querySelector("[data-auto-drain-decision]");
+      expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
+      expect(button(el, "deploy-now")?.disabled).toBe(false);
+    } finally { globalThis.fetch = savedFetch; }
   });
 
   test("the switch, blockers, serving revisions and history are visible", () => {

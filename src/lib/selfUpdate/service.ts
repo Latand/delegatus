@@ -361,7 +361,7 @@ export class SelfUpdateService {
       waitingSince: auto.waitingSince, longWait: auto.enabled && !auto.drain?.admitted && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
       decision: auto.enabled && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
       drain: auto.enabled && auto.waitingSince ? auto.drain
-        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt }
+        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt, ...(auto.drain.acknowledgedAt ? { choice: auto.drain.force ? "deploy-now" as const : "keep-waiting" as const } : {}) }
           : { state: "draining", at: auto.drain.since }
         : null : null,
       changedAt: auto.changedAt, changedBy: auto.changedBy };

@@ -339,7 +339,9 @@ test("the update decision is a counted Needs-you row with named blockers and bot
   root = createRoot(host);
   await act(async () => root!.render(<AttentionPanel queue={queue} current={ALPHA} projectNames={{}} pipelines={[]} placement="docked" canDock
     onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />));
-  expect(host.textContent).toContain("conversation_long_turn");
+  // The turn is named by what it is; its id stays off the screen.
+  expect(host.textContent).toContain("Codex agent");
+  expect(host.textContent).not.toContain("conversation_long_turn");
   expect(host.querySelector('[data-action="deploy-now"]')).not.toBeNull();
   expect(host.querySelector('[data-action="keep-waiting"]')).not.toBeNull();
   expect(host.querySelector('[data-needs-you-dismiss-all]')).toBeNull();

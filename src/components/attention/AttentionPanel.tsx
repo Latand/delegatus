@@ -278,7 +278,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   onDismiss: () => void;
 }) {
   const { t } = useLocale();
-  if (entry.kind === "update") return <AutoDrainDecision decision={entry.decision} />;
+  if (entry.kind === "update") return <AutoDrainDecision key={entry.decision.id} decision={entry.decision} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const title = entry.kind === "conversation" ? entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90) : entry.row.task;
