@@ -62,6 +62,29 @@ function ownerExited(pid: number, identity: string) {
   const current = ownedIdentity(pid);
   return current !== null && current !== identity; // Reuse also proves our process exited.
 }
+function assertOwnersExited() {
+  for (const [pid, identity] of owners) if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
+}
+async function removeFixture(root: string, ports: {
+  remove?: (root: string) => Promise<void>;
+  sleep?: (ms: number) => Promise<unknown>;
+  retry?: boolean;
+} = {}) {
+  const limit = (ports.retry ?? process.platform === "win32") ? 6 : 0;
+  const remove = ports.remove ?? (root => rm(root, { force: true, recursive: true }));
+  const sleep = ports.sleep ?? (ms => Bun.sleep(ms));
+  for (let attempt = 0; ; attempt++) {
+    assertOwnersExited();
+    assertFixtureRoot(root);
+    try { await remove(root); return { attempts: attempt + 1, waitedMs: attempt * 350 }; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (attempt === limit || code !== "EBUSY" && code !== "EPERM") throw error;
+      cleanupEvidence("removal-retry", { attempt: attempt + 1, code, delayMs: 350 });
+      await sleep(350);
+    }
+  }
+}
 function handleEvidence(root: string, childFacts: Record<string, unknown>[]) {
   if (process.platform !== "win32") return;
   const within = (cwd: string | null) => {
@@ -113,21 +136,26 @@ afterEach(async () => {
     await until(() => ownerExited(pid, identity) ? true : null, 3000);
     cleanupEvidence("owner-exited", { pid, startIdentity: identity });
   }
-  for (const [pid, identity] of owners) if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
+  assertOwnersExited();
   cleanupEvidence("all-owners-exited-before-remove");
   for (const root of fixtures) {
     assertFixtureRoot(root);
     // Only verified, exited owners admit this bounded NTFS handle-release
     // retry. Exhaustion rejects the hook; no permission or ACL is repaired.
     const started = Date.now();
-    try { await rm(root, { force: true, recursive: true, maxRetries: process.platform === "win32" ? 6 : 0, retryDelay: 100 }); }
+    let result;
+    try { result = await removeFixture(root); }
     catch (error) {
-      cleanupEvidence("removal-refused", { elapsedMs: Date.now() - started, code: (error as NodeJS.ErrnoException).code });
-      if ((error as NodeJS.ErrnoException).code === "EBUSY") handleEvidence(root, childFacts);
+      const code = (error as NodeJS.ErrnoException)?.code;
+      cleanupEvidence("removal-refused", { elapsedMs: Date.now() - started, code: code ?? "non-filesystem-error" });
+      if (code === "EBUSY" || code === "EPERM") {
+        try { handleEvidence(root, childFacts); }
+        catch { cleanupEvidence("handle-observer-failed"); }
+      }
       throw error;
     }
     if (existsSync(root)) throw new Error("Fixture removal did not complete");
-    cleanupEvidence("fixture-removed", { case: fixtureRoots.get(root)!.label, elapsedMs: Date.now() - started, maxRetries: process.platform === "win32" ? 6 : 0, retryDelayMs: 100 });
+    cleanupEvidence("fixture-removed", { case: fixtureRoots.get(root)!.label, elapsedMs: Date.now() - started, ...result, maxRetries: process.platform === "win32" ? 6 : 0, retryDelayMs: 350 });
     fixtureRoots.delete(root);
   }
   fixtures.length = 0;
@@ -375,3 +403,34 @@ test("native custody refuses a launcher with an incompatible credential reader",
   const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: f.env });
   expect(action).toEqual({ id: "secure-handoff", button: false });
 }, 120000);
+
+test("fixture cleanup control awaits its bounded retry and preserves hard failures", async () => {
+  const f = await fixture("LLV_TOKEN", "cleanup-controls");
+  for (const [code, failures] of [["EBUSY", 2], ["EPERM", 1], ["EBUSY", Infinity], ["EPERM", Infinity], ["EACCES", Infinity]] as const) {
+    let attempts = 0, complete = false;
+    const delays: number[] = [], release: (() => void)[] = [];
+    let lastError: NodeJS.ErrnoException | undefined;
+    const run = removeFixture(f.root, {
+      retry: true,
+      remove: async () => {
+        attempts++;
+        if (attempts <= failures) { lastError = Object.assign(new Error("Synthetic cleanup control"), { code }); throw lastError; }
+      },
+      sleep: ms => { delays.push(ms); return new Promise<void>(resolve => release.push(resolve)); },
+    }).then(value => { complete = true; return { value, error: undefined }; }, error => { complete = true; return { value: undefined, error }; });
+    const waits = code === "EACCES" ? 0 : Math.min(failures, 6);
+    for (let index = 0; index < waits; index++) {
+      await until(() => delays.length === index + 1 ? true : null, 1000);
+      expect(attempts).toBe(index + 1); expect(complete).toBe(false); expect(delays[index]).toBe(350);
+      // An unresolved sleep must prevent another attempt, even after a turn
+      // of the real event loop. Merely scheduling a delay cannot pass this.
+      await Bun.sleep(0); expect(attempts).toBe(index + 1); expect(complete).toBe(false);
+      release[index]!();
+    }
+    const outcome = await run;
+    expect(attempts).toBe(code === "EACCES" ? 1 : Math.min(failures + 1, 7));
+    expect(delays).toEqual(Array(waits).fill(350));
+    if (Number.isFinite(failures)) expect(outcome.value).toEqual({ attempts: failures + 1, waitedMs: failures * 350 });
+    else { expect(outcome.error).toBe(lastError); expect(outcome.value).toBeUndefined(); }
+  }
+}, 30000);
