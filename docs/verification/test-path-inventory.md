@@ -2,7 +2,7 @@
 
 Inventory of all **1520 tracked test files** at `origin/main` = `1d0eda9302bfa5c1df7e392f6002091ab0c7c7e9` (the fetched start point).
 
-Baseline: 1,333 pass, 167 fail, 3 timeout, 17 gated/skipped. Latest per-file results: **1435 pass, 65 fail, 2 timeout, 18 gated/skipped**; **102 baseline failures now pass**. Remaining failures are assigned below to fenced lanes or explicit decisions; this does not claim all main tests are green.
+Baseline: 1,333 pass, 167 fail, 3 timeout, 17 gated/skipped. Latest per-file results: **1435 pass, 65 fail, 2 timeout, 18 gated/skipped**; **101 baseline failures now pass**, and one baseline timeout now passes. Remaining failures are assigned below to fenced lanes or explicit decisions; this does not claim all main tests are green.
 
 Each executed file ran sequentially in its own process, with unique isolated state/HOME/config and short temporary paths, under the heavy-check flock and an 8 GiB systemd scope. Baseline timeout: 120s; targeted reruns: 300s. Bun 1.4.0; the Python test used Python 3. No live registry or unowned process was stopped. Browser opt-ins and credential prerequisites were not enabled. The C54 rerun supplied compiled CSS and an installed Chromium cache in a disposable source export, exercising both themes without changing committed captures. Tests containing partial skips still count as pass only when their process exited successfully.
 
