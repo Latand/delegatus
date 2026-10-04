@@ -1176,6 +1176,63 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
+/** The last phase the hook announced with its own `pre-push: <phase>` marker. */
+export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
+  return failure.outputTail.split("\n").map((line) => line.trim())
+    .filter((line) => /^pre-push: [^;:]{1,60}$/.test(line)).at(-1)?.slice("pre-push: ".length) ?? null;
+}
+
+/** What stopped a publication, in one line a person can act on. The hook's
+    phase markers name the phase; `(fail)` lines name tests. */
+export function publicationFailureCause(failure: PipelinePublicationFailure): string {
+  const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
+  if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
+  const lines = failure.outputTail.split("\n").map((line) => line.trim());
+  const phase = publicationFailurePhase(failure);
+  const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ")).map((line) => line.slice(7).replace(/ \[[\d.]+m?s\]$/, "")))];
+  const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
+  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
+  const last = lines.filter(Boolean).at(-1);
+  return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
+}
+
+/** A push that was stopped before it reached the remote, in one line: what
+    ended it and which phase the hook had announced. Evidence is absent when
+    the Viewer itself died with the push. */
+export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
+  const phase = failure ? publicationFailurePhase(failure) : null;
+  const ended = failure?.timedOutMs ? `the push ran past its ${Math.round(failure.timedOutMs / 60_000)}-minute limit`
+    : failure?.signal ? `the push was ended by ${failure.signal}` : "the push was interrupted";
+  return `${ended}${phase ? ` in the hook's "${phase}" phase` : ""} and did not reach the remote`;
+}
+
+/** A repository hook is the project's own gate and runs as it would from a
+    person's shell. The Viewer's private settings (its interface language, its
+    launcher handoff, its token, its state owner) are no part of that: a test
+    the hook runs reads them and fails for a reason no branch can fix. Gate
+    slot and privacy settings are the hook's own inputs and stay, and so does
+    a publication identity or commit guard handed to this process. Anything
+    else a publication command needs (forge credentials, say) is spread over
+    this result, so the Viewer's settings are removed first. */
+export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.env): Partial<NodeJS.ProcessEnv> {
+  const env: Partial<NodeJS.ProcessEnv> = {};
+  for (const key of Object.keys(source)) {
+    if (key === "NODE_ENV" || key === "NEXT_PHASE" || key === "NEXT_RUNTIME" || /^__NEXT_/.test(key)
+      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$)/.test(key))) env[key] = undefined;
+  }
+  return env;
+}
+
+/** Tracked files the accepted head changes against the base branch as this
+    worktree last fetched it. Null when the comparison cannot be made. */
+async function publicationChangedFiles(pipeline: Pipeline, acceptedSha: string, exec: ExecPort): Promise<number | null> {
+  const base = await exec("git", ["merge-base", acceptedSha, `refs/remotes/origin/${pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH}`], pipeline.worktreeDir);
+  const from = base.code === 0 && /^[0-9a-f]{40}$/i.test(base.stdout.trim()) ? base.stdout.trim() : null;
+  if (!from) return null;
+  const diff = await exec("git", ["diff", "--no-renames", "--name-only", from, acceptedSha], pipeline.worktreeDir);
+  return diff.code === 0 ? diff.stdout.split("\n").filter(Boolean).length : null;
+}
+
 const REMOTE_READ_TIMEOUT = "5s";
 
 /** The lock's mtime records publication progress across Viewer restarts. The
@@ -1421,16 +1478,25 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long test diagnostics must not erase the hook's phase markers.
+        const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
-          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail };
+          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
+          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}) };
       }
       return executed;
     };
     let result: PipelinePublishResult;
-    try { result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
-      publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null })); }
+    try {
+      result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
+        publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null }));
+      // A refusal of a head that changes nothing cannot be the stage's doing.
+      if (failureEvidence && !result.ok) {
+        const changed = await publicationChangedFiles(reservation.pipeline, request.acceptedSha, fencedExec);
+        if (changed !== null) failureEvidence = { ...failureEvidence, changedFiles: changed };
+      }
+    }
     catch (error) { result = writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
@@ -1615,7 +1681,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // left node_modules incomplete, or a merged lockfile may have moved on.
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
-    const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, undefined, { timeoutMs: 180_000 });
+    const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
     if (installed.code !== 0) return failure("preparing publication dependencies", installed);
     // Lifecycle scripts must not change the accepted head or tracked work.
     const prepared = await currentPipelineBranchHead(pipeline, exec);
@@ -1624,7 +1690,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   }
   // Full repository hooks exceed the generic command budget. Publication
   // remains finite and the ownership watcher can cancel it throughout.
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, undefined, { timeoutMs: 900_000 }));
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 900_000 }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

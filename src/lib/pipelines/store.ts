@@ -240,6 +240,12 @@ function isAttempt(value: unknown, index: number): boolean {
       && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
         && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
     )) &&
+    (attempt.publicationRetry === undefined || (
+      attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
+      && !Array.isArray(attempt.publicationRetry)
+      && ["sha", "operationId", "retryAt"].every((key) => typeof (attempt.publicationRetry as Record<string, unknown>)[key] === "string")
+      && Number.isSafeInteger((attempt.publicationRetry as Record<string, unknown>).failures)
+    )) &&
     isReviewFlowSync(attempt.reviewFlowSync) &&
     isNullableString(attempt.startedAt) &&
     isNullableString(attempt.completedAt) &&

@@ -28,6 +28,8 @@ export interface PlanEnvironment {
 }
 const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.includes(".browser.test.");
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
+/** Prose the compiler never reads. Anything else can change what it checks. */
+const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
 
 /** Pure planning: discovery and process execution happen outside this function. */
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
@@ -44,7 +46,11 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     if (mode === "pre-commit" || skipped.size) command.push("--paths", ...(privacyFiles.length ? privacyFiles : ["package.json"]));
     steps.push({ name: "privacy", command });
   }
-  if (mode === "pre-push") steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
+  // A push that changes nothing (a read-only stage, a branch that only trails
+  // main) has nothing a test could judge: whatever fails is already on main.
+  // Privacy still reads every commit the push carries.
+  if (mode === "pre-push" && changedFiles.length === 0) return steps;
+  if (mode === "pre-push" && !changedFiles.every(proseOnly)) steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
   const supplyChainChanged = changedFiles.some(file => ["package.json", "bun.lock", "security/audit-allowlist.json", "scripts/supply-chain-check.ts", "scripts/audit-with-retry.sh", ".github/workflows/supply-chain.yml"].includes(file));
   if (mode === "pre-push" && supplyChainChanged) {
     // Install the candidate graph before any later checks execute against
@@ -66,7 +72,9 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
   if (env.linux) {
     steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
-    steps.push({ name: "Linux tests", command: ["bun", "test", ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
+    // The same verdict rules as touched tests: a platform test that already
+    // fails on the merge base is PRE-EXISTING and never blocks this push.
+    steps.push({ name: "Linux tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
   }
   if (env.runtime) {
     steps.push(
@@ -145,7 +153,9 @@ export function discover(root: string, base: string, files: readonly string[]): 
   const common = files.some(file => ALWAYS_IN_SCOPE.includes(file) || file === ".github/workflows/bun-runtime.yml");
   return {
     base, existing, skippedMedia, tests: siblingTests(root, [...files, "scripts/local-gate.ts"]),
-    linux: process.platform === "linux" && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
+    // An empty diff is "run" to the CI scope, where skipping must be proven.
+    // Here it is proven: nothing changed, so no platform job has a subject.
+    linux: process.platform === "linux" && files.length > 0 && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
     runtime: common || files.some(file => runtimePaths.has(file) || viewerInputs.has(file) || ["Dockerfile", "src/instrumentation.ts"].includes(file) || /^next\.config\./.test(file) || file.startsWith("src/runtime-host/")),
     native: common || files.some(file => nativePaths.has(file)),
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
@@ -184,6 +194,9 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   delete env.LLV_STATE_OWNER;
   delete env.LLV_INBOX_DIR;
   delete env.DELEGATUS_STATE_DIR;
+  // A Viewer that pushes for a lane carries its own interface language, its
+  // launcher handoff and its token. Tests assert the defaults.
+  for (const key of ["LLV_LANG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT", "LLV_TOKEN", "LLV_DEBUG", "DELEGATUS_DEBUG"]) delete env[key];
   env.NODE_ENV = "test";
   return env;
 }
@@ -249,6 +262,7 @@ function main(mode: Mode): void {
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
+  if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   const runtime = steps.some(step => step.pinned) ? pinnedRuntime(root, cache) : process.execPath;
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-local-gate-"));
