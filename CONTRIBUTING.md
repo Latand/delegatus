@@ -102,7 +102,10 @@ did. Adding a kind is a decision about the App's permissions.
   repository is declared. For a covered kind aimed at a declared repository it
   mints a token, starts `gh` with it as `GH_TOKEN` and an empty configuration
   directory, and revokes it when `gh` exits. Every other command reaches `gh`
-  with the arguments and the environment it was typed with.
+  with the arguments and the environment it was typed with. `gh` 2.45 reads a
+  pull request's classic project cards before `gh pr edit`, which an
+  installation token may not; the shim then names the REST form,
+  `gh api -X PATCH repos/<owner/name>/pulls/<number>`, which is covered too.
 - **`git push` to a declared repository** is rewritten, in the agent's
   environment only, to a push URL that one credential helper answers, with
   every other helper cleared for that URL. SSH remotes are rewritten the same

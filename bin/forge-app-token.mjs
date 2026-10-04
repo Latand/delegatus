@@ -246,14 +246,18 @@ function classifyApi(args) {
  * passes through untouched. `repository` is null when the command names none
  * and `gh` would take it from the checkout.
  */
-export function classifyGh(args, env = {}) {
+function ghCommand(args) {
   const positional = [];
   for (let index = 0; index < args.length && positional.length < 2; index++) {
     const arg = args[index];
     if (arg === "-R" || arg === "--repo") { index++; continue; }
     if (!arg.startsWith("-")) positional.push(arg);
   }
-  const [command, sub] = positional;
+  return positional;
+}
+
+export function classifyGh(args, env = {}) {
+  const [command, sub] = ghCommand(args);
   if (!command || args.includes("--help") || args.includes("-h")) return PASS;
   if (command === "api") return classifyApi(args.slice(args.indexOf("api") + 1));
   if (!FORGE_APP_GH_COMMANDS.includes(`${command} ${sub ?? ""}`)) return PASS;
@@ -286,7 +290,14 @@ export async function runGh(args, ports) {
   const env = { ...ports.env, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: ports.emptyGhConfigDir() };
   for (const name of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete env[name];
   try {
-    return await ports.exec(gh, args, env);
+    const status = await ports.exec(gh, args, env);
+    /* Older `gh` reads a pull request's classic project cards before every
+       edit, which an installation token may not, and fails there. The REST
+       form edits the same pull request and is a covered kind too. */
+    if (status !== 0 && ghCommand(args).join(" ") === "pr edit") {
+      ports.stderr(`Delegatus: if \`gh pr edit\` failed on a Projects query, this version of gh cannot edit a pull request with an App token; \`gh api -X PATCH repos/${named}/pulls/<number> -f title=… -F body=@file\` makes the same edit as the App.\n`);
+    }
+    return status;
   } finally {
     await revokeInstallationToken(issued.token, ports);
   }

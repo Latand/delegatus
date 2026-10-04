@@ -198,6 +198,16 @@ describe("running gh for an agent", () => {
     expect(`${p.out.join("")}${p.err.join("")}`).not.toContain(ISSUED);
   });
 
+  test("a failed pr edit under the App names the REST form that makes the same edit", async () => {
+    const p = ports();
+    p.exec = async (command, args, env) => { p.started.push({ command, args, env }); return 1; };
+    expect(await runGh(["pr", "edit", "5", "--body", "b"], p)).toBe(1);
+    expect(p.err.join("")).toContain(`gh api -X PATCH repos/${REPO}/pulls/<number>`);
+    p.err.length = 0;
+    expect(await runGh(["pr", "merge", "5"], p)).toBe(1);
+    expect(p.err).toEqual([]);
+  });
+
   test("negative control: a covered write with no App credential starts no gh at all and says why", async () => {
     const p = ports({ credential: null });
     for (const write of [["pr", "merge", "5", "--squash"], ["pr", "create", "--fill"], ["pr", "edit", "5", "-b", "x"], ["pr", "update-branch", "5"],
