@@ -1,5 +1,4 @@
-import { probeHeadersFrom } from "../../../bin/internalService.mjs";
-import { viewerBootGateKey } from "../../../bin/viewerGateKey.mjs";
+import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
 /* The self-update service (#2007): one per web process, behind the Update
    surface's routes. It holds the update check, and either the checkout
@@ -196,6 +195,8 @@ export class SelfUpdateService {
   private committedAutoSwitchSequence = 0;
   private autoTimer: ReturnType<typeof setInterval> | null = null;
   private autoRunning = false;
+  /** The open turns and stages the admission that filed a relaunch request saw. */
+  private admittedWork: { gateId: string; ids: Set<string> } | null = null;
   private autoBlockers: QuietBlockers | null = null;
   private readonly greenReader: GreenReader;
 
@@ -418,10 +419,20 @@ export class SelfUpdateService {
   private finishFailedApply(): void {
     const intent = this.apply.current;
     if (!intent || intent.trigger !== "auto" || intent.state !== "failed") return;
-    if (!intent.admissionRefused) this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
+    if (intent.admissionRefused) {
+      // A refused admission deployed nothing. The cohort, the operator's
+      // decision, the cumulative wait and the captured rollback stay; only
+      // the accepted custody ends, so the next tick admits the cohort again.
+      const drain = this.auto.drain;
+      this.auto = { ...this.auto, quietSince: null, drain: drain ? { ...drain, admitted: false } : null };
+      this.admittedWork = null;
+      this.saveAuto(); this.refreshDrain();
+      if (this.auto.enabled) void this.check();
+      return;
+    }
+    this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
     this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, quietSince: null, lastBlockers: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
     this.saveAuto(); this.endDrain();
-    if (intent.admissionRefused && this.auto.enabled) void this.check();
   }
 
   private async runAutoTick(): Promise<void> {
@@ -629,6 +640,7 @@ export class SelfUpdateService {
         if (record.launcher.relaunch === 1) {
           this.apply.begin(record, target.sha, "auto", undefined, { rollbackPointer, state: "ready", autoGateId: gateId });
           this.apply.send(record, gateId);
+          this.admittedWork = { gateId, ids: new Set(admissionProbe.work) };
           requested = true;
           this.changes.emit();
           return;
@@ -934,6 +946,10 @@ export class SelfUpdateService {
       const reachable = await this.targetOnBranch(record.checkout, apply.target);
       const snapshot = await this.snapshot();
       const quiet = this.deps.quiet ? await probeQuiet({ ...snapshot, busy: null }, this.deps.quiet, this.deps.now(), true) : null;
+      // An operator's override lets go of the work the admission saw. A turn
+      // or a stage that began after the request was filed was never let go.
+      const admitted = this.admittedWork?.gateId === gateId ? this.admittedWork.ids : new Set<string>();
+      const known = !!quiet && quiet.work.every((id) => admitted.has(id));
       // LAST awaited read precedes this synchronous fence. No state is consumed
       // by a stale issuer, launcher, request or activity observation.
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
@@ -943,7 +959,7 @@ export class SelfUpdateService {
         request = JSON.parse(readFileSync(record.requestFile, "utf8"));
         durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8"));
       } catch { return false; }
-      return green.state === "green" && reachable && this.quietAdmits(quiet)
+      return green.state === "green" && reachable && this.quietAdmits(quiet) && known
         && activity !== null && activity === quietDispatchVersion(this.deps.quiet, this.deps.now())
         && binding === JSON.stringify(this.apply.current) && binding === JSON.stringify(durable)
         && request.role === "relaunch" && request.requestId === requestId && request.target === apply.target && request.autoGateId === gateId
@@ -1438,6 +1454,12 @@ export class SelfUpdateService {
     this.changes.emit();
   }
 
+  /** Launcher custody for this install lives in the state directory this
+      service was given. The ambient environment is ignored for that path. */
+  private custodyEnvironment(): NodeJS.ProcessEnv {
+    return { ...process.env, ...this.deps.env, LLV_STATE_DIR: dirname(this.deps.dir) };
+  }
+
   private async actionFor(decision: ModeDecision): Promise<InstallAction | null> {
     return this.deps.install ? this.deps.install.action(decision) : installAction(decision, undefined, decision.record?.checkout ?? (decision.record ? packageRoot(decision.record) : decision.installRoot));
   }
@@ -1515,15 +1537,22 @@ export class SelfUpdateService {
           }, intent.requestId);
           if (occupied) return occupied;
           const file = launcherControlFile(record.requestFile, "recovery");
-          const headers = probeHeadersFrom(dirname(this.deps.dir));
-          const key = viewerBootGateKey({ ...process.env, ...this.deps.env, LLV_STATE_DIR: dirname(this.deps.dir) });
-          if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
-          writeAtomic(file, { requestId: intent.requestId, requestFile: record.requestFile, unit: action.unit, headers });
+          // The helper probes the restarted Viewer from outside this unit. Its
+          // plan holds no credential: a key this Viewer was given goes into
+          // protected launcher custody, and the plan names that custody.
+          const root = record.checkout ?? packageRoot(record);
+          const environment = this.custodyEnvironment();
+          let custody: boolean;
+          try { custody = prepareLauncherCredentials(root, environment); }
+          catch { return refuse(503, "cannot-restart", "Protected recovery custody is unavailable; update custody is retained"); }
+          writeAtomic(file, { requestId: intent.requestId, requestFile: record.requestFile, unit: action.unit, root, custody,
+            context: Object.fromEntries(["HOME", "XDG_CONFIG_HOME"].flatMap(name => environment[name] ? [[name, environment[name]]] : [])) });
           const recovery = { file, entry: join(release.dir, "bin", "launcher-relaunch.mjs"), bun: this.deps.bun };
           try {
             if (this.deps.install) this.deps.install.run(action, recovery);
             else runInstallAction(action, undefined, recovery);
           } catch {
+            rmSync(file, { force: true });
             return refuse(503, "cannot-restart", "The service recovery was not accepted; update custody is retained");
           }
           // The helper runs outside this service's unit and completes even
@@ -1538,6 +1567,9 @@ export class SelfUpdateService {
             }
             await new Promise(resolve => setTimeout(resolve, 100));
           }
+          // A helper that started has read its plan; one that never did must
+          // not find it later.
+          rmSync(file, { force: true });
           return refuse(503, "cannot-restart", "Prior release health is not proven; update custody is retained");
         }
         this.apply.patch({ state: "ready" });
@@ -1849,6 +1881,9 @@ export class SelfUpdateService {
       appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
         outcome: intent.rolledBack ? "fell-back" : settled, detail: intent.detail });
       if (intent.trigger === "auto" && settled === "failed") this.finishFailedApply();
+      // The handoff this apply owned is verified or rolled back. Its launcher
+      // holds the settings in memory; the key leaves the disk.
+      releaseLauncherCredentials(record.checkout ?? packageRoot(record), this.custodyEnvironment());
     }
     const at = new Date(now).toISOString();
 

@@ -53,7 +53,10 @@ notice, separate manual restarts, and deferred drain policy are superseded.
   Deploy now permits admission despite activity blockers; it still refuses
   another update/restart, unreadable activity or insufficient memory, and
   retains every green, authentication and health gate. The bound itself
-  never forces an interruption.
+  never forces an interruption. Work that starts after the request is filed
+  was never let go and refuses the admission. A refused admission keeps the
+  cohort, the decision and the cumulative wait, and the next tick admits the
+  same cohort again.
 - Once admitted, the transaction owns custody independently of the automatic
   setting. Turning the switch off stops future admission; accepted work keeps
   its hold through handoff, crashes and rollback until verified settlement.

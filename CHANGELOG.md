@@ -8,18 +8,6 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
-### Changed
-- **A task card is dragged by any part of it, and the drag keeps up with the
-  pointer.** On a desktop a press anywhere on the card, the title, the
-  description, a conversation tile or the pipeline block included, starts a drag
-  after 8 px; a press that moves less is the click it always was, and the click
-  after a drag is swallowed. On a phone, hold a task card for 0.35 s and it lifts
-  with a dock of the four columns at the bottom: let go over one to move the task,
-  let go in place for the card menu. The card now follows the pointer by transform
-  alone, and the board's live animations pause while it is held.
-
-## [1.9.1] — 2026-10-03
-
 ### Added
 - **Update replaces the whole installation.** Checkout and packaged updates
   replace the resident launcher, Viewer and runtime host together, verify their
@@ -31,6 +19,16 @@ guarantees for the 1.x series.
   autonomous work waits while the original cohort finishes. The hold survives
   recovery, both restart roles and rollback. After six hours the dialog names
   the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
+
+### Changed
+- **A task card is dragged by any part of it, and the drag keeps up with the
+  pointer.** On a desktop a press anywhere on the card, the title, the
+  description, a conversation tile or the pipeline block included, starts a drag
+  after 8 px; a press that moves less is the click it always was, and the click
+  after a drag is swallowed. On a phone, hold a task card for 0.35 s and it lifts
+  with a dock of the four columns at the bottom: let go over one to move the task,
+  let go in place for the card menu. The card now follows the pointer by transform
+  alone, and the board's live animations pause while it is held.
 
 ### Fixed
 - **Legacy launcher upgrades restore the prior serving release.** If an older
@@ -48,14 +46,19 @@ guarantees for the 1.x series.
   directory, including platform identity and launcher helpers, so new imports
   are covered automatically ([#2495]).
 
+- **An automatic update's final check compares admitted work by identity.**
+  Journal writes of a turn that is already running no longer refuse the
+  restart, so **Deploy now** reaches it; a turn or a stage that starts during
+  admission still refuses it. A refused admission keeps the cohort, the
+  operator's decision and the cumulative wait ([#2495]).
+
 ### Maintainer notes
 - The installed `braces` dependency carries the runtime mitigation from upstream
   tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
   parent-cycle regressions in the release gates. The locally fixed advisory
   metadata expires on 2026-10-10; [#2496] tracks removal after an upstream release.
 - Release-pointer reads and update admission retain main's asynchronous Git
-  checks together with durable drain custody. This version prepares the npm
-  release; tagging and publication are separate release steps.
+  checks together with durable drain custody.
 
 ## [1.9.0] — 2026-10-01
 
@@ -1764,8 +1767,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.9.1...HEAD
-[1.9.1]: https://github.com/Latand/delegatus/compare/v1.9.0...v1.9.1
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.9.0...HEAD
 [1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Latand/delegatus/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/Latand/delegatus/compare/v1.7.0...v1.7.1

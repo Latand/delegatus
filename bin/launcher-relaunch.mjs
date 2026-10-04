@@ -12,7 +12,7 @@ import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
 import "./envAlias.mjs";
-import { restoreLauncherCredentials } from "./launcher-credentials.mjs";
+import { releaseLauncherCredentials, restoreLauncherCredentials } from "./launcher-credentials.mjs";
 import { lockLauncherStartup } from "./launcher-lock.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
@@ -154,10 +154,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "-
 /* This helper belongs to the transient recovery unit, so stopping the old
    Viewer cannot interrupt rollback verification or release custody early. */
 async function recoverService(file) {
-  const plan = JSON.parse(readFileSync(file, "utf8"));
+  // The plan is removed on every exit. It holds no credential; it names the
+  // custody that does.
+  try { await recoverPlannedService(JSON.parse(readFileSync(file, "utf8"))); }
+  finally { rmSync(file, { force: true }); }
+}
+async function recoverPlannedService(plan) {
   const name = basename(plan.requestFile);
-  if (!/^request(?:-[^/\\]+)?\.json$/.test(name) || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(plan.unit)) throw new Error("Invalid recovery plan");
+  if (!/^request(?:-[^/\\]+)?\.json$/.test(name) || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(plan.unit) || typeof plan.root !== "string") throw new Error("Invalid recovery plan");
   const directory = dirname(plan.requestFile);
+  // This unit starts with the service manager's environment. An access key
+  // the Viewer was given is read from its protected custody; a key file is
+  // found through the install's own directories.
+  const environment = { ...process.env, ...(plan.context ?? {}), LLV_STATE_DIR: dirname(directory) };
+  if (plan.custody) restoreLauncherCredentials(plan.root, Object.assign(environment, { LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" }));
+  const headers = probeHeadersFrom(dirname(directory));
+  const key = viewerBootGateKey(environment);
+  if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
   const applyFile = join(directory, "apply.json");
   const trialFile = join(directory, name.replace(/^request/, "trial"));
   const recordFile = join(directory, name.replace(/^request/, "launcher"));
@@ -186,7 +199,7 @@ async function recoverService(file) {
       && record.web.startIdentity && record.web.startIdentity === readStartIdentity(record.web.pid)
       && record.runtimeHost.startIdentity && record.runtimeHost.startIdentity === readStartIdentity(record.runtimeHost.pid)
       && readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").includes(trial.previousEntry)
-      && await terminalHostHealthy(record) && await probePageAndChunk(record.port, 5000, plan.headers) === null) {
+      && await terminalHostHealthy(record) && await probePageAndChunk(record.port, 5000, headers) === null) {
       // Recheck the durable owner after the awaited health observations.
       const fresh = read(recordFile); const owned = read(applyFile); const heldTrial = read(trialFile);
       if (owned?.requestId !== intent.requestId || owned.state !== "switching" || !restored() || existsSync(plan.requestFile)
@@ -198,7 +211,8 @@ async function recoverService(file) {
       const drainFile = join(directory, "auto-drain.json");
       if (read(drainFile)?.id === intent.requestId) rmSync(drainFile, { force: true });
       if (read(trialFile)?.requestId === intent.requestId) rmSync(trialFile, { force: true });
-      rmSync(file, { force: true });
+      // The rollback is verified and settled: the handoff's key leaves the disk.
+      if (plan.custody) releaseLauncherCredentials(plan.root, environment);
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -224,6 +238,14 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       && typeof value.target === "string" && /^[0-9a-f]{40}$/.test(value.target)
       && (value.rollbackPointer === null || typeof value.rollbackPointer === "string")) trial = value;
   } catch { /* No trial on an ordinary start. */ }
+  // A refused dispatch stopped nothing and owns no transition. Its preflight
+  // trial can survive a crash between the refusal receipt and its removal.
+  if (trial?.state === "preflight") {
+    try {
+      const refusal = JSON.parse(readFileSync(`${paths.request}.result.json`, "utf8"));
+      if (refusal.requestId === trial.requestId && refusal.state === "rejected") { rmSync(trialFile, { force: true }); trial = null; }
+    } catch { /* No refusal: the preflight trial keeps its cold recovery. */ }
+  }
 
   const restore = (pointer) => {
     if (pointer === null) rmSync(paths.releasePointer, { force: true });
@@ -234,8 +256,13 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
     if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
     process.chdir(dirname(dirname(nextEntry)));
+    // The next image inherits this launcher's settings. A handoff requirement
+    // was addressed to the terminal command that started this process and
+    // ends with it.
+    const inherited = { ...process.env };
+    delete inherited.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
     process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
-      ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
+      ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
       LLV_LAUNCHER_TRIAL: requestId,
     });
     throw new Error("launcher exec returned without replacing the process");
@@ -246,10 +273,15 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
     const applyFile = join(dirname(paths.request), "apply.json");
     const apply = read(applyFile);
-    if (apply && ["building", "ready", "switching"].includes(apply.state) ) {
+    const receipt = read(`${paths.request}.result.json`);
+    // The launcher refused this apply before stopping anything. A cold start
+    // already on the target is the transition; on any other image the Viewer
+    // settles the refusal, and neither replays a rollback.
+    const refused = receipt?.requestId === apply?.requestId && receipt?.state === "rejected";
+    const onTarget = release.sha === apply?.target && entry === join(release.dir, "bin", "cli.mjs");
+    if (apply && ["building", "ready", "switching"].includes(apply.state) && (!refused || onTarget)) {
       const request = read(paths.request);
       const owner = read(paths.record)?.launcher;
-      const receipt = read(`${paths.request}.result.json`);
       const receiptOwner = receipt?.requestId === apply.requestId && receipt.target === apply.target
         && ["done", "rolled-back"].includes(receipt.state) && receipt.issuerPid === apply.launcherPid
         && receipt.issuerIdentity === apply.launcherIdentity && receipt.launcherPid === owner?.pid
@@ -301,7 +333,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         && receiptOwner && receipt.revision === apply.target && release.sha === apply.target;
       const externalReady = apply.externalRestart && apply.state === "ready" && release.sha === apply.target
         && entry === join(release.dir, "bin", "cli.mjs");
-      directTrial = true; pendingRecovery = !completed && !externalReady && !rolledBack;
+      if (refused) rmSync(`${paths.request}.result.json`, { force: true });
+      directTrial = true; pendingRecovery = !completed && !externalReady && !rolledBack && !refused;
     }
   }
   return {
@@ -325,6 +358,11 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     async begin(request, next, dispatchFence = () => true) {
       if (stopping) return;
       if (!canExec) throw new Error("This interpreter needs a launcher restart to apply an update.");
+      const read = file => { try { return readFileSync(file, "utf8"); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
+      const applyFile = join(dirname(paths.request), "apply.json");
+      const settled = () => { const apply = readPointer(read(applyFile)); return apply?.requestId === request.requestId && ["done", "failed"].includes(apply.state); };
+      // A request republished by a refusal can outlive the Viewer's settlement.
+      if (settled()) return;
       if (next.sha !== request.target || next.dir === release.dir) throw new Error("Relaunch target is not the installed release.");
       const nextEntry = join(next.dir, "bin", "cli.mjs");
       // The Viewer captures this before publishing the new pointer. Older
@@ -333,8 +371,6 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       const rollbackPointer = request.rollbackPointer === null || typeof request.rollbackPointer === "string"
         ? request.rollbackPointer
         : previous.published ? `${JSON.stringify({ sha: previous.sha, dir: previous.dir })}\n` : null;
-      const read = file => { try { return readFileSync(file, "utf8"); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
-      const applyFile = join(dirname(paths.request), "apply.json");
       const gateFile = join(dirname(paths.request), "auto-admission.json");
       const applyBinding = read(applyFile), gateBinding = request.autoGateId ? read(gateFile) : null;
       const owner = JSON.parse(read(paths.record))?.launcher;
@@ -392,13 +428,17 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         || read(trialFile) !== `${JSON.stringify(intent)}\n`
         || pending !== null && JSON.parse(pending)?.requestId !== request.requestId
         || request.autoGateId && (read(gateFile) !== gateBinding || currentGate?.id !== request.autoGateId || currentGate.until <= Date.now()) || !dispatchFence(true)) {
-        if (pending === null) {
+        if (pending === null && !settled()) {
           const temporary = `${paths.request}.${randomUUID()}.tmp`;
           try { writeFileSync(temporary, `${JSON.stringify(request)}\n`, { mode: 0o600, flag: "wx" }); linkSync(temporary, paths.request); }
           catch (error) { if (error.code !== "EEXIST") throw error; }
           finally { rmSync(temporary, { force: true }); }
         }
         atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: "Stale launcher dispatch custody or work evidence" }) + "\n");
+        // The refusal owns no transition: nothing was stopped, so no later
+        // failure may roll this trial back. The receipt precedes its removal.
+        if (read(trialFile) === `${JSON.stringify(intent)}\n`) rmSync(trialFile, { force: true });
+        trial = null;
         return false;
       }
       intent = { ...intent, state: "starting" };
@@ -436,6 +476,13 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     async failed(detail) {
       if (stopping) return false;
       if (!trial || trial.state === "rolled-back") return false;
+      // Only a starting intent admitted child shutdown. A load check that
+      // failed in this process leaves the serving children and the pointer to
+      // the Viewer's settlement; a cold preflight trial still rolls back.
+      if (trial.state === "preflight" && !pendingRecovery) {
+        rmSync(trialFile, { force: true }); trial = null;
+        return false;
+      }
       await stop();
       if (stopping) return false;
       restore(trial.rollbackPointer);

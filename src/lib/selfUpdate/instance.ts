@@ -1,7 +1,7 @@
 /* The one self-update service of this web process, wired to the real
    install (#2007). Everything that resolves the state directory runs on the
    first request, never while a module loads (#1905). */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
@@ -33,6 +33,7 @@ import { SelfUpdateService, type ServiceDeps } from "./service";
 import { currentHostTurnIdle } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
+import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
 
 const POLL_MINUTES = 60;
 const SSE_MIN_GAP_MS = 250;
@@ -123,14 +124,12 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     kickDeliveryQueue: kickStructuredDeliveryQueue,
     updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
+      // Admitted work by identity. The journal is left out on purpose: every
+      // event of a turn already running moves it, so it cannot fence new work.
       dispatchVersion: () => {
-        const journal = process.env.LLV_RUNTIME_JOURNAL;
-        if (!journal) throw new Error("Runtime admission evidence is unavailable");
-        const files = [journal, `${journal}-wal`].map(file => {
-          try { const st = statSync(file, { bigint: true }); return [String(st.ino), String(st.size), String(st.mtimeNs), String(st.ctimeNs)]; }
-          catch (error) { if (file.endsWith("-wal") && (error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
-        });
-        return createHash("sha256").update(JSON.stringify([files, agentRegistry().snapshot(), flowPipelineController().idle(), seatTickIdle()])).digest("hex");
+        const records = admittedRecords(agentRegistry().snapshot());
+        if (!records) throw new Error("Runtime admission evidence is unavailable");
+        return createHash("sha256").update(JSON.stringify([records, flowPipelineController().idle(), seatTickIdle()])).digest("hex");
       },
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import {
@@ -20,6 +20,24 @@ import {
  */
 
 registerSelfUpdateCleanup();
+
+/** A launcher a fake service manager started detached belongs to no child
+    handle of this test. The manager records the process it started: that is
+    the bootstrap, which forwards a signal to the launcher it handed off to.
+    Signalling only the recorded launcher makes the bootstrap start its own in
+    its place, and that one outlives the file. Stop the bootstrap and wait for
+    it, the recorded launcher and the children they supervise. */
+async function stopManagedLauncher(pidFile: string, state: string): Promise<void> {
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  let pid: number;
+  try { pid = Number(readFileSync(pidFile, "utf8")); } catch { return; }
+  const identity = readStartIdentity(pid);
+  let record: LauncherRecord | null = null;
+  try { record = readRecord(state); } catch { /* the launcher never wrote one */ }
+  const owned = [pid, record?.launcher.pid, record?.web.pid, record?.runtimeHost.pid].filter((entry): entry is number => !!entry);
+  if (identity && isAlive(pid)) process.kill(pid, "SIGTERM");
+  await until(() => owned.every(entry => !isAlive(entry)) || (identity !== null && isAlive(pid) && readStartIdentity(pid) !== identity), 10_000);
+}
 test("relaunch replaces launcher, web and host under the same supervisor PID", async () => {
   const fixture = install();
   const { port, child } = await start(fixture);
@@ -1076,7 +1094,13 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
     process.kill(record.web.pid!, "SIGTERM"); await until(() => !isAlive(record.web.pid!));
     const recovery = spawn(process.execPath, ["--bun", path.join(candidate.dir, "dist", "standalone", "server.js")], {
       cwd: path.join(candidate.dir, "dist", "standalone"), env: { ...fixture.env, PORT: String(running.port) }, stdio: "ignore" }); children.add(recovery);
-    await until(() => recovery.pid && isAlive(recovery.pid) ? true : null);
+    // The recovery Viewer has read its script once it answers. A process that
+    // merely exists may still read the file after the rewrite below and file
+    // a failed attempt the launcher under test never made.
+    for (const deadline = Date.now() + 20_000; ; await Bun.sleep(25)) {
+      if (await served(running.port).catch(() => null) === path.join(candidate.dir, "dist", "standalone")) break;
+      if (Date.now() > deadline) throw new Error("The recovery Viewer never answered");
+    }
   }
   if (failure === "import") writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), 'throw new Error("terminal candidate import failed");\n' + readFileSync(path.join(candidate.dir, "bin", "cli.mjs"), "utf8").replace(/^#![^\n]*\n/, ""));
   if (failure === "web") writeFileSync(path.join(candidate.dir, shape === "package" ? "dist/standalone/server.js" : "node_modules/.bin/next"), STUB_NEXT(true));
@@ -1170,7 +1194,9 @@ const bootstrapPid = ${JSON.stringify(running.child.pid)};
 process.kill(bootstrapPid, "SIGTERM");
 const deadline = Date.now() + 5000;
 while (Date.now() < deadline) { try { process.kill(bootstrapPid, 0); } catch { break; } await Bun.sleep(25); }
-spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "bin", "cli.mjs"))}, "--no-open", "--port", ${JSON.stringify(String(running.port))}], { cwd: ${JSON.stringify(fixture.checkout)}, detached: true, stdio: "ignore", env: process.env }).unref();
+const launcher = spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "bin", "cli.mjs"))}, "--no-open", "--port", ${JSON.stringify(String(running.port))}], { cwd: ${JSON.stringify(fixture.checkout)}, detached: true, stdio: "ignore", env: process.env });
+writeFileSync(${JSON.stringify(path.join(managerDir, "launcher.pid"))}, String(launcher.pid));
+launcher.unref();
 `, { mode: 0o700 });
   expect(existsSync(path.join(directory, "apply.json"))).toBe(false);
   let restarting: Promise<void> | undefined;
@@ -1247,7 +1273,11 @@ spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "
     const cold = new ApplyController(directory);
     expect(cold.observe(record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, await socketAnswers(record.socket))).toBe("failed");
     expect(cold.current).toMatchObject({ rolledBack: true, state: "failed" });
-  } finally { const { setSelfUpdateServiceForTests } = await import("../src/lib/selfUpdate/instance"); setSelfUpdateServiceForTests(null); service.stop(); await restarting; }
+  } finally {
+    const { setSelfUpdateServiceForTests } = await import("../src/lib/selfUpdate/instance"); setSelfUpdateServiceForTests(null); service.stop(); await restarting;
+    // The import-failure branch leaves the launcher its fake manager started.
+    await stopManagedLauncher(path.join(managerDir, "launcher.pid"), fixture.state);
+  }
 }, 90_000);
 
 (legacySource ? test : test.skip)("actual legacy bootstrap rollback settles the apply and seat receipt", async () => {
@@ -1533,3 +1563,199 @@ test.each(["gate-expired", "new-work", "launcher-changed"] as const)("resident r
   expect(after.web.pid).toBe(before.web.pid); expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
   await perimeterRemains(running.port, key);
 }, 30000);
+
+test("a refused relaunch keeps both children through the Viewer's settlement and every later poll", async () => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const fixture = install();
+  const running = await start(fixture);
+  const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const candidate = release(fixture, "refused-relaunch");
+  // Each load check announces itself and waits to be let through.
+  const gate = path.join(fixture.root, "load"), entry = path.join(candidate.dir, "bin", "cli.mjs");
+  writeFileSync(entry, `if (process.argv.includes("--version")) { const fs = await import("node:fs"); let attempt = 0; while (fs.existsSync(${JSON.stringify(gate)} + "-entered-" + attempt)) attempt++;
+    fs.writeFileSync(${JSON.stringify(gate)} + "-entered-" + attempt, ""); while (!fs.existsSync(${JSON.stringify(gate)} + "-released-" + attempt)) await Bun.sleep(5); }\n`
+    + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
+  const dir = path.dirname(before.requestFile), apply = new ApplyController(dir);
+  const trialFile = before.requestFile.replace("request-", "trial-"), receipt = `${before.requestFile}.result.json`;
+  apply.begin(before as never, candidate.sha, "operator"); apply.patch({ state: "ready" });
+  expect(existsSync(before.releasePointer)).toBe(false);
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  apply.send(before as never);
+  // Work the admission never saw is filed during the first load check.
+  await until(() => existsSync(`${gate}-entered-0`));
+  writeFileSync(path.join(fixture.state, "agent-registry.json"), JSON.stringify({ version: 2, entries: { "conversation-new": { claimEpoch: 0, pendingAction: "spawn" } }, receipts: {} }));
+  writeFileSync(`${gate}-released-0`, "");
+  await until(() => { try { return JSON.parse(readFileSync(receipt, "utf8")).state === "rejected"; } catch { return false; } });
+  await until(() => !existsSync(trialFile) || existsSync(`${gate}-entered-1`));
+  // The request is offered again. The Viewer settles the refusal and restores
+  // the pointer while that second load check is still running.
+  await until(() => existsSync(`${gate}-entered-1`));
+  expect(new ApplyController(dir).observe(readRecord(fixture.state) as never, true)).toBe("failed");
+  expect(JSON.parse(readFileSync(path.join(dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed", admissionRefused: true });
+  expect(existsSync(before.releasePointer)).toBe(false);
+  writeFileSync(`${gate}-released-1`, "");
+  // Five polling intervals: a launcher that still owned a trial would roll it
+  // back here, stopping the Viewer and the runtime host.
+  await until(() => !existsSync(trialFile) && !existsSync(before.requestFile));
+  await Bun.sleep(2_500);
+  const after = readRecord(fixture.state);
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(after.web.pid).toBe(before.web.pid); expect(after.runtimeHost.pid).toBe(before.runtimeHost.pid);
+  expect(existsSync(`/proc/${before.web.pid}`)).toBe(true); expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(true);
+  expect(after.web.state).toBe("healthy"); expect(after.runtimeHost.state).toBe("healthy");
+  expect(after.launcher.error ?? null).toBeNull();
+  expect(existsSync(trialFile)).toBe(false); expect(existsSync(before.requestFile)).toBe(false);
+  expect(existsSync(before.releasePointer)).toBe(false);
+  expect(existsSync(`${gate}-entered-2`)).toBe(false);
+  expect(await served(running.port)).toBe(fixture.checkout);
+  expect(running.child.exitCode).toBeNull();
+}, 60_000);
+
+test("journal traffic during the load check does not refuse a relaunch", async () => {
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const fixture = install();
+  const running = await start(fixture);
+  const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  // A turn that is already running has its registry record and its journal.
+  writeFileSync(path.join(fixture.state, "agent-registry.json"), JSON.stringify({ version: 2, receipts: {}, entries: { "conversation-open": { claimEpoch: 2, pendingAction: null, status: "live", updatedAt: "0" } } }));
+  const candidate = release(fixture, "journal-traffic");
+  const entered = path.join(fixture.root, "load-entered"), released = path.join(fixture.root, "load-released"), entry = path.join(candidate.dir, "bin", "cli.mjs");
+  writeFileSync(entry, `if (process.argv.includes("--version")) { const fs = await import("node:fs"); fs.writeFileSync(${JSON.stringify(entered)}, ""); while (!fs.existsSync(${JSON.stringify(released)})) await Bun.sleep(5); }\n`
+    + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
+  const apply = new ApplyController(path.dirname(before.requestFile));
+  apply.begin(before as never, candidate.sha, "operator"); apply.patch({ state: "ready" });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  apply.send(before as never);
+  await until(() => existsSync(entered));
+  // Every event of that turn moves these while the load check runs.
+  for (const name of ["runtime-events-fixture.sqlite", "runtime-events-fixture.sqlite-wal", "state.sqlite", "state.sqlite-wal"]) writeFileSync(path.join(fixture.state, name), "event");
+  writeFileSync(path.join(fixture.state, "agent-registry.json"), JSON.stringify({ version: 2, receipts: {}, entries: { "conversation-open": { claimEpoch: 2, pendingAction: null, status: "working", updatedAt: "1" } } }));
+  writeFileSync(released, "");
+  const after = await until(() => {
+    const r = readRecord(fixture.state);
+    return r.launcher.requestId === apply.current!.requestId && r.launcher.state === "healthy" && r.web.state === "healthy" && r.runtimeHost.state === "healthy"
+      && r.web.revision === candidate.sha.slice(0, 7) && r.runtimeHost.revision === candidate.sha.slice(0, 7) ? r : null;
+  });
+  expect(JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, state: "done" });
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(await served(running.port)).toBe(candidate.dir);
+}, 60_000);
+
+// The helper's protocol is the one-time upgrade of a launcher that predates
+// relaunch, so the settled outcome needs that launcher: the rehearsal source.
+for (const outcome of ["refused", "settled"] as const) (outcome === "refused" || legacySource ? test : test.skip)(`a service recovery plan names protected custody and holds no access key: ${outcome}`, async () => {
+  const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
+  const { readRevision } = await import("../src/lib/selfUpdate/git");
+  const { readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  const { idleUpdate } = await import("../src/lib/selfUpdate/types");
+  const { runInstallAction } = await import("../src/lib/selfUpdate/actions");
+  let f: ReturnType<typeof install>, candidate: ReturnType<typeof release>, key: string;
+  if (outcome === "refused") ({ f, candidate, key } = await protectedInstall("checkout", "LLV_TOKEN"));
+  else {
+    f = install({ tokenProtected: true });
+    for (const name of readdirSync(path.join(f.checkout, "bin"))) {
+      const source = path.join(legacySource!, "bin", name); if (existsSync(source)) copyFileSync(source, path.join(f.checkout, "bin", name));
+    }
+    git(f.checkout, "add", "-f", "."); git(f.checkout, "commit", "-m", "legacy service fixture"); f.first = git(f.checkout, "rev-parse", "HEAD");
+    candidate = release(install(), "recovery-candidate"); git(f.checkout, "fetch", candidate.dir, candidate.sha);
+    key = randomBytes(16).toString("hex"); f.env.LLV_TOKEN = key;
+  }
+  // The serving Viewer answers the key it was given and nothing else.
+  const gateHolds = async (port: number) => {
+    if (outcome === "refused") return perimeterRemains(port, key);
+    for (const [credential, status] of [[null, 401], ["wrong-synthetic-key", 401], [key, 200]] as const) {
+      const response = await fetch(`http://127.0.0.1:${port}/`, { headers: credential ? { authorization: `Bearer ${credential}` } : {}, signal: AbortSignal.timeout(2000) });
+      expect(response.status === status).toBe(true); await response.body?.cancel();
+    }
+  };
+  const running = await start(f);
+  const record = await until(() => { const r = readRecord(f.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  await gateHolds(running.port);
+  // The candidate cannot load, so the action must restore the prior release.
+  writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), 'throw new Error("fixture import failure");\n');
+  writeFileSync(record.releasePointer, JSON.stringify({ ...candidate, checkoutHead: f.first }));
+  const directory = path.dirname(record.requestFile);
+  const planFile = path.join(directory, path.basename(record.requestFile).replace(/^request/, "recovery"));
+  const custody = path.join(f.state, `launcher-custody-${path.basename(record.requestFile).slice("request-".length, -".json".length)}`);
+  // The service manager restarts the unit under the unit's own environment.
+  const managerDir = path.join(f.root, "manager"); mkdirSync(managerDir);
+  const serviceEnv = path.join(f.root, "service-env.json"); writeFileSync(serviceEnv, JSON.stringify(f.env), { mode: 0o600 });
+  writeFileSync(path.join(managerDir, "systemctl"), `#!${process.execPath} --bun
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+const bootstrapPid = ${JSON.stringify(running.child.pid)};
+process.kill(bootstrapPid, "SIGTERM");
+const deadline = Date.now() + 5000;
+while (Date.now() < deadline) { try { process.kill(bootstrapPid, 0); } catch { break; } await Bun.sleep(25); }
+const launcher = spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(f.checkout, "bin", "cli.mjs"))}, "--no-open", "--port", ${JSON.stringify(String(running.port))}], { cwd: ${JSON.stringify(f.checkout)}, detached: true, stdio: "ignore", env: JSON.parse(readFileSync(${JSON.stringify(serviceEnv)}, "utf8")) });
+writeFileSync(${JSON.stringify(path.join(managerDir, "launcher.pid"))}, String(launcher.pid));
+launcher.unref();
+`, { mode: 0o700 });
+  let plan = "", helper: ReturnType<typeof spawn> | undefined, helperOutput = "";
+  const runner = { state: idleUpdate(), start: async () => {}, retry: async () => {}, restore(state: ReturnType<typeof idleUpdate>) { this.state = state; }, logPath: () => "" };
+  const service = new SelfUpdateService({
+    now: () => Date.now(), env: f.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
+    mode: async () => ({ mode: "checkout", reason: null, record: readRecord(f.state) as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord }),
+    check: async () => ({ ok: false, error: "fixture", installed: null }), describe: readRevision,
+    createRunner: () => runner, requestRestart: () => "unused", processAlive: (pid, identity) => readStartIdentity(pid) === identity, processIdentity: (pid) => readStartIdentity(pid),
+    hostHealth: async () => { const r = readRecord(f.state); return await socketAnswers(r.socket) ? { pid: r.runtimeHost.pid!, startIdentity: readStartIdentity(r.runtimeHost.pid!)!, hostEpoch: 1 } : null; },
+    requestDeployment: async () => { throw new Error("unused"); }, readDeployment: async () => null,
+    findDeploymentByIdempotencyKey: async () => null, releaseTarget: () => null, prepareCheckRepo: async () => { throw new Error("unused"); },
+    buildEnv: () => ({}), web: { pid: record.web.pid!, port: running.port, startedAt: "" },
+    install: { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }), entry: () => path.join(f.checkout, "bin", "cli.mjs"), run: (action, recovery) => {
+      if (!recovery) throw new Error("the candidate was never meant to start");
+      plan = readFileSync(recovery.file, "utf8");
+      if (outcome === "refused") throw new Error("the service manager refused the transient unit");
+      runInstallAction(action, args => {
+        // The transient unit has the manager's environment: no key, no state
+        // directory, and a home outside the install.
+        const command = args.slice(args.indexOf("--") + 1), env = cleanTerminalEnv(f);
+        helper = spawn(command[0]!, command.slice(1), { cwd: f.checkout, env: { ...env, PATH: managerDir + path.delimiter + env.PATH }, stdio: ["ignore", "pipe", "pipe"] }); children.add(helper);
+        helper.stderr?.on("data", chunk => { helperOutput += String(chunk); });
+      }, recovery);
+    } },
+  });
+  try {
+    const result = await service.performInstallAction();
+    // The plan says where the credentials are held and holds none of them.
+    for (const secret of [key, "probe.", "authorization", "Bearer", "x-llv-internal-service"]) expect(plan.includes(secret)).toBe(false);
+    expect(JSON.parse(plan)).toMatchObject({ unit: "fixture.service", root: f.checkout, custody: true, requestFile: record.requestFile });
+    expect(existsSync(planFile)).toBe(false);
+    expect(result).toMatchObject({ ok: false, status: 503 });
+    const intent = JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"));
+    if (outcome === "refused") {
+      expect((result as { detail?: string; error?: string }).detail ?? (result as { error?: string }).error).toContain("not accepted");
+      // The apply is still open, so its custody stays, private to this user.
+      expect(intent.state).toBe("switching");
+      expect(statSync(custody).mode & 0o077).toBe(0); expect(statSync(path.join(custody, "environment.json")).mode & 0o077).toBe(0);
+      expect(readRecord(f.state).launcher.pid).toBe(record.launcher.pid);
+    } else {
+      // The helper proved the restarted Viewer's gate with the held key, from
+      // an environment that carried none, and the settlement released it.
+      expect(helperOutput).toBe(""); expect(helper?.exitCode).toBe(0);
+      expect(intent).toMatchObject({ state: "failed", rolledBack: true });
+      expect(existsSync(custody)).toBe(false);
+      const settled = readRecord(f.state);
+      expect(settled.launcher.pid).not.toBe(record.launcher.pid);
+      expect(settled.web.revision).toBe(f.first.slice(0, 7)); expect(settled.runtimeHost.revision).toBe(f.first.slice(0, 7));
+      expect(existsSync(record.releasePointer)).toBe(false);
+    }
+    await gateHolds(running.port);
+    // Outside the protected custody directory no state file holds the key.
+    const outside = readdirSync(f.state, { withFileTypes: true }).filter(entry => path.join(f.state, entry.name) !== custody)
+      .map(entry => entry.isDirectory() ? stateText(path.join(f.state, entry.name)) : entry.isFile() ? readFileSync(path.join(f.state, entry.name), "utf8") : "").join("\n");
+    expect(outside.includes(key)).toBe(false);
+  } finally { service.stop(); await stopManagedLauncher(path.join(managerDir, "launcher.pid"), f.state); }
+}, 120_000);
+
+test("a recovery helper that cannot take its plan removes it", async () => {
+  const fixture = install();
+  const control = path.join(fixture.state, "self-update"); mkdirSync(control, { recursive: true });
+  const planFile = path.join(control, "recovery-fixture.json");
+  for (const plan of [{ requestId: "absent", requestFile: path.join(control, "request-fixture.json"), unit: "fixture.service", root: fixture.checkout, custody: false }, { unit: "not a unit" }, "not a plan"]) {
+    writeFileSync(planFile, typeof plan === "string" ? plan : JSON.stringify(plan));
+    const run = spawnSync(process.execPath, ["--bun", path.resolve("bin/launcher-relaunch.mjs"), "--recover-service", planFile], { env: cleanTerminalEnv(fixture), encoding: "utf8", timeout: 30_000 });
+    expect(run.status).toBe(1);
+    expect(existsSync(planFile)).toBe(false);
+  }
+});

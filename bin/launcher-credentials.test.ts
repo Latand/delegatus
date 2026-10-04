@@ -360,6 +360,9 @@ test("custody survives an incompatible inherited PowerShell module path", async 
     const env = { ...process.env };
     if (!prepareLauncherCredentials(root, env)) throw new Error("Credential preparation refused");
     delete env.LLV_TOKEN; delete env.DELEGATUS_TOKEN;
+    // The launcher that takes a handoff carries its requirement; a start
+    // without one keeps its own settings and is never handed the held key.
+    env.LLV_LAUNCHER_CREDENTIAL_HANDOFF = "1";
     restoreLauncherCredentials(root, env);
     if (env.LLV_TOKEN !== process.env.LLV_TOKEN) throw new Error("Credential restoration disagreed");
   `);

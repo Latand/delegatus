@@ -389,7 +389,26 @@ The canonical install root and its filesystem identity are checked in a separate
 private `identity.json` before the credential file is opened. `DELEGATUS_TOKEN`
 uses the entrypoints' existing alias precedence. The new CLI reads custody before
 pointer selection; the terminal bootstrap reads it before trials, probes or children.
-Rollback and cold recovery retain the same record and key.
+
+Custody serves one handoff. The held key is given to the launcher whose command
+carries the requirement, and to a launcher that starts while that handoff is
+still open: an apply in `building`, `ready` or `switching`, or a trial file of
+this install. Rollback and cold recovery in that window read the same record
+and key. Any other launcher start keeps the settings it was given and removes
+custody left from an earlier handoff, so a rotated key or a changed host never
+blocks a start; a setting the operator gives a start also wins over a resumed
+handoff and removes its custody. Commands that start no launcher (`--version`,
+`--help`, `team`) read nothing. The Viewer removes custody when its apply
+settles as done or as a verified rollback, and the service recovery helper
+removes it after it has proven the prior release. A refusal names its cause
+(a different access key, a different host setting, another installation, a
+missing record, unsafe storage) and the custody directory.
+
+The service recovery plan (`recovery-<installId>.json`) holds no credential.
+It names the install root and whether custody was written; the helper reads the
+key from custody, derives the probe tag from the state directory, and removes
+the plan on every exit. The Viewer removes it when the service manager refuses
+the helper or the helper never settles.
 
 POSIX custody requires current-user ownership, directories with mode 0700,
 regular single-link files with mode 0600, descriptor identity checks and
@@ -397,6 +416,10 @@ regular single-link files with mode 0600, descriptor identity checks and
 with one FullControl grant to that SID, verified through PowerShell `Get-Acl`;
 creation uses `Set-Acl` before writing any credential. Every reparse point is
 refused. Existing unsafe ACLs or modes are never repaired automatically.
+One PowerShell process verifies the directory and both records. A process
+remembers each entry it verified by device, inode, size and change time, which
+NTFS advances when a security descriptor is replaced, so a snapshot that asks
+again for unchanged custody starts no PowerShell process.
 A foreign install identity, reused root, partial record or conflicting key refuses
 the handoff. The Update surface then gives a storage prerequisite without a command;
 the existing launcher remains running with its access gate intact.
@@ -421,7 +444,25 @@ A dispatch rechecks ownership synchronously after its last awaited read.
 The request, apply, launcher, gate issuer and durable work evidence must still
 match the accepted decision. Expired or stale custody refuses dispatch and
 retains the accepted records. Admission release follows verified serving
-settlement. Per-role restart controls remain maintenance actions when the
+settlement.
+
+Work evidence is the work an admission saw, by identity. The Viewer compares
+registry records by launch (key, host claim epoch, pending launch, spawn
+receipts), each pipeline's cursor and current attempt, each flow's last round,
+the controllers' idle state and the operator's last interaction; an automatic
+relaunch also requires every open turn and stage in its final probe to be one
+the admission that filed the request already saw. The launcher compares the
+mirrored registry by the same launch identity and the files a stage or a flow
+is filed in. The runtime journal and the state database are left out: every
+event of a turn that is already running moves them, so they cannot tell new
+work from the work an operator let go.
+
+A refused relaunch owns no transition. The launcher removes its preflight
+trial with the refusal, a later failure in that launcher stops nothing, and a
+request republished by the refusal is dropped once the Viewer has settled it.
+A cold start after a refusal performs no rollback: on the target it is the
+transition and settles the apply by its own readiness; on any other image the
+Viewer settles the refusal. Per-role restart controls remain maintenance actions when the
 installed release already serves coherently.
 
 | Path | Awaited reads after admission | Final fence |

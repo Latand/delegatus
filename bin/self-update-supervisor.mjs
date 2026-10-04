@@ -32,6 +32,7 @@ import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
 import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
@@ -381,19 +382,39 @@ export function exitError(child, startedAt, clock = () => Date.now()) {
   };
 }
 
-/** Durable work can be admitted by another process while a read is awaited. */
-export function dispatchActivityVersion(state, env = {}) {
-  const files = [join(state, "agent-registry.json"), join(state, "state.sqlite"), join(state, "state.sqlite-wal")];
-  try { files.push(...readdirSync(state).filter(name => /^runtime-events-.*\.sqlite(?:-wal)?$/.test(name)).sort().map(name => join(state, name))); }
-  catch (error) { if (error.code !== "ENOENT") throw error; }
-  if (env.LLV_RUNTIME_JOURNAL) files.push(env.LLV_RUNTIME_JOURNAL, `${env.LLV_RUNTIME_JOURNAL}-wal`);
+/** The registry records an admission saw, by launch: each record's key, the
+    epoch of its host claim and its pending launch, plus the spawn receipts.
+    A record's status and timestamps move with every event of a turn that is
+    already running, so they are not evidence of newly admitted work. */
+export function admittedRecords(file) {
+  if (!file || typeof file.entries !== "object" || file.entries === null || Array.isArray(file.entries)) return null;
+  const receipts = file.receipts && typeof file.receipts === "object" ? Object.keys(file.receipts).sort() : [];
+  return [Object.keys(file.entries).sort().map(id => [id, file.entries[id]?.claimEpoch ?? null, file.entries[id]?.pendingAction ?? null]), receipts];
+}
+
+/** Durable work can be admitted by another process while a read is awaited.
+    The launcher compares admitted work: the mirrored registry by launch
+    identity, and the files a stage or a flow is filed in. Journal traffic is
+    left out, because the runtime journal and the state database move with
+    every event of an open turn and cannot tell new work from the work an
+    operator let go. New turns are fenced by the admission hold and by the
+    Viewer's own final read. */
+export function dispatchActivityVersion(state) {
+  let records = null;
+  try {
+    const bytes = readFileSync(join(state, "agent-registry.json"), "utf8");
+    try { records = admittedRecords(JSON.parse(bytes)); } catch { /* unreadable: hashed below */ }
+    // An unrecognised registry cannot name its records; any change refuses.
+    records ??= createHash("sha256").update(bytes).digest("hex");
+  } catch (error) { if (error.code !== "ENOENT") throw error; }
+  const files = [];
   for (const name of ["pipelines", "flows"]) {
     const dir = join(state, name);
     try { files.push(...readdirSync(dir).filter(name => name.endsWith(".json")).sort().map(name => join(dir, name))); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  return JSON.stringify(files.map(file => {
+  return JSON.stringify([records, files.map(file => {
     try { const stat = statSync(file, { bigint: true }); return [file, String(stat.ino), String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
     catch (error) { if (error.code === "ENOENT") return [file, null]; throw error; }
-  }));
+  })]);
 }

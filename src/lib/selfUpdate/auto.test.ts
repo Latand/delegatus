@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { initialAuto, pruneReleaseWorktrees, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
 import { SelfUpdateService, type ServiceDeps } from "./service";
@@ -8,7 +8,7 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { targetOnCurrentBranch } from "./git";
-import { createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { admittedRecords, createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { sameProcess } from "./pid";
 import { procBackend } from "../proc";
 import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
@@ -1440,6 +1440,70 @@ test.each(["gate-removed", "gate-expired", "work-started", "launcher-changed", "
     expect(readFileSync(join(h.dir, "auto-drain.json"), "utf8")).toBe(drain);
     expect(existsSync(gateFile) ? readFileSync(gateFile, "utf8") : null).toBe(heldGate);
     expect(JSON.parse(readFileSync(`${h.record.requestFile}.result.json`, "utf8"))).toMatchObject({ state: "rejected" });
+  } finally { release(); watcher.stop(); service.stop(); }
+});
+
+test.each(["journal-traffic", "stage-started", "turn-started"] as const)("a forced drain admits the work it let go and nothing newer: %s", async change => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const sessions = [{ conversationId: "conversation_let_go", engine: "codex", host: "hosted", turn: "running" }];
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [...sessions] }) as never;
+  // The Viewer's own evidence names registry records by launch. A turn that
+  // is already running moves their status and timestamps with every event.
+  let events = 0;
+  h.deps.quiet!.dispatchVersion = () => JSON.stringify(admittedRecords({ receipts: {},
+    entries: { conversation_let_go: { claimEpoch: 1, pendingAction: null, status: events % 2 ? "working" : "live", updatedAt: String(events++) } } }));
+  const service = h.service();
+  let release!: () => void, entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const arrival = new Promise<void>(resolve => { entered = resolve; });
+  let dispatched = 0;
+  const watcher = watchRestartRequests(h.record.requestFile, async () => { dispatched++; }, {
+    intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+  });
+  const file = join(h.dir, "auto.json");
+  try {
+    await service.autoTick(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    const waiting = readAuto(file);
+    expect(waiting.drain?.blockers?.turnList?.[0]?.conversationId).toBe("conversation_let_go");
+    expect(await service.decideDrain(waiting.drain!.id, "deploy-now")).toEqual({ ok: true });
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: TARGET });
+    h.deps.targetOnBranch = async () => { entered(); await barrier; return true; };
+    const polling = watcher.poll(); await arrival;
+    // The launcher reads this state directory; the open turn keeps writing.
+    for (const name of ["runtime-events-forced-drain.sqlite", "runtime-events-forced-drain.sqlite-wal", "state.sqlite-wal"]) writeFileSync(join(dirname(dirname(h.record.requestFile)), name), `event ${change} ${events}`);
+    if (change === "stage-started") h.setStage(true);
+    if (change === "turn-started") sessions.push({ conversationId: "conversation_new", engine: "claude", host: "hosted", turn: "running" });
+    release(); await polling;
+    if (change === "journal-traffic") {
+      expect(dispatched).toBe(1);
+      expect(existsSync(`${h.record.requestFile}.result.json`)).toBe(false);
+      return;
+    }
+    expect(dispatched).toBe(0);
+    expect(JSON.parse(readFileSync(`${h.record.requestFile}.result.json`, "utf8"))).toMatchObject({ requestId: request.requestId, state: "rejected" });
+    // The Viewer settles the refusal through its real snapshot, against a
+    // host that answers with the identity the launcher recorded.
+    h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+    await SelfUpdateService.prototype.snapshot.call(service);
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8"))).toMatchObject({ requestId: request.requestId, state: "failed", admissionRefused: true });
+    const refused = readAuto(file);
+    expect(refused.enabled).toBe(true); expect(refused.off).toBeNull();
+    expect(refused.waitingSince).toBe(waiting.waitingSince); expect(refused.waitingTarget).toBe(TARGET);
+    expect(refused.drain).toMatchObject({ id: waiting.drain!.id, since: waiting.drain!.since, overranAt: waiting.drain!.overranAt, force: true, admitted: false });
+    expect(typeof refused.drain?.acknowledgedAt).toBe("string");
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(waiting.drain!.id);
+    // The decision is not asked a second time, and the same cohort is
+    // admitted again once the newer work is gone.
+    expect(await service.decideDrain(waiting.drain!.id, "keep-waiting")).toMatchObject({ ok: false });
+    h.setStage(false); sessions.length = 1;
+    // The refusal also asks for a fresh check; admission follows it.
+    for (let tick = 0; tick < 100 && !existsSync(h.record.requestFile); tick++) { await service.autoTick(); await Bun.sleep(5); }
+    const again = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(again).toMatchObject({ role: "relaunch", target: TARGET });
+    expect(again.requestId).not.toBe(request.requestId);
+    expect(await service.admitAutoRestart(again.requestId, again.autoGateId)).toBe(true);
+    expect(readAuto(file).waitingSince).toBe(waiting.waitingSince);
   } finally { release(); watcher.stop(); service.stop(); }
 });
 

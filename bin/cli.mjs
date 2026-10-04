@@ -1240,6 +1240,9 @@ async function main() {
   delete process.env.LLV_ROTATE_OPERATOR_SPAWN_CAPABILITY;
   serverProcess.state.restarting = false;
   relaunch.succeeded();
+  // This start settled the handoff it took. A later relaunch inherits the
+  // settings and must not ask for custody that the settlement released.
+  delete process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
   startupLock.release();
 
   /* Restart requests are taken only once startup has finished, and only from
@@ -1540,7 +1543,8 @@ try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
-    restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir));
+    const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+    restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir), process.env, { launch: !oneShot });
   } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
   const selectedLauncher = releaseLauncher();
   if (!selectedLauncher || !(await handOffLauncher(selectedLauncher))) await checkoutLauncher();
