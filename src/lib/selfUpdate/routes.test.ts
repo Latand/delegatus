@@ -1066,14 +1066,15 @@ test.each([
   writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: installed }));
   const record = {
     version: 1, launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), revision: null },
-    web: stoppedProcess(), runtimeHost: stoppedProcess(), checkout: null, installRoot,
+    web: { ...stoppedProcess(), startIdentity: null, requestId: null },
+    runtimeHost: { ...stoppedProcess(), startIdentity: null, requestId: null }, checkout: null, installRoot,
     releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
     port: 3000, socket: join(dir, "runtime.sock"), updatedAt: new Date().toISOString(),
   } as LauncherRecord;
-  const fetcher = spyOn(globalThis, "fetch").mockImplementation(async input => {
+  const fetcher = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
     const version = String(input).endsWith("/latest") ? latest : installed;
     return Response.json({ version, gitHead: version === installed ? "a".repeat(40) : tipSha });
-  });
+  }) as typeof fetch);
   const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
   try {
     await service.check();
