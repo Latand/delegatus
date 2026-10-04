@@ -98,6 +98,9 @@ base diagnostics are `PRE-EXISTING`, additional head diagnostics are `NEW`.
 Fixed and removed/skipped tests remain listed separately. Under this policy,
 assertions that consistently fail on both sides also appear under `FLAKY`,
 because an observed base failure suffices to permit the push.
+When several assertions share the same file, suite and test name, retry
+evidence clears only the matching number of occurrences; any stable residual
+failure remains `NEW`.
 
 Clean head samples incur no reruns. The three rounds share a five-minute
 budget across all candidate files and both sides, including baseline checkout
@@ -110,10 +113,11 @@ Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
 
-The baseline cache stores only complete green initial samples. Baseline
-retry failures evict their green entry immediately, and neither retry verdicts
-nor head results are cached. Even a warm green baseline needs fresh base
-retries before a candidate failure can become `NEW`.
+The baseline cache stores only complete green initial samples. A parsed
+baseline retry failure evicts its green entry immediately, even when a later
+file in that retry batch errors; any aborted baseline retry also evicts the
+entry. Neither retry verdicts nor head results are cached. Even a warm green
+baseline needs fresh base retries before a candidate failure can become `NEW`.
 
 The pre-push gate reuses the platform import closure to scope Linux tests,
 Viewer and runtime-host verification under the Dockerfile's Bun pin, and the

@@ -37,7 +37,10 @@ export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "bas
   const evidence = candidates.map(site => ({ site,
     base: { pass: occurrences(base.passed, site), fail: occurrences(base.failures, site) },
     head: { pass: occurrences(head.passed, site), fail: occurrences(head.failures, site) },
-    recovered: false,
+    initialBaseFailures: occurrences(base.failures, site),
+    initialHeadFailures: occurrences(head.failures, site),
+    maxBaseRetryFailures: 0,
+    maxHeadRetryFailures: 0,
   }));
   for (let round = 0; round < FLAKY_RERUNS; round++) {
     for (const side of ["base", "head"] as const) {
@@ -46,19 +49,37 @@ export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "bas
       for (const item of evidence) {
         const fail = occurrences(run.failures, item.site), pass = occurrences(run.passed, item.site);
         if (side === "base" && occurrences(base.passed, item.site) + occurrences(base.failures, item.site) !== fail + pass) throw new Error(`base rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
+        if (side === "base") item.maxBaseRetryFailures = Math.max(item.maxBaseRetryFailures, fail);
         if (side === "head") {
           if (fail + pass !== occurrences(head.failures, item.site) + occurrences(head.passed, item.site)) throw new Error(`head rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
-          if (fail < occurrences(head.failures, item.site) && pass) item.recovered = true;
+          item.maxHeadRetryFailures = Math.max(item.maxHeadRetryFailures, fail);
         }
         item[side].pass += pass; item[side].fail += fail;
       }
     }
   }
-  const flakyKeys = new Set<string>();
-  for (const item of evidence) if (item.base.fail || item.recovered) {
-    flaky.push({ ...item.site, base: item.base, head: item.head }); flakyKeys.add(key(item.site));
+  const flakyCounts = new Map<string, number>();
+  for (const item of evidence) {
+    const identity = key(item.site);
+    // Identical names can belong to distinct assertions. Spend flaky evidence
+    // against occurrences, then leave any residual introduced count blocking.
+    const baseRetryOnly = Math.max(0, item.maxBaseRetryFailures - item.initialBaseFailures);
+    const recovered = Math.max(0, item.initialHeadFailures - item.maxHeadRetryFailures);
+    const introduced = comparison.introduced.filter(site => key(site) === identity).length;
+    const preexisting = comparison.preexisting.filter(site => key(site) === identity).length;
+    const clearIntroduced = Math.min(introduced, baseRetryOnly + recovered);
+    const count = preexisting + clearIntroduced;
+    for (let index = 0; index < count; index++) flaky.push({ ...item.site, base: item.base, head: item.head });
+    if (count) flakyCounts.set(identity, count);
   }
-  return { ...comparison, introduced: comparison.introduced.filter(site => !flakyKeys.has(key(site))), preexisting: comparison.preexisting.filter(site => !flakyKeys.has(key(site))), flaky };
+  const consume = (sites: TestSite[]) => sites.filter(site => {
+    const identity = key(site), count = flakyCounts.get(identity) ?? 0;
+    if (!count) return true;
+    flakyCounts.set(identity, count - 1);
+    return false;
+  });
+  const preexisting = consume(comparison.preexisting);
+  return { ...comparison, introduced: consume(comparison.introduced), preexisting, flaky };
 }
 
 /** Match occurrences, so a duplicate test name cannot hide an additional failure. */
@@ -124,7 +145,7 @@ function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout
   return result.stdout;
 }
 
-function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number } = {}): TestRun {
+function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void } = {}): TestRun {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   for (const file of files) {
     const remaining = Math.floor(Math.min(RUN_BUDGET_MS - (performance.now() - started), (options.deadline ?? Infinity) - performance.now()));
@@ -132,7 +153,13 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
     const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     // Bun filters the outer-to-inner describe names joined by spaces. Its JUnit
     // classname records the same ancestry in reverse, separated by " > ".
-    const names = options.sites?.filter(site => site.file === file).map(site => escape([...(site.suite ? site.suite.split(" > ").reverse() : []), site.name].join(" ")));
+    const names = options.sites?.filter(site => site.file === file).flatMap(site => {
+      const ancestors = site.suite ? site.suite.split(" > ").reverse() : [];
+      // JUnit reverses distinct suite ancestors and joins them with " > ". A
+      // literal separator in a describe name is ambiguous, so retain the raw
+      // classname form alongside the reconstructed nested-suite form.
+      return [...new Set([escape([...ancestors, site.name].join(" ")), escape([site.suite, site.name].filter(Boolean).join(" "))])];
+    });
     const filter = names ? [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"] : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
@@ -158,6 +185,7 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
       if ((result.exitCode === 0) !== (parsed.failures.length === 0)) throw new Error("runner exit disagrees with its report");
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
+      if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (label === "baseline" || options.sites) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
@@ -288,11 +316,18 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
       reruns++;
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      const retry = runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { sites, deadline });
-      // A baseline assertion failing on a retry invalidates its green cached
-      // sample immediately, including if a subsequent rerun errors out.
-      if (side === "base" && retry.failures.length) rmSync(entry, { force: true });
-      return retry;
+      try {
+        return runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, {
+          sites, deadline,
+          // Evict on the first parsed base failure, before a later file can
+          // abort this retry batch and discard its partial result.
+          onFailure: side === "base" ? () => rmSync(entry, { force: true }) : undefined,
+        });
+      } catch (error) {
+        // An aborted base retry cannot certify the cached green sample either.
+        if (side === "base") rmSync(entry, { force: true });
+        throw error;
+      }
     });
     if (reruns) log(`touched-tests: flaky confirmation ${FLAKY_RERUNS} reruns per side, ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);

@@ -356,6 +356,85 @@ test("the stable regression control fails every head sample and refuses CLI", ()
   expect(readFileSync(f.marker + "-head", "utf8")).toBe("4");
 });
 
+test("recovering one duplicate-name occurrence leaves the stable occurrence NEW", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "duplicate-schedule");
+  const trace = path.join(f.dir, "duplicate-trace");
+  const duplicate = `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const counter = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+let occurrence = 0;
+const check = () => { const index = occurrence++; appendFileSync(${JSON.stringify(trace)}, side + ":" + run + ":" + index + "\\n"); expect(index === 0 ? side === "base" : side === "base" || run > 1).toBe(true); };
+test("same name", check);
+test("same name", check);`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), duplicate);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "duplicate identity baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), duplicate);
+  const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(cli.status).toBe(1);
+  expect(cli.stdout).toContain("FLAKY example.test.ts: same name");
+  expect(cli.stdout).toContain("NEW example.test.ts: same name");
+  expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(readFileSync(trace, "utf8").trim().split("\n").filter(line => line.startsWith("head:")).length).toBe(8);
+});
+
+test("a later base retry file error evicts the cache after an earlier failure", () => {
+  const f = scheduledFixture([2, 6], []);
+  const marker = path.join(f.dir, "second-file-runs");
+  const second = `import { expect, test } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const file = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(file) ? Number(readFileSync(file, "utf8")) + 1 : 1;
+writeFileSync(file, String(run));
+if (side === "base" && run === 2) process.exit(0);
+test("second file", () => expect(side === "base" || run !== 2).toBe(true));`;
+  writeFileSync(path.join(f.dir, "b.test.ts"), second);
+  f.git("add", "b.test.ts"); f.git("commit", "-m", "second retry fixture");
+  const base = f.git("rev-parse", "HEAD");
+  const run = () => touchedTests(f.dir, base, ["./example.test.ts", "./b.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
+  run();
+  expect(readdirSync(f.cache).some(file => file.endsWith(".json"))).toBe(true);
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [2, 6], [1, 2, 3, 4]));
+  expect(() => run()).toThrow("base rerun: b.test.ts");
+  expect(readdirSync(f.cache).some(file => file.endsWith(".json"))).toBe(false);
+  f.logs.length = 0;
+  const next = run();
+  expect(f.logs.join("\n")).toContain("baseline run");
+  expect(next.flaky).toHaveLength(1);
+});
+
+test("a literal describe separator is filtered as part of the suite name", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "literal-separator");
+  const literal = `import { test, expect, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const file = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(file) ? Number(readFileSync(file, "utf8")) + 1 : 1;
+writeFileSync(file, String(run));
+describe("one > two", () => {
+  test("case", () => expect(side === "base" || run > 1).toBe(true));
+  test("unrelated", () => appendFileSync(${JSON.stringify(marker)} + "-unrelated", side + "\\n"));
+});`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), literal);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "literal suite baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), literal);
+  const result = touchedTests(f.dir, base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
+  expect(result.introduced).toHaveLength(0);
+  expect(result.flaky).toHaveLength(1);
+  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: one > two > case");
+  expect(readFileSync(marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["base", "head"]);
+});
+
 test("the retry bound stays small and incomplete samples cannot become FLAKY", () => {
   expect(FLAKY_RERUNS).toBe(3); expect(FLAKY_BUDGET_MS).toBe(300000);
   const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test" };
