@@ -83,8 +83,11 @@ remain intact. A single item or interpretation whose metadata cannot fit is
 rejected with a bounded HTTP 400 asking for a narrower query or project.
 
 Relevance has no one-word strong retry. Every result keeps the originally
-retained units as its coverage denominator and reports its missing units;
-quoted phrases, hyphenated terms and paths stay atomic. During migration a
+retained units as its coverage denominator and reports its missing units.
+Quoted phrases are always atomic. Unquoted hyphenated terms and paths are
+atomic on the first pass; when that pass has no strong match, the second pass
+may also match their parts near each other in one message, and marks the unit
+with `~`. During migration a
 bounded subset can be retrieved while the full denominator remains unchanged.
 
 Copies with identical 16-token lead snippets fold even when their remaining
@@ -286,3 +289,64 @@ pipeline description are unchanged from current main; the PR only appends a
 search-order test in that file. This inherited pipeline mismatch is outside
 the search update's scope. Five search/bounded-numeric MCP schema checks pass
 separately; the remaining 25 schema cases are filtered out in that scoped run.
+
+## Second pass for compound terms
+
+The second pass is specified in
+[D1 of the design](../design/smarter-search.md#d1-query-units-and-word-forms-on-the-query-side-no-reindex).
+This section records its replay on 2026-10-04. The protocol is the one in
+"Reproduction" above, unchanged: the same offline snapshot as the 11.7%
+measurement, 1,000 queries with seed 20260926, 300 search/open pairs with seed
+7, the historical time and issuing-transcript fences, project scope, 60%
+coverage, and whole-corpus frequencies. The snapshot held the index only, so
+no project maps were copied; main reproduces its earlier 117 and 43 on it,
+which is the control. Each side ran against its own private copy under the
+hard 8 GiB scope with the shared lock, in the order main, candidate, main,
+candidate. Recorded calls came from 479 transcripts (none unavailable) and
+2,477 distinct queries.
+
+| Metric | Main | Second pass |
+| --- | ---: | ---: |
+| Strong queries | 883 / 1,000 | 892 / 1,000 |
+| Weak-only queries | 52 / 1,000 | 47 / 1,000 |
+| Zero queries | 65 / 1,000 | 61 / 1,000 |
+| **Strong-zero** | **117 (11.7%)** | **108 (10.8%)** |
+| Opened transcript in top-6 | 43 / 300 | 43 / 300 |
+| Replay latency p50 / p95, run 1 | 5.56 / 17.25 ms | 5.42 / 16.74 ms |
+| Replay latency p50 / p95, run 2 | 5.41 / 16.72 ms | 5.55 / 17.16 ms |
+| Page size p50 / p95 / max | 4,907 / 6,977 / 8,615 B | 4,915 / 6,977 / 8,615 B |
+| Peak RSS, larger run | 204 MiB | 190 MiB |
+
+A paired comparison loaded both implementations in one process against one
+copy and ran every query through each, alternating the order:
+
+- **Recall:** 9 queries gain a strong match and none loses one. No unit of
+  main's interpretation is missing from the candidate's, and no denominator
+  shrinks, on all 1,000 queries.
+- **Pages:** 991 pages are byte-identical to main's. The other 9 are the
+  second-pass pages; the largest is 6,173 B. The page-size median moves by
+  8 B because of those nine; p95 and max are main's.
+- **Top-6:** 43 and 43, with no win and no loss among the 300 pairs.
+- **Latency, best of seven rounds per query:** p50 4.96 → 5.05 ms and p95
+  16.24 → 16.23 ms. Two earlier paired runs gave +0.12 / +0.10 ms and
+  +0.11 / +0.05 ms. The cost falls on the 117 queries main leaves without a
+  strong match: p50 0.74 → 1.12 ms, p95 7.76 → 12.13 ms.
+
+The 8% follow-up is closed as unreachable on this protocol; the classes of the
+117 failures, the 8.4% floor and the choice of an 8-token window are in
+[the design](../design/smarter-search.md#follow-up-strong-zero-recall-8).
+
+On the invented 250,000-message fixture (five repetitions, hard 8 GiB cap,
+library, route and HTTP surfaces; packaged MCP and UI skipped as unchanged),
+the new compound-term cell, an absent compound whose two parts are both
+common, has a 77 ms library median against its 300 ms bound. The common-pair
+relevance median is 134 ms and the six-conversation page gate passes; peak RSS
+is 485 MiB.
+
+Six new contract cases cover proximity, the growing denominator, no widening
+beside a strong literal match, numeric parts and function words, identifier
+prefix, and cursor continuation with forged wide units rejected. Four fail on
+main and two hold the prohibitions there. With them, four exact-path search
+and replay files pass 62 tests (one standalone migration case skipped for lack
+of a built artifact), and the route and MCP search files pass 14. Private
+scratch copies and outputs were deleted after verification.

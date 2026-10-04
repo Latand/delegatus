@@ -149,6 +149,60 @@ it covers en, ru and uk with one rule set of about 60 lines.
 Both orders use these units. The **newest** order ANDs them, so for any query
 without quotation marks it returns a superset of today's matches. The **relevance** order ranks by them.
 
+**Second pass (relevance only).** When the first page of a relevance search
+has no strong match (`strongTotal` is 0), the units that have a wider form are
+tried once more. Which units are kept is still decided on the literal forms,
+exactly as above; the wider form only replaces the expression of a unit the
+first pass kept or ignored as absent. There are two wider forms, each ORed
+with the literal one:
+
+- **Parts near each other.** An unquoted compound term (several tokens joined
+  by a hyphen, a dot or a path separator, or one token joined by `_`) also
+  matches a message where its distinct parts occur within
+  **8 tokens** of each other: `account_project_binding` finds "the account for
+  this project has a binding". No part may be a bare number, and at least two
+  parts must be outside the function-word list, so `5.3` and `sign-in` stay
+  literal.
+- **Identifier prefix.** A single token of 5 or more characters that holds a
+  digit, `_` or `#` (a bare `#N` or number excepted) also matches as a prefix,
+  so a shortened commit hash finds the full one.
+
+The wider form is counted with the same whole-corpus `COUNT(*) … MATCH` as an
+atomic phrase. A unit keeps its literal form when the wider one matches no
+message, matches more than 5% of messages, or adds nothing to the literal
+count. Otherwise the unit takes the wider expression and its label gains a
+trailing `~`; an absent unit that passes joins the retained units. A unit the
+first pass dropped as common stays dropped. The rules that hold for every
+query:
+
+- no unit disappears and the coverage denominator can only grow;
+- a `"quoted phrase"` is never widened;
+- the parts of a compound term never become separate units: they must meet in
+  one message inside the window;
+- when no unit changes there is no second search, and the second page replaces
+  the first only when it holds a strong match; in every other case the answer
+  is the first pass's, byte for byte;
+- continuation pages replay the units in the cursor. The cursor version stays
+  6: a wide unit is rebuilt from its literal terms and must match exactly
+  before it runs, and cursors issued before this change keep working.
+
+**Why 8 tokens.** It is the smallest window that returns every replay query
+whose recovered match is on topic. The design study read the top results of
+each recovered query at every window:
+
+| window | strong-zero | recovered queries | read as on topic |
+| ---: | ---: | ---: | --- |
+| 2 | 110 | 7 | all |
+| 4 | 110 | 7 | all |
+| **8** | **108** | **9** | **9 of 9** |
+| 16 | 108 | 9 | the same 9, more conversations for each |
+| 32 | 104 | 13 | the 4 added are all off topic |
+| 64 | 102 | 15 | — |
+
+A window of 16 adds no query, and 32 adds four that are all off topic: three
+are words that happen to sit in one long message and one is only adjacent to
+the subject. That is the "bag of words in a message" the operator rejected.
+
 ### D2. Two orders; each surface keeps a documented default
 
 | surface | default order | why |
@@ -230,6 +284,10 @@ adds:
   snippets are 16 tokens in this order (today: 24).
 - `matched`/`missing` tell the agent in a glance whether the conversation
   answers all of the question.
+- A label ending in `~` (in `interpretedAs.units`, `matched` and `missing`)
+  marks a unit the second pass widened: the match may be the term's parts near
+  each other or a longer identifier, so the reader checks the fragment. It
+  sits beside the existing `*` for a word form.
 - `alsoIn` lists at most 3 paths plus the count, and `duplicateCount` becomes
   `1 + alsoIn.count`.
 - The page adds `interpretedAs: { units: [...], ignored: ["in", "the"] }` and
@@ -477,7 +535,7 @@ Tests, run by path:
    exclusion fences unchanged. Report aggregate recall, opened-transcript
    top-6 wins/losses and latency in the PR, without private query text.
    The follow-up is [Strong-zero recall ≤8%](#follow-up-strong-zero-recall-8);
-   that target remains unmet and is no longer a merge blocker.
+   it was closed on 2026-10-04 as unreachable on this protocol.
 4. For any unquoted query, the dialog still returns every row today's search
    returns, newest first, with the inflected matches placed by their time.
 5. A first request against a v4 index returns while migration and large index
@@ -497,13 +555,41 @@ Tests, run by path:
 
 ## Follow-up: strong-zero recall ≤8%
 
-Reduce strong-zero to ≤8% on the same seeded replay while preserving D1/D3,
-60% retained-unit coverage, project scope, historical time and issuing-transcript
-exclusion. Compare recall and opened top-6 against main, including two-word
-and three-to-four-word queries without project scope, and report latency.
-The measured main-versus-PR baseline and the remaining gap are recorded in
-[the performance report](../performance/smarter-search.md#main-versus-pr-baseline-and-acceptance).
-This follow-up is separate from PR #2397's net-improvement acceptance.
+**Closed as unreachable on this protocol.** On 2026-10-04 the operator chose
+variant 2 of the design study: change the search only and leave the
+measurement as it is. The second pass in D1 is that change. On the same seeded
+replay it takes strong-zero from 117 to 108 of 1,000 queries (11.7% → 10.8%)
+with no query losing its strong match; the numbers are in
+[the performance report](../performance/smarter-search.md#second-pass-for-compound-terms).
+
+The 8% target stays out of reach because of what the 117 failing queries are.
+Each was read and placed in one class:
+
+| class | queries | matching can recover |
+| --- | ---: | --- |
+| Recency: the conversation that answers appeared after the query, or exists only in the asking transcript | 43 | no |
+| Truly absent: a term is in no indexed message | 29 | no |
+| Scope: the strong match lies outside the named project | 8 | no |
+| Phrasing: the terms are visible and never share a conversation | 4 | no |
+| Phrasing: parts of a compound term near each other | 7 | yes |
+| Phrasing: parts scattered across one message | 14 | only by a bag-of-words match |
+| Tokenisation: another spelling, an identifier prefix | 8 | partly |
+| Language: a word form | 4 | partly |
+
+The first four rows are the **floor: 43 + 29 + 8 + 4 = 84 queries, 8.4%**. The
+words those queries need were absent from the corpus the query could see, so
+no matching rule returns them. Three contracts hold the floor in place and
+all three stay: the historical fence together with whole-corpus frequencies,
+the project scope, and the 60% coverage threshold. The other variants reached
+8.5% by loosening one of them (counting frequencies under the fence, or
+matching a bag of words in a message) and the operator declined both.
+
+**A separate idea for later, left unbuilt by this change.** Tool calls and tool output are
+not indexed. For 53 of the 72 recency and truly-absent queries, every missing
+term occurs in such records of other transcripts before the query was asked;
+10 of the 72 had no term long enough to check. Indexing them is the one
+direction that moves the floor. It needs its own design: index size, secret
+redaction in tool output, and a new snapshot to measure on.
 
 ## Deferred — not currently justified
 
@@ -522,5 +608,16 @@ This follow-up is separate from PR #2397's net-improvement acceptance.
   313 MB of duplicated bodies on disk. That is disk, not RAM, and it needs a
   full rebuild; nothing in the requirement calls for it.
 - **Porter or trigram tokenizers.** Measured in D6 and rejected there.
+- **Indexing tool calls and tool output.** Described under the closed
+  follow-up above; a future design of its own.
+- **Proximity for numeric parts** (decimal numbers, dates). It recovered 2
+  replay queries and neither read as clearly on topic: adjacent numbers meet
+  by chance. The second pass forbids it by rule.
+- **Derivational stems** (`-er`, `-ation`, `-ment` …). 3 queries recovered, 1
+  on topic.
+- **Endings of 3–4 letter words.** 1 query recovered, off topic.
+- **Separator substitution** (kebab ↔ snake ↔ joined, `#N` → `N`). Recovered
+  no replay query.
+- **A wider proximity window (32 or 64 tokens).** See "Why 8 tokens" in D1.
 - **Moving the search off the Viewer thread.** Owned by #1438; the relevance
   p95 stays inside the band that issue already accepts.
