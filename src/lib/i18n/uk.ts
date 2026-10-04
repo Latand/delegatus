@@ -4868,6 +4868,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.auto.drain.draining": "Очікуємо завершення від {time}: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.",
   "selfUpdate.auto.drain.overran": "Поточна робота стримує оновлення вже 6 год. Нові автономні запуски залишаються стриманими. Оновлення зараз може перервати цю роботу; очікування дозволяє їй завершитися.",
   "selfUpdate.auto.decision.title": "Автооновлення потребує вашого рішення",
+  "selfUpdate.auto.decision.overrides": "Оновити зараз може перервати поточну роботу й продовжити, поки людина активна:",
+  "selfUpdate.auto.decision.prerequisites": "Оновити зараз усе ще чекає на ці передумови:",
   "selfUpdate.auto.decision.deployNow": "Оновити зараз",
   "selfUpdate.auto.decision.keepWaiting": "Чекати далі",
   "selfUpdate.auto.decision.failed": "Не вдалося записати рішення. Спробуйте ще раз.",

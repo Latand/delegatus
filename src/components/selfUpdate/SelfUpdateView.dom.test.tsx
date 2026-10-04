@@ -160,6 +160,28 @@ const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
 describe("automatic updates", () => {
+  for (const locale of ["en", "uk"] as const) test.each([
+    ["memory", { memoryMb: 3500 }, locale === "en" ? "Less than 4 GB of free memory (3500 MB)." : "Вільної пам'яті менше 4 ГБ (3500 МБ).", true],
+    ["controller", { busy: true, busyReason: "pipeline-controller" }, locale === "en" ? "The pipeline controller is working." : "Контролер пайплайнів працює.", true],
+    ["web health", { busy: true, busyReason: "web" }, locale === "en" ? "The web process is starting or restarting." : "Вебпроцес запускається або перезапускається.", true],
+    ["host health", { busy: true, busyReason: "runtime-host" }, locale === "en" ? "The runtime host is starting or restarting." : "Хост виконання запускається або перезапускається.", true],
+    ["operator", { operatorActiveAt: AT }, locale === "en" ? "A person was active in Delegatus recently." : "Нещодавно хтось працював у Delegatus.", false],
+    ["unreadable", { unreadable: "synthetic registry failure" }, locale === "en" ? "Cannot read agent activity: synthetic registry failure" : "Не вдалося прочитати активність агентів: synthetic registry failure", true],
+    ["turn total", { turns: 21 }, locale === "en" ? "Agent turns running: 21" : "Працюють ходи агентів: 21", false],
+    ["stage total", { stages: 24 }, locale === "en" ? "Pipeline stages running: 24" : "Працюють етапи пайплайна: 24", false],
+  ] as const)(`Needs-you shows %s blockers and retained prerequisites in ${locale}`, (_name, overrides, copy, retained) => {
+    setLocale(locale);
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: NEW_REV, green: { state: "green" },
+      blockers: null, waitingSince: AT, longWait: true,
+      decision: { id: "drain-current", at: AT, project: "Example", blockers: {
+        turns: 0, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null, ...overrides,
+      } } };
+    const decision = render(s).querySelector("[data-auto-drain-decision]")!;
+    expect(text(decision)).toContain(copy);
+    expect(text(decision.querySelector(retained ? "[data-deploy-prerequisites]" : "[data-deploy-overrides]"))).toContain(copy);
+    expect(decision.querySelectorAll("button")).toHaveLength(2);
+  });
   test.each(["en", "uk"] as const)("named scheduled, draining and overrun states in %s", (locale) => {
     setLocale(locale);
     const s = snapshot();

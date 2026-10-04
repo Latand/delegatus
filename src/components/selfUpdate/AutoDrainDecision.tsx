@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Snapshot } from "@/lib/selfUpdate/types";
 
@@ -27,11 +27,22 @@ export function AutoDrainDecision({ decision }: { decision: NonNullable<AutoView
   return <div data-needs-you-kind="update" data-auto-drain-decision={decision.id} className="flex min-w-0 flex-col gap-2 rounded-[8px] border border-warning p-3 text-ui [overflow-wrap:anywhere]">
     <p className="m-0 font-semibold text-primary">{t("selfUpdate.auto.decision.title")}</p>
     <p className="m-0 text-secondary">{t("selfUpdate.auto.drain.overran")}</p>
-    <ul className="m-0 list-disc pl-5 text-secondary">
+    <p className="m-0 text-secondary">{t("selfUpdate.auto.decision.overrides")}</p>
+    <ul data-deploy-overrides className="m-0 list-disc pl-5 text-secondary">
       {(blockers?.stageList ?? []).map((stage) => <li key={`${stage.pipelineId}:${stage.stageId}`}>{stage.stageId} · {stage.task}</li>)}
       {(blockers?.turnList ?? []).map((turn) => <li key={turn.conversationId}>{turn.engine} · {turn.project ? `${turn.project} · ` : ""}{turn.conversationId}</li>)}
-      {blockers?.unreadable ? <li>{blockers.unreadable}</li> : null}
+      {blockers && blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}
+      {blockers && blockers.stages > 0 ? <li>{t("selfUpdate.auto.block.stages", { count: blockers.stages })}</li> : null}
+      {blockers?.operatorActiveAt ? <li>{t("selfUpdate.auto.block.operator")}</li> : null}
     </ul>
+    {blockers && (blockers.busy || blockers.memoryMb !== null || blockers.unreadable) ? <>
+      <p className="m-0 text-secondary">{t("selfUpdate.auto.decision.prerequisites")}</p>
+      <ul data-deploy-prerequisites className="m-0 list-disc pl-5 text-secondary">
+        {blockers.busy ? <li>{t(blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` as MessageKey : "selfUpdate.auto.block.busy")}</li> : null}
+        {blockers.memoryMb !== null ? <li>{t("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) })}</li> : null}
+        {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
+      </ul>
+    </> : null}
     <div className="flex flex-wrap gap-2">
       <button type="button" data-action="deploy-now" disabled={pending} onClick={() => void choose("deploy-now")} className="min-h-11 rounded-[8px] bg-warning px-3 py-2 font-semibold text-canvas disabled:opacity-50">{t("selfUpdate.auto.decision.deployNow")}</button>
       <button type="button" data-action="keep-waiting" disabled={pending} onClick={() => void choose("keep-waiting")} className="min-h-11 rounded-[8px] border border-border px-3 py-2 font-semibold text-primary disabled:opacity-50">{t("selfUpdate.auto.decision.keepWaiting")}</button>

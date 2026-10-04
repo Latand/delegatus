@@ -4959,6 +4959,8 @@ export const en = {
   "selfUpdate.auto.drain.draining": "Draining since {time}: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.",
   "selfUpdate.auto.drain.overran": "Running work has held the update for 6 h. New autonomous launches remain held. Deploy now may interrupt this work; keep waiting lets it finish.",
   "selfUpdate.auto.decision.title": "Automatic update needs your decision",
+  "selfUpdate.auto.decision.overrides": "Deploy now may interrupt running work and proceed while a person is active:",
+  "selfUpdate.auto.decision.prerequisites": "Deploy now still waits for these prerequisites:",
   "selfUpdate.auto.decision.deployNow": "Deploy now",
   "selfUpdate.auto.decision.keepWaiting": "Keep waiting",
   "selfUpdate.auto.decision.failed": "Could not record the decision. Try again.",
