@@ -1635,12 +1635,19 @@ test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ["SIGTERM", "pending
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
   if (boundary === "pending") process.kill(before.launcher.pid, "SIGSTOP");
   apply.send(before as never);
-  if (boundary === "consumed") await until(() => existsSync(marker) && !existsSync(before.requestFile));
-  else expect(existsSync(before.requestFile)).toBe(true);
+  const trialFile = before.requestFile.replace(/request([^/]*)$/, "trial$1");
+  if (boundary === "consumed") {
+    await until(() => existsSync(marker) && !existsSync(before.requestFile));
+    expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, state: "preflight" });
+  } else {
+    expect(JSON.parse(readFileSync(before.requestFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, role: "relaunch" });
+    expect(existsSync(trialFile)).toBe(false);
+  }
   const killed = new Promise(resolve => running.child.once("exit", resolve));
   process.kill(before.launcher.pid, signal);
   if (boundary === "pending" && signal !== "SIGKILL") process.kill(before.launcher.pid, "SIGCONT");
   await killed;
+  expect(readRecord(fixture.state).launcher).toMatchObject({ pid: before.launcher.pid, startIdentity: before.launcher.startIdentity });
   // A crashed launcher leaves its recorded children. Stop only these fixture
   // PIDs; cold startup then exercises the durable handoff on the same install.
   for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");

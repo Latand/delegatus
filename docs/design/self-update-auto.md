@@ -62,7 +62,7 @@ notice, separate manual restarts, and deferred drain policy are superseded.
   serving identities and health. Rollback retains custody until the prior
   release is coherently serving and verified. The legacy two-request path is
   reserved for launchers without relaunch support; prerequisite actions are
-  described in [the install contract](self-update-every-install.md#p2--the-viewer).
+  described in [the install contract](self-update-every-install.md).
 
 The implementation is in `src/lib/selfUpdate/{service,auto,drain,apply}.ts`,
 with the launcher handoff in `bin/{launcher-relaunch,self-update-supervisor}.mjs`.
