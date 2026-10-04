@@ -597,7 +597,11 @@ export function ComposerBar({
   /* The browser is about to ask for the microphone again on a device that
      already allowed it; the row names the setting that ends the question. It
      sits in the accessory region, in the flow above the input, so it takes
-     room and covers nothing: the field and Send stay where they were. */
+     room and covers nothing: the field and Send stay where they were. The
+     dismiss control's touch target is 46 px and lies inside the row: it reaches
+     the row's own top and right edges (9 px and 11 px from the button) and
+     takes the rest downward and leftward, because the accessory region is a
+     scrollport and clips whatever leaves the row. */
   const micHintRow = micHint.hint ? (
     <div
       data-mic-permission-hint={micHint.hint}
@@ -611,7 +615,7 @@ export function ComposerBar({
         data-mic-permission-hint-dismiss
         aria-label={t("mic.hint.dismiss")}
         onClick={micHint.dismiss}
-        className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 before:absolute before:-inset-3 before:content-['']"
+        className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 before:absolute before:-top-[9px] before:-right-[11px] before:-bottom-[17px] before:-left-[15px] before:content-['']"
       >
         <X className="h-3.5 w-3.5" aria-hidden />
       </button>

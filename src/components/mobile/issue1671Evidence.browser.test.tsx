@@ -632,12 +632,27 @@ browserTest("microphone hint: the record button with and without the hint at 390
           /* The text itself: the row's own scroll size counts the dismiss
              button's enlarged touch target. */
           hintCut: [...(hint?.querySelectorAll("span") ?? [])].some((text) => text.scrollWidth > text.clientWidth || text.scrollHeight > text.clientHeight),
+          /* What a finger reaches: a walk from the button's centre, one pixel
+             at a time, for as long as the point still lands on the button. The
+             accessory region is a scrollport and clips whatever leaves it, so
+             the style's own numbers overstate the target. */
           dismissTarget: (() => {
             const button = hint?.querySelector<HTMLElement>("[data-mic-permission-hint-dismiss]");
             if (!button) return null;
             const r = button.getBoundingClientRect();
-            const inset = Math.abs(parseFloat(getComputedStyle(button, "::before").top) || 0);
-            return { width: r.width + inset * 2, height: r.height + inset * 2 };
+            const cx = r.x + r.width / 2;
+            const cy = r.y + r.height / 2;
+            const lands = (x: number, y: number) => {
+              const hit = document.elementFromPoint(x, y);
+              return Boolean(hit && (hit === button || button.contains(hit)));
+            };
+            const reach = (dx: number, dy: number) => {
+              let steps = 0;
+              while (steps < 100 && lands(cx + dx * (steps + 1), cy + dy * (steps + 1))) steps += 1;
+              return steps;
+            };
+            if (!lands(cx, cy)) return { width: 0, height: 0 };
+            return { width: reach(-1, 0) + reach(1, 0) + 1, height: reach(0, -1) + reach(0, 1) + 1 };
           })(),
           unit: rect(unit), send: rect(send), mic: rect(micButton), textarea: rect(textarea),
           sendReachable: reachable(send), micReachable: reachable(micButton), textareaReachable: reachable(textarea),
