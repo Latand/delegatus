@@ -1934,7 +1934,7 @@ spawned child's host PID from `/proc/thread-self/children` before exiting.
 Success and malformed-output cases still spawn their detached descendant
 from the collector's cleanup TERM; crash and timeout retain their original
 pre-trigger. Both pipe modes and denied individual signals remain covered.
-No production code, timeout, skip or cleanup expectation changed. The
+No production code, timeout, skip or descendant-absence expectation changed. The
 post-settlement polling was removed, so liveness is sampled immediately when
 the read settles; a late cleanup can no longer hide a leak. A positive-PID
 assertion prevents an empty receipt from turning signal 0 into a group check.
@@ -1954,6 +1954,15 @@ failures. Test-only fixture corrections make their whole-path runs pass:
 | `src/lib/pipelines/stageVerdictRequest.test.ts` | 9 pass, 0 fail | Tick the accepted skip before checking adoption; assert no destructive Git operation after that tick. |
 
 ### Notes
+
+One later candidate series was 19 pass / 1 fail: a denied-success fixture
+injected `EPERM` and returned conservative `worker-cleanup` with all 22
+reported PIDs absent. The fixture now tracks actual injected denial and
+accepts that outcome only for denied success with the exact fresh failed
+`collector-crash` / `worker-cleanup` diagnostic and `EPERM` in its causes.
+Uninjected success still requires `complete`; descendant absence and released
+handles are mandatory in either case. Denial is a retained secondary cause;
+it does not establish which separate ownership check refused verification.
 
 A flaky main test read once on each side can be reported as **NEW** when the
 baseline passes and head fails. The hook's cached baseline can retain that

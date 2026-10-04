@@ -1694,10 +1694,14 @@ describe("resource recurring reads", () => {
           const baseline = referencedHandles();
           const escapedPidFile = path.join(directory, "term-escaped-pid");
           const realKill = process.kill.bind(process);
+          let injectedDenial = false;
           const kill = fixture.denyEscaped
             ? spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
                 if (pid > 0 && signal !== 0 && existsSync(escapedPidFile)
-                  && pid === Number(readFileSync(escapedPidFile, "utf8"))) throw errno("EPERM");
+                  && pid === Number(readFileSync(escapedPidFile, "utf8"))) {
+                  injectedDenial = true;
+                  throw errno("EPERM");
+                }
                 return realKill(pid, signal as NodeJS.Signals | number | undefined);
               }) as typeof process.kill)
             : null;
@@ -1728,7 +1732,22 @@ describe("resource recurring reads", () => {
           await new Promise<void>((resolve) => setImmediate(resolve));
           const label = `${pipes} ${fixture.name}`;
 
-          expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
+          if (fixture.name === "denied success cleanup" && outcome.diagnostic.status === "failed") {
+            // A denied signal can accompany an unverified cleanup. The reader
+            // conservatively refuses success in that case, even after absence.
+            expect(injectedDenial, `${label} injected denial`).toBeTrue();
+            expect(outcome.diagnostic, label).toMatchObject({
+              fresh: true,
+              status: "failed",
+              degradedReason: "collector-crash",
+              failure: {
+                cause: "worker-cleanup",
+                causes: ["resource collector worker cleanup ownership verification failed", "EPERM"],
+              },
+            });
+          } else {
+            expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
+          }
           expect(leaked, `${label} escaped descendant`).toBe(fixture.escapedAtSettlement);
           expect(newReferencedHandleCount(baseline), `${label} referenced handles`).toBe(0);
         });
