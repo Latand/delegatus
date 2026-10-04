@@ -2005,3 +2005,49 @@ passed 23/0 normally and with the controlled delay. That refused hook reported
 1 new, 0 pre-existing, 413 fixed and 8 removed/skipped failures; no escape was
 used. This is another concrete example of the hook's single-sample false NEW
 risk, beyond the resource receipt race.
+
+## PR #2489 merge refresh after #2484
+
+The original 1520-file inventory above remains a historical measurement. The
+tracked-path recipe now selects **1547 test files** on `origin/main` at
+`ee726f70bad2f09ec2b0275a4744dc765eb16075`. Main gained the following **27 paths** since that inventory.
+`U` means inventoried, without a fresh whole-file measurement in this refresh;
+these rows do not reuse a result from a different revision.
+
+| Added main test path | Refresh result |
+| --- | --- |
+| `scripts/eslint-changes.test.ts` | U |
+| `scripts/gate-slot.test.ts` | U |
+| `scripts/local-gate-tests.test.ts` | U |
+| `scripts/local-gate.test.ts` | U |
+| `scripts/local-gate.workflows.test.ts` | U |
+| `scripts/memory-selection.test.ts` | U |
+| `scripts/supply-chain-check.test.ts` | U |
+| `src/components/TmuxComposer.parallel.dom.test.tsx` | U |
+| `src/components/feed/prependJoin.parse.test.ts` | U |
+| `src/components/feedTopEdge.dom.test.ts` | U |
+| `src/components/kanban/KanbanBoard.renders.dom.test.tsx` | U |
+| `src/components/kanban/KanbanCardDrag.dom.test.tsx` | U |
+| `src/components/kanban/cardGhostOpaque.test.ts` | U |
+| `src/components/kanban/columnLayoutAnimation.dom.test.ts` | U |
+| `src/components/kanban/reuseKanbanModel.test.ts` | U |
+| `src/components/mobile/MobileChromeSheets.dom.test.tsx` | U |
+| `src/hooks/boundedTransition.test.ts` | U |
+| `src/lib/logRead.test.ts` | U |
+| `src/lib/orchestrator/deputySeatBusy.test.ts` | U |
+| `src/lib/pipelines/parkedPublication.test.ts` | U |
+| `src/lib/pipelines/remoteActions.test.ts` | U |
+| `src/lib/runtime/structuredDeliveryController.nativeSwitch.test.ts` | U |
+| `src/lib/scanner/scanCache.catalogFreshness.test.tsx` | U |
+| `src/lib/search/unavailable.test.ts` | U |
+| `src/lib/telegram/bot/reportReplies.test.ts` | U |
+| `src/lib/workflows/execAsync.test.ts` | U |
+| `src/runtime-host/journalStartup.test.ts` | U |
+
+The merge resolution keeps #2484's inactive `unhosted` fake host with no
+process identity, delivered kill receipt, detached transport and both exact
+zero-release assertions. The two conflicted hunks cover kill admission/release
+and post-rebind release/cleanup. The retained #2489 isolation contribution is
+`try/finally`: open the parked gate, await registration, and close the fixture
+even when an assertion fails. The temporary HOME, state, config and TMPDIR setup
+and main's five controller-generation retirement scenarios remain intact.

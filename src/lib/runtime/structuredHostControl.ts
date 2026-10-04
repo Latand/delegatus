@@ -346,6 +346,8 @@ export interface StructuredHostTerminationDependencies {
       follows. Returning a refusal ends the termination with nothing further
       sent. */
   authorize?(): { status: 403 | 409; error: string } | null;
+  /** Durable authority, read before the synchronous signal/identity fences. */
+  authorizeAsync?(): Promise<{ status: 403 | 409; error: string } | null>;
   sleep?(ms: number): Promise<void>;
   graceMs?: number;
   deadlineMs?: number;
@@ -573,6 +575,10 @@ export async function terminateStructuredHostTree(
     if (!refused) return null;
     return { ok: false, status: refused.status, error: refused.error, remaining: survivors(), ...partialEvidence() };
   };
+  const readAuthority = async (): Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null> => {
+    const refused = await dependencies.authorizeAsync?.() ?? null;
+    return refused ? { ok: false, status: refused.status, error: refused.error, remaining: survivors(), ...partialEvidence() } : null;
+  };
   const survivors = () => tree.filter((candidate) => alive(candidate));
   /* Ownership is asked at kill time, never read off the snapshot: the seat may
      have been given up since it was taken, or given to a replacement host —
@@ -580,7 +586,7 @@ export async function terminateStructuredHostTree(
      False means nothing the runtime holds is ours to end through it: the
      released/orphaned case, which only the process group reaches. */
   try {
-    const refusedBeforeRuntime = authorityRefusal();
+    const refusedBeforeRuntime = await readAuthority() ?? authorityRefusal();
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
     let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
@@ -599,10 +605,10 @@ export async function terminateStructuredHostTree(
        kernel identity fence again after that boundary: a session key may have
        been rebound while we waited, and a recycled group leader must never
        receive the fallback signal. The caller's authority crosses it too. */
+    const refusedAfterRuntime = await readAuthority() ?? authorityRefusal();
+    if (refusedAfterRuntime) return refusedAfterRuntime;
     const changedAfterRuntime = identityRefusal();
     if (changedAfterRuntime) return changedAfterRuntime;
-    const refusedAfterRuntime = authorityRefusal();
-    if (refusedAfterRuntime) return refusedAfterRuntime;
 
     const refusals: string[] = [];
     const signalOnce = (target: number, value: NodeJS.Signals) => {
@@ -618,27 +624,27 @@ export async function terminateStructuredHostTree(
     /* Exactly one signal per process: the group signal already reaches every
        member, so only the descendants that left it (a child that called
        setsid, a reparented grandchild) are signalled individually. */
-    const sweep = (value: NodeJS.Signals): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
+    const sweep = async (value: NodeJS.Signals): Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null> => {
+      const refused = await readAuthority() ?? authorityRefusal();
+      if (refused) return refused;
       const changed = identityRefusal();
       if (changed) return changed;
-      const refused = authorityRefusal();
-      if (refused) return refused;
       const standing = survivors();
       if (groupLeader !== null && standing.some((candidate) => groupOf(candidate) === groupLeader)) {
         signalOnce(-groupLeader, value);
       }
       for (const candidate of standing) {
         if (groupLeader !== null && groupOf(candidate) === groupLeader) continue;
+        const refused = await readAuthority() ?? authorityRefusal();
+        if (refused) return refused;
         const changed = identityRefusal();
         if (changed) return changed;
-        const refused = authorityRefusal();
-        if (refused) return refused;
         signalOnce(candidate, value);
       }
       return null;
     };
 
-    const changedBeforeTerm = sweep("SIGTERM");
+    const changedBeforeTerm = await sweep("SIGTERM");
     if (changedBeforeTerm) return changedBeforeTerm;
     const startedAt = Date.now();
     let escalated = false;
@@ -647,7 +653,7 @@ export async function terminateStructuredHostTree(
       if (elapsed >= deadlineMs) break;
       if (!escalated && elapsed >= graceMs) {
         escalated = true;
-        const changedBeforeKill = sweep("SIGKILL");
+        const changedBeforeKill = await sweep("SIGKILL");
         if (changedBeforeKill) return changedBeforeKill;
       }
       await sleep(TERMINATION_POLL_MS);

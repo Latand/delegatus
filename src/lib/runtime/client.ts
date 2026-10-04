@@ -212,6 +212,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       status,
       ...(details ? { details } : {}),
       ...(options.fromStatuses ? { fromStatuses: [...options.fromStatuses] } : {}),
+      ...(options.retirementClaim ? { retirementClaim: options.retirementClaim } : {}),
       ...(options.awaitProjection ? { awaitProjection: true } : {}),
     }) as Promise<RuntimeOperationResult>;
   }
