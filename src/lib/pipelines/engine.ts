@@ -6548,7 +6548,12 @@ function remoteActionFence(pipeline: Pipeline): string {
   return crypto.createHash("sha256").update(JSON.stringify({
     state: pipeline.state, cursor: pipeline.cursor, stages: pipeline.stages,
     control: pipeline.controlGeneration,
-    attempt: attempt ? { n: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId, state: attempt.state, flowId: attempt.flowId } : null,
+    // A late needs_decision report can settle without changing attempt.state.
+    // Recovery admitted for a transport park must not consume that verdict.
+    attempt: attempt ? { n: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId, state: attempt.state, flowId: attempt.flowId,
+      activatedBy: attempt.activatedBy, verdict: attempt.verdict, report: attempt.report, completedAt: attempt.completedAt,
+      reviewHeadSha: attempt.reviewHeadSha, expectedReviewHeadSha: attempt.expectedReviewHeadSha } : null,
+    reviewPending: pipeline.reviewPending,
     head: pipeline.lastPassedCommit, branch: pipeline.branch, worktree: pipeline.worktreeDir,
     hidden: pipeline.hiddenAt, closed: pipeline.closedAt,
     delivery: pipeline.delivery ? { target: pipeline.delivery.target, epoch: pipeline.delivery.epoch, owner: pipeline.delivery.ownerId, active: pipeline.delivery.active, operation: pipeline.delivery.operation?.id } : null,
@@ -6614,13 +6619,21 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     const settlementFence = action.fence;
     const matches = (pipeline: Pipeline | null) => pipeline?.remoteAction?.id === action.id
       && pipeline.remoteAction.state === "pending" && remoteActionFence(pipeline) === settlementFence;
+    const budgetRefusal = (pipeline: Pipeline | null) => {
+      if (!pipeline || (action.action !== "retry-stage" && action.action !== "skip-stage")) return null;
+      const stage = currentStage(pipeline);
+      return terminalBudgetDecisionRefusal(stage ? currentAttempt(pipeline, stage.id) : null, action.action === "retry-stage");
+    };
     const receiptMatches = () => {
       if (!action.retryReceipt) return true;
       const state = ports.spawnReceiptState ? ports.spawnReceiptState(action.retryReceipt.launchId) : ports.spawnReceipt(action.retryReceipt.launchId)?.state;
       if (state !== action.retryReceipt.state) return false;
       return true;
     };
-    const revalidate = () => { if (!matches(findPipelineRecord(preview.id)) || !receiptMatches()) abort.abort(); };
+    const revalidate = () => {
+      const current = findPipelineRecord(preview.id);
+      if (!matches(current) || budgetRefusal(current) || !receiptMatches()) abort.abort();
+    };
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
@@ -6688,9 +6701,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
     await withPipelineMutation((pipelines, persist) => {
       const pipeline = pipelines.find((item) => item.id === preview.id);
       if (!pipeline || pipeline.remoteAction?.id !== action.id || pipeline.remoteAction.state !== "pending") return;
-      const stale = !matches(pipeline) || !receiptMatches()
+      const refusal = budgetRefusal(pipeline);
+      const stale = Boolean(refusal) || !matches(pipeline) || !receiptMatches()
         || (action.retryReceipt?.claimId !== undefined && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed");
-      pipeline.remoteAction = { ...action, state: "settled", settledAt: ports.now(), ...(!result.ok || stale ? { error: stale ? "remote action superseded" : (result as { error: string }).error } : {}) };
+      pipeline.remoteAction = { ...action, state: "settled", settledAt: ports.now(), ...(!result.ok || stale ? { error: refusal?.error ?? (stale ? "remote action superseded" : (result as { error: string }).error) } : {}) };
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", stale ? `${action.action} remote verification superseded`
         : result.ok ? `${action.action} remote verification settled` : `${action.action} remote verification failed: ${result.error}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
       if (stale) { persist(); return; }

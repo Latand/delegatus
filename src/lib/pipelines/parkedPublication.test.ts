@@ -125,6 +125,102 @@ function terminalBudgetPark(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
+for (const timing of ["before execution", "during Git verification", "after final Git verification"] as const) {
+  for (const lateVerdict of ["needs_decision", "fail"] as const) {
+    test(`deferred skip preserves a terminal budget ${lateVerdict} verdict settled ${timing}`, async () => {
+      const h = fixture();
+      const { settlePendingRemoteActions } = await import("./engine");
+      const { pipelineRevision } = await import("./store");
+      let entered!: () => void;
+      let release!: () => void;
+      const checking = new Promise<void>((resolve) => { entered = resolve; });
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let work: Promise<void> | undefined;
+      try {
+        terminalBudgetPark(h);
+        const review = h.lane.runs[1]!.attempts[0]!;
+        review.state = "needs_decision"; review.verdict = null; review.completedAt = null;
+        review.conversationId = "conversation_fixture_review";
+        review.error = "host unavailable before terminal verdict settlement";
+        review.reviewHeadSha = h.head; review.expectedReviewHeadSha = h.head;
+        review.report = { seq: 1, at: new Date().toISOString(),
+          actor: { kind: "agent", conversationId: review.conversationId, role: "worker" },
+          verdict: { status: lateVerdict, findings: ["P1 late review defect"] },
+          summary: "late terminal review", calls: 1,
+          provenance: { head: h.head, branch: h.lane.branch, uncommitted: [], pullRequest: null, outputs: [] } };
+        h.lane.cursor!.state = "pending";
+        h.lane.cursor!.activatedBy = structuredClone(review.activatedBy!);
+        delete h.lane.reviewPending;
+        h.lane.stateDetail = review.error;
+        savePipelines([h.lane]);
+        const ports = { ...h.ports, remoteActionSupported: () => true, pathForConversation: () => null,
+          conversationRuntime: () => null, sourcePathAllowed: () => false, conversationRegistered: () => false };
+        expect((await patchPipeline(h.lane.id, { action: "skip-stage" }, ports)).error).toBeUndefined();
+        const admittedRevision = pipelineRevision(h.current());
+        let delayed = false;
+        let gitCalls = 0;
+        let branchReads = 0;
+        const deferredPorts = { ...ports, exec: async (...args: Parameters<typeof realExec>) => {
+          gitCalls++;
+          if (timing === "during Git verification" && !delayed && args[0] === "git" && args[1][0] === "status") {
+            delayed = true; entered(); await held;
+          }
+          const executed = await ports.exec(...args);
+          if (args[0] === "git" && args[1][0] === "branch" && ++branchReads === 2 && timing === "after final Git verification") {
+            entered(); await held;
+          }
+          return executed;
+        } };
+        if (timing !== "before execution") {
+          work = settlePendingRemoteActions(deferredPorts);
+          expect(await Promise.race([checking.then(() => true), work.then(() => false), Bun.sleep(1000).then(() => false)])).toBe(true);
+        }
+        // Replaying an admitted intent after a restart must also fence the
+        // verdict that settled before the recovery executor started.
+        const admittedAction = structuredClone(h.current().remoteAction);
+        if (timing === "before execution") {
+          const awaitingReport = h.current();
+          delete awaitingReport.remoteAction;
+          savePipelines([awaitingReport]);
+        }
+        await tickPipelines([], ports);
+        const settled = h.current();
+        if (timing === "before execution") {
+          settled.remoteAction = admittedAction;
+          savePipelines([settled]);
+        }
+        expect(settled).toMatchObject({ state: "needs_decision", reviewPending: { terminalRecheck: true },
+          remoteAction: { state: "pending" } });
+        expect(settled.runs[1]!.attempts[0]!.verdict).toMatchObject({ status: lateVerdict, findings: ["P1 late review defect"] });
+        const retainedReview = structuredClone(settled.runs[1]!.attempts[0]);
+        const retainedPending = structuredClone(settled.reviewPending);
+        const retainedDetail = settled.stateDetail;
+        release();
+        if (work) await work;
+        else await settlePendingRemoteActions(deferredPorts);
+        await h.tick();
+        expect(h.current()).toMatchObject({ state: "needs_decision", closedAt: null, publishedCommit: null,
+          reviewPending: retainedPending, stateDetail: retainedDetail, remoteAction: { state: "settled", error: expect.any(String) } });
+        expect(h.current().runs[1]!.attempts).toEqual([retainedReview!]);
+        expect(h.current().delivery!.operation).toBeUndefined();
+        expect(h.current().reviewGrants).toBeUndefined();
+        expect(h.pushes()).toBe(0);
+        if (timing === "before execution") expect(gitCalls).toBe(0);
+        for (const action of ["skip-stage", "retry-stage"] as const) {
+          expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+        }
+        expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "stale-race-grant",
+          addRounds: 1, expectedRevision: admittedRevision }, ports, { kind: "operator" })).status).toBe(409);
+        expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "fresh-race-grant",
+          addRounds: 1, expectedRevision: pipelineRevision(h.current()) }, ports, { kind: "operator" })).error).toBeUndefined();
+        expect(h.current()).toMatchObject({ state: "running", cursor: { stageId: "build", state: "pending",
+          input: expect.stringContaining("late review defect") }, reviewGrants: [{ rounds: 1, terminalAttempt: 1 }] });
+        expect(h.pushes()).toBe(0);
+      } finally { release(); await work; h.cleanup(); }
+    });
+  }
+}
+
 for (const action of ["publish", "retry-stage"] as const) test(`a passed publication park with budget activation remains retryable through ${action}`, async () => {
   const h = fixture();
   try {
