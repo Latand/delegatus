@@ -2417,23 +2417,26 @@ test("a lost push reply is reconciled before explicit takeover and stale owner p
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("a Git child retains the publication fence after its Viewer executor dies", async () => {
+test.each([false, true])("a Git child retains the publication fence after its Viewer executor dies (inherited advice: %s)", async (inheritedAdvice) => {
   const box = (await publishSandbox());
   let child: ReturnType<typeof Bun.spawn> | undefined;
   const release = path.join(box.root, "release-push");
   const ready = path.join(box.root, "push-ready");
   try {
     const head = (await box.commit("orphan.txt", "accepted\n"));
+    await git(box.repo, "config", "advice.graftFileDeprecated", "true");
     const hooks = path.join(box.root, "hooks");
     fs.mkdirSync(hooks);
-    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf ready > "$DELIVERY_READY"\nwhile [ ! -f "$DELIVERY_RELEASE" ]; do sleep 0.02; done\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nif [ "$DELIVERY_EXPECT_CONFIG" = 1 ] && [ "$(git config --get publication.fixture)" != preserved ]; then exit 91; fi\nprintf ready > "$DELIVERY_READY"\nwhile [ ! -f "$DELIVERY_RELEASE" ]; do sleep 0.02; done\n', { mode: 0o700 });
     (await git(box.repo, "config", "core.hooksPath", hooks));
     const script = `import { publishPipelineBranch } from ${JSON.stringify(path.join(import.meta.dir, "git.ts"))};
       import { findPipelineRecord } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
       import { realExec } from ${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))};
       await publishPipelineBranch(findPipelineRecord(process.env.DELIVERY_ID), realExec, { acceptedSha: process.env.DELIVERY_HEAD });`;
     child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, DELIVERY_ID: box.subject.id,
-      DELIVERY_HEAD: head, DELIVERY_READY: ready, DELIVERY_RELEASE: release }, stdout: "pipe", stderr: "pipe" });
+      DELIVERY_HEAD: head, DELIVERY_READY: ready, DELIVERY_RELEASE: release, DELIVERY_EXPECT_CONFIG: inheritedAdvice ? "1" : "",
+      ...(inheritedAdvice ? { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "advice.graftFileDeprecated", GIT_CONFIG_VALUE_0: "true",
+        GIT_CONFIG_KEY_1: "publication.fixture", GIT_CONFIG_VALUE_1: "preserved" } : {}) }, stdout: "pipe", stderr: "pipe" });
     const deadline = Date.now() + 10_000;
     while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
     expect(fs.existsSync(ready)).toBe(true);

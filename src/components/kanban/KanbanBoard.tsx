@@ -2,6 +2,7 @@
 
 import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
@@ -23,11 +24,13 @@ import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { isCardHandle, startCardGesture } from "./cardDrag";
 import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, OPEN_RAIL_WIDTH, openRailTier, type KanbanLayoutMode, type OpenRailTier } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
+import { changeColumnWidth, COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
@@ -351,7 +354,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return byTask;
   }, [remoteAgents]);
   const remoteCards = useMemo(() => remoteCardsFor(allTasks, remoteFeed), [allTasks, remoteFeed]);
-  const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
     { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
@@ -423,7 +425,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       root.removeEventListener("focusin", onWork);
     };
   }, []);
-  const seatView = props.seat ? props.seat(boardId) : null;
+  const renderSeat = props.seat;
+  const seatView = useMemo(() => renderSeat?.(boardId) ?? null, [renderSeat, boardId]);
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
@@ -641,7 +644,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
        columns' mode follows what those leave them (#1841). */
     const aside = asideRef.current;
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
+    let frame = 0;
     const apply = () => {
+      // The helper owns intermediate widths; measure the settled layout.
+      if (element.hasAttribute("data-column-layout")) return;
       const barWidth = element.getBoundingClientRect().width;
       const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
       const seatWidth = seat?.getBoundingClientRect().width ?? 0;
@@ -652,13 +658,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
+    const settled = () => {
+      // Release transient layers before asking for the settled layout. This
+      // read otherwise forces raster/layout in the animation's cleanup task.
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; apply(); });
+    };
     apply();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(apply);
-    observer.observe(element);
-    if (aside) observer.observe(aside);
-    if (seat) observer.observe(seat);
-    return () => observer.disconnect();
+    element.addEventListener(COLUMN_LAYOUT_END, settled);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(apply) : null;
+    observer?.observe(element);
+    if (aside) observer?.observe(aside);
+    if (seat) observer?.observe(seat);
+    return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, settled); if (frame) cancelAnimationFrame(frame); };
   }, [hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
@@ -1677,74 +1688,25 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [mode, openCardMenu, openStatusMenu, shift, startEdit, hideCard, menu]);
 
   /* ── Pointer drag to a column ────────────────────────────────────────── */
+  /* The whole card is the handle (cardDrag.ts): a press anywhere but a text
+     field or a reader starts a drag after 8 px, and a click without movement
+     does what it always did. The ghost and the hint are drawn by hand, so a
+     drag renders nothing in React. */
+  const draggingCard = useRef(false);
+  const dragHintText = t("kanban.dragHint");
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .pblock, .reader-slot, .stage-detail")) return;
-    const element = event.currentTarget;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const pointerId = event.pointerId;
-    let started = false;
-    let ghost: HTMLElement | null = null;
-    let over: TaskStatus | null = null;
-    let overColumn: HTMLElement | null = null;
-    const moveHandler = (moveEvent: PointerEvent) => {
-      const dx = moveEvent.clientX - startX;
-      const dy = moveEvent.clientY - startY;
-      if (!started) {
-        if (Math.hypot(dx, dy) < 6) return;
-        started = true;
-        try { element.setPointerCapture(pointerId); } catch { /* capture is best-effort */ }
-        element.classList.add("dragging");
-        ghost = element.cloneNode(true) as HTMLElement;
-        ghost.querySelectorAll(".reader-slot").forEach((slot) => slot.replaceChildren());
-        ghost.classList.add("ghost");
-        ghost.classList.remove("dragging");
-        ghost.style.setProperty("--w", `${element.offsetWidth}px`);
-        ghost.setAttribute("aria-hidden", "true");
-        ghost.removeAttribute("data-id");
-        rootRef.current?.appendChild(ghost);
-        setDragHint(true);
-      }
-      const rect = element.getBoundingClientRect();
-      ghost!.style.left = `${rect.left + dx}px`;
-      ghost!.style.top = `${rect.top + dy}px`;
-      ghost!.style.display = "none";
-      const under = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
-      ghost!.style.display = "";
-      /* The drop target is marked on the column element itself: a board
-         re-render per pointer move would cost every card a frame. */
-      const column = under?.closest<HTMLElement>(".column[data-status]") ?? null;
-      if (overColumn && overColumn !== column) overColumn.classList.remove("drop");
-      overColumn = column;
-      over = column ? column.dataset.status as TaskStatus : null;
-      if (column) column.classList.toggle("drop", over !== card.status);
-    };
-    const finish = (cancel: boolean) => {
-      element.removeEventListener("pointermove", moveHandler);
-      element.removeEventListener("pointerup", up);
-      element.removeEventListener("pointercancel", cancelled);
-      document.removeEventListener("keydown", escape, true);
-      if (!started) return;
-      element.classList.remove("dragging");
-      ghost?.remove();
-      overColumn?.classList.remove("drop");
-      setDragHint(false);
-      if (!cancel && over && over !== card.status) move(card, over);
-    };
-    const up = () => finish(false);
-    const cancelled = () => finish(true);
-    const escape = (keyEvent: KeyboardEvent) => {
-      if (keyEvent.key === "Escape" && started) {
-        keyEvent.stopPropagation();
-        finish(true);
-      }
-    };
-    element.addEventListener("pointermove", moveHandler);
-    element.addEventListener("pointerup", up);
-    element.addEventListener("pointercancel", cancelled);
-    document.addEventListener("keydown", escape, true);
-  }, [move]);
+    if (event.button !== 0 || event.pointerType === "touch" || !card.task || !rootRef.current) return;
+    if (!isCardHandle({ target: event.target, offsetX: event.nativeEvent.offsetX })) return;
+    startCardGesture({
+      element: event.currentTarget,
+      root: rootRef.current,
+      status: card.status,
+      event,
+      hint: dragHintText,
+      onDrop: (to) => move(card, to),
+      onActive: (active) => { draggingCard.current = active; },
+    });
+  }, [move, dragHintText]);
 
   /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the
@@ -2143,6 +2105,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     let measuredAt = 0;
     const measure = () => {
       frame = 0;
+      // The final visibility scan runs after the helper releases its layers.
+      if (root.hasAttribute("data-column-layout")) return;
       measuredAt = performance.now();
       const rootRect = root.getBoundingClientRect();
       const ids: string[] = [];
@@ -2193,6 +2157,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (performance.now() - measuredAt >= SCROLL_MEASURE_MS) schedule();
     };
     schedule();
+    root.addEventListener(COLUMN_LAYOUT_END, schedule);
     root.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", schedule);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
@@ -2200,6 +2165,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return () => {
       if (frame) cancelAnimationFrame(frame);
       if (timer) window.clearTimeout(timer);
+      root.removeEventListener(COLUMN_LAYOUT_END, schedule);
       root.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", schedule);
       observer?.disconnect();
@@ -2482,7 +2448,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useColumnDwell(rootRef, {
     enabled: widthControls,
     canWiden: (status) => !wideColumns.pinned && !stripStatuses.has(status) && (wideShelf ? wideShelf !== status : status !== "assigned"),
-    busy: () => menuOpenRef.current || sheetOpen.current || dragHint,
+    busy: () => menuOpenRef.current || sheetOpen.current || draggingCard.current,
     widen: wideColumns.widenIfNarrow,
   });
 
@@ -2976,7 +2942,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
           />
         </KanbanPopover>
       ) : null}
-      {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
     </div>
     </KanbanDraftContext.Provider>
@@ -3119,7 +3084,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
             title={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
             data-col-width={status}
             data-col-width-action={isWide ? "narrow" : "widen"}
-            onClick={() => (isWide ? widths.state.narrow() : widths.state.widen(status))}
+            onClick={(event) => changeColumnWidth(event.currentTarget, () => flushSync(() => (isWide ? widths.state.narrow() : widths.state.widen(status))))}
           >
             {isWide ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
           </button>
@@ -3183,7 +3148,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
 class CardFlights extends Component<{ placements: ReadonlyMap<string, TaskStatus>; rootRef: RefObject<HTMLElement | null> }, unknown, Map<string, DOMRect> | null> {
   getSnapshotBeforeUpdate(previous: { placements: ReadonlyMap<string, TaskStatus> }): Map<string, DOMRect> | null {
     const root = this.props.rootRef.current;
-    if (!root || previous.placements === this.props.placements) return null;
+    // Column transforms own the painted geometry until their cleanup.
+    if (!root || root.hasAttribute("data-column-layout") || previous.placements === this.props.placements) return null;
     let from: Map<string, DOMRect> | null = null;
     for (const [id, status] of this.props.placements) {
       const was = previous.placements.get(id);

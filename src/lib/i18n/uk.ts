@@ -3278,6 +3278,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.kanban.tellOrchestrator": "Сказати оркестратору",
   "mobile2.kanban.openTask": "Відкрити задачу «{title}»",
   "mobile2.kanban.openRow": "Відкрити «{title}»",
+  "mobile2.kanban.dockHint": "Відпустіть над колонкою",
+  "mobile2.kanban.dockHere": "тут",
   "mobile2.kanban.moveTo": "Перемістити в «{column}»",
   "mobile2.kanban.moved": "Переміщено в «{column}»",
   "mobile2.kanban.openFirstAgent": "Відкрити першого агента",

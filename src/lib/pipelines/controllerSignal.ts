@@ -67,6 +67,10 @@ export function registerPipelineTick(tick: PipelineTick): () => void {
   };
 }
 
+export function hasLocalPipelineController(): boolean {
+  return signal.tick !== null && signal.tick !== defaultPipelineTick;
+}
+
 export function requestPipelineTick(): void {
   if (signal.scheduled || signal.tick === null) return;
   signal.scheduled = true;
