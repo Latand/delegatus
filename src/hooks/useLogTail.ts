@@ -13,6 +13,9 @@ import { forgetTailSnapshot, persistTailSnapshot, restoreTailSnapshot, resumable
 
 /** Longest single jsonl line we are willing to chase across history chunks. */
 const OLDER_CHUNK_HOPS = 4;
+/** What one older-history read asks for. The server caps it; a transcript of
+    screenshots then comes back in a handful of reads rather than dozens. */
+const OLDER_PAGE_BYTES = 4 * 1024 * 1024;
 const TAIL_CACHE_PATHS = 24;
 const TAIL_CACHE_LINES = 6000;
 
@@ -407,7 +410,7 @@ export function useLogTail(file: FileEntry | null, pausedInput = false, cap = 25
       let start = startRef.current;
       // A chunk may end mid-line; hop further back until the first newline shows up.
       for (let hop = 0; hop < OLDER_CHUNK_HOPS; hop += 1) {
-        const res = await fetch(`/api/log?path=${encodeURIComponent(target)}&before=${start}`);
+        const res = await fetch(`/api/log?path=${encodeURIComponent(target)}&before=${start}&bytes=${OLDER_PAGE_BYTES}`);
         const json = (await res.json()) as LogChunk | { error?: string };
         if (gen !== genRef.current) return 0;
         if ("error" in json && json.error) return 0;

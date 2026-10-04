@@ -38,6 +38,9 @@ export interface FileScanIntent {
   /** This caller's lifetime. The shared generation stops after its final
       subscriber leaves; one cancelled joiner never interrupts the others. */
   signal?: AbortSignal | null;
+  /** Called when the shared generation actually starts, including when this
+      caller merged into an already queued generation. */
+  onStart?: () => void;
 }
 
 interface ResolvedScanIntent {
@@ -58,6 +61,7 @@ interface ScanGeneration {
   subscribers: number;
   started: boolean;
   settled: boolean;
+  startCallbacks: Set<() => void>;
   promise: Promise<FileCatalogScan>;
   resolve: (snapshot: FileCatalogScan) => void;
   reject: (error: unknown) => void;
@@ -131,6 +135,7 @@ function generationFor(
   intent: ResolvedScanIntent,
   runner: CoordinatedScanRunner,
   exclusive: boolean,
+  onStart?: () => void,
 ): ScanGeneration {
   let resolve!: (snapshot: FileCatalogScan) => void;
   let reject!: (error: unknown) => void;
@@ -150,6 +155,7 @@ function generationFor(
     subscribers: 0,
     started: false,
     settled: false,
+    startCallbacks: new Set(onStart ? [onStart] : []),
     promise,
     resolve,
     reject,
@@ -164,6 +170,7 @@ function startGeneration(
   pending.generation = state.generation;
   pending.started = true;
   state.inflight = pending;
+  for (const onStart of pending.startCallbacks) onStart();
   let scan: Promise<FileCatalogScan>;
   try {
     scan = Promise.resolve(pending.runner(pending.intent, pending.controller.signal));
@@ -206,6 +213,7 @@ function enqueue(
   intent: ResolvedScanIntent,
   runner: CoordinatedScanRunner,
   exclusive: boolean,
+  onStart?: () => void,
 ): ScanGeneration {
   if (!exclusive) {
     /* Only the shared pending generation accepts extra callers: an exclusive
@@ -218,10 +226,11 @@ function enqueue(
         persist: shared.intent.persist || intent.persist,
         fresh: shared.intent.fresh || intent.fresh,
       };
+      if (onStart) shared.startCallbacks.add(onStart);
       return shared;
     }
   }
-  const pending = generationFor(intent, runner, exclusive);
+  const pending = generationFor(intent, runner, exclusive, onStart);
   state.queue.push(pending);
   scheduleStart(state);
   return pending;
@@ -296,7 +305,7 @@ export async function coordinatedFileScan(
     && intent.join !== false
     && covers(inflight.intent, wanted)
     ? inflight
-    : enqueue(state, wanted, runner, exclusive);
+    : enqueue(state, wanted, runner, exclusive, intent.onStart);
   return subscribe(state, generation, intent.signal);
 }
 

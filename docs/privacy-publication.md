@@ -3,8 +3,10 @@
 Every pull request runs `privacy-publication` from the default branch through
 `pull_request_target`. The job checks out trusted scanner, test, workflow, and
 fingerprint files separately, then handles the pull-request checkout as opaque
-inspection input. Candidate code is never executed. The scan covers committed,
-staged, unstaged, and untracked changes relative to the exact base SHA.
+inspection input for the trusted scan. After the trusted verdict and cache
+writes, the candidate's privacy tests run without credentials under a 90-second
+timeout. The scan covers committed, staged, unstaged, and untracked changes
+relative to the exact base SHA.
 Diagnostics expose finding classes and counts. Matched values, OCR text,
 metadata values, and file paths remain suppressed.
 
@@ -183,6 +185,16 @@ A separator inside that span cannot conceal the raw character before the callee.
 operand checks and decoded inspection views can revoke a raw-approved candidate
 when it belongs to an extended email, host, URI or concatenated expression.
 They cannot grant an exemption to a spelling or boundary introduced by decoding.
+Template ownership uses the expression ending immediately before the opening
+backtick after skipping whitespace, line breaks and comments. Identifier endings
+(including Unicode and escaped names), closed groups, calls, members and earlier
+literals withhold approval regardless of the surrounding keyword or statement.
+Returned call/index operands keep that ownership too. Explicit Markdown prose
+with an unquoted HTTP link on the same physical line keeps its inline-code
+exemption; quotes, escapes, comment delimiters and a new line cannot create that
+prose classification. The lexer does not evaluate callable values or fully parse
+JavaScript/TypeScript: ambiguous expression endings conservatively withhold
+approval, including identifier-shaped prose that could be an executable tag.
 The former NFKC whitespace-preservation workaround is removed: Unicode
 neighbours are rejected before normalization. JSON escapes still receive an
 additional inspection view, and other privacy rules still read the original.

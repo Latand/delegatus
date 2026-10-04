@@ -47,7 +47,7 @@ export interface StructuredDeliveryQueuePort {
   /** A terminal provider turn engages an account pick immediately (#1983).
       Live host health still fences a newer turn before applying it. */
   terminalTurn?(conversationId: string): boolean;
-  nativeQueueExecute?(command: NativeQueueCommand & { operationId: string }, refusalReason?: string): Promise<void>;
+  nativeQueueExecute?(command: NativeQueueCommand & { operationId: string; eventSeq: number }, refusalReason?: string): Promise<void | false>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
@@ -926,7 +926,10 @@ export class StructuredDeliveryQueue {
     if (!retry.ready()) { this.retrySoon(); return false; }
     try {
       if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
-      await this.port.nativeQueueExecute(effect, reason);
+      if (await this.port.nativeQueueExecute(effect, reason) === false) {
+        this.retrySoon();
+        return false;
+      }
       this.nativeExecutionRetries.delete(effect.conversationId);
       return true;
     } catch (error) {

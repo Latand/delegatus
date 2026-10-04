@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
@@ -11,6 +12,7 @@ import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
+import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
@@ -8118,7 +8120,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
         pending: Boolean(card.querySelector(".head .title.pending")),
         conversations: card.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations") ?? null,
         notStarted: card.querySelectorAll("[data-launch-not-started]").length,
-        notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+        notLoaded: Number(card.querySelector("[data-elsewhere-conversations]")?.getAttribute("data-elsewhere-conversations") ?? 0),
         failed: card.querySelectorAll("[data-launch-failed]").length,
         error: (card.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
       };
@@ -8164,7 +8166,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
             if (at("t-ghost-fixture")?.conversations !== null) failures.push(`${label}: the launch that never started counts ${at("t-ghost-fixture")?.conversations} conversation(s)`);
             if (at("t-ghost-fixture")?.notStarted !== 1) failures.push(`${label}: no «launch did not start» row`);
             if (!at("t-ghost-young")?.pending) failures.push(`${label}: the young task no longer waits for its agent's name`);
-            if (at("t-ghost-elsewhere")?.conversations !== "1" || at("t-ghost-elsewhere")?.notLoaded !== 1) failures.push(`${label}: the conversation off the board is not counted with its own open row ${JSON.stringify(at("t-ghost-elsewhere"))}`);
+            if (at("t-ghost-elsewhere")?.conversations !== "1" || at("t-ghost-elsewhere")?.notLoaded !== 1) failures.push(`${label}: the conversation off the board is not counted and folded behind the one line ${JSON.stringify(at("t-ghost-elsewhere"))}`);
             if (at("t-ghost-failed")?.pending || at("t-ghost-failed")?.title === untitled) failures.push(`${label}: the failed launch still waits for a name`);
             if (at("t-ghost-failed")?.conversations !== null || at("t-ghost-failed")?.failed !== 1 || at("t-ghost-failed")?.error !== FAILED_ERROR) failures.push(`${label}: the launch that failed two minutes ago is not listed with its error ${JSON.stringify(at("t-ghost-failed"))}`);
             /* The failed launch opens its launch view: the error and Retry. */
@@ -8186,8 +8188,10 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
               await page.keyboard.press("Escape").catch(() => {});
               await page.waitForTimeout(300);
             } else failures.push(`${label}: the failed launch offers no Open`);
-            /* The conversation off the board opens by its own link. */
-            const open = page.locator(`${card("t-ghost-elsewhere")} [data-not-loaded]`);
+            /* The conversation off the board waits behind one line in the folded Past attempts section, and opens from its list. */
+            await page.locator(`${card("t-ghost-elsewhere")} details.history > summary`).click();
+            await page.locator(`${card("t-ghost-elsewhere")} [data-elsewhere-toggle]`).click();
+            const open = page.locator(`${card("t-ghost-elsewhere")} [data-elsewhere-row] button`);
             if (await open.count()) {
               await open.click();
               await page.waitForTimeout(200);
@@ -8283,8 +8287,8 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
               await elsewhere.first().click();
               await page.waitForTimeout(800);
               await page.screenshot({ path: path.join(pngDir, `${label}-task-t-ghost-elsewhere.png`) });
-              elsewhereScreen = await page.evaluate(() => ({ notLoaded: document.querySelectorAll("[data-phone-task-not-loaded]").length }));
-              if (elsewhereScreen.notLoaded !== 1) failures.push(`${label}: the off-board conversation has no row of its own on the task screen`);
+              elsewhereScreen = await page.evaluate(() => ({ notLoaded: Number(document.querySelector("[data-phone-task-elsewhere]")?.getAttribute("data-phone-task-elsewhere") ?? 0), rows: document.querySelectorAll("[data-phone-task-not-loaded]").length }));
+              if (elsewhereScreen.notLoaded !== 1 || elsewhereScreen.rows !== 0) failures.push(`${label}: the off-board conversation is not folded behind the earlier section's line ${JSON.stringify(elsewhereScreen)}`);
             }
             readings[label] = { titles, ghostScreen: screen, elsewhereScreen, failedScreen };
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
@@ -8332,7 +8336,7 @@ describe("old cards list only the launches that did not start, folded behind one
         summary: card.querySelector("[data-launches-not-started]")?.getAttribute("data-launches-not-started") ?? null,
         summaryText: (card.querySelector("[data-launches-toggle]")?.textContent ?? "").trim() || null,
         dismissAll: (card.querySelector("[data-launches-dismiss-all]")?.textContent ?? "").trim() || null,
-        notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+        notLoaded: Number(card.querySelector("[data-elsewhere-conversations]")?.getAttribute("data-elsewhere-conversations") ?? 0),
         error: (card.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
       };
     }
@@ -11157,6 +11161,855 @@ describe("the board scrolls on the compositor at a device pixel ratio of 1", () 
     }
     if (failures.length) throw new Error(failures.join("\n"));
   }, 300_000);
+});
+
+describe("column dwell smooth", () => {
+  const inspectColumnAnimations = async (page: Page) => {
+    const install = () => {
+      const nativeAnimations = document.getAnimations.bind(document);
+      // Document's getter omits the slot wrappers' own shadow-tree effects.
+      // Include the real effects so scrubbing and cleanup inspect every layer.
+      document.getAnimations = () => [...new Set([
+        ...nativeAnimations(),
+        ...[...document.querySelectorAll<HTMLElement>(".card, .col-head, .divider, .empty, .remote-unbound")].flatMap((node) => node.shadowRoot?.querySelector<HTMLElement>("[data-column-text-group]")?.getAnimations() ?? []),
+      ])];
+    };
+    await page.context().addInitScript(install);
+    await page.evaluate(install);
+  };
+  browserTest("task composer forms remain usable before and during a width transition", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/composer");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", locale, "no-preference");
+        try {
+          await page.locator("[data-bar-create]").click();
+          await page.locator('.menu [role="menuitem"]').first().click();
+          await page.locator("[data-kanban-new-task] textarea").fill("A draft survives column motion");
+          expect(await page.locator("[data-kanban-new-task]").evaluate((node) => node.shadowRoot)).toBeNull();
+          const divider = await page.locator(".column[data-status=inbox] .divider").first().evaluate((node) => {
+            const group = node.shadowRoot!.querySelector<HTMLElement>("[data-column-text-group]")!;
+            return { width: group.getBoundingClientRect().width, height: group.getBoundingClientRect().height };
+          });
+          expect(divider.width).toBeGreaterThan(60);
+          expect(divider.height).toBeLessThan(40);
+          await page.locator('[data-col-width="inbox"]').click();
+          await page.waitForFunction(() => document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout === "running");
+          await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
+          expect(await page.locator("[data-kanban-new-task] textarea").inputValue()).toBe("A draft survives column motion");
+          await page.locator("[data-kanban-new-task] .tools button").click();
+          await page.locator('[data-col-width="inbox"]').click();
+          await page.waitForFunction(() => document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout === "running");
+          await page.evaluate(() => document.querySelector<HTMLButtonElement>("[data-bar-create]")!.click());
+          await page.locator('.menu [role="menuitem"]').first().click();
+          await page.locator("[data-kanban-new-task] textarea").fill("Another usable draft");
+          await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
+          expect(await page.locator('[data-board] .column[data-status="inbox"]').getAttribute("data-wide")).toBe("0");
+          expect(await page.locator("[data-kanban-new-task] textarea").inputValue()).toBe("Another usable draft");
+          expect(await page.locator("[data-kanban-new-task]").evaluate((node) => node.shadowRoot)).toBeNull();
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+
+  browserTest("unbound remote agent glyphs retain their natural size during a column resize", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/remote");
+    fs.mkdirSync(out, { recursive: true });
+    const now = Date.now();
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [{ k: `a:${"2".repeat(16)}`, p: `repo-${"a".repeat(32)}`, t: "Remote worker", e: "codex", m: "gpt-6-sol", st: "working", at: now, peer: "Machine B", stale: false, asOf: now }] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await page.locator(".remote-unbound summary").waitFor();
+        if (await page.locator("[data-rail-hide]").count()) await page.locator("[data-rail-hide]").click();
+        await page.locator(".remote-unbound summary").scrollIntoViewIfNeeded();
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(400);
+        const sample = await page.evaluate(async () => {
+          const root = document.querySelector<HTMLElement>(".kb")!;
+          const column = document.querySelector<HTMLElement>('.column[data-status="inbox"]')!;
+          const summary = column.querySelector<HTMLElement>(".remote-unbound summary")!;
+          const glyph = () => {
+            const text = [...summary.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())!;
+            const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 2);
+            const box = range.getBoundingClientRect(); return { width: box.width, height: box.height };
+          };
+          const before = glyph();
+          column.querySelector<HTMLButtonElement>("[data-col-width]")!.click();
+          await Promise.resolve();
+          while (root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          for (const animation of document.getAnimations()) {
+            const target = (animation.effect as KeyframeEffect).target;
+            if (target instanceof HTMLElement && target.hasAttribute("data-layout-animating")) { animation.pause(); animation.currentTime = 50; }
+          }
+          return { before, during: glyph(), promoted: !!summary.closest("[data-layout-animating=content], [data-column-text-held]") };
+        });
+        expect(sample.promoted).toBe(true);
+        expect(Math.abs(sample.during.width / sample.before.width - 1)).toBeLessThanOrEqual(0.01);
+        expect(Math.abs(sample.during.height - sample.before.height)).toBeLessThanOrEqual(1);
+        expect(pageErrors).toEqual([]);
+        fs.writeFileSync("evidence/column-dwell-smooth/remote.json", JSON.stringify({ viewport: VIEWPORT, sample }, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+
+  browserTest("scroll-mode width controls hold the source boxes while the final layout FLIPs", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/scroll-width");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 1000, height: 900 }, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        await page.reload();
+        if (await page.locator('[data-rail-hide]').count()) await page.locator('[data-rail-hide]').click();
+        await page.locator('[data-col-width="inbox"]').waitFor();
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(400);
+        expect(await page.locator(".board.scroll").count()).toBe(1);
+        for (const action of ["widen", "narrow"]) {
+          const reading = await page.evaluate(async () => {
+            const column = document.querySelector<HTMLElement>('.column[data-status="inbox"]')!;
+            const card = column.querySelector<HTMLElement>(".card")!;
+            const before = { width: card.getBoundingClientRect().width, height: card.getBoundingClientRect().height };
+            const wide = column.dataset.wide;
+            column.querySelector<HTMLButtonElement>("[data-col-width]")!.click();
+            await Promise.resolve();
+            while (column.dataset.wide === wide) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            document.getAnimations().forEach((animation) => { animation.pause(); animation.currentTime = 0; });
+            const after = card.getBoundingClientRect();
+            return { before, after: { width: after.width, height: after.height }, naturalWidth: card.offsetWidth };
+          });
+          expect(Math.abs(reading.after.width - reading.before.width)).toBeLessThanOrEqual(0.5);
+          expect(Math.abs(reading.after.height - reading.before.height)).toBeLessThanOrEqual(0.5);
+          expect(Math.abs(reading.naturalWidth - reading.before.width)).toBeGreaterThan(100);
+          await page.waitForTimeout(600);
+          const settled = await page.evaluate(() => {
+            const column = document.querySelector<HTMLElement>('.column[data-status="inbox"]')!;
+            return { width: column.offsetWidth, active: !!document.querySelector("[data-column-layout]"), promoted: document.querySelectorAll("[data-layout-animating]").length };
+          });
+          expect(settled.width).toBe(action === "widen" ? 480 : 280);
+          expect(settled.active).toBe(false);
+          expect(settled.promoted).toBe(0);
+          readings.push({ action, reading, settled });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync("evidence/column-dwell-smooth/scroll-width.json", JSON.stringify({ viewport: { width: 1000, height: 900 }, readings }, null, 2) + "\n");
+    }
+  }, 60_000);
+
+  browserTest("keyboard agent jumps preserve navigation while column widths change", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/keyboard");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      // At 1440, both agent columns stay at their minimum width on every jump.
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 3840, height: 2160 }, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await context.addInitScript(() => {
+          localStorage.setItem("llv:kanban-readers:v1:atlas", JSON.stringify(["search-ver-2", "rounds-review", "pending-worker", "upload-plan", "export-impl"].map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))));
+          localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+        });
+        await page.reload();
+        await page.locator("[data-open-rail]").waitFor();
+        await page.locator('[data-rail-hide]').click();
+        await page.mouse.move(700, 10);
+        await page.locator('[data-open-agent-jump="conversation_search-ver-2"]').click();
+        await page.waitForTimeout(450);
+        await page.evaluate(() => {
+          const changes: { wide: string; delta: number; active: boolean; animations: number; scrolled: boolean; visible: boolean }[] = [];
+          const columns = [...document.querySelectorAll<HTMLElement>(".board > .column")];
+          const widths = () => columns.map((node) => node.getBoundingClientRect().width);
+          const bodies = [...document.querySelectorAll<HTMLElement>(".col-body, .kb-page")];
+          let before: number[] = [], beforeScroll: number[] = [];
+          document.addEventListener("keydown", (event) => {
+            if (event.altKey && (event.code === "KeyJ" || event.code === "KeyK")) {
+              before = widths(); beforeScroll = bodies.map((node) => node.scrollTop);
+            }
+          }, true);
+          Object.assign(window, { keyboardWidthChanges: changes });
+          new MutationObserver(() => {
+            requestAnimationFrame(async () => {
+              const root = document.querySelector<HTMLElement>(".kb")!;
+              while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+              const key = document.querySelector<HTMLElement>('[data-open-agent-jump][aria-current="true"]')!.dataset.openAgentJump!;
+              const reader = document.querySelector<HTMLElement>(`[data-kanban-reader="${key}"]`)!;
+              const rect = reader.getBoundingClientRect(), viewport = reader.closest(".col-body")!.getBoundingClientRect();
+              const tracks = getComputedStyle(document.querySelector(".board")!).gridTemplateColumns.split(" ").map(Number.parseFloat);
+              changes.push({ wide: document.querySelector<HTMLElement>('.column[data-wide="1"]')!.dataset.status!, delta: Math.max(...tracks.map((width, i) => Math.abs(width - before[i]!))), active: root.hasAttribute("data-column-layout"), animations: document.getAnimations().filter((animation) => ((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))).length, scrolled: bodies.some((node, i) => node.scrollTop !== beforeScroll[i]), visible: rect.top < viewport.bottom && rect.bottom > viewport.top });
+            });
+          }).observe(document.querySelector(".kb")!, { subtree: true, attributes: true, attributeFilter: ["data-wide"] });
+        });
+        for (const shortcut of ["Alt+j", "Alt+j", "Alt+j", "Alt+k"]) {
+          await page.keyboard.press(shortcut);
+          await page.waitForTimeout(450);
+        }
+        const changes = await page.evaluate(() => (window as unknown as { keyboardWidthChanges: { wide: string; delta: number; active: boolean; animations: number; scrolled: boolean; visible: boolean }[] }).keyboardWidthChanges);
+        expect(changes.map(({ wide }) => wide)).toEqual(["inbox", "assigned", "inbox"]);
+        for (const change of changes) {
+          expect(change.delta).toBeGreaterThan(1);
+          expect(change.visible).toBe(true);
+          if (change.active) expect(change.animations).toBeGreaterThan(0);
+          else expect(change.scrolled).toBe(true);
+        }
+        expect(await page.locator(".kb-layout-copy").count()).toBe(0);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+
+  browserTest("width transforms preserve the visible scroll position of an open reader", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/readers");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await context.addInitScript(() => {
+          localStorage.setItem("llv:kanban-readers:v1:atlas", JSON.stringify([{ key: "conversation_search-ver-2", path: "/repo/search-ver-2.jsonl", folded: false }]));
+          localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+        });
+        await page.reload();
+        await page.locator("[data-kanban-reader]").first().waitFor();
+        await page.locator('[data-rail-hide]').click();
+        await page.mouse.move(700, 10);
+        await page.waitForTimeout(400);
+        const scrolls = await page.evaluate(async () => {
+          const feed = document.querySelector<HTMLElement>(".column .card [data-log-feed-scroller]")!;
+          const history = document.createElement("div");
+          Object.assign(history.style, { height: "800px", width: "1200px" });
+          history.textContent = "Additional conversation history";
+          feed.append(history);
+          feed.style.overflowX = "auto";
+          feed.scrollTop = 150; feed.scrollLeft = 80;
+          await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+          const before = { top: feed.scrollTop, left: feed.scrollLeft };
+          document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
+          await Promise.resolve();
+              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          for (const animation of document.getAnimations()) if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = 40; }
+          const copies = [...document.querySelectorAll<HTMLElement>(".kb-layout-copy [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
+          return { before, live: { top: feed.scrollTop, left: feed.scrollLeft }, copies };
+        });
+        expect(scrolls.before).toEqual({ top: 150, left: 80 });
+        expect(scrolls.live).toEqual(scrolls.before);
+        expect(scrolls.copies).toHaveLength(0);
+        for (const copy of scrolls.copies) expect(copy).toEqual(scrolls.before);
+        const retargeted = await page.evaluate(async () => {
+          document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
+          await Promise.resolve();
+              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          for (const animation of document.getAnimations()) if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = 40; }
+          return [...document.querySelectorAll<HTMLElement>(".column .card [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
+        });
+        expect(retargeted).toHaveLength(1);
+        for (const copy of retargeted) expect(copy).toEqual(scrolls.before);
+        await page.evaluate(() => { document.querySelector<HTMLElement>(".column .card [data-log-feed-scroller]")!.scrollTop += 80; });
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+        expect(await page.locator(".kb-layout-copy").count()).toBe(0);
+        expect(await page.locator("[data-layout-animating]").count()).toBe(0);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+
+  browserTest("interrupted width transitions preserve visible geometry and actual scrolling reveals live cards", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/interruptions");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        const reset = async () => {
+          await page.reload();
+          await page.locator('[data-col-width="inbox"]').waitFor();
+          if (await page.locator('[data-rail-hide]').count()) await page.locator('[data-rail-hide]').click();
+          await page.mouse.move(700, 10);
+          await page.waitForTimeout(400);
+        };
+        for (const next of ["inbox", "done", "assigned"]) {
+          await reset();
+          const continuity = await page.evaluate(async (status) => {
+            const click = (column: string) => document.querySelector<HTMLButtonElement>(`[data-col-width="${column}"]`)!.click();
+            const seek = async (at: number) => {
+              await Promise.resolve();
+              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+              for (const animation of document.getAnimations()) {
+                if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = at; }
+              }
+            };
+            const geometry = (node: HTMLElement) => {
+              const r = node.getBoundingClientRect();
+              const s = getComputedStyle(node);
+              return { x: r.x, y: r.y, width: r.width, height: r.height, opacity: s.opacity, clip: s.clipPath };
+            };
+            const initialWidth = geometry(document.querySelector<HTMLElement>('.column[data-status="inbox"]')!).width;
+            click("inbox"); await seek(40);
+            const destinationWidth = parseFloat(getComputedStyle(document.querySelector(".board")!).gridTemplateColumns);
+            const layers = [...document.querySelectorAll<HTMLElement>('.board > .column, .board .col-head, .board .col-body > .card')].filter((node) => {
+              if (!node.matches(".card")) return true;
+              const box = node.getBoundingClientRect();
+              const view = node.closest(".col-body")!.getBoundingClientRect();
+              return box.top < Math.min(view.bottom, innerHeight) && box.bottom > Math.max(view.top, 0);
+            });
+            const before = layers.map(geometry);
+            const frameBefore = geometry(document.querySelector<HTMLElement>('.column[data-status="inbox"]')!);
+            click(status); await seek(0);
+            const frameAfter = geometry(document.querySelector<HTMLElement>('.column[data-status="inbox"]')!);
+            return { initialWidth, destinationWidth, frameBefore, frameAfter, before, after: layers.map(geometry), retained: layers.every((node) => node.isConnected), copies: layers.length };
+          }, next);
+          expect(continuity.copies).toBeGreaterThan(5);
+          expect(continuity.frameBefore.width).toBeGreaterThan(continuity.initialWidth + 1);
+          expect(continuity.frameBefore.width).toBeLessThan(continuity.destinationWidth - 1);
+          expect(Math.abs(continuity.frameBefore.width - continuity.frameAfter.width)).toBeLessThanOrEqual(1);
+          expect(Math.abs(continuity.frameBefore.x - continuity.frameAfter.x)).toBeLessThanOrEqual(1);
+          expect(continuity.retained).toBe(true);
+          readings.push({ next, continuity });
+          continuity.before.forEach((before, i) => {
+            const after = continuity.after[i]!;
+            for (const key of ["x", "y", "width", "height"] as const) expect(Math.abs(before[key] - after[key])).toBeLessThanOrEqual(1);
+            expect(after.opacity).toBe(before.opacity);
+            expect(after.clip).toBe(before.clip);
+          });
+          await page.waitForTimeout(400);
+          expect(await page.locator(".kb-layout-copy").count()).toBe(0);
+        }
+        for (const action of ["widen", "narrow"]) for (const how of ["programmatic", "keyboard", "scrollIntoView", "page", "board", "ancestor"] as const) {
+          await reset();
+          await page.evaluate((kind) => {
+            const board = document.querySelector<HTMLElement>('[data-board]')!;
+            if (kind === "page") board.style.flex = "0 0 1000px";
+            if (kind === "board") {
+              board.style.position = "relative"; board.style.overflowX = "auto";
+              const spacer = document.createElement("div");
+              Object.assign(spacer.style, { position: "absolute", left: "1800px", width: "1px", height: "1px" });
+              board.append(spacer);
+            }
+          }, how);
+          if (action === "narrow") {
+            await page.locator('[data-col-width="inbox"]').click();
+            await page.waitForTimeout(400);
+          }
+          await page.evaluate(async () => {
+            document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
+            await Promise.resolve();
+            while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            for (const animation of document.getAnimations()) if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = 40; }
+          });
+          expect(await page.locator("[data-layout-animating]").count()).toBeGreaterThan(0);
+          expect(await page.locator(".kb-layout-copy").count()).toBe(0);
+          const beforeScroll = await page.evaluate(() => document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!.scrollTop);
+          if (how === "keyboard") {
+            await page.evaluate(() => {
+              const body = document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!;
+              body.tabIndex = 0; body.focus({ preventScroll: true });
+            });
+            await page.keyboard.press("ArrowDown");
+            await page.waitForFunction((before) => document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!.scrollTop !== before, beforeScroll, { polling: "raf", timeout: 1000 });
+          } else await page.evaluate((kind) => {
+            if (kind === "ancestor") {
+              const spacer = document.createElement("div");
+              spacer.style.height = "200px";
+              document.body.append(spacer);
+              window.scrollTo(0, 80);
+            } else if (kind === "page") document.querySelector<HTMLElement>(".kb-page")!.scrollTop += 80;
+            else if (kind === "board") document.querySelector<HTMLElement>('[data-board]')!.scrollLeft += 80;
+            else if (kind === "scrollIntoView") {
+              const cards = document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]');
+              cards[cards.length - 1]!.scrollIntoView({ block: "end", behavior: "instant" });
+            } else document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!.scrollTop += 80;
+          }, how);
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+          const scroll = await page.evaluate(() => ({ top: document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!.scrollTop, pageTop: document.querySelector<HTMLElement>(".kb-page")!.scrollTop, boardLeft: document.querySelector<HTMLElement>('[data-board]')!.scrollLeft, windowTop: window.scrollY, copies: document.querySelectorAll(".kb-layout-copy").length, marked: document.querySelectorAll("[data-layout-animating]").length }));
+          const moved = how === "ancestor" ? scroll.windowTop > 0 : how === "page" ? scroll.pageTop > 0 : how === "board" ? scroll.boardLeft > 0 : scroll.top !== beforeScroll;
+          expect(moved, `${action} ${how} moved`).toBe(true);
+          expect(scroll.copies, `${action} ${how}`).toBe(0);
+          expect(scroll.marked).toBe(0);
+          readings.push({ action, how, scroll });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync("evidence/column-dwell-smooth/interruptions.json", JSON.stringify({ viewport: VIEWPORT, readings }, null, 2) + "\n");
+    }
+  }, 90_000);
+
+  browserTest("rapid retargets preserve visible glyphs between keyframes and after wrapping", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/glyphs");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        for (const phase of [0, 10, 20, 40, "after-wrap"] as const) {
+          await page.reload();
+          await page.locator('[data-col-width="inbox"]').waitFor();
+          if (await page.locator('[data-rail-hide]').count()) await page.locator('[data-rail-hide]').click();
+          await page.mouse.move(700, 10);
+          await page.waitForTimeout(350);
+          const sample = await page.evaluate(async (phase) => {
+            const root = document.querySelector<HTMLElement>(".kb")!;
+            const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            const click = (status: string) => document.querySelector<HTMLButtonElement>(`[data-col-width="${status}"]`)!.click();
+            const rect = (node: HTMLElement, glyph = false) => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              if (glyph) {
+                const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+                let text: Node | null;
+                while ((text = walk.nextNode())) if (text.textContent?.trim()) {
+                  const start = text.textContent.length - text.textContent.trimStart().length;
+                  range.setStart(text, start); range.setEnd(text, start + text.textContent.trimStart().split(/\s/)[0]!.length); break;
+                }
+              }
+              const box = glyph ? range.getBoundingClientRect() : node.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height, opacity: Number(getComputedStyle(node).opacity) };
+            };
+            const labelGlyph = (node: HTMLElement) => {
+              const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              let text: Node | null;
+              while ((text = walk.nextNode())) if (text.textContent?.trim()) {
+                const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, Math.min(text.textContent!.length, text.textContent!.trimStart().split(/\s/)[0]!.length));
+                const box = range.getBoundingClientRect();
+                return { width: box.width, height: box.height };
+              }
+              return { width: 0, height: 0 };
+            };
+            const labels = [...root.querySelectorAll<HTMLElement>(".divider > span, .divider > button, .empty > strong, .empty > span")].filter((node) => {
+              const rect = node.getBoundingClientRect(), viewport = node.closest(".col-body")!.getBoundingClientRect();
+              return rect.top < viewport.bottom && rect.bottom > viewport.top;
+            });
+            const naturalLabels = labels.map(labelGlyph);
+            click("inbox"); await Promise.resolve();
+            while (root.dataset.columnLayout !== "running") await frame();
+            if (phase === "after-wrap") {
+              await new Promise<void>((resolve) => setTimeout(resolve, 140));
+              document.getAnimations().forEach((animation) => animation.pause());
+            } else if (typeof phase === "number") {
+              for (const animation of document.getAnimations()) if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = phase; }
+            }
+            const labelGlyphs = labels.map((node, i) => ({ natural: naturalLabels[i]!, during: labelGlyph(node), opacity: Number(getComputedStyle(node).opacity) }));
+            const layers = [...root.querySelectorAll<HTMLElement>(".board > .column, .board .col-head, .board .col-body > .card")].filter((node) => {
+              const box = node.getBoundingClientRect(), viewport = node.closest(".col-body")?.getBoundingClientRect();
+              return !viewport || (box.top < Math.min(viewport.bottom, innerHeight) && box.bottom > Math.max(viewport.top, 0));
+            });
+            const children = layers.filter((node) => node.matches(".card")).flatMap((node) => [...node.children].filter((child): child is HTMLElement => child instanceof HTMLElement && !child.matches(".label, .saving")));
+            const before = layers.map((node) => rect(node)), glyphBefore = children.map((node) => rect(node, true));
+            const target = phase === 0 || phase === "after-wrap" ? "inbox" : phase === 40 ? "assigned" : "done";
+            click(target); await Promise.resolve();
+            // Wait for the inverse paint and release, then scrub the new
+            // effects to their source pose before checking continuity.
+            while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "running") await frame();
+            document.getAnimations().forEach((animation) => { animation.pause(); animation.currentTime = 0; });
+            const after = layers.map((node) => rect(node)), glyphAfter = children.map((node) => rect(node, true));
+            return { phase, target, before, after, glyphBefore, glyphAfter, labelGlyphs };
+          }, phase);
+          fs.writeFileSync(path.join(out, `retarget-${phase}.json`), JSON.stringify(sample, null, 2) + "\n");
+          expect(sample.labelGlyphs.length).toBeGreaterThan(0);
+          for (const glyph of sample.labelGlyphs) if (glyph.opacity > 0.01 && glyph.natural.width) {
+            expect(Math.abs(glyph.during.width / glyph.natural.width - 1), `${phase} label width`).toBeLessThanOrEqual(0.01);
+            expect(Math.abs(glyph.during.height - glyph.natural.height), `${phase} label height`).toBeLessThanOrEqual(1);
+          }
+          let maxLayerDelta = 0, maxGlyphDelta = 0, visibleGlyphs = 0;
+          sample.before.forEach((before, i) => {
+            for (const key of ["x", "y", "width", "height"] as const) {
+              const delta = Math.abs(before[key] - sample.after[i]![key]);
+              maxLayerDelta = Math.max(maxLayerDelta, delta);
+              expect(delta, `${phase} layer ${i} ${key}`).toBeLessThanOrEqual(1);
+            }
+          });
+          sample.glyphBefore.forEach((before, i) => {
+            if (before.opacity <= 0.01 || !before.width) return;
+            visibleGlyphs++;
+            for (const key of ["x", "y", "width", "height"] as const) {
+              const delta = Math.abs(before[key] - sample.glyphAfter[i]![key]);
+              maxGlyphDelta = Math.max(maxGlyphDelta, delta);
+              expect(delta, `${phase} glyph ${i} ${key}`).toBeLessThanOrEqual(1);
+            }
+          });
+          expect(visibleGlyphs).toBeGreaterThan(0);
+          readings.push({ phase, target: sample.target, visibleGlyphs, maxLayerDelta, maxGlyphDelta });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync("evidence/column-dwell-smooth/glyphs.json", JSON.stringify({ viewport: VIEWPORT, readings }, null, 2) + "\n");
+    }
+  }, 90_000);
+
+  browserTest("cards entering the viewport after wrapping reveal natural-size glyphs", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth/entering");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
+      await inspectColumnAnimations(page);
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+        await page.reload();
+        await page.locator('[data-rail-hide]').click();
+        await page.mouse.move(700, 10);
+        await page.locator('[data-col-width="inbox"]').click();
+        await page.waitForTimeout(600);
+        const sample = await page.evaluate(async () => {
+          const column = document.querySelector<HTMLElement>('.column[data-status="assigned"]')!;
+          const body = column.querySelector<HTMLElement>(".col-body")!;
+          body.scrollTop = 0;
+          const cards = [...body.querySelectorAll<HTMLElement>(":scope > .card")];
+          // A real task title above the viewport boundary supplies enough
+          // wrapping difference for a deterministic entering-card regression.
+          const title = cards[0]!.querySelector<HTMLElement>(".title");
+          if (title) title.textContent = "Review release preparation and verify every pipeline result before publishing ".repeat(3);
+          const candidate = cards[Math.min(2, cards.length - 1)]!;
+          body.style.flex = "0 0 auto";
+          body.style.height = `${Math.min(innerHeight - body.getBoundingClientRect().top - 50, Math.max(200, candidate.getBoundingClientRect().top - body.getBoundingClientRect().top - 10))}px`;
+          const viewport = body.getBoundingClientRect();
+          const glyph = (card: HTMLElement) => {
+            const content = [...card.children].find((node) => !node.matches(".label, .saving"))!;
+            const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+            let text: Node | null;
+            while ((text = walker.nextNode())) if (text.textContent?.trim()) {
+              const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, Math.min(2, text.textContent.length));
+              return range.getBoundingClientRect().height;
+            }
+            return 0;
+          };
+          const clipped = [...body.querySelectorAll<HTMLElement>(":scope > .card")].filter((node) => node.getBoundingClientRect().top >= viewport.bottom).map((node) => ({ node, height: glyph(node) }));
+          document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
+          await Promise.resolve();
+          const root = document.querySelector<HTMLElement>(".kb")!;
+          while (column.dataset.wide !== "1" || column.style.width || root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          // The helper holds the newly wrapped source pose for one paint
+          // before creating its reveal effects on the following frame.
+          await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+          for (const animation of document.getAnimations()) {
+            const target = (animation.effect as KeyframeEffect).target;
+            if (target instanceof HTMLElement && target.hasAttribute("data-layout-animating")) {
+              animation.pause(); animation.currentTime = Number(animation.effect!.getTiming().duration) * 0.6;
+            }
+          }
+          const readings = clipped.filter(({ node }) => node.getBoundingClientRect().top < viewport.bottom).map(({ node, height }) => ({ before: height, after: glyph(node), contents: node.querySelectorAll('[data-layout-animating="content"]').length + (node.shadowRoot?.querySelectorAll('[data-layout-animating="content"]').length ?? 0) }));
+          return { readings, clipped: clipped.length, titleFound: !!title, viewport: { top: viewport.top, bottom: viewport.bottom }, boxes: cards.map((node) => ({ top: node.getBoundingClientRect().top, height: node.offsetHeight })), width: column.offsetWidth };
+        });
+        expect(sample.readings.length, JSON.stringify(sample)).toBeGreaterThan(0);
+        for (const reading of sample.readings) {
+          expect(reading.contents, JSON.stringify(sample)).toBeGreaterThan(0);
+          expect(Math.abs(reading.before - reading.after)).toBeLessThanOrEqual(1);
+        }
+        expect(pageErrors).toEqual([]);
+        fs.writeFileSync("evidence/column-dwell-smooth/entering.json", JSON.stringify({ viewport: VIEWPORT, readings: sample.readings }, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+
+  browserTest("moving hover widens at one second and cards FLIP smoothly at CPU x4", async () => {
+    const out = path.resolve(".artifacts/column-dwell-smooth");
+    const evidenceDir = "evidence/column-dwell-smooth";
+    const videoPathFor = (locale: string) => `.artifacts/column-dwell-smooth/${locale}-hover-narrow.webm`;
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const timingFailures: { locale: string; motion: string; phase: string; milliseconds: number }[] = [];
+    try {
+      for (const motion of ["no-preference", "reduce"] as const) for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", locale, motion);
+        await inspectColumnAnimations(page);
+        const frames: { data: string; time: number }[] = [];
+        let capturing = true;
+        const cdp = await context.newCDPSession(page);
+        const record = motion === "no-preference";
+        const videoPath = videoPathFor(locale);
+        const cpu = record ? 4 : 1;
+        try {
+          await context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+          await page.reload();
+          await page.locator('[data-rail-hide]').click();
+          await page.waitForFunction(() => !document.querySelector('[data-seat-collapse][aria-expanded="true"]'));
+          await page.mouse.move(700, 10);
+          await page.waitForTimeout(700);
+          const fixture = await page.evaluate(() => {
+            const cards = [...document.querySelectorAll<HTMLElement>('[data-board] .card[data-id]')];
+            return { cards: cards.length, heights: [...new Set(cards.map((node) => Math.round(node.getBoundingClientRect().height)))] };
+          });
+          expect(fixture.cards).toBeGreaterThanOrEqual(15);
+          expect(fixture.heights.length).toBeGreaterThanOrEqual(3);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+          if (record) {
+            cdp.on("Page.screencastFrame", (event) => {
+              if (capturing) frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
+              void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => { /* A final in-flight frame may arrive after context cleanup. */ });
+            });
+            await cdp.send("Page.startScreencast", { format: "jpeg", quality: 90, maxWidth: 1440, maxHeight: 900, everyNthFrame: 1 });
+          }
+          const geometry = () => page.evaluate(() => ["inbox", "assigned"].map((status) => {
+            const column = document.querySelector<HTMLElement>(`.column[data-status="${status}"]`)!;
+            const box = column.getBoundingClientRect(), body = column.querySelector(".col-body")!.getBoundingClientRect();
+            const head = column.querySelector(".col-head")!.getBoundingClientRect();
+            return { status, left: box.left, top: body.top, width: box.width, bottom: Math.min(body.bottom, innerHeight), headTop: head.top, headBottom: head.bottom };
+          }));
+          const narrowBoxes = await geometry();
+          await page.evaluate(() => {
+            const column = document.querySelector<HTMLElement>('[data-board] .column[data-status="inbox"]')!;
+            const board = document.querySelector<HTMLElement>('[data-board]')!;
+            const body = document.querySelector<HTMLElement>('[data-board] .column[data-status="assigned"] .col-body')!;
+            body.scrollTop = 60;
+            const samples: { at: number; gap: number; wide: string; animated: boolean; active: boolean; scroll: number }[] = [];
+            const marks: { name: string; at: number }[] = [];
+            let scroll = body.scrollTop;
+            body.addEventListener("scroll", () => { scroll = body.scrollTop; }, { passive: true });
+            const clock = document.createElement("div");
+            Object.assign(clock.style, {position:"fixed", right:"0", top:"0", width:"16px", height:"16px", zIndex:"2147483647", pointerEvents:"none"});
+            clock.dataset.captureClock = ""; document.body.append(clock);
+            let previous = performance.now();
+            let stopped = false;
+            const hover = (event: PointerEvent) => {
+              if (!(event.target as Element).closest('.column[data-status="inbox"]')) return;
+              marks.push({ name: "hover", at: performance.timeOrigin + performance.now() });
+              board.removeEventListener("pointerover", hover);
+            };
+            board.addEventListener("pointerover", hover);
+            new MutationObserver(() => marks.push({ name: "commit", at: performance.timeOrigin + performance.now() })).observe(column, { attributes: true, attributeFilter: ["data-wide"] });
+            const tick = (now: number) => {
+              /* The timing probe must not force layout every frame. Geometry
+                 continuity is measured by the retarget case, and by the video. */
+              const index = samples.length;
+              if (index < 15) clock.style.backgroundColor = `rgb(${(index % 32)*8}, ${Math.floor(index/32)*8}, 128)`;
+              else if (clock.isConnected) clock.remove();
+              samples.push({ at: performance.timeOrigin + now, gap: now - previous, wide: column.dataset.wide!, active: !!document.querySelector("[data-column-layout]"), animated: document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout === "running", scroll });
+              previous = now;
+              if (!stopped) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+            Object.assign(window, { dwellVideo: { samples, marks, mark: (name: string) => marks.push({ name, at: Date.now() }), stop: () => { stopped = true; } } });
+          });
+          const target = await page.locator('[data-board] .column[data-status="inbox"] .col-body').boundingBox();
+          expect(target).not.toBeNull();
+          const x = target!.x + target!.width / 2;
+          const y = target!.y + 70;
+          await page.mouse.move(x, y);
+          for (let i = 1; i <= 12; i++) {
+            await page.waitForTimeout(70);
+            await page.mouse.move(x + (i % 2 ? 35 : -35), y + i * 8);
+          }
+          try { await page.waitForFunction(() => document.querySelector('[data-board] .column[data-status="inbox"][data-wide="1"]'), undefined, { timeout: 4000 }); }
+          catch (error) { await page.screenshot({ path: path.join(out, "hover-failed.png") }); throw error; }
+          await page.waitForTimeout(400);
+          await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
+          // Let the deferred board measurement finish before a still capture.
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          const wideBoxes = await geometry();
+          await page.screenshot({ path: path.join(out, `${locale}-${motion}-wide.png`) });
+          await page.evaluate(() => (window as unknown as { dwellVideo: { mark(name: string): void } }).dwellVideo.mark("narrow"));
+          await page.locator('[data-col-width="inbox"][data-col-width-action="narrow"]').click();
+          await page.waitForTimeout(400);
+          await page.waitForFunction(() => !document.querySelector("[data-column-layout]"));
+          // Let the deferred board measurement finish before a still capture.
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          await page.screenshot({ path: path.join(out, `${locale}-${motion}-narrow.png`) });
+          /* A just-narrowed column remains narrow under the same pointer. */
+          await page.waitForTimeout(1100);
+          expect(await page.locator('[data-board] .column[data-status="inbox"]').getAttribute("data-wide")).toBe("0");
+          const measurement = await page.evaluate(() => {
+            const video = (window as unknown as { dwellVideo: { samples: { at: number; gap: number; wide: string; animated: boolean; active: boolean; scroll: number }[]; marks: { name: string; at: number }[]; stop(): void } }).dwellVideo;
+            video.stop();
+            const windows = video.samples.filter((sample, i) => sample.active || video.samples[i - 1]?.active || video.samples[i - 2]?.active);
+            const groups = [...document.querySelectorAll<HTMLElement>(".card, .col-head, .divider, .empty, .remote-unbound")].flatMap((node) => node.shadowRoot?.querySelector<HTMLElement>("[data-column-text-group]") ?? []);
+            return { samples: video.samples, marks: video.marks, maxAnimationFrameMs: Math.max(0, ...windows.map((sample) => sample.gap)), animationFrames: windows.length, scrollValues: [...new Set(video.samples.map((sample) => sample.scroll))], copiesLeft: document.querySelectorAll('.kb-layout-copy').length, heldTextLeft: document.querySelectorAll("[data-column-text-held]").length, textLayersLeft: groups.filter((node) => node.style.willChange || node.hasAttribute("data-layout-animating") || node.getAnimations().length).length };
+          });
+          if (record) {
+            // Keep the timing record even when a decoded-pixel assertion fails.
+            fs.writeFileSync(path.join(out, `${locale}-measurement.json`), JSON.stringify(measurement, null, 2) + "\n");
+            await cdp.send("Page.stopScreencast");
+            capturing = false;
+            const frameDir = path.join(out, `${locale}-frames`);
+            fs.mkdirSync(frameDir, { recursive: true });
+            frames.forEach((frame, i) => fs.writeFileSync(path.join(frameDir, `${i}.jpg`), Buffer.from(frame.data, "base64")));
+            const manifest = frames.map((frame, i) => `file '${i}.jpg'\noption framerate 1000\nduration ${Math.max(0.001, ((frames[i + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
+            fs.writeFileSync(path.join(frameDir, "frames.txt"), manifest + "\n");
+            execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", path.join(frameDir, "frames.txt"), "-fps_mode", "passthrough", "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", path.resolve(videoPath)]);
+            const starts = measurement.samples.filter((sample, i) => sample.active && !measurement.samples[i - 1]?.active);
+            const ends = measurement.samples.filter((sample, i) => !sample.active && !measurement.samples[i - 1]?.active && measurement.samples[i - 2]?.active);
+            const transitions = starts.map((sample, i) => ({ name: i === 0 ? "hover-widen" : "button-narrow", start: sample.at - sample.gap, end: ends[i]!.at }));
+            expect(transitions).toHaveLength(2);
+            const frameWindows = transitions.map((transition) => ({ name: transition.name, motionFrames: measurement.samples.filter((sample) => sample.at >= transition.start && sample.at <= transition.end && sample.animated).length, maxRAFFrameMs: Math.max(0, ...measurement.samples.filter((sample) => sample.at >= transition.start && sample.at <= transition.end).map((sample) => sample.gap)), frames: frames.flatMap((frame, i) => frame.time >= transition.start - 50 && frame.time <= transition.end + 50 ? [i] : []), maxCaptureFrameMs: Math.max(0, ...frames.flatMap((frame, i) => i > 0 && frame.time >= transition.start && frame.time <= transition.end ? [frame.time - frames[i - 1]!.time] : [])) }));
+            for (const window of frameWindows) {
+              expect(window.frames.length).toBeGreaterThan(5);
+              expect(window.motionFrames).toBeGreaterThan(5);
+              if (window.maxCaptureFrameMs > 50) timingFailures.push({ locale, motion, phase: window.name, milliseconds: window.maxCaptureFrameMs });
+            }
+            // Decode captured pixels after recording, so the visibility/start
+            // probes cannot introduce forced layouts into the RAF timing gate.
+            const pixels = await Promise.all(frames.map(async (frame) => (await sharp(Buffer.from(frame.data, "base64")).removeAlpha().raw().toBuffer({ resolveWithObject: true }))));
+            const dark = (index: number, box: typeof narrowBoxes[number]) => {
+              const { data, info } = pixels[index]!;
+              let count = 0;
+              for (let y = Math.ceil(box.top + 20); y < Math.floor(box.bottom - 12); y++) for (let x = Math.ceil(box.left + 20); x < Math.floor(box.left + box.width - 20); x++) {
+                const at = (y * info.width + x) * info.channels;
+                if (data[at]! < 145 && data[at + 1]! < 145 && data[at + 2]! < 145) count++;
+              }
+              return count;
+            };
+            // Find an empty row in Inbox's first card in either wrapping pose.
+            // Its right edge moves with the real column, independently of the
+            // header buttons that change on the state commit.
+            const cardEdge = (index: number) => {
+              const { data, info } = pixels[index]!;
+              let best = { left: 0, right: 0 };
+              const origin = narrowBoxes[0]!.left;
+              const limit = Math.ceil(origin + Math.max(narrowBoxes[0]!.width, wideBoxes[0]!.width));
+              for (let y = Math.ceil(narrowBoxes[0]!.top + 20); y < narrowBoxes[0]!.top + 100; y += 3) {
+                const white = (x: number) => {
+                  const at = (y*info.width+x)*info.channels;
+                  return data[at]! >= 245 && data[at+1]! >= 245 && data[at+2]! >= 245;
+                };
+                let x = Math.ceil(origin+5);
+                while (x < limit) {
+                  while (x < limit && !white(x)) x++;
+                  const left = x;
+                  while (x < limit && white(x)) x++;
+                  if (left < origin+55 && x-left > best.right-best.left) best = { left, right: x };
+                }
+              }
+              expect(best.right-best.left).toBeGreaterThan(100);
+              return { ...best, columnRight: best.right+best.left-origin };
+            };
+            const edge = (index: number) => cardEdge(index).right;
+            // CDP timestamps stamp delivery of the captured surface, which
+            // can trail its producing RAF by several frames even at rest.
+            // A short pixel clock calibrates that pipeline before the hover
+            // transition; it is removed long before activation. RAF gaps and
+            // capture gaps retain their original, unadjusted clocks.
+            const captureDelays = pixels.flatMap(({data,info}, index) => {
+              const at = (4*info.width + info.width-4)*info.channels;
+              if (Math.abs(data[at+2]!-128) > 8) return [];
+              const tick = Math.round(data[at]!/8) + Math.round(data[at+1]!/8)*32;
+              if (tick < 2 || tick >= 15) return [];
+              const produced = measurement.samples[tick]?.at;
+              return produced ? [frames[index]!.time-produced] : [];
+            }).sort((a,b) => a-b);
+            expect(captureDelays.length).toBeGreaterThanOrEqual(3);
+            const captureLatencyMs = captureDelays[Math.floor(captureDelays.length/2)]!;
+            const paintTime = (index: number) => frames[index]!.time-captureLatencyMs;
+            const visibility = [];
+            for (const [i, transition] of transitions.entries()) {
+              const commit = measurement.marks.filter((mark) => mark.name === "commit")[i]!.at;
+              const before = frames.findLastIndex((_, index) => paintTime(index) < commit-100);
+              const after = frames.findIndex((_, index) => paintTime(index) >= transition.end+33);
+              const source = i === 0 ? narrowBoxes : wideBoxes, target = i === 0 ? wideBoxes : narrowBoxes;
+              const firstMotion = frames.findIndex((_, index) => paintTime(index) >= commit && Math.abs(edge(index) - edge(before)) > 2);
+              expect(firstMotion).toBeGreaterThanOrEqual(0);
+              const travel = Math.abs(edge(after) - edge(before));
+              const direction = Math.sign(edge(after) - edge(before));
+              const steps = frames.flatMap((_, index) => index > before && index <= after ? [{ frame: index, fraction: Math.abs(edge(index) - edge(index - 1)) / travel, signedFraction: direction * (edge(index) - edge(index - 1)) / travel }] : []);
+              const maximumFrameTravelFraction = Math.max(...steps.map((step) => step.fraction));
+              expect(Math.min(...steps.map((step) => step.signedFraction)), `${locale} ${transition.name}: no reverse width step`).toBeGreaterThanOrEqual(-0.01);
+              expect(maximumFrameTravelFraction, `${locale} ${transition.name}: ${JSON.stringify(steps)}`).toBeLessThanOrEqual(0.25);
+              const delay = paintTime(firstMotion) - commit;
+              expect(delay).toBeLessThanOrEqual(50);
+              if (i === 0) expect(paintTime(firstMotion) - measurement.marks.find((mark) => mark.name === "hover")!.at).toBeLessThanOrEqual(1100);
+              for (const [column, box] of source.entries()) {
+                const settled = target[column]!;
+                const baseline = Math.min(dark(before, box), dark(after, settled));
+                expect(baseline).toBeGreaterThan(100);
+                const counts = frames.flatMap((frame, index) => {
+                  if (paintTime(index) < commit || paintTime(index) > transition.end) return [];
+                  const boundary = cardEdge(index).columnRight;
+                  const gap = narrowBoxes[1]!.left-(narrowBoxes[0]!.left+narrowBoxes[0]!.width);
+                  const right = narrowBoxes[1]!.left+narrowBoxes[1]!.width;
+                  const pose = column === 0 ? { ...box, width: boundary-box.left } : { ...box, left: boundary+gap, width: right-boundary-gap };
+                  return [{ frame: index, ratio: dark(index, pose)/baseline }];
+                });
+                const minimum = Math.min(...counts.map((entry) => entry.ratio));
+                expect(minimum, `${locale} ${transition.name} ${box.status}: ${JSON.stringify(counts)}`).toBeGreaterThanOrEqual(0.5);
+                visibility.push({ transition: transition.name, column: box.status, baseline, minimum, firstMotionDelayMs: delay, maximumFrameTravelFraction, steps, counts });
+              }
+              /* Header controls stay inside their column. Their text layer is
+                 counter-scaled from the top left while the head surface scales,
+                 so a control at its final wide position can paint over the
+                 gutter before the frame edge reaches it. The gutter right of
+                 each of the first two columns, in the header's own rows, holds
+                 only canvas in every decoded frame of the transition. */
+              const gutterWidth = narrowBoxes[1]!.left-(narrowBoxes[0]!.left+narrowBoxes[0]!.width);
+              const assignedRight = narrowBoxes[1]!.left+narrowBoxes[1]!.width;
+              const headRows = [Math.ceil(narrowBoxes[0]!.headTop+4), Math.floor(narrowBoxes[0]!.headBottom-4)] as const;
+              const gutterInk = (index: number, from: number, to: number, canvas: number) => {
+                const { data, info } = pixels[index]!;
+                let ink = 0;
+                for (let y = headRows[0]; y < headRows[1]; y++) for (let x = Math.ceil(from+2); x < Math.floor(to-2); x++) {
+                  const at = (y*info.width+x)*info.channels;
+                  if (canvas-(data[at]!+data[at+1]!+data[at+2]!)/3 > 50) ink++;
+                }
+                return ink;
+              };
+              const canvasOf = (index: number, from: number, to: number) => {
+                const { data, info } = pixels[index]!;
+                const row = Math.round((headRows[0]+headRows[1])/2);
+                const at = (row*info.width+Math.round((from+to)/2))*info.channels;
+                return (data[at]!+data[at+1]!+data[at+2]!)/3;
+              };
+              const restingGutters = [[narrowBoxes[0]!.left+narrowBoxes[0]!.width, narrowBoxes[1]!.left], [assignedRight, assignedRight+gutterWidth]] as const;
+              const canvases = restingGutters.map(([from, to]) => canvasOf(before, from, to));
+              const headLeaks = frames.flatMap((_, index) => {
+                if (paintTime(index) < commit || paintTime(index) > transition.end) return [];
+                const boundary = cardEdge(index).columnRight;
+                return [{ frame: index, inbox: gutterInk(index, boundary, boundary+gutterWidth, canvases[0]!), assigned: gutterInk(index, assignedRight, assignedRight+gutterWidth, canvases[1]!) }];
+              });
+              expect(headLeaks.length).toBeGreaterThan(5);
+              expect(headLeaks.filter((leak) => leak.inbox > 0 || leak.assigned > 0), `${locale} ${transition.name}: header control pixels outside their column`).toEqual([]);
+              visibility.push({ transition: transition.name, column: "head-gutters", headLeaks });
+            }
+            const decodedFrames = Number(execFileSync("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", path.resolve(videoPath)], { encoding: "utf8" }).trim());
+            expect(decodedFrames).toBe(frames.length);
+            cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement, video: videoPath, frameCount: frames.length, frameWindows, captureLatencyMs, captureDelays, visibility });
+          } else cases.push({ locale, motion, cpu, viewport: VIEWPORT, fixture, ...measurement });
+          if (measurement.maxAnimationFrameMs > 50) timingFailures.push({ locale, motion, phase: "activation-through-cleanup", milliseconds: measurement.maxAnimationFrameMs });
+          expect(measurement.copiesLeft).toBe(0);
+          expect(measurement.heldTextLeft).toBe(0);
+          expect(measurement.textLayersLeft).toBe(0);
+          expect(measurement.scrollValues).toHaveLength(1);
+          expect(motion === "reduce" ? measurement.animationFrames === 0 : measurement.animationFrames > 5).toBe(true);
+          const firstWide = measurement.samples.find((sample) => sample.wide === "1")!;
+          expect(firstWide.at - measurement.marks[0]!.at).toBeGreaterThanOrEqual(990);
+          expect(firstWide.at - measurement.marks[0]!.at).toBeLessThan(1100);
+          expect(pageErrors).toEqual([]);
+        } finally { await cdp.detach(); await context.close(); }
+      }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync(`${evidenceDir}/frames.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", frameNumbering: "zero-based decoded video frames", browser: browser.version(), cpuAffinity: process.platform === "linux" ? fs.readFileSync("/proc/self/status", "utf8").match(/^Cpus_allowed_list:\s*(.+)$/m)?.[1] ?? null : null, cases, timingFailures }, null, 2) + "\n");
+    }
+    expect(timingFailures).toEqual([]);
+  }, 180_000);
 });
 
 describe("a column widens itself: the agent focused from the rail, the mouse resting on it", () => {
@@ -14895,6 +15748,192 @@ describe("state writes disk-full alert", () => {
 });
 
 /*
+ * Whole-card drag (operator, 2026-10-02): a card is dragged by any part of it,
+ * and the dragged card follows the pointer at the display rate. The board is the
+ * `drag-board` scene: 48 tasks with long titles, descriptions, conversations and
+ * pipelines. The reading is taken from a recorded Chromium trace
+ * (`dragFrameMeter.ts`) over a 3 s scripted pointer path to another column.
+ * `LLV_DRAG_LABEL=before|after` names the record written to
+ * `evidence/whole-card-drag/<label>-desktop.json`; the trace stays under
+ * `.artifacts/whole-card-drag/`.
+ */
+describe("whole-card drag rendered evidence", () => {
+  const OUT = path.resolve(".artifacts/whole-card-drag");
+  /* The orchestrator's panel fills the screen above the columns; `O` folds it, as an operator working the board does. */
+  const foldSeat = async (page: Page) => {
+    await page.locator(".kb").first().click({ position: { x: 4, y: 4 }, force: true }).catch(() => {});
+    await page.keyboard.press("o");
+    await page.waitForTimeout(500);
+  };
+  const deskCard = (id: string) => `.kb .column .card[data-id="task:${id}"]`;
+
+  browserTest("any part of a card drags it: title, description, conversation tile, pipeline block; no text is selected and the click after is swallowed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board`, { width: 1440, height: 900 }, "light", "en");
+      try {
+        const cases: Array<[string, string, string]> = [
+          ["title", "", "[data-rename]"], ["description", "", "[data-describe]"],
+          ["conversation tile", ":has(.tile)", ".tile"], ["pipeline block", ":has(.pblock)", ".pblock"],
+        ];
+        for (const [name, has, selector] of cases) {
+          const card = page.locator(`.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]${has}, .kb .column[data-status="assigned"] .card[data-id^="task:t-drag-"]${has}`).first();
+          await card.waitFor();
+          await card.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(150);
+          const id = (await card.getAttribute("data-id"))!;
+          const box = await card.locator(selector).first().boundingBox();
+          expect(box, `${name} is on screen`).not.toBeNull();
+          const at: [number, number] = [box!.x + Math.min(box!.width / 2, 60), box!.y + Math.min(box!.height / 2, 10)];
+          await page.mouse.move(...at);
+          await page.mouse.down();
+          await page.mouse.move(at[0] + 5, at[1], { steps: 2 });
+          expect(await page.locator(".kb .card.ghost").count(), `${name}: 5 px is a click in waiting`).toBe(0);
+          await page.mouse.move(at[0] + 90, at[1] + 40, { steps: 6 });
+          await page.waitForTimeout(60);
+          expect(await page.locator(".kb .card.ghost").count(), `${name}: dragging`).toBe(1);
+          expect(await page.evaluate(() => String(getSelection())), `${name}: nothing selected`).toBe("");
+          await page.mouse.move(1430, 880, { steps: 4 });
+          await page.mouse.up();
+          await page.waitForTimeout(80);
+          expect(await page.locator(".kb .card.ghost").count(), `${name}: dropped`).toBe(0);
+          expect(await page.locator(`.kb .card[data-id="${id}"] textarea, .kb .card[data-id="${id}"] input[type="text"]`).count(), `${name}: the click after a drag is swallowed`).toBe(0);
+          expect(await page.locator(".reader-slot *").count(), `${name}: opened nothing`).toBe(0);
+        }
+        const card = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+        const id = (await card.getAttribute("data-id"))!;
+        /* The same press without movement is the click it always was. */
+        await card.locator("[data-rename]").first().click();
+        expect(await page.locator(`.kb .card[data-id="${id}"] textarea, .kb .card[data-id="${id}"] input[type="text"]`).count(), "a click renames").toBeGreaterThan(0);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  /* LLV_DRAG_VIDEO=<dir> records the drag as a video (Playwright recordVideo), with a dot where the pointer is. */
+  const VIDEO = process.env.LLV_DRAG_VIDEO;
+  (VIDEO ? browserTest : test.skip)("records a desktop drag to a video", async () => {
+    fs.mkdirSync(VIDEO!, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, recordVideo: { dir: VIDEO!, size: { width: 1440, height: 900 } } });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+      await context.addInitScript(() => {
+          const dot = document.createElement("div");
+          dot.style.cssText = "position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(220,60,40,.55);border:2px solid #fff;z-index:99999;pointer-events:none;display:none";
+          const place = (event: PointerEvent) => { dot.style.display = "block"; dot.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`; };
+          addEventListener("pointermove", place, true); addEventListener("pointerdown", place, true);
+          addEventListener("pointerup", () => { dot.style.display = "none"; }, true);
+          document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dot));
+        });
+      const page = await context.newPage();
+      await page.goto(`${server.base}?scenario=drag-board`);
+      const source = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+      await source.waitFor();
+      await foldSeat(page);
+      await page.waitForTimeout(800);
+      const box = (await source.boundingBox())!;
+      const blocked = (await page.locator('.column[data-status="blocked"] .col-body').boundingBox())!;
+      /* Taken by the title, which is a button and could not be before. */
+      const title = (await source.locator("[data-rename]").boundingBox())!;
+      const from: [number, number] = [title.x + 40, title.y + title.height / 2];
+      await page.mouse.move(...from);
+      await page.mouse.down();
+      const route: Array<[number, number]> = [[from[0] + 60, from[1] + 90], [box.x + 300, from[1] + 220], [blocked.x + blocked.width / 2, from[1] + 120], [blocked.x + blocked.width / 2 - 40, from[1] + 260]];
+      for (const [x, y] of pointerPath([from, ...route], 3000, 16)) { await page.mouse.move(x, y); await page.waitForTimeout(12); }
+      await page.waitForTimeout(600);
+      await page.mouse.up();
+      await page.waitForTimeout(1200);
+      const video = page.video()!;
+      await context.close();
+      await video.saveAs(path.join(VIDEO!, "desktop-drag.webm"));
+      await video.delete();
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("a strip that opens under the card moves its neighbours: centre of the Blocked strip, then 60 px on, still lands in Blocked", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=board-order`, { width: 1440, height: 900 }, "light", "en");
+      try {
+        const source = page.locator(card("t-order-tint"));
+        await source.waitFor();
+        await foldSeat(page);
+        await source.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(200);
+        const box = (await source.boundingBox())!;
+        const strip = (await page.locator('.column[data-status="blocked"]').boundingBox())!;
+        expect(strip.width, "Blocked starts as a strip").toBeLessThan(100);
+        const centre = strip.x + strip.width / 2;
+        await page.mouse.move(box.x + 8, box.y + 8);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 120, box.y + 80, { steps: 6 });
+        await page.mouse.move(centre, box.y + 80, { steps: 10 });
+        await page.waitForTimeout(400);
+        await page.mouse.move(centre + 60, box.y + 80, { steps: 8 });
+        await page.waitForTimeout(400);
+        const dropping = await page.evaluate(() => [...document.querySelectorAll(".column.drop")].map((column) => (column as HTMLElement).dataset.status));
+        expect(dropping, "the column under the pointer is the one that takes it").toEqual(["blocked"]);
+        await page.mouse.up();
+        await page.waitForTimeout(300);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map((patch) => [patch.id, patch.body.status])).toEqual([["t-order-tint", "blocked"]]);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("a 3 s drag over a 48-card board holds the display rate", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board`, { width: 1440, height: 900 }, "light", "en");
+      try {
+        /* The board's top card of the first column: on screen without scrolling, so the path starts on it. */
+        const source = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+        await source.waitFor();
+        await foldSeat(page);
+        /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
+           the ablation that shows what they cost a drag. */
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        await source.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(100);
+        /* The card's own padding: no control sits there, so today's drag takes it as well. */
+        const box = await source.boundingBox();
+        expect(box).not.toBeNull();
+        const blocked = await page.locator('.column[data-status="blocked"] .col-body').boundingBox();
+        expect(blocked).not.toBeNull();
+        const from: [number, number] = [box!.x + 8, box!.y + 8];
+        const cdp = await context.newCDPSession(page);
+        /* LLV_DRAG_CPU=4 reads the same drag on a CPU four times slower, which is what a laptop on battery is. */
+        const cpu = Number(process.env.LLV_DRAG_CPU ?? "1");
+        if (cpu > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+        await page.mouse.move(...from);
+        await page.mouse.down();
+        const reading = await recordDrag(page, cdp, OUT, `${process.env.LLV_DRAG_LABEL ?? "run"}-desktop${cpu > 1 ? `-x${cpu}` : ""}`, () => playPath(cdp, [from, [from[0] + 120, from[1] + 160], [blocked!.x + blocked!.width / 2, from[1] + 40], [blocked!.x + blocked!.width / 2 - 200, from[1] + 320]], 3000, 8));
+        expect(await page.locator(".kb .card.ghost").count(), "the card is being dragged").toBe(1);
+        await page.screenshot({ path: path.join(OUT, `${process.env.LLV_DRAG_LABEL ?? "run"}-desktop-mid-drag.png`) });
+        await page.mouse.up();
+        fs.mkdirSync("evidence/whole-card-drag", { recursive: true });
+        fs.writeFileSync(`evidence/whole-card-drag/${process.env.LLV_DRAG_LABEL ?? "run"}-desktop${cpu > 1 ? `-x${cpu}` : ""}.json`, `${JSON.stringify({ board: "48 tasks, long titles, pipelines", viewport: "1440x900", cpuThrottling: cpu, path: "3 s, one move per 8 ms", ...reading, trace: undefined }, null, 2)}\n`);
+        console.log(JSON.stringify(reading));
+        expect(pageErrors).toEqual([]);
+        if (process.env.LLV_DRAG_LABEL === "after" && cpu === 1) {
+          expect(reading.frameMs.p95, "p95 frame time").toBeLessThanOrEqual(16.7 + 0.5);
+          expect(reading.longTasks.count, "tasks over 50 ms").toBe(0);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+/*
  * Launch layout shifts (docs/design/launch-render-polish.md). A launch is read
  * the way the operator watches it: the draft is opened, the first prompt sent
  * and the page left alone until the turn ends, while a PerformanceObserver
@@ -15474,6 +16513,238 @@ describe("passive task status note", () => {
       }
       fs.mkdirSync("evidence/card-status-note", { recursive: true });
       fs.writeFileSync("evidence/card-status-note/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("a task card folds the conversations outside this board into one line of its Past attempts (#2459)", () => {
+  /* The `elsewhere-wall` scenario: a finished task whose lanes left nine past
+     attempts and whose agents linked two dozen more conversations by
+     transcript path, none loaded on this board, and a finished task holding
+     only such conversations. On the desktop at 1440 px and on the phone at
+     390 px, in en and uk: no row per conversation anywhere, one quiet line
+     inside the Past attempts section that is closed until opened, the count in
+     its header equal to the attempts it lists once each, and a list behind the
+     line that opens every one of the conversations. Frames go to
+     ELSEWHERE_WALL_PNG_DIR; every frame is taken before any gate is read, so the
+     same case renders the "before" frames on a tree without the change. */
+  const ATTEMPTS = 9;
+  const WALL = 24;
+  const ONLY = 12;
+  const lineOf = (lang: "en" | "uk", count: number, listed: boolean) => `${translate(lang, "kanban.past.elsewhere", { count })} · ${translate(lang, listed ? "kanban.past.elsewhereHide" : "kanban.past.elsewhereShow")}`;
+
+  browserTest("no card lists the conversations off the board one by one; one line in the closed Past attempts section opens their list — desktop and phone, en and uk", async () => {
+    const out = path.resolve(".artifacts/elsewhere-wall");
+    const pngDir = process.env.ELSEWHERE_WALL_PNG_DIR ?? "/var/tmp/llv-elsewhere-wall-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=elsewhere-wall`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* Desktop. */
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 1440, height: 1000 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-wall"), { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            for (const id of ["t-wall", "t-wall-only"]) {
+              await page.locator(card(id)).scrollIntoViewIfNeeded();
+              await page.locator(card(id)).screenshot({ path: path.join(pngDir, `${label}-${id}-closed.png`) });
+            }
+            const read = (id: string) => page.locator(card(id)).evaluate((element) => {
+              const section = element.querySelector<HTMLDetailsElement>("details.history");
+              return {
+                height: Math.round(element.getBoundingClientRect().height),
+                rows: element.querySelectorAll("[data-not-loaded]").length,
+                lines: element.querySelectorAll("[data-elsewhere-toggle]").length,
+                lineText: (element.querySelector("[data-elsewhere-toggle]")?.textContent ?? "").trim(),
+                listed: element.querySelectorAll("[data-elsewhere-row]").length,
+                sectionOpen: section?.open ?? null,
+                head: (section?.querySelector("summary .hl")?.textContent ?? "").trim(),
+                attempts: [...(section?.querySelectorAll("li[data-past]") ?? [])].map((row) => row.getAttribute("data-past")),
+                lineVisible: (() => { const line = element.querySelector<HTMLElement>("[data-elsewhere-toggle]"); return line ? line.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true }) : false; })(),
+              };
+            });
+            const closed = { wall: await read("t-wall"), only: await read("t-wall-only") };
+            /* Open the section: its attempts and the one line. */
+            const wallSummary = page.locator(`${card("t-wall")} details.history > summary`);
+            if (await wallSummary.count()) await wallSummary.click();
+            await page.waitForTimeout(300);
+            await page.locator(card("t-wall")).scrollIntoViewIfNeeded();
+            await page.locator(card("t-wall")).screenshot({ path: path.join(pngDir, `${label}-t-wall-section-open.png`) });
+            const sectionOpen = await read("t-wall");
+            const onlySummary = page.locator(`${card("t-wall-only")} details.history > summary`);
+            if (await onlySummary.count()) await onlySummary.click();
+            await page.waitForTimeout(300);
+            await page.locator(card("t-wall-only")).screenshot({ path: path.join(pngDir, `${label}-t-wall-only-section-open.png`) });
+            /* Open the line: the list that opens each conversation. */
+            const toggle = page.locator(`${card("t-wall")} [data-elsewhere-toggle]`);
+            if (await toggle.count()) {
+              await toggle.click();
+              await page.waitForTimeout(300);
+            }
+            await page.locator(card("t-wall")).screenshot({ path: path.join(pngDir, `${label}-t-wall-list-open.png`) });
+            const listOpen = await read("t-wall");
+            const rowButton = page.locator(`${card("t-wall")} [data-elsewhere-row] button`).nth(4);
+            let hash: string | null = null;
+            if (await rowButton.count()) {
+              await rowButton.click();
+              await page.waitForTimeout(200);
+              hash = await page.evaluate(() => location.hash);
+            }
+            readings[label] = { closed, sectionOpen, listOpen, hash };
+            const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+            if (closed.wall.rows !== 0 || closed.only.rows !== 0 || sectionOpen.rows !== 0 || listOpen.rows !== 0) failures.push(`${label}: rows of «conversation outside this board» stand on the card ${JSON.stringify({ closed, listOpen })}`);
+            if (closed.wall.lines !== 1 || closed.only.lines !== 1) failures.push(`${label}: not exactly one line per card ${JSON.stringify(closed)}`);
+            if (closed.wall.sectionOpen !== false || closed.wall.lineVisible || closed.only.lineVisible) failures.push(`${label}: the line shows while Past attempts is closed ${JSON.stringify(closed)}`);
+            if (closed.wall.listed !== 0) failures.push(`${label}: rows listed before the line is opened`);
+            if (closed.wall.head !== head) failures.push(`${label}: the header reads «${closed.wall.head}», not «${head}»`);
+            if (closed.wall.attempts.length !== ATTEMPTS || new Set(closed.wall.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(closed.wall.attempts)}`);
+            if (closed.wall.lineText !== lineOf(lang, WALL, false)) failures.push(`${label}: the line reads «${closed.wall.lineText}»`);
+            if (closed.only.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only card's header reads «${closed.only.head}»`);
+            if (!sectionOpen.lineVisible) failures.push(`${label}: the line is not visible in the open section`);
+            if (listOpen.listed !== WALL) failures.push(`${label}: the opened list holds ${listOpen.listed} of ${WALL}`);
+            if (!hash?.includes("wall-5")) failures.push(`${label}: the fifth row opened ${JSON.stringify(hash)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        /* Phone. */
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="done"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(600);
+            const screens: Record<string, unknown> = {};
+            for (const id of ["t-wall", "t-wall-only"]) {
+              const element = page.locator(`[data-phone-card="task:${id}"]`);
+              if (!await element.count()) { failures.push(`${label}: no phone card ${id}`); continue; }
+              await element.first().scrollIntoViewIfNeeded();
+              await element.first().click();
+              await page.waitForTimeout(800);
+              const read = () => page.evaluate(() => {
+                const section = document.querySelector<HTMLElement>("[data-phone-task-past]");
+                return {
+                  rows: document.querySelectorAll("[data-phone-task-not-loaded]").length,
+                  sectionPresent: Boolean(section),
+                  head: (section?.querySelector("[data-phone-task-past-toggle]")?.textContent ?? "").trim(),
+                  lines: document.querySelectorAll("[data-phone-task-elsewhere-toggle]").length,
+                  lineText: (document.querySelector("[data-phone-task-elsewhere-toggle]")?.textContent ?? "").trim(),
+                  attempts: [...document.querySelectorAll("[data-phone-task-past-row]")].map((row) => row.getAttribute("data-phone-task-past-row")),
+                  pageHeight: Math.round(document.documentElement.scrollHeight),
+                };
+              });
+              const section = page.locator("[data-phone-task-past]").first();
+              await section.scrollIntoViewIfNeeded().catch(() => {});
+              await page.screenshot({ path: path.join(pngDir, `${label}-${id}-closed.png`) });
+              const closed = await read();
+              await page.locator("[data-phone-task-past-toggle]").first().click().catch(() => {});
+              await page.waitForTimeout(300);
+              await section.scrollIntoViewIfNeeded().catch(() => {});
+              await page.screenshot({ path: path.join(pngDir, `${label}-${id}-section-open.png`) });
+              const opened = await read();
+              const toggle = page.locator("[data-phone-task-elsewhere-toggle]");
+              if (await toggle.count()) {
+                await toggle.first().click();
+                await page.waitForTimeout(300);
+                await toggle.first().scrollIntoViewIfNeeded().catch(() => {});
+              }
+              await page.screenshot({ path: path.join(pngDir, `${label}-${id}-list-open.png`) });
+              const listed = await read();
+              let hash: string | null = null;
+              const rowButton = page.locator("[data-phone-task-not-loaded]").nth(4);
+              if (id === "t-wall" && await rowButton.count()) {
+                await rowButton.click();
+                await page.waitForTimeout(300);
+                hash = await page.evaluate(() => location.hash);
+              }
+              screens[id] = { closed, opened, listed, hash };
+              const expected = id === "t-wall" ? WALL : ONLY;
+              if (closed.rows !== 0 || opened.rows !== 0) failures.push(`${label}: ${id} lists rows of its own before the line is opened ${JSON.stringify({ closed, opened })}`);
+              if (closed.lines !== 0) failures.push(`${label}: ${id} shows the line while the section is folded`);
+              if (opened.lines !== 1 || opened.lineText !== lineOf(lang, expected, false)) failures.push(`${label}: ${id}'s line ${JSON.stringify(opened)}`);
+              if (listed.rows !== expected) failures.push(`${label}: ${id}'s list holds ${listed.rows} of ${expected}`);
+              if (id === "t-wall") {
+                const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+                if (closed.head !== head) failures.push(`${label}: the header reads «${closed.head}», not «${head}»`);
+                if (opened.attempts.length !== ATTEMPTS || new Set(opened.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(opened.attempts)}`);
+                if (!hash?.includes("wall-5")) failures.push(`${label}: the fifth row opened ${JSON.stringify(hash)}`);
+              } else if (opened.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only task's header reads «${opened.head}»`);
+              await page.goBack().catch(() => {});
+              await page.waitForTimeout(500);
+              if (id === "t-wall") await page.goBack().catch(() => {});
+              await page.waitForTimeout(300);
+            }
+            readings[label] = screens;
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/elsewhere-wall", { recursive: true });
+    fs.writeFileSync("evidence/elsewhere-wall/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+
+describe("parallel ask idle fallback", () => {
+  browserTest("composer confirms direct delivery in both languages at desktop and 390 px", async () => {
+    const out = path.resolve(".artifacts/parallel-ask-fallback");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/deputyBlockEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=composer-fallback`, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const message = locale === "uk" ? "Перевір стан рев'ю" : "Check the review status";
+          const textarea = page.locator("textarea");
+          await textarea.fill(message);
+          await textarea.press("Control+Shift+Enter");
+          const notice = page.getByText(translate(locale, "composer.parallelSentDirectly"), { exact: true });
+          await notice.waitFor({ timeout: 5_000 }).catch(async (error) => {
+            await page.screenshot({ path: path.join(out, "failure.png") });
+            console.error(await page.locator("body").innerText(), pageErrors);
+            throw error;
+          });
+          expect(await textarea.inputValue()).toBe("");
+          const body = await page.evaluate(() => (window as unknown as { parallelFallbackBody: { text: string } }).parallelFallbackBody);
+          expect(body.text).toBe(message);
+          const geometry = await notice.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(element);
+            const ink = range.getBoundingClientRect();
+            return { x: box.x, right: box.right, bottom: box.bottom, width: box.width, inkWidth: ink.width, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          expect(geometry.overflow).toBe(false);
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.inkWidth).toBeLessThanOrEqual(geometry.width);
+          expect(geometry.bottom).toBeLessThanOrEqual(900);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          cases.push({ locale, width, message, notice: await notice.innerText(), geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/parallel-ask-fallback", { recursive: true });
+      fs.writeFileSync("evidence/parallel-ask-fallback/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });

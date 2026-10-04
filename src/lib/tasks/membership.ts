@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
+import { canonicalProject } from "@/lib/projects/aliases";
 
 import { isoNow } from "./helpers";
 import { withTaskCompletion } from "./completion";
@@ -201,8 +202,8 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
     const indexes = unique.map((id) => tasks.findIndex((task) => task.id === id));
     const missing = indexes.findIndex((index) => index < 0);
     if (missing >= 0) return { ok: false, error: `task ${unique[missing]} is not available`, status: 404 };
-    const projects = new Set(indexes.map((index) => tasks[index]!.project));
-    if (projects.size > 1 || (project && !projects.has(project))) return { ok: false, error: "explicit tasks must belong to the launch's project", status: 409 };
+    const projects = new Set(indexes.map((index) => canonicalProject(tasks[index]!.project)));
+    if (projects.size > 1 || (project && !projects.has(canonicalProject(project)))) return { ok: false, error: "explicit tasks must belong to the launch's project", status: 409 };
     const refused = input.admit?.(indexes.map((index) => tasks[index]!));
     if (refused) return { ok: false, ...refused };
     for (const index of indexes) commit(index, upsertLinked(tasks[index]!, input.identity, now));

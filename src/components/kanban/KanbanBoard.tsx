@@ -1,7 +1,8 @@
 "use client";
 
 import { ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
@@ -23,11 +24,13 @@ import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { isCardHandle, startCardGesture } from "./cardDrag";
 import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, OPEN_RAIL_WIDTH, openRailTier, type KanbanLayoutMode, type OpenRailTier } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
+import { changeColumnWidth, COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
 import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
@@ -42,6 +45,8 @@ import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
+import { reuseKanbanModel } from "./reuseKanbanModel";
+import { useStableCallback } from "./useStableCallback";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
@@ -211,6 +216,8 @@ interface SheetTarget {
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const NO_READERS: readonly OpenReader[] = [];
+const NO_REMOTE_AGENTS: readonly RemoteAgentView[] = [];
+const NO_REMOTE_FOR_CARD: readonly RemoteAgentView[] = [];
 /** Parts of the board's root that belong to the Viewer, where the board answers no key. */
 const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
@@ -339,9 +346,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The other machines' agents and lanes. On the Overview the feed
      covers every linked project, and only its lanes and hosts are drawn. */
   const remoteFeed = useRemoteFeed(props.overview ? null : project);
-  const remoteAgents = !props.overview && remoteFeed ? remoteFeed.agents.filter((row) => row.p === project) : [];
+  const remoteAgents: readonly RemoteAgentView[] = useMemo(() => (!props.overview && remoteFeed ? remoteFeed.agents.filter((row) => row.p === project) : NO_REMOTE_AGENTS), [props.overview, remoteFeed, project]);
+  /* One list per task, stable while the feed is: a card's memo reads it. */
+  const remoteAgentsByTask = useMemo(() => {
+    const byTask = new Map<string, RemoteAgentView[]>();
+    for (const row of remoteAgents) if (row.task) byTask.set(row.task, [...(byTask.get(row.task) ?? []), row]);
+    return byTask;
+  }, [remoteAgents]);
   const remoteCards = useMemo(() => remoteCardsFor(allTasks, remoteFeed), [allTasks, remoteFeed]);
-  const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
     { kind: "status" | "card" | "colour" | "icon"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "create" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
@@ -413,7 +425,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       root.removeEventListener("focusin", onWork);
     };
   }, []);
-  const seatView = props.seat ? props.seat(boardId) : null;
+  const renderSeat = props.seat;
+  const seatView = useMemo(() => renderSeat?.(boardId) ?? null, [renderSeat, boardId]);
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
@@ -425,10 +438,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The readers a card holds open, for where a new draft stands (kanbanModel's `openReaders`). */
   const unfoldedReaders = useMemo(() => new Set(openReaders.filter((reader) => !reader.folded).map((reader) => reader.key)), [openReaders]);
   const modelNow = Math.floor(props.now / 15) * 15;
-  const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow }),
-    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, unfoldedReaders, modelNow],
-  );
+  /* A catalog update rebuilds the model, and a card whose content did not change
+     stays the object it was, so only the cards it touched render again (#2218). */
+  const previousModel = useRef<KanbanModel | null>(null);
+  // eslint-disable-next-line react-hooks/refs -- Identity cache: the ref only decides which equal object is kept, never what the model holds.
+  const model: KanbanModel = useMemo(() => {
+    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
+    const shared = reuseKanbanModel(previousModel.current, built);
+    previousModel.current = shared;
+    return shared;
+  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, unfoldedReaders, modelNow]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);
@@ -625,7 +644,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
        columns' mode follows what those leave them (#1841). */
     const aside = asideRef.current;
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
+    let frame = 0;
     const apply = () => {
+      // The helper owns intermediate widths; measure the settled layout.
+      if (element.hasAttribute("data-column-layout")) return;
       const barWidth = element.getBoundingClientRect().width;
       const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
       const seatWidth = seat?.getBoundingClientRect().width ?? 0;
@@ -636,13 +658,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
+    const settled = () => {
+      // Release transient layers before asking for the settled layout. This
+      // read otherwise forces raster/layout in the animation's cleanup task.
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; apply(); });
+    };
     apply();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(apply);
-    observer.observe(element);
-    if (aside) observer.observe(aside);
-    if (seat) observer.observe(seat);
-    return () => observer.disconnect();
+    element.addEventListener(COLUMN_LAYOUT_END, settled);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(apply) : null;
+    observer?.observe(element);
+    if (aside) observer?.observe(aside);
+    if (seat) observer?.observe(seat);
+    return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, settled); if (frame) cancelAnimationFrame(frame); };
   }, [hasAside, seatSide, railShown]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
@@ -663,34 +690,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!result.ok) flash(card.id);
     });
   }, [flash]);
-  const previousRects = useRef(new Map<string, { rect: DOMRect; status: string | undefined }>());
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const next = new Map<string, { rect: DOMRect; status: string | undefined }>();
-    const moved: Array<{ element: HTMLElement; from: DOMRect }> = [];
-    const reduce = prefersReducedMotion();
-    root.querySelectorAll<HTMLElement>(".card[data-id]").forEach((element) => {
-      const id = element.dataset.id!;
-      const rect = element.getBoundingClientRect();
-      const status = element.closest<HTMLElement>(".column")?.dataset.status;
-      next.set(id, { rect, status });
-      const before = previousRects.current.get(id);
-      if (!before || !rect.width) return;
-      if (before.status && status && before.status !== status) moved.push({ element, from: before.rect });
-    });
-    previousRects.current = next;
-    if (!moved.length) return;
-    if (reduce || moved.length > 6) {
-      for (const { element } of moved) {
-        element.classList.remove("moved-static");
-        void element.offsetWidth;
-        element.classList.add("moved-static");
-      }
-      return;
-    }
-    for (const { element, from } of moved) fly(element, from, root);
-  });
+  /* The card moves of a render fly from where the cards were (`CardFlights`). */
+  const placements = useMemo(() => {
+    const byCard = new Map<string, TaskStatus>();
+    for (const status of KANBAN_STATUSES) for (const card of model.columns[status].shown) byCard.set(card.id, status);
+    return byCard;
+  }, [model]);
 
   /* ── Status moves ────────────────────────────────────────────────────── */
   /* Focus follows the card into its new column: the moved card is a new
@@ -1683,74 +1688,25 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [mode, openCardMenu, openStatusMenu, shift, startEdit, hideCard, menu]);
 
   /* ── Pointer drag to a column ────────────────────────────────────────── */
+  /* The whole card is the handle (cardDrag.ts): a press anywhere but a text
+     field or a reader starts a drag after 8 px, and a click without movement
+     does what it always did. The ghost and the hint are drawn by hand, so a
+     drag renders nothing in React. */
+  const draggingCard = useRef(false);
+  const dragHintText = t("kanban.dragHint");
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .pblock, .reader-slot, .stage-detail")) return;
-    const element = event.currentTarget;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const pointerId = event.pointerId;
-    let started = false;
-    let ghost: HTMLElement | null = null;
-    let over: TaskStatus | null = null;
-    let overColumn: HTMLElement | null = null;
-    const moveHandler = (moveEvent: PointerEvent) => {
-      const dx = moveEvent.clientX - startX;
-      const dy = moveEvent.clientY - startY;
-      if (!started) {
-        if (Math.hypot(dx, dy) < 6) return;
-        started = true;
-        try { element.setPointerCapture(pointerId); } catch { /* capture is best-effort */ }
-        element.classList.add("dragging");
-        ghost = element.cloneNode(true) as HTMLElement;
-        ghost.querySelectorAll(".reader-slot").forEach((slot) => slot.replaceChildren());
-        ghost.classList.add("ghost");
-        ghost.classList.remove("dragging");
-        ghost.style.setProperty("--w", `${element.offsetWidth}px`);
-        ghost.setAttribute("aria-hidden", "true");
-        ghost.removeAttribute("data-id");
-        rootRef.current?.appendChild(ghost);
-        setDragHint(true);
-      }
-      const rect = element.getBoundingClientRect();
-      ghost!.style.left = `${rect.left + dx}px`;
-      ghost!.style.top = `${rect.top + dy}px`;
-      ghost!.style.display = "none";
-      const under = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
-      ghost!.style.display = "";
-      /* The drop target is marked on the column element itself: a board
-         re-render per pointer move would cost every card a frame. */
-      const column = under?.closest<HTMLElement>(".column[data-status]") ?? null;
-      if (overColumn && overColumn !== column) overColumn.classList.remove("drop");
-      overColumn = column;
-      over = column ? column.dataset.status as TaskStatus : null;
-      if (column) column.classList.toggle("drop", over !== card.status);
-    };
-    const finish = (cancel: boolean) => {
-      element.removeEventListener("pointermove", moveHandler);
-      element.removeEventListener("pointerup", up);
-      element.removeEventListener("pointercancel", cancelled);
-      document.removeEventListener("keydown", escape, true);
-      if (!started) return;
-      element.classList.remove("dragging");
-      ghost?.remove();
-      overColumn?.classList.remove("drop");
-      setDragHint(false);
-      if (!cancel && over && over !== card.status) move(card, over);
-    };
-    const up = () => finish(false);
-    const cancelled = () => finish(true);
-    const escape = (keyEvent: KeyboardEvent) => {
-      if (keyEvent.key === "Escape" && started) {
-        keyEvent.stopPropagation();
-        finish(true);
-      }
-    };
-    element.addEventListener("pointermove", moveHandler);
-    element.addEventListener("pointerup", up);
-    element.addEventListener("pointercancel", cancelled);
-    document.addEventListener("keydown", escape, true);
-  }, [move]);
+    if (event.button !== 0 || event.pointerType === "touch" || !card.task || !rootRef.current) return;
+    if (!isCardHandle({ target: event.target, offsetX: event.nativeEvent.offsetX })) return;
+    startCardGesture({
+      element: event.currentTarget,
+      root: rootRef.current,
+      status: card.status,
+      event,
+      hint: dragHintText,
+      onDrop: (to) => move(card, to),
+      onActive: (active) => { draggingCard.current = active; },
+    });
+  }, [move, dragHintText]);
 
   /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the
@@ -2149,6 +2105,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     let measuredAt = 0;
     const measure = () => {
       frame = 0;
+      // The final visibility scan runs after the helper releases its layers.
+      if (root.hasAttribute("data-column-layout")) return;
       measuredAt = performance.now();
       const rootRect = root.getBoundingClientRect();
       const ids: string[] = [];
@@ -2186,12 +2144,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
       timer = 0;
       schedule();
     };
-    const onScroll = () => {
+    /* The capture listener hears every scroll under the board, and the seat's
+       feed and each reader pin to the bottom on every streamed event. Only a
+       scroller that holds the columns (the board, its page) or a column body
+       can move a card; any other scroll is ignored. */
+    const movesCards = (target: EventTarget | null) =>
+      !(target instanceof HTMLElement) || target.matches(".col-body") || target.querySelector(".column[data-status]") !== null;
+    const onScroll = (event: Event) => {
+      if (!movesCards(event.target)) return;
       if (timer) window.clearTimeout(timer);
       timer = window.setTimeout(settle, SCROLL_SETTLE_MS);
       if (performance.now() - measuredAt >= SCROLL_MEASURE_MS) schedule();
     };
     schedule();
+    root.addEventListener(COLUMN_LAYOUT_END, schedule);
     root.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", schedule);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
@@ -2199,6 +2165,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return () => {
       if (frame) cancelAnimationFrame(frame);
       if (timer) window.clearTimeout(timer);
+      root.removeEventListener(COLUMN_LAYOUT_END, schedule);
       root.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", schedule);
       observer?.disconnect();
@@ -2481,7 +2448,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useColumnDwell(rootRef, {
     enabled: widthControls,
     canWiden: (status) => !wideColumns.pinned && !stripStatuses.has(status) && (wideShelf ? wideShelf !== status : status !== "assigned"),
-    busy: () => menuOpenRef.current || sheetOpen.current || dragHint,
+    busy: () => menuOpenRef.current || sheetOpen.current || draggingCard.current,
     widen: wideColumns.widenIfNarrow,
   });
 
@@ -2578,6 +2545,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
   });
 
+  /* The handlers a card's memo reads. Their closures follow the catalog; the
+     cards must not (#2218). */
+  const cardOpenMember = useStableCallback(openReaderFor);
+  const cardOpenStage = useStableCallback(openStage);
+  const cardFocus = useStableCallback(focusCard);
+  const cardOpenAttempt = useStableCallback(openRecorded);
+  const cardOpenConversations = useStableCallback(onOpenConversations);
+
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
       key={status}
@@ -2590,6 +2565,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       collapsed={collapsed}
       nowMs={modelNow * 1000}
       remoteAgents={remoteAgents}
+      remoteAgentsByTask={remoteAgentsByTask}
       remoteCards={remoteCards}
       pendingIds={controller}
       editing={editing}
@@ -2612,10 +2588,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onCardMenu: openCardMenu,
         onKey: onCardKey,
         onPointerDown: onCardPointerDown,
-        onOpenMember: openReaderFor,
-        onOpenStage: openStage,
-        onFocusCard: focusCard,
-        onOpenConversations,
+        onOpenMember: cardOpenMember,
+        onOpenStage: cardOpenStage,
+        onFocusCard: cardFocus,
+        onOpenConversations: cardOpenConversations,
         onStartEdit: startEdit,
         onEditDraft: editDraft,
         onCommitEdit: commitEdit,
@@ -2630,7 +2606,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onIconMenu: openIconMenu,
         graphChoices,
         onToggleGraph: toggleGraph,
-        onOpenAttempt: openRecorded,
+        onOpenAttempt: cardOpenAttempt,
         onDismissLaunch: dismissLaunch,
         drafts: stageDrafts,
         pipelinePorts,
@@ -2704,6 +2680,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     <AccountChoiceContext.Provider value={accountChoice}>
     <KanbanDraftContext.Provider value={draftActions}>
     <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
+      <CardFlights placements={placements} rootRef={rootRef} />
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
           happening, one spacer, find, view, create, panels, more. The two ends are the project's own
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
@@ -2965,7 +2942,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
           />
         </KanbanPopover>
       ) : null}
-      {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
     </div>
     </KanbanDraftContext.Provider>
@@ -2982,7 +2958,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -3013,6 +2989,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   collapsed: ReadonlySet<string>;
   nowMs: number;
   remoteAgents: readonly RemoteAgentView[];
+  remoteAgentsByTask: ReadonlyMap<string, readonly RemoteAgentView[]>;
   remoteCards: ReadonlyMap<string, RemoteCard>;
   pendingIds: { pending(id: string): boolean };
   onColumnMenu: (anchor: HTMLElement) => void;
@@ -3029,7 +3006,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       pending={card.task ? pendingIds.pending(card.task.id) : false}
       collapsed={collapsed.has(card.id)}
       nowMs={nowMs}
-      remoteAgents={card.task ? remoteAgents.filter((row) => row.task === card.task!.id) : []}
+      remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_FOR_CARD : NO_REMOTE_FOR_CARD}
       remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
       stagePanels={panelsByCard.get(card.id) ?? ""}
@@ -3107,7 +3084,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
             title={isWide ? t("kanban.columnNarrow") : t("kanban.columnWiden", { column: label })}
             data-col-width={status}
             data-col-width-action={isWide ? "narrow" : "widen"}
-            onClick={() => (isWide ? widths.state.narrow() : widths.state.widen(status))}
+            onClick={(event) => changeColumnWidth(event.currentTarget, () => flushSync(() => (isWide ? widths.state.narrow() : widths.state.widen(status))))}
           >
             {isWide ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
           </button>
@@ -3160,6 +3137,55 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
 
 /** A card whose column changed flies there as a clone above the board, so no
     column's scroll box clips it (prototype `fly`). */
+/**
+ * A card that moves to another column flies from where it was. Where it was is
+ * read in `getSnapshotBeforeUpdate`, the one hook that runs once React knows
+ * what changes and before it changes the DOM, so a card that stays in its
+ * column is never measured. The board used to read every card's rectangle
+ * after every render to learn the same thing, a forced layout of the whole
+ * board for each catalog update (#2218).
+ */
+class CardFlights extends Component<{ placements: ReadonlyMap<string, TaskStatus>; rootRef: RefObject<HTMLElement | null> }, unknown, Map<string, DOMRect> | null> {
+  getSnapshotBeforeUpdate(previous: { placements: ReadonlyMap<string, TaskStatus> }): Map<string, DOMRect> | null {
+    const root = this.props.rootRef.current;
+    // Column transforms own the painted geometry until their cleanup.
+    if (!root || root.hasAttribute("data-column-layout") || previous.placements === this.props.placements) return null;
+    let from: Map<string, DOMRect> | null = null;
+    for (const [id, status] of this.props.placements) {
+      const was = previous.placements.get(id);
+      if (was === undefined || was === status) continue;
+      const element = root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(id)}"]`);
+      if (element) (from ??= new Map()).set(id, element.getBoundingClientRect());
+    }
+    return from;
+  }
+
+  componentDidUpdate(_previous: unknown, _state: unknown, from: Map<string, DOMRect> | null) {
+    const root = this.props.rootRef.current;
+    if (!root || !from) return;
+    const moved: Array<{ element: HTMLElement; from: DOMRect }> = [];
+    for (const [id, rect] of from) {
+      const element = root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(id)}"]`);
+      /* A card in a column that is not displayed has no box to fly to. */
+      if (element && element.getBoundingClientRect().width) moved.push({ element, from: rect });
+    }
+    if (!moved.length) return;
+    if (prefersReducedMotion() || moved.length > 6) {
+      for (const { element } of moved) {
+        element.classList.remove("moved-static");
+        void element.offsetWidth;
+        element.classList.add("moved-static");
+      }
+      return;
+    }
+    for (const { element, from: rect } of moved) fly(element, rect, root);
+  }
+
+  render() {
+    return null;
+  }
+}
+
 function fly(element: HTMLElement, from: DOMRect, root: HTMLElement): void {
   const destination = element.getBoundingClientRect();
   const body = element.closest(".col-body")?.getBoundingClientRect();
