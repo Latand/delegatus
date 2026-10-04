@@ -686,6 +686,76 @@ test("target account revocation during interrupt fences reconfigure and continua
   expect(loadPipelines()[0]!.stateDetail).toContain("no longer allowed");
 });
 
+test("rollback refuses to cancel or rearm a continuation on a revoked source account", async () => {
+  const h = switchHarness(); h.setOutcome("failed"); let allowed = ["default", "target"];
+  h.ports.allowedAccountIds = () => allowed;
+  h.ports.runtimeSwitchControl = async (_id, _path, action, key) => {
+    h.operations.set(key, action);
+    if (action === "interrupt") allowed = ["target"];
+  };
+  h.ports.resumeSeveredTurn = async input => {
+    if (!h.deliveries.has(input.clientMessageId)) {
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "failed", at: h.ports.now() });
+    }
+    return true;
+  };
+  await requestSwitch(h, { account: "target" });
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("source account is no longer allowed");
+  expect(h.operations.get("cancel")).toBeUndefined();
+  expect(h.continuations).toHaveLength(1);
+});
+
+test("rollback waits visibly when source account authorization cannot be read", async () => {
+  const h = switchHarness(); let unreadable = false;
+  h.ports.allowedAccountIds = () => { if (unreadable) throw new Error("project account bindings are unreadable"); return ["default"]; };
+  h.ports.runtimeSwitchOutcome = async () => { unreadable = true; return { state: "failed", error: "account refused" }; };
+  h.ports.resumeSeveredTurn = async input => {
+    if (!h.deliveries.has(input.clientMessageId)) {
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "failed", at: h.ports.now() });
+    }
+    return true;
+  };
+  await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("account authorization unavailable");
+  expect(h.operations.get("cancel")).toBeUndefined();
+  expect(h.continuations).toHaveLength(1);
+});
+
+test("rollback does not rearm a held continuation after its source account is revoked", async () => {
+  const h = switchHarness(); h.setOutcome("pending"); let allowed = ["default", "target"];
+  h.ports.allowedAccountIds = () => allowed;
+  h.ports.resumeSeveredTurn = async input => {
+    if (!h.deliveries.has(input.clientMessageId)) {
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "pending", at: h.ports.now() });
+    }
+    return true;
+  };
+  h.ports.cancelRuntimeSwitch = async () => {
+    h.operations.set("cancel", "cancel");
+    for (const key of h.deliveries.keys()) h.deliveries.set(key, { state: "delivered", at: h.ports.now() });
+  };
+  await requestSwitch(h, { account: "target" });
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(1);
+  allowed = ["target"];
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("source account is no longer allowed");
+  expect(h.operations.get("cancel")).toBeUndefined();
+  expect(h.continuations).toHaveLength(1);
+});
+
 
 test("a successor report relays only prose after the native continuation boundary", async () => {
   const h = switchHarness(); await requestSwitch(h); const started = h.wallClock();

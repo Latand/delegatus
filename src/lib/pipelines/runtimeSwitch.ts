@@ -103,6 +103,16 @@ export async function driveRuntimeSwitch(
     pipeline.stateDetail = reason; await persist();
   };
   const park = async (reason: string) => { pipeline.state = "needs_decision"; pipeline.stateDetail = reason; attempt.state = "needs_decision"; record.outcome = reason; await persist(); };
+  const rollbackAccountAllowed = async (): Promise<boolean> => {
+    let pool: string[] | null | undefined;
+    try { pool = ports.allowedAccountIds?.(pipeline.project, record.from.engine); }
+    catch (error) { await park(`runtime switch rollback waiting: account authorization unavailable: ${String(error)}`); return false; }
+    if (pool && (!record.from.accountId || !pool.includes(record.from.accountId))) {
+      await park("runtime switch rollback refused: source account is no longer allowed");
+      return false;
+    }
+    return true;
+  };
   const reconfigureKey = switchOperationKey(record, "reconfigure");
   const continueKey = record.continuationKey ?? switchOperationKey(record, "continue");
   const resume = async (key: string) => {
@@ -131,6 +141,10 @@ export async function driveRuntimeSwitch(
     return new Date(nativeStart).toISOString();
   };
   const rollback = async (reason: string) => {
+    // Recheck here as well as before cancellation: policy may change while the
+    // held reconfigure is being withdrawn, and neither a new key nor a reused
+    // continuation may run on a revoked source account.
+    if (!await rollbackAccountAllowed()) return;
     Object.assign(attempt, { conversationId: record.from.conversationId, launchId: record.from.launchId,
       sessionId: record.from.sessionId, agentPath: record.from.agentPath, accountId: record.from.accountId });
     Object.assign(attempt.effectiveRole, { engine: record.from.engine, model: record.from.model, effort: record.from.effort, serviceTier: record.from.serviceTier ?? undefined });
@@ -188,6 +202,7 @@ export async function driveRuntimeSwitch(
       const outcome = record.reconfigureNoop ? { state: "applied" as const } : await ports.runtimeSwitchOutcome?.(record.from.conversationId, reconfigureKey);
       if (!outcome || outcome.state === "pending") {
         if (expired) {
+          if (!await rollbackAccountAllowed()) return;
           try { await ports.cancelRuntimeSwitch?.(record.from.conversationId, reconfigureKey); }
           catch (error) { await park(`runtime switch did not settle; cancellation refused: ${String(error)}`); return; }
           if (!ports.cancelRuntimeSwitch) { await park("runtime switch did not settle; cancellation unavailable"); return; }
@@ -202,6 +217,7 @@ export async function driveRuntimeSwitch(
           if (!floor) return;
           record.continuedAt = floor; clearOldWaits(attempt); await settle("rolled-back", outcome.error ?? "runtime switch failed; continued on previous runtime"); return;
         }
+        if (!await rollbackAccountAllowed()) return;
         await ports.cancelRuntimeSwitch?.(record.from.conversationId, reconfigureKey);
         await rollback(outcome.error ?? "runtime switch failed"); return;
       }

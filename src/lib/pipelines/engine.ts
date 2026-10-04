@@ -2096,16 +2096,35 @@ async function recoverProviderCut(
     attempt.completedAt = now;
     park(pipeline, reason, attempt);
   };
+  const waitForAccountPolicy = (accountId: string, operation: string): boolean => {
+    let allowed: string[] | null | undefined;
+    try { allowed = ports.allowedAccountIds?.(pipeline.project, engine); }
+    catch (error) {
+      pipeline.stateDetail = `waiting for account authorization before ${operation}: ${redactBounded(String(error), 300)}`;
+      persist(); ports.scheduleTick?.(30_000); return true;
+    }
+    if (allowed && !allowed.includes(accountId)) {
+      pipeline.stateDetail = `waiting for an allowed account; ${operation} target is no longer allowed`;
+      persist(); ports.scheduleTick?.(30_000); return true;
+    }
+    return false;
+  };
   if (bounded || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
     parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
     return true;
   }
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > time) return true;
   const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
+  // These account ids survive the tick that selected them. Policy can change
+  // between that selection and a migration retry or continuation, so fence
+  // both the durable migration and the attempt's recorded reseat on every tick.
+  if (wait.switchedAccountId && waitForAccountPolicy(wait.switchedAccountId, "conversation reseat")) return true;
+  if (migration?.retry && waitForAccountPolicy(migration.targetId, "persisted migration")) return true;
   if (migration?.retry && engine === "codex" && migration.sourceFailure) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, migration.targetId);
   }
   if (migration?.retry && attempt.conversationId && ports.requestConversationReseat) {
+    if (waitForAccountPolicy(migration.targetId, "conversation reseat")) return true;
     try { await ports.requestConversationReseat(attempt.conversationId, migration.targetId); }
     catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account switch refused: ${String(error)}`, ports, persist); return true; }
   }
@@ -2126,6 +2145,7 @@ async function recoverProviderCut(
       // Legacy transports use a fresh host in the same worktree.
       return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
     }
+    if (waitForAccountPolicy(target, "conversation reseat")) return true;
     try { await ports.requestConversationReseat(attempt.conversationId, target); }
     catch (error) {
       if (engine === "codex") return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
@@ -4874,7 +4894,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           persist([live]); changed = true;
         });
       };
-      const dispatchCheckpoint = async () => {
+      const dispatchCheckpoint = async (account = record.rollback ? record.from : record.to) => {
         const ignored = record.mode === "handoff" ? [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")] : [];
         for (const conversationId of new Set([record.from.conversationId, attempt.conversationId].filter((id): id is string => !!id))) {
           if (await ports.runtimeSwitchKilled?.(conversationId, record.requestedAt, ignored)) {
@@ -4883,12 +4903,23 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             await checkpoint(); throw new RuntimeSwitchSuperseded();
           }
         }
-        const pool = ports.allowedAccountIds?.(pipeline.project, record.to.engine);
-        if (!record.rollback && pool && !pool.includes(record.to.accountId!)) {
-          let reason = "runtime switch target account is no longer allowed; stage continuation is fenced";
-          if (record.mode === "fork" && ports.cancelRuntimeSwitch) {
-            try { await ports.cancelRuntimeSwitch(record.from.conversationId, switchOperationKey(record, "reconfigure")); }
-            catch (error) { reason += `; cancellation refused: ${String(error)}`; }
+        let pool: string[] | null | undefined;
+        try { pool = ports.allowedAccountIds?.(pipeline.project, account.engine); }
+        catch (error) {
+          const reason = `runtime switch continuation is fenced: account authorization unavailable: ${String(error)}`;
+          pipeline.state = "needs_decision"; attempt.state = "needs_decision"; pipeline.stateDetail = reason; record.outcome = reason;
+          await checkpoint(); throw new RuntimeSwitchSuperseded();
+        }
+        if (pool && (!account.accountId || !pool.includes(account.accountId))) {
+          const subject = record.rollback || account === record.from ? "source account" : "target account";
+          let reason = `runtime switch ${subject} is no longer allowed; stage continuation is fenced`;
+          if (!record.rollback && account === record.to && record.mode === "fork" && ports.cancelRuntimeSwitch) {
+            try {
+              const sourcePool = ports.allowedAccountIds?.(pipeline.project, record.from.engine);
+              if (sourcePool && (!record.from.accountId || !sourcePool.includes(record.from.accountId))) {
+                reason += "; source account is no longer allowed, cancellation refused to avoid rearming its continuation";
+              } else await ports.cancelRuntimeSwitch(record.from.conversationId, switchOperationKey(record, "reconfigure"));
+            } catch (error) { reason += `; source authorization or cancellation failed: ${String(error)}`; }
           }
           pipeline.state = "needs_decision"; attempt.state = "needs_decision"; pipeline.stateDetail = reason; record.outcome = reason;
           await checkpoint(); throw new RuntimeSwitchSuperseded();
@@ -4912,7 +4943,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         } } : {}),
         ...(ports.runtimeSwitchControl ? { runtimeSwitchControl: async (...args: Parameters<NonNullable<PipelinePorts["runtimeSwitchControl"]>>) => { await dispatchCheckpoint(); return await ports.runtimeSwitchControl!(...args); } } : {}),
         ...(ports.resumeSeveredTurn ? { resumeSeveredTurn: async (...args: Parameters<NonNullable<PipelinePorts["resumeSeveredTurn"]>>) => { await dispatchCheckpoint(); return await ports.resumeSeveredTurn!(...args); } } : {}),
-        ...(ports.cancelRuntimeSwitch ? { cancelRuntimeSwitch: async (...args: Parameters<NonNullable<PipelinePorts["cancelRuntimeSwitch"]>>) => { await dispatchCheckpoint(); return await ports.cancelRuntimeSwitch!(...args); } } : {}),
+        ...(ports.cancelRuntimeSwitch ? { cancelRuntimeSwitch: async (...args: Parameters<NonNullable<PipelinePorts["cancelRuntimeSwitch"]>>) => { await dispatchCheckpoint(record.from); return await ports.cancelRuntimeSwitch!(...args); } } : {}),
       };
       if (record.phase === "requested") {
         const beforeCut = !attempt.report && attempt.agentPath
