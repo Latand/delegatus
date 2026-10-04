@@ -90,7 +90,11 @@ async function fixture() {
           socket.end(JSON.stringify({ id: request.id, ok: true, result: { pid: process.pid, startIdentity: readStartIdentity(process.pid), hostEpoch: 1 } }) + "\\n");
         });
       });
-      server.listen(endpoint, () => writeFileSync(process.env.LLV_RUNTIME_HOST_FENCE, JSON.stringify({ pid: process.pid, startIdentity: runtimeHostStartIdentity(process.pid), acquisitionId: "fixture-acquisition-id" })));
+      // Publish the genuine owner before the endpoint is connectable, matching
+      // runtime-host main's fence-before-listen order. Windows termination can
+      // leave the predecessor's fence behind without running its SIGTERM hook.
+      writeFileSync(process.env.LLV_RUNTIME_HOST_FENCE, JSON.stringify({ pid: process.pid, startIdentity: runtimeHostStartIdentity(process.pid), acquisitionId: "fixture-acquisition-id" }));
+      server.listen(endpoint);
       process.on("SIGTERM", () => server.close(() => { rmSync(process.env.LLV_RUNTIME_HOST_FENCE, { force: true }); process.exit(0); }));
     `);
   }
@@ -152,7 +156,7 @@ async function fixture() {
         const trace = value => appendFileSync(path.join(directory, name + ".jsonl"), JSON.stringify(value) + "\\n");
         try {
           const child = original(command, args, { ...options, stdio: ["ignore", ...files] });
-          trace({ method, pid: child.pid, entry: args.find(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message });
+          trace({ method, pid: child.pid, entry: args.findLast(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message });
           if (method === "spawn") {
             child.once("exit", (code, signal) => trace({ code, signal }));
             child.once("error", error => trace({ error: error.message }));
@@ -194,7 +198,7 @@ async function fixture() {
     print("waiting", observation);
     print("old-child", { pid: old.pid, code: old.exitCode, signal: old.signalCode, output });
     print("bootstrap", { pid: run.child.pid, code: run.child.exitCode, signal: run.child.signalCode, stdout: run.stdout(), stderr: run.error() });
-    for (const directory of [path.dirname(recordFile), diagnosticsDir]) {
+    for (const directory of [state, path.dirname(recordFile), diagnosticsDir]) {
       const names = readdirSync(directory).sort();
       print("directory", { directory, names });
       for (const name of names.slice(0, 24)) {
