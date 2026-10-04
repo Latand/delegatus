@@ -118,10 +118,14 @@ export const MEASURE_DEPUTY_BLOCKS = `(() => {
   };
   const content = document.querySelector("[data-feed-state]");
   const children = content ? [...content.children] : [];
+  /* The seat's live turn: its in-flight tool rows share one group, and a reply
+     is a keyed conversation row of its own that carries data-live-turn until
+     its transcript record adopts the node. */
+  const seatLive = (child) => child.hasAttribute("data-live-turn-group") || child.hasAttribute("data-live-turn");
   const seatRows = children.filter((child) => !child.hasAttribute("data-deputy-block") && (child.hasAttribute("data-feed-key") || child.hasAttribute("data-live-turn-group")));
   const seatInk = seatRows.map(ink);
   const order = children.flatMap((child) => child.hasAttribute("data-deputy-block") ? ["block:" + child.getAttribute("data-deputy-block")]
-    : child.hasAttribute("data-live-turn-group") ? ["seat-live"]
+    : seatLive(child) ? ["seat-live"]
     : child.hasAttribute("data-feed-key") ? ["seat"] : []);
   const round = (value) => Math.round(value * 10) / 10;
   const speakersOf = (row) => [...row.querySelectorAll("[data-seat-speaker], [data-mobile-message-header]")]
@@ -132,7 +136,12 @@ export const MEASURE_DEPUTY_BLOCKS = `(() => {
     });
   const sizeOf = (element) => round(parseFloat(getComputedStyle(element).fontSize));
   const proseSizes = (root, inside) => ({
-    live: [...root.querySelectorAll("[data-live-turn]:not([data-live-tool])")].filter(inside).map(sizeOf),
+    /* A reply row wraps its speaker line and its text: the text is what is sized. */
+    live: [...root.querySelectorAll("[data-live-turn]:not([data-live-tool])")].filter(inside).map((row) => {
+      const caret = row.querySelector("[data-live-turn-caret]");
+      const body = row.querySelector("[data-tts-body]");
+      return sizeOf(row.hasAttribute("data-feed-key") ? caret?.parentElement ?? body?.parentElement ?? row : row);
+    }),
     settled: [...root.querySelectorAll("[data-tts-body]")].filter(inside).map((body) => sizeOf(body.parentElement)),
   });
   const lastGlyphRight = (element) => {
@@ -209,7 +218,7 @@ export const MEASURE_DEPUTY_BLOCKS = `(() => {
       proseSizes: proseSizes(block, () => true),
     };
   });
-  const seatLiveGroup = children.find((child) => child.hasAttribute("data-live-turn-group"));
+  const seatLiveGroup = children.find((child) => !child.hasAttribute("data-deputy-block") && seatLive(child));
   const seatCaret = seatLiveGroup ? seatLiveGroup.querySelector("[data-live-turn-caret]") : null;
   const seatSpeaker = seatLiveGroup ? seatLiveGroup.querySelector("[data-seat-speaker]") : null;
   return {

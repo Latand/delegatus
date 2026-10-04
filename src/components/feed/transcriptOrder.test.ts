@@ -77,13 +77,13 @@ const staleOpening: RuntimeLiveTurn = {
   }],
 };
 
-test("issue 674: an unclaimed opening answer never renders below fresher transcript records", () => {
+test("issue 674: a claimed opening answer stays retired outside the loaded window", () => {
   /* The window the pane actually holds: the opening answer's row has slid out,
-     so no claim can be made from it and none was ever persisted. */
+     and the identity claim made when it was visible survives. */
   const paneWindow = feedOf(TRANSCRIPT.slice(5));
   expect(paneWindow.some(({ item }) => "text" in item && item.text === OPENING_ANSWER)).toBe(false);
 
-  expect(visibleRuntimeLiveTurnItems(staleOpening, paneWindow)).toEqual([]);
+  expect(visibleRuntimeLiveTurnItems(staleOpening, paneWindow, new Set(["item-674-opening"]))).toEqual([]);
 });
 
 test("issue 674: an undated tail cannot resurrect the stale opening answer", () => {
@@ -92,7 +92,7 @@ test("issue 674: an undated tail cannot resurrect the stale opening answer", () 
   const paneWindow = feedOf(TRANSCRIPT.slice(5));
   expect(paneWindow.at(-1)?.item.kind).toBe("svc");
 
-  expect(visibleRuntimeLiveTurnItems(staleOpening, paneWindow)).toEqual([]);
+  expect(visibleRuntimeLiveTurnItems(staleOpening, paneWindow, new Set(["item-674-opening"]))).toEqual([]);
 });
 
 test("issue 674: a live item newer than every transcript record still renders in the tail", () => {

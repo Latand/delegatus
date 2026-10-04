@@ -463,9 +463,16 @@ export type PipelineStageAttempt = {
     lastRecordAt: number | null;
     replacementAttempt?: number;
     replacedAttempt?: number;
+    /** Set once a stop this recovery issued ended a live host: the evidence
+        that stop was decided on, and the newest transcript record read after
+        the host was gone. The cause is named from this while that record is
+        still the newest, because the host's exit moves the evidence a later
+        tick would read. */
+    stopped?: { kind: "idle" | "dead" | "stalled"; restarted: boolean; lastRecordAt: number | null };
   };
-  /** Prompt context for a fresh attempt created after this attempt was interrupted. */
-  restartContext?: { previousAttempt: number; transcriptPath: string };
+  /** Prompt context for a fresh attempt created after this attempt was interrupted.
+      `cause` is absent on records written before causes were told apart. */
+  restartContext?: { previousAttempt: number; transcriptPath: string; cause?: PipelineStageInterruptionCause };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
@@ -1207,3 +1214,7 @@ export type PatchPipelineRequest = {
 export type PipelinesResponse = {
   pipelines: Pipeline[];
 };
+
+/** Why a running stage attempt was replaced: the service restarted under it,
+    its host was found gone, or Delegatus stopped a host whose turn went silent. */
+export type PipelineStageInterruptionCause = "restart" | "host-lost" | "engine-stop";

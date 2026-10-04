@@ -1674,6 +1674,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     throw new McpToolRefusal("machine accepts only \"here\": a new task runs on the machine that creates it", { code: "TASK_INVALID_FIELD", field: "machine", status: 400 });
   }
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
+  const caller = dependencies ? attributionOf(dependencies) : null;
   assertMaintenanceWrite(maintainer, args, undefined, true);
   const input: CreateTaskInput = {
     ...args,
@@ -1681,7 +1682,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, seatHolding: taskSeatHoldingSnapshot() });
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot() });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1727,6 +1728,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const maintainer = maintenanceCaller(dependencies);
+  const caller = attributionOf(dependencies);
   if (args.refine !== undefined) {
     if (maintainer) throw new McpToolRefusal("Maintenance uses explicit taskId and text for retitling.", { code: "maintainer_delete_refused", status: 403 });
     return refineBoardTask(args, dependencies);
@@ -1766,11 +1768,10 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
     assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent, retiredSeat);
     const before = fieldValues(prior);
-    const caller = attributionOf(dependencies);
     const noteAuthor = caller.kind === "manager"
       ? { kind: "orchestrator" as const, conversationId: caller.conversationId }
       : { kind: "agent" as const, conversationId: caller.conversationId };
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", noteAuthor, seatHolding: taskSeatHoldingSnapshot(), explicit: true,
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", conversationId: caller.conversationId ?? undefined, noteAuthor, seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };

@@ -102,6 +102,16 @@ export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhost
 
 export type { ProcessIdentity } from "@/lib/processIdentity";
 
+/** Receipt of one captured termination tree, enough to undo exactly that write. */
+export interface StructuredTerminationCapture {
+  /** Identities this capture added; ones an earlier capture retained are not listed. */
+  added: ProcessIdentity[];
+  /** Whether the row carried the survivor field at all before this capture. */
+  retainedField: boolean;
+  previousUpdatedAt: string;
+  updatedAt: string;
+}
+
 export interface TmuxHostEvidence {
   kind: "tmux";
   endpoint: string;
@@ -4263,6 +4273,23 @@ function isRecoverableSpawnReadinessFailure(error: string | null): boolean {
 /** Durable source for identity and handoff evidence. The lock directory is
     intentionally separate from in-memory promises, so a Viewer replacement
     cannot leave an imaginary owner behind. */
+const TERMINATION_JOURNAL_ROTATE_BYTES = 4 * 1024 * 1024;
+
+/** One line per captured or withdrawn termination tree, beside the registry
+    it describes. A capture changes what the row's own host may write, so the
+    moment it happens has to be readable after the fact. */
+function journalStructuredTermination(registryFilename: string, record: Record<string, unknown>): void {
+  try {
+    const filename = path.join(path.dirname(registryFilename), "host-termination-journal.ndjson");
+    try {
+      if (fs.statSync(filename).size > TERMINATION_JOURNAL_ROTATE_BYTES) fs.renameSync(filename, `${filename}.1`);
+    } catch { /* first write */ }
+    fs.appendFileSync(filename, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    console.error("[host termination] journal could not be appended", error);
+  }
+}
+
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
@@ -6712,19 +6739,73 @@ export class AgentRegistry {
     expectedRoot: Readonly<ProcessIdentity>,
     survivors: readonly ProcessIdentity[],
   ): boolean {
-    return this.mutate((file) => {
+    return this.captureStructuredTerminationSurvivors(key, expectedRoot, survivors) !== null;
+  }
+
+  /** The same write, returned as a receipt a caller can undo. A termination
+      captures its tree before its first effect, and one that is then refused
+      before anything was signalled or released owes the row nothing: the
+      receipt names exactly the identities this capture added and the revision
+      it replaced, so withdrawing it cannot remove another capture's evidence. */
+  captureStructuredTerminationSurvivors(
+    key: SessionKey,
+    expectedRoot: Readonly<ProcessIdentity>,
+    survivors: readonly ProcessIdentity[],
+    source = "unspecified",
+  ): StructuredTerminationCapture | null {
+    const capture = this.mutate((file): StructuredTerminationCapture | null => {
+      const entry = file.entries[sessionKeyId(key)];
+      const current = entry?.structuredHost?.process ?? null;
+      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
+      const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
+      const retainedField = entry.structuredTerminationSurvivors !== undefined;
+      const identities = new Map((entry.structuredTerminationSurvivors ?? []).map(identity => [identityKey(identity), identity]));
+      const added: ProcessIdentity[] = [];
+      for (const identity of survivors) {
+        if (!identities.has(identityKey(identity))) added.push({ ...identity });
+        identities.set(identityKey(identity), { ...identity });
+      }
+      const previousUpdatedAt = entry.updatedAt;
+      entry.structuredTerminationSurvivors = [...identities.values()];
+      entry.updatedAt = now();
+      return { added, retainedField, previousUpdatedAt, updatedAt: entry.updatedAt };
+    });
+    if (capture) {
+      journalStructuredTermination(this.filename, {
+        at: capture.updatedAt, event: "captured", source, key: sessionKeyId(key), root: expectedRoot.pid,
+        pids: survivors.map(identity => identity.pid), added: capture.added.map(identity => identity.pid),
+      });
+    }
+    return capture;
+  }
+
+  /** Undoes one capture whose termination had no effect. Only the identities
+      that capture added leave the row. The earlier revision stamp returns only
+      while the capture is still the row's newest write, so a row nobody else
+      touched reads exactly as it did before the stop was considered. */
+  withdrawStructuredTerminationSurvivors(
+    key: SessionKey,
+    expectedRoot: Readonly<ProcessIdentity>,
+    capture: Readonly<StructuredTerminationCapture>,
+    source = "unspecified",
+  ): boolean {
+    const withdrawn = this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       const current = entry?.structuredHost?.process ?? null;
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return false;
-      const identities = new Map((entry.structuredTerminationSurvivors ?? []).map(identity =>
-        [`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`, identity]));
-      for (const identity of survivors) {
-        identities.set(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`, { ...identity });
-      }
-      entry.structuredTerminationSurvivors = [...identities.values()];
-      entry.updatedAt = now();
+      const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
+      const withdrawn = new Set(capture.added.map(identityKey));
+      const remaining = (entry.structuredTerminationSurvivors ?? []).filter(identity => !withdrawn.has(identityKey(identity)));
+      if (remaining.length === 0 && !capture.retainedField) delete entry.structuredTerminationSurvivors;
+      else entry.structuredTerminationSurvivors = remaining;
+      entry.updatedAt = entry.updatedAt === capture.updatedAt ? capture.previousUpdatedAt : now();
       return true;
     });
+    journalStructuredTermination(this.filename, {
+      at: now(), event: withdrawn ? "withdrawn" : "withdrawal-refused", source, key: sessionKeyId(key),
+      root: expectedRoot.pid, removed: capture.added.map(identity => identity.pid),
+    });
+    return withdrawn;
   }
 
   /**
@@ -6916,6 +6997,16 @@ export class AgentRegistry {
       advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
       return true;
     });
+  }
+
+  /** Why a claimed write was refused: true when the caller still owns the
+      writer fence and only a captured termination tree holds the row. */
+  structuredHostWriteHeldByTermination(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
+    const entry = this.readOnlySnapshot().entries[sessionKeyId(key)];
+    return entry?.claimOwner === claimOwner
+      && entry.claimEpoch === claimEpoch
+      && entry.structuredHost?.writerClaimEpoch === claimEpoch
+      && (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
   }
 
   ownsStructuredHostClaim(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {

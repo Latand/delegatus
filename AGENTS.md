@@ -91,7 +91,8 @@ Touched tests run one file per process on head and on the merge base with
 `origin/main`, each with fresh state, HOME and TMPDIR under the OS temp root.
 Only new failures block; output lists pre-existing and fixed failures by file,
 describe ancestry and test name, and retains between-tests errors. An incomplete
-baseline blocks as a gate error; an incomplete head names its file and blocks.
+baseline blocks as a gate error and an incomplete head names its file and blocks,
+unless both are broken the same way, which lists as pre-existing.
 Baseline results are cached by commit, sorted file set, origin URL, Bun version, dependency
 graph and execution environment under the private temp directory
 `delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). A SHA-256

@@ -313,12 +313,21 @@ export type Item = (
      or an internal relay card. Without evidence it renders as this system row. */
   | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
-  | { kind: "raw"; text: string; err: boolean }
+  | { kind: "raw"; text: string; err: boolean; processingError?: { recordType: string; message: string } }
 ) & { structuredUserRef?: string };
 
 /* The wire text can begin with marker-shaped literal content. Keep it outside
    the public Item shape so legacy parsed rows retain their exact contracts. */
 const rawUserTexts = new WeakMap<Item, string>();
+// Correlation uses original complete segments; public cards keep redaction and caps.
+const assistantEchoTexts = new WeakMap<Item, string>();
+export function assistantEchoText(item: Item): string | null {
+  if (item.kind === "prose") return item.text;
+  if (item.kind === "blob") return assistantEchoTexts.get(item) ?? item.text;
+  if (item.kind === "review" || item.kind === "mem-citation") return assistantEchoTexts.get(item) ?? item.raw;
+  return null;
+}
+
 const nativeUserRefs = new WeakMap<Item, string>();
 /** Exact journal record identity survives Codex echo reconciliation. */
 export function nativeUserRefFor(item: Item): string | undefined { return nativeUserRefs.get(item); }
@@ -1818,12 +1827,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const pushBlobIfHuge = (text: string, sourceId?: string): boolean => {
     if (!looksLikeBlob(text)) return false;
-    push({
+    const item: Item = {
       kind: "blob",
       bytes: text.length,
       text: redactSecrets(text).slice(0, BLOB_KEEP),
       ...(sourceId ? { sourceId } : {}),
-    });
+    };
+    // Private matching metadata never becomes the blob's displayed payload.
+    if (item.text !== text) assistantEchoTexts.set(item, text);
+    push(item);
     return true;
   };
   const pushImage = (block: Record<string, unknown>, fileWrap: Record<string, unknown>) => {
@@ -1856,15 +1868,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     emit: (item: Item) => void = push,
     sourceId?: string,
   ): boolean => {
-    const emitOwned = (item: ReviewCardItem | MemCitationItem) =>
-      emit(sourceId ? { ...item, sourceId } : item);
+    const emitOwned = (item: ReviewCardItem | MemCitationItem, fullText: string) => {
+      const owned = sourceId ? { ...item, sourceId } : item;
+      if (owned.raw !== fullText) assistantEchoTexts.set(owned, fullText);
+      emit(owned);
+    };
     MEM_CITATION_RE.lastIndex = 0;
     const hasCitation = MEM_CITATION_RE.test(text);
     MEM_CITATION_RE.lastIndex = 0;
     if (!hasCitation) {
       const review = parseReview(text.trim(), ts);
       if (!review) return false;
-      emitOwned(review);
+      emitOwned(review, text.trim());
       return true;
     }
     let handled = false;
@@ -1874,7 +1889,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (!trimmed) return;
       const review = parseReview(trimmed, ts);
       if (review) {
-        emitOwned(review);
+        emitOwned(review, trimmed);
         handled = true;
       } else {
         fallback(trimmed);
@@ -1884,7 +1899,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const whole = match[0];
       const index = match.index ?? 0;
       pushTextPart(text.slice(last, index));
-      emitOwned(parseMemCitation(whole, match[1] ?? "", match[2] ?? ""));
+      emitOwned(parseMemCitation(whole, match[1] ?? "", match[2] ?? ""), whole);
       handled = true;
       last = index + whole.length;
     }
@@ -1967,6 +1982,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
                 ? { ...item, ...(sourceId ? { sourceId } : {}) }
                 : item,
         });
+        const fullText = assistantEchoTexts.get(item);
+        if (fullText !== undefined) assistantEchoTexts.set(entries[idx].item, fullText);
       }
       /* Current envelopes can finish with the visible answer while the adjacent
          response mirror appends a structured citation block under the same id.
@@ -3273,7 +3290,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       for (const part of arr(message.content)) {
         if (counted && part.type === "tool_use" && textPart(part.id)) ledger.member(textPart(part.id));
         if (part.type === "text" && textPart(part.text).trim()) {
-          addProse(ts, textPart(part.text), textPart(obj.uuid) || undefined);
+          addProse(ts, textPart(part.text), textPart(obj.id) || textPart(obj.uuid) || textPart(message.id) || undefined);
         }
         else if (part.type === "thinking" && textPart(part.thinking).trim()) {
           push({ kind: "think", text: textPart(part.thinking).replace(/\s+/g, " ").trim() });
@@ -3575,25 +3592,40 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return;
     }
     if (jsonl) {
+      let obj: unknown;
       try {
-        const obj = JSON.parse(line);
+        obj = JSON.parse(line);
+      } catch {
+        addRecord(null, "malformed_record", { source: line });
+        return;
+      }
+      try {
         if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          const record = obj as Record<string, unknown>;
           const tracksTurns = cfg.fmt === "claude" || cfg.fmt === "codex";
-          const facts = tracksTurns ? classifyTurnRecord(obj, cfg.fmt === "codex") : null;
+          const facts = tracksTurns ? classifyTurnRecord(record, cfg.fmt === "codex") : null;
           if (facts) {
             latestTurnTimestamp = facts.timestampMs ?? latestTurnTimestamp;
             if (facts.starts) beginTurn(facts.timestampMs);
             else if (facts.assistantRecord && !facts.fails && turnFailed) recoverFailedTurn();
           }
-          if (cfg.fmt === "claude") renderClaude(obj);
-          else if (cfg.fmt === "openclaw") renderOpenclaw(obj);
-          else if (cfg.fmt === "copilot") renderCopilot(obj);
-          else renderCodex(obj);
+          if (cfg.fmt === "claude") renderClaude(record);
+          else if (cfg.fmt === "openclaw") renderOpenclaw(record);
+          else if (cfg.fmt === "copilot") renderCopilot(record);
+          else renderCodex(record);
           if (facts?.fails) finishTurn(true);
           else if (facts?.closes) finishTurn(false);
         } else addRecord(null, "malformed_record", { value: obj });
-      } catch {
-        addRecord(null, "malformed_record", { source: line });
+      } catch (error) {
+        const recordType = redactTranscriptText(textPart(rec(obj).type)).slice(0, 120) || "unknown";
+        const message = redactTranscriptText(error instanceof Error ? error.message : String(error)).slice(0, 1000);
+        // The window index is no line of the transcript: it starts mid-file,
+        // moves as the cap trims and is negative for prepended history.
+        const processingError = { recordType, message };
+        // Do not call translation or tool-card code again in its failure path.
+        // The raw fallback also stays readable outside the conversation surface.
+        push({ kind: "raw", err: true, processingError,
+          text: `Record processing failed (${recordType}): ${message}` });
       }
     } else renderPlain(line);
   };

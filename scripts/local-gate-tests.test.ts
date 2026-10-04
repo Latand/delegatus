@@ -31,18 +31,22 @@ test("a new failure blocks by file and full test identity", () => {
   const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(cli.status).toBe(1); expect(cli.stdout).toContain("NEW example.test.ts");
 });
-test("first-sample base failures are FLAKY and red baseline samples are never cached", () => {
+test("a failure on both first samples is PRE-EXISTING from the CLI, costs no reruns and is never cached", () => {
   const marker = path.join(gateTemporaryRoot(), `gate-marker-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify("run\n")}); test("old red", () => expect(false).toBe(true));`);
-  expect(f.run().introduced).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: old red (base 0 pass/4 fail; head 0 pass/4 fail)");
-  const before = readFileSync(marker, "utf8").trim().split("\n").length;
-  expect(before).toBe(8);
+  const samples = () => readFileSync(marker, "utf8").trim().split("\n").length;
+  const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(cli.status).toBe(0);
+  expect(cli.stdout).toContain("PRE-EXISTING example.test.ts: old red");
+  expect(cli.stdout).not.toContain("FLAKY"); expect(cli.stdout).not.toContain("flaky confirmation");
+  expect(cli.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+  // One process per side: the base sample and the head sample, nothing more.
+  expect(samples()).toBe(2);
   f.env.INVOCATION_ID = "another-systemd-scope";
-  f.logs.length = 0; expect(f.run().flaky).toHaveLength(1);
-  expect(readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(16);
+  const again = f.run(); expect(again.preexisting).toHaveLength(1); expect(again.flaky).toHaveLength(0); expect(again.introduced).toHaveLength(0);
+  expect(samples()).toBe(4);
   expect(f.logs.join("\n")).toContain("baseline run");
-  expect(f.logs.at(-1)).toContain("0 new failures, 0 pre-existing failures");
+  expect(readdirSync(f.cache)).toHaveLength(0);
 });
 test("a failure fixed by the push is reported; a skipped assertion is kept separate", () => {
   const f = fixture(source(false)); writeFileSync(path.join(f.dir, "example.test.ts"), source(true));
@@ -54,7 +58,7 @@ test("changing the baseline origin invalidates cache before a same-named regress
   const check = (extra = "true") => `import { test, expect } from "bun:test"; import { execFileSync } from "node:child_process"; const origin = execFileSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).trim(); test("origin contract", () => expect(origin.endsWith("green.git") && ${extra}).toBe(true));`;
   const f = fixture(check());
   f.git("remote", "set-url", "origin", "https://example.invalid/red.git");
-  expect(f.run().flaky).toHaveLength(1);
+  const red = f.run(); expect(red.preexisting).toHaveLength(1); expect(red.flaky).toHaveLength(0);
   f.git("remote", "set-url", "origin", "https://example.invalid/green.git");
   writeFileSync(path.join(f.dir, "example.test.ts"), check("false"));
   f.logs.length = 0;
@@ -147,7 +151,7 @@ test.skipIf(process.platform === "win32")("test helpers in the recorded process 
     expect(probe.status !== 0 || probe.stdout.trim().startsWith("Z")).toBeTrue();
   }
 });
-test("real pre-push entry permits FLAKY and refuses NEW after privacy/types/lint", () => {
+test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/types/lint", () => {
   const f = fixture(source(false));
   for (const leaf of [".githooks", ".github/workflows", "shims"]) mkdirSync(path.join(f.dir, leaf), { recursive: true });
   mkdirSync(path.join(f.dir, "scripts"));
@@ -167,7 +171,8 @@ test("real pre-push entry permits FLAKY and refuses NEW after privacy/types/lint
   const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
   const hook = () => spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
-  expect(accepted.stdout).toContain("0 new failures, 0 pre-existing failures");
+  expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
   expect(readFileSync(calls, "utf8")).toContain("--check-commits");
   expect(readFileSync(calls, "utf8")).toContain("tsc --noEmit");
   expect(readFileSync(calls, "utf8")).toContain("scripts/eslint-changes.ts");
@@ -175,7 +180,7 @@ test("real pre-push entry permits FLAKY and refuses NEW after privacy/types/lint
   const refused = hook(); expect(refused.status).toBe(1);
   if (!refused.stdout.includes("NEW")) throw new Error(refused.stdout + refused.stderr);
   expect(refused.stdout).toContain("NEW example.test.ts: new red");
-  expect(refused.stdout).toContain("1 new failures, 0 pre-existing failures");
+  expect(refused.stdout).toContain("1 new failures, 1 pre-existing failures");
 }, 60000);
 
 test("an incomplete cached baseline is rebuilt before it can certify a comparison", () => {
@@ -332,6 +337,93 @@ test("a base-only scheduled failure is FLAKY with both counts and no unrelated r
   expect(readdirSync(f.cache)).toHaveLength(0);
 });
 
+test("a base that failed its first sample needs no reruns even when later samples would differ", () => {
+  const f = scheduledFixture([1], [1, 2, 3, 4]);
+  const accepted = f.cli();
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: inner > outer > target [Ω]");
+  expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+  expect(readFileSync(f.marker + "-base", "utf8")).toBe("1");
+  expect(readFileSync(f.marker + "-head", "utf8")).toBe("1");
+});
+
+// A throw inside a describe callback is Bun's "Unhandled error between tests":
+// the report stays complete and the error appears on every run, filtered or not.
+const betweenTests = (message: string | null, extra = "") => `import { test, expect, describe } from "bun:test";
+test("steady red", () => expect(false).toBe(true));
+${extra}
+${message === null ? "" : `describe("broken", () => { test("inner", () => {}); throw new Error(${JSON.stringify(message)}); });`}`;
+const cliAt = (f: ReturnType<typeof fixture>, base: string, files = ["./example.test.ts"]) => spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, ...files], { cwd: f.dir, env: f.env, encoding: "utf8" });
+const SAME_WAY = "(the base run of this file is broken the same way)";
+
+test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", () => {
+  const f = fixture(betweenTests("describe boom"));
+  const accepted = cliAt(f, f.base);
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
+  expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: steady red\n");
+  expect(accepted.stdout).toContain("0 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+  expect(accepted.stdout).not.toContain("gate error"); expect(accepted.stderr).not.toContain("gate error");
+});
+
+test("a retry in a file whose base is broken the same way still confirms its candidates", () => {
+  const f = fixture(source(true));
+  const counter = path.join(f.dir, "between-schedule");
+  const recovering = `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const run = existsSync(${JSON.stringify(counter)} + side) ? Number(readFileSync(${JSON.stringify(counter)} + side, "utf8")) + 1 : 1;
+writeFileSync(${JSON.stringify(counter)} + side, String(run));
+test("recovers", () => expect(side === "base" || run > 1).toBe(true));
+test("stays red", () => expect(side === "base").toBe(true));`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("describe boom", recovering));
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "broken base with a head-only schedule");
+  const refused = cliAt(f, f.git("rev-parse", "HEAD"));
+  expect(refused.stderr).not.toContain("gate error");
+  expect(refused.stdout).toContain("FLAKY example.test.ts: recovers (base 4 pass/0 fail; head 3 pass/1 fail)");
+  expect(refused.stdout).toContain("NEW example.test.ts: stays red");
+  expect(refused.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
+  expect(refused.stdout).toContain("1 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(refused.status).toBe(1);
+});
+
+test("a file that cannot finish on either side in the same way is PRE-EXISTING from the CLI and is never cached", () => {
+  const f = fixture("process.exit(0);");
+  writeFileSync(path.join(f.dir, "example.test.ts"), "// harmless edit\nprocess.exit(0);");
+  const accepted = cliAt(f, f.base);
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toMatch(/PRE-EXISTING example\.test\.ts: <runner error> .+ \(the base run of this file is broken the same way\)/);
+  expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+  expect(f.run().preexisting).toHaveLength(1);
+  expect(f.logs.join("\n")).toContain("baseline run");
+  expect(readdirSync(f.cache)).toHaveLength(0);
+});
+
+test("a between-tests error only on the head, or a different one, is NEW from the CLI and blocks", () => {
+  const f = fixture(betweenTests(null));
+  writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("describe boom"));
+  const headOnly = cliAt(f, f.base);
+  expect(headOnly.status).toBe(1);
+  expect(headOnly.stdout).toContain("NEW example.test.ts: <between-tests error> error: describe boom\n");
+  expect(headOnly.stdout).not.toContain(SAME_WAY);
+  expect(headOnly.stdout).toContain("1 new failures, 1 pre-existing failures");
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "broken base");
+  writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("another boom"));
+  const different = cliAt(f, f.git("rev-parse", "HEAD"));
+  expect(different.status).toBe(1);
+  expect(different.stdout).toContain("NEW example.test.ts: <between-tests error> error: another boom\n");
+  expect(different.stdout).toContain("1 new failures, 1 pre-existing failures, 1 fixed");
+});
+
+test("a head that cannot finish a file the base finished is NEW from the CLI and blocks", () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "example.test.ts"), "process.exit(0);");
+  const refused = cliAt(f, f.base);
+  expect(refused.status).toBe(1);
+  expect(refused.stdout).toMatch(/NEW example\.test\.ts: <runner error> /);
+  expect(refused.stdout).not.toContain(SAME_WAY);
+});
+
 test("a head scheduled recovery passes CLI and never caches a head pass", () => {
   const f = scheduledFixture([], [1]);
   const accepted = f.cli();
@@ -454,7 +546,10 @@ test("second file", () => expect(side === "base" || run !== 2).toBe(true));`;
   f.logs.length = 0;
   const next = run();
   expect(f.logs.join("\n")).toContain("baseline run");
-  expect(next.flaky).toHaveLength(1);
+  // The aborted batch never reached this file, so its scheduled base failure
+  // lands on the rebuilt first sample: a failure on both first samples.
+  expect(next.preexisting.map(site => site.name)).toEqual(["target [Ω]"]);
+  expect(next.flaky).toHaveLength(0); expect(next.introduced).toHaveLength(0);
 });
 
 test("a literal describe separator is filtered inside nested suite ancestry", () => {
