@@ -473,6 +473,174 @@ test("failed publication retains the hook tail, exit status and duration in lane
   } finally { h.cleanup(); }
 });
 
+/** A lane cut from an older main whose stage left `files` behind (none for a
+    read-only stage), with main moved on by `behind` commits since. */
+function trailingLane(h: ReturnType<typeof fixture>, behind: number, files: Record<string, string> = {}): string {
+  const source = path.join(h.root, "source");
+  h.git("reset", "-q", "--hard", h.lane.baseRef!);
+  for (const [file, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(h.repo, file)), { recursive: true }); fs.writeFileSync(path.join(h.repo, file), text);
+  }
+  if (Object.keys(files).length) { h.git("add", "."); h.git("commit", "-q", "-m", "stage output"); }
+  for (let n = 1; n < behind; n++) h.git("-C", source, "commit", "--allow-empty", "-q", "-m", `later main ${n}`);
+  h.git("-C", source, "push", "-q", "origin", "main"); h.git("fetch", "-q", "origin", "main");
+  expect(h.git("rev-list", "--count", "HEAD..origin/main")).toBe(String(behind));
+  h.lane.lastPassedCommit = h.git("rev-parse", "HEAD"); h.lane.state = "running"; h.lane.stateDetail = null;
+  savePipelines([h.lane]);
+  return h.lane.lastPassedCommit;
+}
+
+/** The hook of a repository whose main carries a test that reads the pushing
+    process's settings: green from a shell, red under the Viewer's own
+    interface language, launcher handoff or token (bin/server-runtime.test.ts
+    did exactly this on five lanes on 2026-10-04). Privacy runs first. */
+function viewerSensitiveHook(h: ReturnType<typeof fixture>): string {
+  const marker = path.join(h.root, "privacy-ran");
+  fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\necho "pre-push: branch is $(git rev-list --count HEAD..origin/main) commit(s) behind origin/main; merge it" >&2\necho "pre-push: privacy" >&2\ntouch '${marker}'\necho "pre-push: Linux tests" >&2\nif [ -n "\${LLV_LANG:-}\${LLV_LAUNCHER_REEXEC:-}\${LLV_TOKEN:-}\${LLV_STATE_OWNER:-}" ]; then\n  echo "(fail) the CLI names a missing prerequisite [1.00ms]" >&2\n  echo "pre-push: bash failed (1); gate failed" >&2\n  exit 1\nfi\n`, { mode: 0o700 });
+  return marker;
+}
+
+async function underViewerSettings<T>(run: () => Promise<T>): Promise<T> {
+  const settings = { LLV_LANG: "uk", LLV_LAUNCHER_REEXEC: "1", LLV_TOKEN: "fixture-token", NODE_ENV: "production" };
+  const previous = Object.fromEntries(Object.keys(settings).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, settings);
+  try { return await run(); } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+}
+
+test("a lane branch behind main whose stage changed nothing publishes: the hook never sees the Viewer's own settings", async () => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 3);
+    expect(head).toBe(h.lane.baseRef!);
+    const marker = viewerSensitiveHook(h);
+    await underViewerSettings(async () => {
+      expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+      await h.tick();
+    });
+    // The hook ran, privacy included, and passed as it does from a shell.
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(h.pushes()).toBe(1);
+    expect(spawnSync("git", ["--git-dir", h.remote, "rev-parse", `refs/heads/${h.lane.branch}`], { encoding: "utf8" }).stdout.trim()).toBe(head);
+  } finally { h.cleanup(); }
+});
+
+test("a lane branch behind main whose stage changed one document publishes while main carries a test that fails under the Viewer", async () => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2, { "docs/design/note.md": "# design\n" });
+    const marker = viewerSensitiveHook(h);
+    await underViewerSettings(async () => {
+      expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+      await h.tick();
+    });
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+  } finally { h.cleanup(); }
+});
+
+test("a refused publication of an unchanged head retries on a bounded backoff, then parks with one line a person can act on", async () => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\necho 'pre-push: Linux tests' >&2\necho '(fail) main is red [2.00ms]' >&2\necho 'pre-push: bash failed (1); gate failed' >&2\nexit 1\n", { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const scheduled: number[] = [];
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: (delay: number) => { scheduled.push(delay); } };
+    const tick = async () => { for (let n = 0; n < 3; n++) await tickPipelines([], ports); };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    await tick();
+    const cause = "the repository's pre-push hook failed in its \"Linux tests\" phase (exit 1, 1 failing test, first: main is red)";
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}. The stage changed no files; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
+    expect(h.current().delivery!.operation!.result).toMatchObject({ failure: { changedFiles: 0 } });
+    expect(scheduled).toContain(60_000);
+    // Ticks before the wait is over push nothing: no four-second loop.
+    await tick(); await tick();
+    expect(h.pushes()).toBe(1);
+    for (const [wait, pushes] of [[60_000, 2], [5 * 60_000, 3]] as const) {
+      clock += wait; await tick();
+      expect(h.pushes()).toBe(pushes);
+      expect(h.current().state).toBe("running");
+      await tick();
+      expect(h.pushes()).toBe(pushes);
+    }
+    expect(h.current().stateDetail).toContain("automatic retry 3 of 3 at 2026-10-04T10:21:00.000Z");
+    clock += 15 * 60_000; await tick();
+    expect(h.pushes()).toBe(4);
+    expect(h.current().state).toBe("needs_decision");
+    const [line, ...evidence] = h.current().stateDetail!.split("\n");
+    expect(line).toBe(`publishing the passed stage: ${cause}. The stage changed no files; retried 3 times, so the cause is on the base branch or in the hook itself: fix it there, then retry-stage.`);
+    expect(evidence.join("\n")).toContain("(fail) main is red");
+    // The pass is kept; only its publication waits for a person.
+    expect(h.current().runs[0]!.attempts[0]!).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+    // Parked means parked: time alone publishes nothing more.
+    clock += 60 * 60_000; await tick();
+    expect(h.pushes()).toBe(4);
+    expect(h.current().publishedCommit).toBeNull();
+    // The cause is fixed; a person asks once and the same accepted head lands.
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+    await tick();
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toBeUndefined();
+  } finally { h.cleanup(); }
+});
+
+test("a refused publication of a head that changed code parks at once and is never retried on its own", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const marker = path.join(h.root, "privacy-ran");
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: privacy' >&2\ntouch '${marker}'\necho 'pre-push: touched tests' >&2\necho '(fail) the stage broke this [2.00ms]' >&2\nexit 1\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    const tick = async () => { for (let n = 0; n < 3; n++) await tickPipelines([], ports); };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    await tick();
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toBe("publishing the passed stage: the repository's pre-push hook failed in its \"touched tests\" phase (exit 1, 1 failing test, first: the stage broke this). Fix it on this branch or on the base branch, then retry-stage.");
+    expect(h.current().delivery!.operation!.result).toMatchObject({ failure: { changedFiles: 1 } });
+    clock += 60 * 60_000; await tick();
+    expect(h.pushes()).toBe(1);
+    expect(h.current().publishedCommit).toBeNull();
+  } finally { h.cleanup(); }
+});
+
+test("a privacy refusal of an unchanged head is never retried or bypassed: the pushed commits stay unpublished", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\necho 'privacy-publication: commit identity is not allowed' >&2\necho 'pre-push: bun failed (1); gate failed' >&2\nexit 1\n", { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    const tick = async () => { for (let n = 0; n < 3; n++) await tickPipelines([], ports); };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    await tick();
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toBe("publishing the passed stage: the repository's pre-push hook failed in its \"privacy\" phase (exit 1). The commits this push carries were refused: correct their author, message or content on this branch, then retry-stage.");
+    clock += 60 * 60_000; await tick();
+    expect(h.pushes()).toBe(1);
+    expect(h.current().publishedCommit).toBeNull();
+    expect(spawnSync("git", ["--git-dir", h.remote, "rev-parse", "--verify", "-q", `refs/heads/${h.lane.branch}`], { encoding: "utf8" }).status).not.toBe(0);
+  } finally { h.cleanup(); }
+});
+
+test("the publication hook environment drops the Viewer's settings and keeps the hook's own inputs", async () => {
+  const { pipelinePublicationHookEnv } = await import("./git");
+  const env = pipelinePublicationHookEnv({ NODE_ENV: "production", PATH: "/usr/bin", HOME: "/sandbox/home", LANG: "en_US.UTF-8",
+    LLV_LANG: "uk", LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: "/checkout", LLV_TOKEN: "t", LLV_STATE_OWNER: "viewer",
+    LLV_SKIP_HOOKS: "1", DELEGATUS_DEBUG: "1", NEXT_RUNTIME: "nodejs", LLV_GATE_SLOTS: "2", LLV_PRIVACY_OCR_LANGUAGES: "eng",
+    LLV_PUBLICATION_NAME: "Agent", NEXT_TELEMETRY_DISABLED: "1" });
+  // Every key present is an explicit removal; a kept variable is inherited untouched.
+  expect(Object.values(env).every((value) => value === undefined)).toBe(true);
+  expect(Object.keys(env).sort()).toEqual(["DELEGATUS_DEBUG", "LLV_LANG", "LLV_LAUNCHER_CHECKOUT", "LLV_LAUNCHER_REEXEC", "LLV_SKIP_HOOKS", "LLV_STATE_OWNER", "LLV_TOKEN", "NEXT_RUNTIME", "NODE_ENV"]);
+});
+
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   h.lane.stages[0]!.role = { roleId: "verifier" };
   h.lane.stages[0]!.effectiveRole = { ...h.lane.stages[0]!.effectiveRole!, roleId: "verifier", access: "read-only" };

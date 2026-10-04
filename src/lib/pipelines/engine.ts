@@ -73,7 +73,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -3159,6 +3159,73 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
+/** One minute, five, fifteen: long enough for the base branch or the machine
+    to change, short enough that a lane is not forgotten. Then it parks. */
+const PUBLICATION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+
+/** The first line of a publication park: the cause and what a person does. */
+function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: { error: string; failure?: import("./types").PipelinePublicationFailure }): string {
+  const failure = published.failure;
+  if (!failure) return `publishing the passed stage: ${published.error}`;
+  const retried = attempt.publicationRetry?.exhausted ? `; retried ${PUBLICATION_RETRY_DELAYS_MS.length} times` : "";
+  const action = commitsRefusedByPrivacy(failure)
+    ? "The commits this push carries were refused: correct their author, message or content on this branch, then retry-stage."
+    : failure.changedFiles === 0
+    ? `The stage changed no files${retried}, so the cause is on the base branch or in the hook itself: fix it there, then retry-stage.`
+    : "Fix it on this branch or on the base branch, then retry-stage.";
+  return `publishing the passed stage: ${publicationFailureCause(failure)}. ${action}\n${published.error}`;
+}
+
+/** Privacy reads the pushed commits themselves, a merge of the base branch
+    included, so its refusal stands until those commits change. */
+function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationFailure): boolean {
+  return publicationFailurePhase(failure) === "privacy";
+}
+
+/**
+ * A refused publication of a head that changes nothing cannot be the stage's
+ * doing, so the lane waits and tries again instead of asking a person at once.
+ * Each failed operation is counted once on the attempt; the wait is durable
+ * across ticks and restarts, and the last refusal parks with its cause.
+ * A stage that changed files parks at once: its own gate verdict is news.
+ */
+function retryRefusedPublication(
+  pipeline: Pipeline,
+  attempt: PipelineStageAttempt,
+  published: { error: string; failure?: import("./types").PipelinePublicationFailure },
+  ports: PipelinePorts,
+): boolean {
+  const operation = pipeline.delivery?.operation;
+  const failure = published.failure;
+  if (!operation || operation.state !== "settled" || !failure || failure.changedFiles !== 0 || commitsRefusedByPrivacy(failure)) return false;
+  const previous = attempt.publicationRetry?.sha === operation.sha ? attempt.publicationRetry : undefined;
+  let record = previous;
+  if (previous?.operationId !== operation.id) {
+    // A refusal after retry-stage or an exhausted round starts a new round.
+    const failures = (previous && !previous.exhausted ? previous.failures : 0) + 1;
+    if (failures > PUBLICATION_RETRY_DELAYS_MS.length) {
+      attempt.publicationRetry = { ...previous!, operationId: operation.id, exhausted: true };
+      return false;
+    }
+    record = { sha: operation.sha, operationId: operation.id, failures,
+      retryAt: new Date(unixMs(ports.now()) + PUBLICATION_RETRY_DELAYS_MS[failures - 1]!).toISOString() };
+    attempt.publicationRetry = record;
+  } else if (previous.exhausted) return false;
+  const wait = unixMs(record!.retryAt) - unixMs(ports.now());
+  if (wait <= 0) {
+    delete pipeline.delivery!.operation;
+    pipeline.publishedCommit = null;
+    const reserved = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: pipeline.lastPassedCommit, publishedSha: null });
+    if (!reserved.ok) return false;
+    keepPassedStageUnpublished(pipeline, attempt, reserved.remote === "unreachable" ? reserved.detail : "publication retry reserved");
+    ports.scheduleTick?.(0);
+    return true;
+  }
+  keepPassedStageUnpublished(pipeline, attempt, `${publicationFailureCause(failure)}. The stage changed no files; automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`);
+  ports.scheduleTick?.(Math.max(1_000, wait));
+  return true;
+}
+
 async function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -3186,7 +3253,8 @@ async function retryTerminalStagePublication(
     publishedSha: pipeline.publishedCommit ?? null,
   });
   if (!published.ok) {
-    attempt.error = `publishing the passed stage: ${published.error}`;
+    if (retryRefusedPublication(pipeline, attempt, published, ports)) return;
+    attempt.error = passedPublicationParkDetail(attempt, published);
     park(pipeline, attempt.error);
     return;
   }
@@ -3195,6 +3263,7 @@ async function retryTerminalStagePublication(
       ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
     return;
   }
+  delete attempt.publicationRetry;
   pipeline.publishedCommit = published.sha;
   attempt.error = null;
   advancePipeline(pipeline, stage, ports, attempt);
@@ -9920,6 +9989,8 @@ export async function patchPipeline(
           delete pipeline.delivery.operation;
           pipeline.publishedCommit = null;
         }
+        // A person asked again: the automatic retries start a new round.
+        delete attempt.publicationRetry;
         attempt.state = "passed";
         pipeline.state = "running";
         pipeline.pausedState = null;
