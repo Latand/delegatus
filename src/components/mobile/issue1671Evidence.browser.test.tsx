@@ -67,12 +67,37 @@ describe("shared memory settings", () => {
         enabled = true;
         const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
         try {
-          const offer = page.locator("[data-memory-offer]"); await offer.waitFor();
-          const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
-          expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          const offers = page.locator("[data-memory-offer]"); await offers.nth(1).waitFor();
+          const offer = offers.first(), shortOffer = offers.nth(1);
+          expect(await shortOffer.evaluate(el => el.tagName)).toBe("P");
+          expect(await shortOffer.locator("summary").count()).toBe(0);
+          /* The folded line keeps the bubble's trailing edge and measure, and on the phone its target is 44 px
+             and clear of the copy control above it. */
+          const edges = await page.evaluate(() => {
+            const box = (el: Element | null) => el?.getBoundingClientRect();
+            const bubble = box(document.querySelector("[data-user-bubble]")), summary = box(document.querySelector("[data-memory-offer] summary"));
+            const actions = box(document.querySelector("[data-mobile-message-actions] button"));
+            return { bubbleRight: bubble!.right, summaryLeft: summary!.left, summaryRight: summary!.right, summaryTop: summary!.top, summaryHeight: summary!.height, actionsBottom: actions?.bottom ?? 0, row: document.querySelector("[data-memory-offer]")!.parentElement!.getBoundingClientRect().width };
+          });
+          expect(Math.abs(edges.summaryRight - edges.bubbleRight)).toBeLessThanOrEqual(1);
+          expect(edges.summaryLeft).toBeGreaterThanOrEqual(edges.summaryRight - edges.row * (width === 390 ? .86 : .75) - 1);
+          if (width === 390) {
+            expect(edges.summaryHeight).toBeGreaterThanOrEqual(44);
+            expect(edges.summaryTop).toBeGreaterThanOrEqual(edges.actionsBottom - 1);
+            const top = await page.evaluate(() => { const r = document.querySelector("[data-memory-offer] summary")!.getBoundingClientRect(); return document.elementFromPoint(r.right - 4, r.top + .5)?.closest("summary") !== null; });
+            expect(top).toBe(true);
+          } else {
+            const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
+            expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
           await offer.locator("summary").click();
-          expect(await offer.locator("p").innerText()).toContain("constraint 15");
+          /* Opened, the same line carries every title once: nothing is repeated under it. */
+          expect(await offer.locator("p").count()).toBe(0);
+          const opened = await offer.innerText();
+          for (let i = 1; i <= 15; i++) expect(opened.match(new RegExp(`constraint ${i}(?!\\d)`, "g"))).toHaveLength(1);
+          await page.screenshot({ path: path.join(out, `offer-open-${locale}-${width}.png`) });
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
           const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
           const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);

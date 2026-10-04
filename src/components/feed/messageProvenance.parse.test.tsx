@@ -434,3 +434,22 @@ for (const engine of ["claude", "codex"] as const) for (const locale of ["en", "
     }
   });
 }
+
+for (const locale of ["en", "uk"] as const) {
+  test(`a memory offer is plain text when it is one short title and one expandable line otherwise in ${locale}`, () => {
+    setLocale(locale);
+    const turn = (ref: string): Item => ({ kind: "user", ts: "2026-10-01T12:00:00Z", text: `Turn ${ref}`, structuredUserRef: ref });
+    const short = turn("short"), many = turn("many"), long = turn("long");
+    const titles = Array.from({ length: 4 }, (_, i) => `Synthetic title ${i + 1}`);
+    const lookup = provenanceLookupFor({ memoryOffers: { short: ["Synthetic title"], many: titles, long: ["x".repeat(60)] } }, [short, many, long]);
+    const render = (item: Item) => renderToStaticMarkup(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
+    const plain = render(short);
+    expect(plain).toContain("data-memory-offer");
+    expect(plain).not.toContain("<summary");
+    expect(plain).not.toContain("<details");
+    for (const item of [many, long]) expect(render(item)).toContain("<summary");
+    const folded = render(many);
+    for (const title of titles) expect(folded.split(`${title}`).length - 1).toBe(2); // the label and the title attribute
+    expect(folded).not.toMatch(/<\/summary><p/);
+  });
+}
