@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { procBackend } from "@/lib/proc";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
@@ -115,6 +116,7 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
     createRunner: () => { throw new Error("no runner in this mode"); },
     requestRestart,
     processAlive: () => true,
+    processIdentity: () => null,
     hostHealth: async () => null,
     requestDeployment: requestViewerDeployment,
     readDeployment: async () => null,
@@ -549,8 +551,9 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         publish,
         now: () => Date.now(),
       }, onChange),
-      hostHealth: async () => ({ pid, startIdentity, hostEpoch: 1 }),
+      hostHealth: async () => ({ pid, startIdentity: procBackend.processIdentity(pid)!, hostEpoch: 1 }),
       processAlive: (candidate, identity) => sameProcess({ pid: candidate, startIdentity: identity }),
+      processIdentity: (candidate) => procBackend.processIdentity(candidate),
     });
     h.service = new SelfUpdateService(h.deps);
     return h;

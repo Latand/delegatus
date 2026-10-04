@@ -5623,8 +5623,6 @@ async function lightboxMain(): Promise<void> {
 /* One browser driver owns the Update dialog geometry too. Its API answer is a
    fixture, so no capture can start a real update or restart. */
 async function selfUpdateAutoMain(): Promise<void> {
-  const { translate } = await import("../src/lib/i18n/core");
-  const messages = { en: (await import("../src/lib/i18n/en")).en, uk: (await import("../src/lib/i18n/uk")).uk };
   seedHome();
   const evidenceDir = process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR?.trim() || null;
   const port = await freePort();
@@ -5641,23 +5639,234 @@ async function selfUpdateAutoMain(): Promise<void> {
   };
   const auto = { availability: "available" as const, enabled: true, off: null, phase: "waiting" as const, target: revision(next), green: { state: "green" as const },
     blockers: { turns: 2, stages: 1, operatorActiveAt: "2026-01-01T23:55:00Z", busy: false, memoryMb: null, unreadable: null }, waitingSince: "2026-01-01T00:00:00Z", longWait: false };
+  /* The shapes the server sends: a project is its key and a conversation is its id. The
+     surface must name both in words, so the fixture carries neither a name nor a title. */
+  const projectKey = "repo-0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const projectName = "harbor-billing";
+  const build = { pipelineId: "pipeline_7c1d2e3f", stageId: "build", task: "Ship the billing export for March", cursor: "running", conversationId: "conversation_0d9c3b7e-51a4-4c2e-9f10-6b7a8c9d0e1f" };
+  const review = { pipelineId: "pipeline_a4b5c6d7", stageId: "review", task: "Review the invoice rounding fix", cursor: "reviewing", conversationId: "conversation_5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b" };
+  const turn = (conversationId: string, engine: string, extra: { seat?: boolean; stage?: typeof build } = {}) => ({ conversationId, engine, project: projectKey,
+    seat: extra.seat ?? false, stage: extra.stage ? { pipelineId: extra.stage.pipelineId, stageId: extra.stage.stageId } : null });
+  const working = { ...auto.blockers, operatorActiveAt: null, turns: 5, stages: 2, stageList: [build, review], turnList: [
+    turn(build.conversationId, "claude", { stage: build }), turn(review.conversationId, "codex", { stage: review }),
+    turn("conversation_4f6d2a10-9b7e-4c55-8a31-2f0e6d7c9b12", "claude"), turn("conversation_91a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a5b", "codex"),
+    turn("conversation_aa11bb22-cc33-4d44-8e55-ff6677889900", "codex", { seat: true }),
+  ] };
+  const overranAt = "2026-01-02T06:00:00Z";
   const states: Record<string, Snapshot> = {
     off: { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
-    scheduled: { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
-      busy: true, busyReason: "pipeline-controller", turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
-      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
-    draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...auto.blockers,
-      turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
-      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
-    overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: "2026-01-02T06:00:00Z" }, blockers: { ...auto.blockers,
-      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }] } } },
-    "long-names": { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+    draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...working, busy: true, busyReason: "pipeline-controller" } } },
+    "draining-counts": { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" } } },
+    overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: overranAt }, blockers: working,
+      decision: { id: "drain-example", at: overranAt, project: "Delegatus", blockers: working } } },
+    kept: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: overranAt, choice: "keep-waiting" }, blockers: working, decision: null } },
+    "long-names": { ...base, auto: { ...auto, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...auto.blockers,
       turnList: [{ conversationId: "conversation_seat", engine: "codex", project: "Project".repeat(11) + "Name", seat: true, stage: null }],
       stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "T".repeat(80), cursor: "running", conversationId: "conversation_builder" }] } } },
+    applied: { ...base, serving: { web: revision(next), runtimeHost: revision(next) }, processes: { web: processView(next), runtimeHost: processView(next) },
+      auto: { ...auto, phase: "idle", blockers: null, waitingSince: null }, history: [
+        { at: "2026-01-02T07:00:00Z", by: "auto", kind: "restart-host", target: next, from: old, outcome: "done" },
+        { at: "2026-01-02T06:59:00Z", by: "auto", kind: "restart-web", target: next, from: old, outcome: "done" }] },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
+  const opaque = /repo-[0-9a-f]{16,}|conversation_[0-9a-f-]{8,}/;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  const shot = async (page: Page, tag: string) => {
+    const frame = path.join(OUT_DIR, `${tag}.png`);
+    await page.screenshot({ path: frame });
+    if (evidenceDir) {
+      fs.mkdirSync(evidenceDir, { recursive: true });
+      fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+    }
+  };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    // The isolated install's first-run toast otherwise covers phone choices.
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) for (const [name, snapshot] of Object.entries(states)) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const height = width === 390 ? 844 : 900;
+      const context = await browser.newContext({ viewport: { width, height }, colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      // The name this browser remembered for the project, as after any earlier visit.
+      await context.addInitScript(({ language, names }: { language: string; names: Record<string, string> }) => {
+        localStorage.setItem("llv_lang", language);
+        localStorage.setItem("llvProjectNames", JSON.stringify(names));
+      }, { language: lang, names: { [projectKey]: projectName } });
+      const page = await context.newPage();
+      /* Every update answer is this fixture; a decision click is answered by `decided` and
+         moves `current`, the way the service's next snapshot would. */
+      let current = snapshot;
+      let decided: { status: number; snapshot: Snapshot } = { status: 202, snapshot: states.kept! };
+      await page.route(/\/api\/self-update(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) }));
+      await page.route("**/api/self-update/events*", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(current)}\n\n` }));
+      await page.route("**/api/self-update/auto", (route) => {
+        const answered = decided;
+        current = answered.snapshot;
+        return route.fulfill({ status: answered.status, contentType: "application/json", body: JSON.stringify(answered.status === 202 ? answered.snapshot
+          : { error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: answered.snapshot }) });
+      });
+      const openDialog = async () => {
+        await page.waitForFunction(() => {
+          if (document.querySelector("[data-self-update-dialog]")) return true;
+          window.dispatchEvent(new Event("llv:open-self-update"));
+          return false;
+        }, undefined, { timeout: 60_000 });
+        await page.waitForSelector('[data-section="auto"]', { timeout: 30_000 });
+      };
+      const measure = () => page.evaluate(() => {
+        const dialog = document.querySelector<HTMLElement>("[data-self-update-dialog]")!;
+        const card = dialog.querySelector<HTMLElement>('[data-section="auto"]')!;
+        const button = card.querySelector<HTMLButtonElement>('[data-action="toggle-auto"]')!;
+        const outer = dialog.getBoundingClientRect();
+        const rect = card.getBoundingClientRect();
+        const control = button.getBoundingClientRect();
+        const blockerRows = [...card.querySelectorAll<HTMLElement>("ul li")].map((row) => {
+          const range = document.createRange();
+          range.selectNodeContents(row);
+          const bounds = [...range.getClientRects()];
+          return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
+            left: Math.min(...bounds.map((bound) => bound.left)), right: Math.max(...bounds.map((bound) => bound.right)),
+            lines: bounds.length };
+        });
+        const choices = [...card.querySelectorAll<HTMLButtonElement>('[data-action="deploy-now"], [data-action="keep-waiting"]')].map((choice) => {
+          const box = choice.getBoundingClientRect();
+          return { action: choice.dataset.action, x: box.x, y: box.y, width: box.width, height: box.height, bottom: box.bottom };
+        });
+        const drain = card.querySelector<HTMLElement>("[data-drain-state]");
+        return { blockerRows, choices, drain: drain ? { state: drain.dataset.drainState, choice: drain.dataset.drainChoice ?? null } : null,
+          alert: card.querySelector<HTMLElement>('[role="alert"]')?.innerText ?? null,
+          cardOverflow: card.scrollWidth - card.clientWidth, overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
+          text: card.innerText.slice(0, 900) };
+      });
+      const tag = `${width}-${lang}-${colorScheme}-${name}`;
+      const check = (frame: string, geometry: Awaited<ReturnType<typeof measure>>) => {
+        report.frames[frame] = geometry;
+        if (geometry.overflow > 1 || geometry.cardOverflow > 1 || !geometry.controlVisible) report.failures.push(`${frame}: overflow or clipped switch`);
+        if (geometry.blockerRows.some((row) => row.overflow > 1 || row.left < geometry.card.x - 1 || row.right > geometry.card.x + geometry.card.width + 1)) {
+          report.failures.push(`${frame}: blocker text spills beyond card`);
+        }
+        if (opaque.test(geometry.text)) report.failures.push(`${frame}: a project key or a conversation id is on screen`);
+        const rows = geometry.blockerRows.map((row) => row.text);
+        if (new Set(rows).size !== rows.length) report.failures.push(`${frame}: a blocker row is listed twice`);
+        if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${frame}: wrong interface language`);
+      };
+      /* An answered overrun says what was chosen and offers nothing to press. */
+      const checkKept = (frame: string, geometry: Awaited<ReturnType<typeof measure>>) => {
+        check(frame, geometry);
+        if (geometry.choices.length || geometry.drain?.choice !== "keep-waiting" || !geometry.text.includes(lang === "uk" ? "Ви обрали чекати далі" : "You chose to keep waiting")
+          || /Try again|Спробуйте ще раз|Deploy now|Оновити зараз/.test(geometry.text)) report.failures.push(`${frame}: the answered overrun still reads as an open choice`);
+      };
+      await page.goto(`${baseUrl}/`);
+      await openDialog();
+      const geometry = await measure();
+      if (name === "kept") checkKept(tag, geometry); else check(tag, geometry);
+      if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some((row) => row.lines < 2))) {
+        report.failures.push(`${tag}: long blocker name did not wrap`);
+      }
+      if (name === "draining-counts" && !geometry.blockerRows.some((row) => /: 2$/.test(row.text))) report.failures.push(`${tag}: counts are missing where no work is named`);
+      if (name === "overran") {
+        // Five pieces of work, five rows, and both choices on the first screen.
+        if (geometry.blockerRows.length !== 5 || geometry.choices.length !== 2) report.failures.push(`${tag}: the decision does not list each piece of work once beside two choices`);
+        if (geometry.choices.some((choice) => choice.bottom > height || choice.height < 44)) report.failures.push(`${tag}: a choice is below the first screen or under 44 px`);
+      }
+      await shot(page, tag);
+      if (name === "overran") {
+        /* A refusal: the decision was answered elsewhere. The 409 carries what is true now. */
+        decided = { status: 409, snapshot: states.kept! };
+        await page.locator('[data-self-update-dialog] [data-action="keep-waiting"]').click();
+        await page.waitForSelector("[data-self-update-dialog] [data-auto-drain-decision]", { state: "detached", timeout: 30_000 });
+        checkKept(`${tag}-refused`, await measure());
+        await shot(page, `${tag}-refused`);
+        /* An accepted «Keep waiting», then the same after a reload. */
+        current = snapshot;
+        decided = { status: 202, snapshot: states.kept! };
+        await page.goto(`${baseUrl}/`);
+        await openDialog();
+        await page.locator('[data-self-update-dialog] [data-action="keep-waiting"]').click();
+        await page.waitForSelector("[data-self-update-dialog] [data-auto-drain-decision]", { state: "detached", timeout: 30_000 });
+        checkKept(`${tag}-accepted`, await measure());
+        await shot(page, `${tag}-accepted`);
+        await page.reload();
+        await openDialog();
+        checkKept(`${tag}-reloaded`, await measure());
+        await shot(page, `${tag}-reloaded`);
+        /* The standing Needs-you control carries the same decision; neither choice is submitted. */
+        current = snapshot;
+        if (width === 390) {
+          // A hash change alone keeps the page, and with it the open dialog.
+          await page.goto(`${baseUrl}/#p=__overview__`);
+          await page.reload();
+          await page.locator('[data-mobile2-open="attention"]').click();
+        } else {
+          await page.goto(`${baseUrl}/`);
+          await page.locator("[data-attention-island] > button").first().click();
+        }
+        const fold = page.locator('[data-needs-you-fold="Delegatus"]');
+        if (await fold.count() && await fold.getAttribute("aria-expanded") === "false") await fold.click();
+        const choice = page.locator('[data-auto-drain-decision="drain-example"]').first();
+        await choice.waitFor({ state: "visible", timeout: 30_000 });
+        await choice.scrollIntoViewIfNeeded();
+        const choices = await choice.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const rows = [...element.querySelectorAll("li")].map((row) => row.textContent ?? "");
+          return { overflow: element.scrollWidth - element.clientWidth, left: box.left, right: box.right, rows, text: element.textContent ?? "",
+            choices: [...element.querySelectorAll("button")].map((button) => button.getBoundingClientRect().height) };
+        });
+        report.frames[`${tag}-needs-you`] = choices;
+        if (choices.overflow > 1 || opaque.test(choices.text) || choices.rows.length !== 5 || new Set(choices.rows).size !== 5
+          || choices.choices.length !== 2 || choices.choices.some((size) => size < 44)) report.failures.push(`${tag}: Needs-you decision is unreadable`);
+        if (width === 390 && (choices.left < 12 || choices.right > 378)) report.failures.push(`${tag}: Needs-you decision runs to the screen edge`);
+        await shot(page, `${tag}-needs-you`);
+      }
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  const result = JSON.stringify(report, null, 2) + "\n";
+  fs.writeFileSync(path.join(OUT_DIR, "self-update-auto.json"), result);
+  if (evidenceDir) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.writeFileSync(path.join(evidenceDir, "geometry.json"), result);
+  }
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`self-update auto geometry: ${path.join(OUT_DIR, "self-update-auto.json")}`);
+}
+
+/* The update dialog for every form of installation: what each one must do before or
+   after an update, and how a ready, failed or rolled-back replacement reads. */
+async function selfUpdateInstallMain(): Promise<void> {
+  const messages = { en: (await import("../src/lib/i18n/en")).en, uk: (await import("../src/lib/i18n/uk")).uk };
+  seedHome();
+  const evidenceDir = process.env.SELF_UPDATE_INSTALL_EVIDENCE_DIR?.trim() || null;
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const old = "a".repeat(40);
+  const next = "b".repeat(40);
+  const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.6.1", date: "2026-01-01" });
+  const processView = (sha: string) => ({ ...stoppedProcess(), state: "healthy" as const, pid: 101, startedAt: "2026-01-01T00:00:00Z", revision: sha.slice(0, 7), lastHealthAt: "2026-01-01T00:00:00Z", lastHealthOk: true, tail: [] });
+  const base: Snapshot = {
+    mode: "checkout", unsupportedReason: null, installed: revision(next), available: null,
+    serving: { web: revision(old), runtimeHost: revision(old) }, check: { ...idleCheck(), state: "up-to-date", at: "2026-01-01T00:00:00Z" },
+    update: idleUpdate(), processes: { web: processView(old), runtimeHost: processView(old) }, busy: null,
+    meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: "2026-01-02T00:00:00Z" },
+  };
+  const auto = { availability: "available" as const, enabled: true, off: null, phase: "waiting" as const, target: revision(next), green: { state: "green" as const },
+    blockers: { turns: 2, stages: 1, operatorActiveAt: "2026-01-01T23:55:00Z", busy: false, memoryMb: null, unreadable: null }, waitingSince: "2026-01-01T00:00:00Z", longWait: false };
+  const states: Record<string, Snapshot> = {};
   states["install-action"] = { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null }, action: { id: "restart-service", button: true, unit: "delegatus.service" } };
   states["install-switch"] = { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null }, busy: "update",
     update: { ...idleUpdate(), state: "running", target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z",
@@ -5703,22 +5912,6 @@ async function selfUpdateAutoMain(): Promise<void> {
       update: { ...idleUpdate(), state: "failed", rolledBack: rollback, target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
         steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "failed", startedAt: "2026-01-02T00:00:00Z", durationMs: 60_000, exitCode: null, tail: [], failure: { kind: "error", text: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } }] } };
   }
-  states.overran!.auto!.decision = { id: "drain-example", at: "2026-01-02T06:00:00Z", project: "Delegatus", blockers: {
-    ...auto.blockers,
-    stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }],
-    turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", seat: false, stage: null }],
-  } };
-  for (const [name, blockers] of Object.entries({
-    memory: { memoryMb: 3500 },
-    controller: { busy: true, busyReason: "pipeline-controller" as const },
-    health: { busy: true, busyReason: "runtime-host" as const, unreadable: "synthetic health evidence unavailable" },
-    operator: { operatorActiveAt: "2026-01-02T06:00:00Z" },
-    totals: { turns: 21, stages: 24 },
-  })) {
-    const decisionBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null, ...blockers };
-    states[`overran-${name}`] = { ...states.overran!, auto: { ...states.overran!.auto!, blockers: decisionBlockers,
-      decision: { id: "drain-example", at: "2026-01-02T06:00:00Z", project: "Delegatus", blockers: decisionBlockers } } };
-  }
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
@@ -5731,7 +5924,7 @@ async function selfUpdateAutoMain(): Promise<void> {
     const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
     if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states).filter(([name]) => !process.env.SELF_UPDATE_INSTALL_ONLY || name.startsWith("install-"))) {
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
       if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
       const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
@@ -5772,7 +5965,6 @@ async function selfUpdateAutoMain(): Promise<void> {
         report.frames[tag] = geometry;
         if (geometry.overflow > 1 || geometry.cardOverflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
         if (geometry.blockerRows.some(row => row.overflow > 1 || row.left < geometry.card.x - 1 || row.right > geometry.card.x + geometry.card.width + 1)) report.failures.push(`${tag}: blocker text spills beyond card`);
-        if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some(row => row.lines < 2))) report.failures.push(`${tag}: long blocker name did not wrap`);
         if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
       }
       if (name.startsWith("install-")) {
@@ -5825,48 +6017,6 @@ async function selfUpdateAutoMain(): Promise<void> {
         fs.mkdirSync(evidenceDir, { recursive: true });
         fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
       }
-      if (name === "overran" || name.startsWith("overran-")) {
-        await page.keyboard.press("Escape");
-        // This existing case also checks the standing Needs-you control; all
-        // update API answers are fixtures and neither choice is submitted.
-        if (width === 390) {
-          await page.goto(`${baseUrl}/#p=__overview__`);
-          await page.locator('[data-mobile2-open="attention"]').click();
-        } else {
-          await page.locator("[data-attention-island] > button").first().click();
-        }
-        const fold = page.locator('[data-needs-you-fold="Delegatus"]');
-        if (await fold.count() && await fold.getAttribute("aria-expanded") === "false") await fold.click();
-        const choice = page.locator('[data-auto-drain-decision="drain-example"]').first();
-        await choice.waitFor({ state: "visible", timeout: 30_000 });
-        const choices = await choice.evaluate((element) => {
-          const bounds = element.getBoundingClientRect();
-          const rows = [...element.querySelectorAll<HTMLElement>("li")].map(row => {
-            const range = document.createRange(); range.selectNodeContents(row);
-            return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
-              clipped: [...range.getClientRects()].some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1) };
-          });
-          return { overflow: element.scrollWidth - element.clientWidth, text: element.textContent ?? "", rows,
-            prerequisites: element.querySelector("[data-deploy-prerequisites]")?.textContent ?? "",
-            overrides: element.querySelector("[data-deploy-overrides]")?.textContent ?? "", choices: element.querySelectorAll("button").length };
-        });
-        report.frames[`${tag}-needs-you`] = choices;
-        const blockers = snapshot.auto!.decision!.blockers!;
-        const copy = (key: import("../src/lib/i18n/core").MessageKey, params?: Record<string, string | number>) => translate(lang, key, params);
-        const required: string[] = [];
-        const overridden: string[] = [];
-        if (blockers.memoryMb !== null) required.push(copy("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) }));
-        if (blockers.busy) required.push(copy(blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` : "selfUpdate.auto.block.busy"));
-        if (blockers.unreadable) required.push(copy("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable }));
-        if (blockers.operatorActiveAt) overridden.push(copy("selfUpdate.auto.block.operator"));
-        if (blockers.turns) overridden.push(copy("selfUpdate.auto.block.turns", { count: blockers.turns }));
-        if (blockers.stages) overridden.push(copy("selfUpdate.auto.block.stages", { count: blockers.stages }));
-        if (choices.overflow > 1 || choices.rows.some(row => row.overflow > 1 || row.clipped) || choices.choices !== 2
-          || required.some(text => !choices.prerequisites.includes(text)) || overridden.some(text => !choices.overrides.includes(text))
-          || name === "overran" && !choices.text.includes("conversation_long_turn")) report.failures.push(`${tag}: Needs-you blockers or decision are unreadable`);
-        await choice.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-needs-you.png`) });
-      }
       await context.close();
     }
   } finally {
@@ -5874,13 +6024,13 @@ async function selfUpdateAutoMain(): Promise<void> {
     await stop(server);
   }
   const result = JSON.stringify(report, null, 2) + "\n";
-  fs.writeFileSync(path.join(OUT_DIR, "self-update-auto.json"), result);
+  fs.writeFileSync(path.join(OUT_DIR, "self-update-install.json"), result);
   if (evidenceDir) {
     fs.mkdirSync(evidenceDir, { recursive: true });
     fs.writeFileSync(path.join(evidenceDir, "geometry.json"), result);
   }
   if (report.failures.length) throw new Error(report.failures.join("; "));
-  console.log(`self-update auto geometry: ${path.join(OUT_DIR, "self-update-auto.json")}`);
+  console.log(`self-update install geometry: ${path.join(OUT_DIR, "self-update-install.json")}`);
 }
 
 /* The Linked installs dialog (#2333). Every /api/links* answer is a fixture, so nothing pairs, mints
@@ -6217,6 +6367,7 @@ if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
+else if (process.env.BOARD_CAPTURE_CASE === "self-update-install") await selfUpdateInstallMain();
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMembersMain();

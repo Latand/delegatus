@@ -34,8 +34,11 @@ class RecordingRegistry {
   readonly writes: Array<{ columns: StructuredHostColumns; status: string; releaseClaim: boolean }> = [];
   readonly releases: number[] = [];
   acceptWrites = true;
+  /** A refused write whose row is held by a captured termination tree. */
+  heldByTermination = false;
 
   ownsStructuredHostClaim(): boolean { return true; }
+  structuredHostWriteHeldByTermination(): boolean { return this.heldByTermination; }
 
   setStructuredHostClaimed(
     _key: unknown,
@@ -210,6 +213,48 @@ for (const [engine, bind] of binders) {
 
       expect(host.releaseCalls).toBe(1);
       expect(registry.releases).toEqual([7]);
+    });
+
+    test("keeps the host when a captured termination tree refuses its checkpoint, and lands it once the row is free", async () => {
+      const registry = new RecordingRegistry();
+      const host = new RecordingHost();
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
+
+      registry.acceptWrites = false;
+      registry.heldByTermination = true;
+      host.emit({ eventCursor: 1 });
+      await Bun.sleep(45);
+      // Refused every period, and each refusal waits for the next one.
+      expect(registry.writes.length).toBeGreaterThanOrEqual(3);
+      expect(host.releaseCalls).toBe(0);
+      expect(registry.releases).toEqual([]);
+
+      // A material change is held the same way: the turn it opens is not lost with the host.
+      host.emit({ eventCursor: 2, status: "active", activeTurnRef: "turn-1" });
+      expect(host.releaseCalls).toBe(0);
+
+      registry.acceptWrites = true;
+      registry.heldByTermination = false;
+      await Bun.sleep(25);
+      expect(registry.writes.at(-1)).toMatchObject({ columns: { eventCursor: 2, activeTurnRef: "turn-1" }, status: "live" });
+      expect(host.releaseCalls).toBe(0);
+      stop();
+      expect(registry.releases).toEqual([7]);
+    });
+
+    test("a terminal write refused under a captured tree still ends the binding", async () => {
+      const registry = new RecordingRegistry();
+      const host = new RecordingHost();
+      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
+
+      registry.acceptWrites = false;
+      registry.heldByTermination = true;
+      host.emit({ eventCursor: 3, status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
+
+      // The guard keeps the row's process and survivors; the writer gives up its claim as before.
+      expect(registry.writes.at(-1)).toMatchObject({ status: "unhosted", releaseClaim: true });
+      expect(registry.releases).toEqual([7]);
+      expect(host.releaseCalls).toBe(1);
     });
   });
 }

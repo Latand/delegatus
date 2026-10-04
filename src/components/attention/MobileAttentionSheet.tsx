@@ -147,7 +147,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const dismissible = needsYouDismissibleCount(entries);
   const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
   const row = (entry: MobileAttentionEntry) => {
-    if (entry.kind === "update") return <AutoDrainDecision key={entry.id} decision={entry.decision} />;
+    // The card keeps the sheet's content gutter; a bare card ran edge to edge.
+    if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
     const role = needsYouEntryRole(entry, pipelines);
     const body = entry.kind === "conversation" ? (
       <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />

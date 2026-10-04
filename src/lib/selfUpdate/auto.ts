@@ -60,7 +60,9 @@ export interface AutoView {
   blockers: QuietBlockers | null;
   waitingSince: string | null;
   longWait: boolean;
-  drain?: { state: "scheduled" | "draining" | "overran"; at: string; nextAt?: string } | null;
+  /** `choice` is the operator's answer to an overrun, once given: what the
+      surface says in place of the decision it no longer offers. */
+  drain?: { state: "draining" | "overran"; at: string; choice?: "deploy-now" | "keep-waiting" } | null;
   decision?: { id: string; at: string; project: string; blockers: QuietBlockers | null } | null;
   changedAt?: string | null;
   changedBy?: AutoWriter | null;

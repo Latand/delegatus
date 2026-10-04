@@ -4339,7 +4339,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
   const calls: unknown[] = [];
   const reviewContinuation = { clientRequestId: "continue-1", expectedRevision: "a".repeat(64), stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, reviewContinuation, replayed: false };
@@ -4362,7 +4362,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
 
 test("continue-review from a conversation that did not create the pipeline is refused before its receipt is spent (#1938)", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
     patchPipeline: async () => { throw new Error("must not be reached"); },
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_other", role: "orchestrator" }),
   } as never);
@@ -4376,7 +4376,7 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
   const calls: unknown[] = [];
   const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };

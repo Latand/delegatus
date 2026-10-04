@@ -1364,23 +1364,24 @@ export async function tickFlow(
       return JSON.stringify(flow) !== before;
     }
     try {
-      const preparedRound = structuredClone(round);
+      // Prepare against a private copy; awaited Git must not consume the round
+      // if controls or update admission change before the final account fence.
+      const launchFlow = cloneFlows([flow])[0]!;
+      const launchRound = launchFlow.rounds.find(item => item.n === round.n)!;
       const prepared = await withAccountMutationLockAsync(
         () => {
-          if (!flowRevisionCurrent(flow) || (flowAwaitingAdmission(flow) && activeDrain())) return null;
-          return prepareReviewerLaunch(flow, preparedRound);
+          if (!flowRevisionCurrent(flow) || flowAwaitingAdmission(flow) && activeDrain()) return null;
+          return prepareReviewerLaunch(launchFlow, launchRound);
         },
         { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
       );
       if (!prepared) return false;
-      const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(flow, preparedRound, signal));
+      const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(launchFlow, launchRound, signal));
       if (!observed.current) return false;
       const reservation = await withAccountMutationLockAsync(
         () => {
-          // Account admission may have queued before the update drain began.
-          // Defer before consuming account attempts or interruption markers.
-          if (!flowRevisionCurrent(flow) || (flowAwaitingAdmission(flow) && activeDrain())) return null;
-          Object.assign(round, preparedRound);
+          if (!flowRevisionCurrent(flow) || flowAwaitingAdmission(flow) && activeDrain()) return null;
+          Object.assign(round, launchRound);
           round.spawnStartedAt = isoNow();
           return reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId);
         },

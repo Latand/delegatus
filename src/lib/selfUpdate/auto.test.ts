@@ -8,7 +8,9 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { targetOnCurrentBranch } from "./git";
-import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { sameProcess } from "./pid";
+import { procBackend } from "../proc";
 import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 import { startCurrentReleaseControllers } from "../viewerInstrumentation";
@@ -532,7 +534,8 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
   // A check already in flight delays the build while the original cohort runs.
   writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: revision(old), available: revision(target), check: { ...idleCheck(), state: "checking" } }, update: null }));
   h.deps.describe = async (_repo, sha) => revision(git(["rev-parse", sha], checkout));
-  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+  const hostAnswer = launcherStartedHost(h);
+  h.deps.hostHealth = hostAnswer;
   let runner!: UpdateRunner;
   const holds: string[] = [];
   h.deps.createRunner = (config, publish, changed) => runner = new UpdateRunner(config, {
@@ -560,18 +563,26 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
   h.deps.requestPipelineTick = () => { ticks++; };
   let finishCheck!: () => void;
   let newer = target;
+  let firstCheck = true;
   h.deps.check = async () => {
-    // Hold the initial check only; the post-build refresh must also settle
-    // before main's final activity fence can admit the restart.
-    if (!finishCheck) await new Promise<void>((resolve) => { finishCheck = resolve; });
+    if (firstCheck) {
+      firstCheck = false;
+      await new Promise<void>((resolve) => { finishCheck = resolve; });
+    }
     return { ok: true, installed: revision(old), available: revision(newer), relation: "behind", ahead: 0, behind: 2, delta: null };
   };
   const service = new SelfUpdateService(h.deps);
   const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const waitForTick = async () => {
+    const controller = service as unknown as { autoRunning: boolean };
+    for (let i = 0; i < 200 && controller.autoRunning; i++) await Bun.sleep(1);
+    expect(controller.autoRunning).toBe(false);
+  };
+  const tick = async () => { await waitForTick(); await service.autoTick(); await waitForTick(); };
   try {
     const checking = service.check();
     for (let i = 0; i < 100 && !finishCheck; i++) await Bun.sleep(1);
-    await service.autoTick();
+    await tick();
     const drain = held()!;
     expect(drain.target).toBe(target);
     expect(runner.state.state).toBe("idle");
@@ -581,45 +592,74 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
     for (let i = 0; i < 100 && runner.state.state !== "done" && runner.state.state !== "failed"; i++) await Bun.sleep(1);
     expect(runner.state.state).toBe("done");
     expect(runner.state.target).toBe(target);
+    // Publishing now awaits Git, and the post-build check also runs async.
+    // Let that observation settle before asking the final restart fence.
+    for (let i = 0; i < 100 && service.active(); i++) await Bun.sleep(1);
+    expect(service.active()).toBe(false);
     expect(holds.length).toBeGreaterThan(3);
     expect(holds.every((id) => id === drain.id)).toBe(true);
     expect((await service.snapshot()).available?.sha).toBe(newer);
     expect(h.pending()).toBeNull();
     h.setTurn(false);
-    await service.check();
-    // A completed check schedules its own tick. Async release observations
-    // must finish before this test drives the next quiet-window observation.
-    const settled = async () => {
-      const deadline = Date.now() + 2_000;
-      while ((service as unknown as { autoRunning: boolean }).autoRunning && Date.now() < deadline) await Bun.sleep(1);
-      expect((service as unknown as { autoRunning: boolean }).autoRunning).toBe(false);
-    };
-    await settled();
     for (const role of ["web", "runtime-host"] as const) {
-      await service.autoTick();
-      await settled();
+      await tick();
       h.advance(60_000);
-      await service.autoTick();
+      await tick();
       const pending = h.pending()!;
       expect(pending.role).toBe(role);
       expect(held()?.id).toBe(drain.id);
       endRestartGate(restartGateFile(h.record.requestFile), JSON.parse(readFileSync(h.record.requestFile, "utf8")).autoGateId);
       rmSync(h.record.requestFile);
       h.record[role === "web" ? "web" : "runtimeHost"] = { ...h.record[role === "web" ? "web" : "runtimeHost"], revision: target.slice(0, 7), requestId: pending.requestId };
-      await service.autoTick();
+      await tick();
       expect(held()?.id).toBe(drain.id);
     }
     // Matching cached revisions alone cannot prove the succession completed.
     h.deps.hostHealth = async () => { throw new Error("candidate host health unavailable"); };
-    await service.autoTick();
+    await tick();
     expect(held()?.id).toBe(drain.id);
     expect(ticks).toBe(0);
-    h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
-    await service.autoTick();
+    h.deps.hostHealth = hostAnswer;
+    await tick();
     expect(held()).toBeNull();
     expect(ticks).toBe(1);
   } finally { service.stop(); }
 });
+
+test("a host the launcher started is healthy when it answers in the process backend's identity format", async () => {
+  const h = scenario();
+  const launcher = createLauncherRecord(join(h.dir, "launcher.json"), { checkout: h.record.checkout, releasesDir: h.record.releasesDir, releasePointer: h.record.releasePointer, requestFile: h.record.requestFile, port: 0, socket: h.record.socket });
+  launcher.started("runtimeHost", { pid: process.pid }, { sha: OLD });
+  launcher.set("runtimeHost", { state: "healthy" });
+  const written = (JSON.parse(readFileSync(launcher.file, "utf8")) as LauncherRecord).runtimeHost;
+  const answer = procBackend.processIdentity(process.pid)!;
+  // The two real formats differ, so equal strings can never be the test.
+  expect(written.startIdentity).not.toBe(answer);
+  h.record.runtimeHost = written;
+  h.deps.hostHealth = launcherStartedHost(h);
+  const runtimeHost = async () => (await new SelfUpdateService(h.deps).snapshot()).processes.runtimeHost;
+  expect(await runtimeHost()).toMatchObject({ state: "healthy", pid: process.pid, lastHealthOk: true, error: null });
+
+  // Another process answering under the recorded PID stays failed.
+  for (const startIdentity of [`${process.pid}:1`, written.startIdentity!, procBackend.processIdentity(process.ppid)!]) {
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity, hostEpoch: 1 });
+    expect(await runtimeHost()).toMatchObject({ state: "failed", lastHealthOk: false, error: { kind: "message", text: "Runtime host health identity does not match the launcher" } });
+  }
+  // A recorded PID the launcher did not start is gone, whatever answers.
+  h.deps.hostHealth = launcherStartedHost(h);
+  h.record.runtimeHost = { ...written, startIdentity: "1" };
+  expect(await runtimeHost()).toMatchObject({ state: "failed", pid: null, lastHealthOk: false, error: { kind: "gone", pid: process.pid } });
+});
+
+/** Puts the record and the health answer in the formats the two real processes
+    write: the launcher's bare start ticks and the host's process backend
+    identity. This test process stands in for the host. */
+function launcherStartedHost(h: ReturnType<typeof scenario>) {
+  h.record.runtimeHost = { ...h.record.runtimeHost, pid: process.pid, startIdentity: launcherStartIdentity(process.pid) };
+  h.deps.processAlive = (pid, startIdentity) => pid !== process.pid || sameProcess({ pid, startIdentity });
+  h.deps.processIdentity = (pid) => procBackend.processIdentity(pid);
+  return async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)!, hostEpoch: 1 });
+}
 
 function scenario() {
   const dir = mkdtempSync(join(root, "run-"));
@@ -653,7 +693,7 @@ function scenario() {
     targetOnBranch: async () => true,
     prune: async () => { prunes += 1; },
     findDeploymentByIdempotencyKey: async () => null,
-    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true,
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, processIdentity: (pid: number) => pid === 102 ? "host" : null,
     hostHealth: async () => ({ pid: 102 }), describe: async (_repo: string, sha: string) => revision(sha),
     buildEnv: () => ({}),
     createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),
@@ -676,7 +716,7 @@ async function postTypingPresence(role: string): Promise<void> {
   expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
 }
 
-test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission preserves pending custody or rechecks %s after its Git observation", async (change) => {
+test.each(["accepted-disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission preserves pending custody or rechecks %s after its Git observation", async (change) => {
   const h = scenario();
   const checkout = join(h.dir, "admission-checkout"); mkdirSync(checkout);
   const git = Bun.which("git")!;
@@ -735,7 +775,7 @@ test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-bu
     const deadline = Date.now() + 2_000;
     while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
     expect(existsSync(entered)).toBe(true);
-    if (change === "disable") {
+    if (change === "accepted-disable") {
       expect(await service.setAuto(false)).toMatchObject({ ok: true });
       expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
     } else if (change.endsWith("-build")) {
@@ -743,9 +783,12 @@ test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-bu
       expect(existsSync(join(h.dir, "apply.json"))).toBe(false);
     } else h.setStage(true);
     writeFileSync(released, "");
-    expect(await admission).toBe(change.endsWith("-build"));
-    if (change.endsWith("-build")) expect(h.pending()).toMatchObject({ requestId, role: "web", target: sha });
-    else expect(h.pending()).toBeNull();
+    // A persisted accepted request owns custody after switch-off, and a build
+    // refused at the custody write leaves it in place. New work still vetoes
+    // admission after the last observation.
+    expect(await admission).toBe(change !== "work-starts");
+    if (change === "work-starts") expect(h.pending()).toBeNull();
+    else expect(h.pending()).toMatchObject({ requestId, role: "web", target: sha });
   } finally {
     writeFileSync(released, ""); await admission;
     await service.setAuto(false);
@@ -1398,4 +1441,57 @@ test.each(["gate-removed", "gate-expired", "work-started", "launcher-changed", "
     expect(existsSync(gateFile) ? readFileSync(gateFile, "utf8") : null).toBe(heldGate);
     expect(JSON.parse(readFileSync(`${h.record.requestFile}.result.json`, "utf8"))).toMatchObject({ state: "rejected" });
   } finally { release(); watcher.stop(); service.stop(); }
+});
+
+test("ending the drain delivers a held autonomous message once without any other wake", async () => {
+  const { StructuredDeliveryQueue } = await import("../runtime/structuredDeliveryQueue");
+  const h = scenario();
+  h.setTurn(true);
+  let service = h.service();
+  await service.autoTick();
+  await service.autoTick();
+  const lease = join(h.dir, "auto-drain.json");
+  const hold = activeDrain(lease, h.deps.now())!;
+  expect(hold).not.toBeNull();
+  // An agent's message for an idle host, accepted after the drain began.
+  const admittedAt = new Date(Date.parse(hold.since) + 1_000).toISOString();
+  let status = { status: "queued", revision: 1, admittedAt };
+  const writes: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    autonomousTurnHeld: (_operationId, admitted) => {
+      const drain = activeDrain(lease, h.deps.now());
+      return !!drain && !(Date.parse(admitted ?? "") < Date.parse(drain.since));
+    },
+    effects: async () => status.status === "delivered" ? [] : [{ id: "effect:held", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "held-operation", conversationId: "conversation-idle", text: "start the next task", policy: "queue", origin: { kind: "agent", role: "builder" } } }],
+    status: async () => status,
+    hostClaim: async () => "owner:1",
+    transition: async (_id, next) => { status = { ...status, status: next, revision: status.revision + 1 }; },
+  }, () => ({
+    supportsSteer: true,
+    attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+    send: async (entry: { id: string }) => { writes.push(entry.id); return { outcome: "turn-started", turnId: "turn-one" }; },
+    interrupt: async () => {}, answer: async () => {}, release: async () => {},
+    health: async () => ({ status: "idle", sessionKey: "session-one", endpoint: "test:host", pid: 1, processStartIdentity: "1",
+      eventCursor: 0, protocolVersion: "test", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+  }) as never);
+  let kicks = 0;
+  let woken: Promise<unknown> = Promise.resolve();
+  h.deps.kickDeliveryQueue = () => { kicks++; woken = queue.drain(); return woken as Promise<void>; };
+  try {
+    await queue.drain();
+    expect(writes).toEqual([]);
+    expect(status.status).toBe("queued");
+    // The operator turns automatic updates off: the only event is the release itself.
+    service.stop();
+    writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), enabled: false });
+    service = h.service();
+    await service.autoTick();
+    expect(activeDrain(lease, h.deps.now())).toBeNull();
+    await woken;
+    expect(kicks).toBe(1);
+    expect(writes).toEqual(["held-operation"]);
+    await queue.drain();
+    expect(writes).toEqual(["held-operation"]);
+  } finally { service.stop(); }
 });

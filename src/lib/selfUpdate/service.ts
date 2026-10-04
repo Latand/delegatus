@@ -99,6 +99,11 @@ export interface ServiceDeps {
   createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
   requestRestart(record: LauncherRecord, role: LauncherRole): string;
   processAlive(pid: number, startIdentity: string): boolean;
+  /** The identity the runtime host reports for itself in its health answer,
+      read for another PID. The launcher records bare start ticks and the host
+      answers in the process backend's format, so the two are never compared
+      as strings. */
+  processIdentity(pid: number): string | null;
   hostHealth(): Promise<RuntimeHostHealth | null>;
   requestDeployment(body: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
   readDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
@@ -114,6 +119,9 @@ export interface ServiceDeps {
   green?: GreenReader;
   quiet?: QuietPorts;
   requestPipelineTick?(): void;
+  /** Wakes structured delivery when the drain ends: a held autonomous message
+      for an idle host has no other event coming to move it. */
+  kickDeliveryQueue?(): void | Promise<void>;
   updateProject?(): string;
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
@@ -384,7 +392,7 @@ export class SelfUpdateService {
       waitingSince: auto.waitingSince, longWait: auto.enabled && !auto.drain?.admitted && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
       decision: auto.enabled && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
       drain: auto.enabled && auto.waitingSince ? auto.drain
-        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt }
+        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt, ...(auto.drain.acknowledgedAt ? { choice: auto.drain.force ? "deploy-now" as const : "keep-waiting" as const } : {}) }
           : { state: "draining", at: auto.drain.since }
         : null : null,
       changedAt: auto.changedAt, changedBy: auto.changedBy };
@@ -594,8 +602,7 @@ export class SelfUpdateService {
         this.changes.emit();
         return;
       }
-      // The launcher may have been replaced while GitHub and activity were read.
-      // Re-read the record before filing anything an older watcher would take.
+      // Re-read after the rollback pointer's asynchronous Git observation.
       this.decision = null;
       const dispatchActivity = quietDispatchVersion(quiet, this.deps.now());
       const dispatchOwner = { ...record.launcher };
@@ -876,7 +883,7 @@ export class SelfUpdateService {
       const admissionSnapshot = await this.snapshot();
       const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
-      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.auto.enabled || this.active() || this.checking
+      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.auto.enabled || this.checking || this.active()
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
         || (!this.draining() && (admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha))) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
@@ -957,12 +964,11 @@ export class SelfUpdateService {
     const snapshot = await this.snapshot();
     const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
     // Every asynchronous observation precedes the final admission fence. A
-    // later disable, runner/restart/check activity or replacement request
-    // must never admit this old request, including during snapshot's Git reads.
+    // replacement request or controller activity must never admit this request.
     if (JSON.stringify(this.auto.pending) !== JSON.stringify(pending)) return false;
     const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
     const currentRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
-    if (!this.active() && this.slice.check.state !== "checking" && (this.auto.enabled || this.auto.drain?.admitted === true)
+    if (!this.active() && this.slice.check.state !== "checking" && (this.auto.enabled || this.hasAutoCustody())
       && reachable && green.state === "green" && this.quietAdmits(quiet) && snapshot.installed.sha === pending.target
       && availability === "available" && current.mode === "checkout" && currentRecord?.checkout === record.checkout
       && currentRecord.web.state === "healthy" && currentRecord.runtimeHost.state === "healthy"
@@ -1046,6 +1052,8 @@ export class SelfUpdateService {
     this.auto = { ...this.auto, drain: null };
     this.saveAuto();
     this.deps.requestPipelineTick?.();
+    const failed = (error: unknown) => console.error("[self-update] delivery wake after the drain failed", error instanceof Error ? error.name : "unknown");
+    try { void Promise.resolve(this.deps.kickDeliveryQueue?.()).catch(failed); } catch (error) { failed(error); }
   }
 
   private finishAutoRestart(pending: NonNullable<AutoState["pending"]>, outcome: "done" | "failed" | "fell-back", detail: string | undefined, record: LauncherRecord): void {
@@ -1609,7 +1617,7 @@ export class SelfUpdateService {
         && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
         && serving.web.revision === target.slice(0, 7) && serving.runtimeHost.revision === target.slice(0, 7)
         && serving.web.pid !== null && serving.web.startIdentity !== null && this.deps.processAlive(serving.web.pid, serving.web.startIdentity)
-        && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive);
+        && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity);
       const deploymentId = `checkout-${randomUUID()}`;
       const at = new Date(this.deps.now()).toISOString();
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
@@ -1834,7 +1842,7 @@ export class SelfUpdateService {
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
-    const settled = this.apply.observe(record, runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive)
+    const settled = this.apply.observe(record, runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity)
       && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity), now);
     if (settled) {
       const intent = this.apply.current!;
@@ -1869,7 +1877,7 @@ export class SelfUpdateService {
     });
     let host = fromRecord(record.runtimeHost, { socket: record.socket });
     if (host.state === "healthy") {
-      if (runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive)) host = { ...host, lastHealthAt: at, lastHealthOk: true };
+      if (runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity)) host = { ...host, lastHealthAt: at, lastHealthOk: true };
       else host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError ?? (health ? "Runtime host health identity does not match the launcher" : "Runtime host health is unavailable") } };
     }
 

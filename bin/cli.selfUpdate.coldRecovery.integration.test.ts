@@ -100,10 +100,13 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
   const child = spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: ["ignore", "ignore", "pipe"] }); children.add(child);
   let recoveryError = "";
   child.stderr!.on("data", bytes => { recoveryError = (recoveryError + bytes.toString()).slice(-4096); });
-  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; })
+  const terminalBeforeBoot = boundary === "settlement" || boundary === "settled";
+  // The launcher records its children healthy, then the request it settled, in
+  // two writes: wait for the second before reading the record.
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy"
+    && (terminalBeforeBoot || r.launcher.requestId !== null) ? r : null; })
     .catch(error => { throw new Error(`${String(error)}; cold exit=${child.exitCode}; ${recoveryError.replaceAll(key, "<redacted>")}`); });
   expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);
-  const terminalBeforeBoot = boundary === "settlement" || boundary === "settled";
   if (!terminalBeforeBoot) expect(after.launcher.requestId).toBe(apply.current!.requestId);
   const targetServes = signal === "SIGKILL" && boundary === "starting" || ["verified", "settlement", "settled"].includes(boundary);
   expect(after.launcher.revision).toBe(targetServes ? candidate.sha : fixture.first);
@@ -117,7 +120,7 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
     now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
     mode: async () => ({ mode: "checkout", reason: null, record: after as never }), check: async () => ({ ok: false, error: "fixture", installed: null }),
     describe: async (_repo, sha) => ({ sha, short: sha.slice(0, 7), version: "", date: "" }), createRunner: () => ({ state: idleUpdate(), restore() {}, logPath: () => "" }) as never,
-    requestRestart: () => "unused", processAlive: (pid, identity) => isAlive(pid) && readStartIdentity(pid) === identity,
+    requestRestart: () => "unused", processAlive: (pid, identity) => isAlive(pid) && readStartIdentity(pid) === identity, processIdentity: (pid) => readStartIdentity(pid),
     hostHealth: async () => await socketAnswers(after.socket) ? { pid: after.runtimeHost.pid!, startIdentity: readStartIdentity(after.runtimeHost.pid!)!, hostEpoch: 1 } : null,
     requestDeployment: async () => { throw new Error("unused"); }, readDeployment: async () => null, findDeploymentByIdempotencyKey: async () => null,
     releaseTarget: () => null, prepareCheckRepo: async () => { throw new Error("unused"); }, buildEnv: () => ({}), web: { pid: after.web.pid!, port: running.port, startedAt: "" },

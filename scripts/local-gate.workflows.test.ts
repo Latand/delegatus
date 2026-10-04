@@ -1,22 +1,28 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { isImageInput } from "./docker-image-scope.cjs";
 const root = path.resolve(import.meta.dir, "..");
 function read(name: string) {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as {
     on: { pull_request?: { paths?: string[] }; push?: { branches?: string[]; tags?: string[] }; schedule?: { cron: string }[]; workflow_dispatch?: unknown };
-    jobs: Record<string, { "timeout-minutes"?: number; steps?: { name?: string; run?: string; with?: Record<string, unknown> }[] }>;
+    jobs: Record<string, { if?: string; needs?: string; "timeout-minutes"?: number | string; steps?: { name?: string; run?: string; with?: Record<string, unknown> }[] }>;
     concurrency: { "cancel-in-progress": boolean | string };
   };
 }
-test("Docker publishing stays on main and tags; PRs match image inputs and reject unrelated paths", () => {
+test("Docker publishing stays on main and tags; PR scope admits image inputs and rejects unrelated paths", () => {
   const docker = read("docker-image.yml");
   expect(docker.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
-  const patterns = docker.on.pull_request!.paths!;
-  const matches = (file: string) => patterns.some(pattern => new Bun.Glob(pattern).match(file));
-  for (const file of ["Dockerfile", ".dockerignore", "package.json", "bun.lock", "patches/dependency.patch", "src/runtime-host/main.ts", "src/app/page.tsx", "public/icon.svg", "bin/cli.mjs", "scripts/published-image-entrypoint.sh", "scripts/build-mcp.ts", "vendor/connector/index.js"]) expect(matches(file)).toBeTrue();
-  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/local-gate.ts", "scripts/audit-with-retry.sh", ".github/workflows/docker-image.yml"]) expect(matches(file)).toBeFalse();
-  expect(docker.jobs.build!["timeout-minutes"]).toBe(45);
+  // Admission moved from GitHub's truncated paths filter to the complete diff.
+  expect(docker.on).toHaveProperty("pull_request");
+  expect(docker.on.pull_request?.paths).toBeUndefined();
+  expect(docker.jobs.scope?.if).toBe("github.event_name == 'pull_request'");
+  expect(docker.jobs.scope?.steps?.[1]?.run).toBe('node scripts/docker-image-scope.cjs "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"');
+  expect(docker.jobs.build?.needs).toBe("scope");
+  expect(docker.jobs.build?.if).toBe("${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}");
+  for (const file of ["Dockerfile", ".dockerignore", "package.json", "bun.lock", "patches/dependency.patch", "src/runtime-host/main.ts", "src/app/page.tsx", "public/icon.svg", "bin/cli.mjs", "scripts/published-image-entrypoint.sh", "scripts/build-mcp.ts", "vendor/connector/index.js", "landing/site/demo/taskIcons.json", "scripts/demo-capture-browser.cjs", ".env.production", ".postcssrc.json", ".github/workflows/docker-image.yml", "scripts/local-gate.ts"]) expect(isImageInput(file), file).toBeTrue();
+  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/audit-with-retry.sh"]) expect(isImageInput(file), file).toBeFalse();
+  expect(docker.jobs.build!["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
   expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
   const build = docker.jobs.build!.steps!.find(step => step.name === "Build both architectures")!;
   expect(build.with!.push).toBe("${{ github.event_name != 'pull_request' }}");

@@ -23,7 +23,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -53,7 +53,7 @@ import {
   type StructuredHostTerminationDependencies,
 } from "@/lib/runtime/structuredHostControl";
 import { redactBounded } from "@/lib/monitor/redact";
-import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -162,7 +162,7 @@ export type PipelineStageSpawn = {
 
 /** Identity of the agent host a stage attempt owns, as a close reports it. */
 export type { PipelineStageHostRef, PipelineCloseReport } from "./types";
-import type { PipelineStageHostRef, PipelineCloseReport, PipelineCloseHostEvidence } from "./types";
+import type { PipelineStageHostRef, PipelineCloseReport, PipelineCloseHostEvidence, PipelineStageInterruptionCause } from "./types";
 
 export type PipelineStageStopResult =
   /** Termination is evidenced: the kill was delivered, or the host is gone.
@@ -327,6 +327,9 @@ export interface PipelinePorts {
     policy?: "queue";
     project?: string;
     cwd?: string;
+    /** Admission time of the attempt this message continues. An update drain
+        delivers a follow-up to an attempt it found running and holds the rest. */
+    cohortAt?: string;
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
@@ -1012,6 +1015,10 @@ async function stopStageHostByRecordedIdentity(
   probe: StageHostProbe,
   termination: StructuredHostTerminationDependencies,
   observationGuard?: () => { status: 409; error: string } | null,
+  /** Told the tree capture this stop wrote, and null once it is withdrawn. */
+  onCapture?: (capture: StructuredTerminationCapture | null) => void,
+  /** Told once the stop has released the host or is about to signal it. */
+  onFirstEffect?: () => void,
 ): Promise<PipelineStageStopResult> {
   const registry = agentRegistry();
   const refused = (reason: string): PipelineStageStopResult => ({
@@ -1062,14 +1069,32 @@ async function stopStageHostByRecordedIdentity(
   if (refusal) {
     return refused(`${refusal.error} (pid ${ref.pid}); ${generation}`);
   }
+  /* The capture is this stop's own write, so a stop refused before its first
+     effect takes it back: a row left holding a captured tree refuses its
+     host's next write, and a host nobody ended would pay for a stop that
+     never happened. */
+  const root = { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch };
+  const source = `pipeline-stage-stop ${target.stageId}:${target.attempt}`;
+  let capture: StructuredTerminationCapture | null = null;
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
     authorize,
-    persistCapturedTree: termination.persistCapturedTree ?? (identities => registry.recordStructuredTerminationSurvivors(
-      probe.key,
-      { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-      identities,
-    )),
+    onFirstEffect: () => {
+      termination.onFirstEffect?.();
+      onFirstEffect?.();
+    },
+    ...(termination.persistCapturedTree ? {} : {
+      persistCapturedTree: (identities: readonly ProcessIdentity[]) => {
+        capture = registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source);
+        onCapture?.(capture);
+        return capture !== null;
+      },
+      withdrawCapturedTree: () => {
+        if (!capture) return;
+        const withdrawn = registry.withdrawStructuredTerminationSurvivors(probe.key, root, capture, source);
+        if (withdrawn) onCapture?.(null);
+      },
+    }),
   });
   if (outcome.ok) {
     return {
@@ -1150,7 +1175,7 @@ function pipelineSurvivorRefusal(pipeline: Pipeline): { error: string; status: n
 }
 
 export function defaultPipelinePorts(
-  dependencies: { liveness?: TurnLivenessDependencies } = {},
+  dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies } = {},
 ): PipelinePorts {
   let runtimeSnapshot: ReturnType<NonNullable<ReturnType<typeof runtimeHostClient>>["snapshot"]> | null = null;
   const registry = agentRegistry();
@@ -1327,8 +1352,12 @@ export function defaultPipelinePorts(
           const stat = fs.statSync(probe.transcriptPath);
           artifact = [stat.ino, stat.size, stat.mtimeMs];
         } catch { /* An unreadable or removed artifact withdraws its old stamp. */ }
-        return JSON.stringify([generation?.id, entry?.updatedAt, entry?.structuredHost?.process, artifact]);
+        /* The stop's own tree capture moves the row's revision. It is the one
+           registry write this stamp reads through; any other still withdraws. */
+        const revision = ownCapture && entry?.updatedAt === ownCapture.updatedAt ? ownCapture.previousUpdatedAt : entry?.updatedAt;
+        return JSON.stringify([generation?.id, revision, entry?.structuredHost?.process, artifact]);
       };
+      let ownCapture: StructuredTerminationCapture | null = null;
       const observed = stamp();
       // A new reader bypasses this sweep's cached runtime snapshot. Bind the
       // resulting stop to the registry revision captured before that await.
@@ -1341,13 +1370,22 @@ export function defaultPipelinePorts(
       if (stamp() !== observed) return null;
       if (!probe || !probe.resident()) return { outcome: "not-running" };
       let changed = false;
+      /* The stamp asks whether the host resumed work before this stop touched
+         it. Once the stop has released the host or signalled it, the row and
+         the claim move because of the stop itself: the host reports `unhosted`
+         and its binding gives the claim up. Reading that as somebody else's
+         change would leave a dead host's row behind with its captured tree and
+         its descendants unsignalled, so from the first effect on the ladder
+         runs to its end on the identity and row checks alone. */
+      let effectStarted = false;
       const guard = (): { status: 409; error: string } | null => {
-        if (stamp() === observed) return null;
+        if (effectStarted || stamp() === observed) return null;
         changed = true;
         return { status: 409, error: "stage host evidence changed before automatic termination" };
       };
       if (guard()) return null;
-      const stopped = await stopStageHostByRecordedIdentity(target, probe, {}, guard);
+      const stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, guard,
+        (capture) => { ownCapture = capture; }, () => { effectStarted = true; });
       // The runtime can retire its own row during termination. That revision
       // change is a completed stop when no captured process survived.
       if (stopped.outcome === "unresolved" && stopped.survivors.length === 0 && !probe.resident()) {
@@ -1494,6 +1532,7 @@ export function defaultPipelinePorts(
         /* #1117: the continuation is the controller's own message, and the
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
+        ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       });
       return result?.ok === true;
     },
@@ -2060,7 +2099,7 @@ async function recoverProviderCut(
   try {
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
-      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir });
+      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
     return true;
@@ -3764,6 +3803,72 @@ function rerunHostLostReadOnlyStage(
  * delivery queue's own dedupe the last line of defence behind that.
  */
 const SEVERED_TURN_RESUME_SILENCE_MS = 3 * 60_000;
+/**
+ * How long an idle host's open transcript must be silent before the turn is
+ * read as interrupted.
+ *
+ * A host goes idle when its turn ends, and a Claude CLI then continues by
+ * itself on a background-command notification: the transcript opens a turn the
+ * host never names, so "host idle, transcript busy" is also what an agent at
+ * work looks like. The transcript is growing while its newest record is
+ * younger than this bound. The bound sits above the ten minutes the CLI allows
+ * one foreground command, so a continuation waiting on a single long step is
+ * still inside it. An undated transcript proves no silence and is never read
+ * as interrupted here.
+ */
+export const IDLE_TURN_QUIET_MS = 12 * 60_000;
+
+function idleTurnSilent(durable: StageTurnEvidence, ports: PipelinePorts): boolean {
+  const newest = durable.lastRecordAt ?? durable.message?.ts ?? null;
+  return newest !== null && unixMs(ports.now()) - newest >= IDLE_TURN_QUIET_MS;
+}
+
+/** What the replaced attempt, the lane and the fresh attempt's prompt say
+    happened. "Restart" is said only when the service restarted under the
+    attempt; a host found gone and a host Delegatus stopped say so. */
+const INTERRUPTION_WORDS: Record<PipelineStageInterruptionCause, { error: string; detail: string; handover: string }> = {
+  restart: {
+    error: "interrupted by a Delegatus restart",
+    detail: "was interrupted by a restart",
+    handover: "was interrupted by a Delegatus restart",
+  },
+  "host-lost": {
+    error: "stage host was lost while its turn was open",
+    detail: "lost its host while its turn was open",
+    handover: "lost its host while its turn was open",
+  },
+  "engine-stop": {
+    error: "stopped by Delegatus after its turn went silent",
+    detail: "was stopped by Delegatus after its turn went silent",
+    handover: "was stopped by Delegatus after its turn went silent",
+  },
+};
+
+/** What the lane, the attempt and the card note say when the recovery of an
+    interrupted turn parks. A restart is named only when the service restarted
+    under the attempt, the same rule the replacement's words follow. */
+export function interruptedTurnRecoveryParkDetail(step: "termination" | "reservation", restarted: boolean): string {
+  const recovery = restarted ? "restart recovery" : "interrupted-turn recovery";
+  return step === "termination"
+    ? `${recovery} could not confirm termination of the interrupted stage host`
+    : `${recovery} could not reserve a fresh stage attempt`;
+}
+
+/** The turn evidence a replacement was decided on. */
+type InterruptedTurnEvidence = { kind: "idle" | "dead" | "stalled"; restarted: boolean };
+
+/** What the lane says when the automatic replacement is interrupted in the
+    boot that created it. The words describe the replacement's own
+    interruption; "again" and "too" are added only when the attempt it replaced
+    is recorded with the same cause. */
+function secondInterruptionParkDetail(replacedCause: PipelineStageInterruptionCause | undefined, own: InterruptedTurnEvidence): string {
+  const ownCause: PipelineStageInterruptionCause = own.restarted ? "restart" : own.kind === "dead" ? "host-lost" : "engine-stop";
+  const same = replacedCause === ownCause;
+  const what = ownCause === "restart"
+    ? same ? "the automatic restart attempt was interrupted again during this boot" : "the automatic replacement attempt was interrupted by a Delegatus restart"
+    : `the automatic replacement attempt ${ownCause === "host-lost" ? "lost its host" : "went silent"}${same ? " too" : ""}`;
+  return `${what}; retry-stage to start another attempt`;
+}
 const recoveryHost = globalThis as typeof globalThis & {
   __llvPipelineRecoveryBootId?: string;
   __llvPipelineRecoveryBootStartedAt?: number;
@@ -3801,6 +3906,7 @@ function providerRecoveryOwnsTurn(attempt: PipelineStageAttempt, durable: StageT
 async function replaceInterruptedStageAttempt(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void, bootId: string, lastRecordAt: number | null,
+  interruption: InterruptedTurnEvidence,
 ): Promise<boolean> {
   // A stage report is durable authority even when succession entered recovery
   // (or one was recorded while the host-stop operation was awaiting).
@@ -3808,7 +3914,7 @@ async function replaceInterruptedStageAttempt(
   const previous = attempt.restartRecovery;
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined) {
-      park(pipeline, "the automatic restart attempt was interrupted again during this boot; retry-stage to start another attempt", attempt);
+      park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
       persist();
       return true;
     }
@@ -3822,13 +3928,33 @@ async function replaceInterruptedStageAttempt(
     }
   }
   const requestedAt = previous?.bootId === bootId ? previous.requestedAt : ports.now();
-  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt };
+  /* A stop of ours that already ended this host still names the cause while
+     nothing has been written since the host was gone. */
+  const endedEarlier = previous?.stopped && previous.stopped.lastRecordAt === lastRecordAt ? previous.stopped : undefined;
+  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt, ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   persist();
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
+  /* A withdrawn stop did nothing, so it leaves no reservation behind either;
+     whatever the transcript holds by now is read by the ordinary paths. */
+  if (stopped === null) {
+    if (previous) attempt.restartRecovery = previous;
+    else delete attempt.restartRecovery;
+    persist();
+    return false;
+  }
   // Termination can take long enough for the old turn to finish or make new
   // progress. Preserve that evidence and let the normal settlement path read
   // it before changing the original attempt or reserving a replacement.
   const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt);
+  /* The stop ended a live host. A CLI appends undated bookkeeping as it exits,
+     and an undated newest record is dated by the file, so the transcript's
+     newest record moves under a turn that stays open. What was decided before
+     the stop is recorded now, with the record the dead host left behind. */
+  if (stopped.outcome === "stopped") {
+    attempt.restartRecovery.stopped = { ...interruption, lastRecordAt: latest?.lastRecordAt ?? null };
+    persist();
+  }
+  const ended = attempt.restartRecovery.stopped;
   if (latest?.turn === "terminal" && latest.message && latest.message.ts > unixMs(attempt.startedAt)) {
     const fenced = parsePipelineStageVerdict(latest.message.text);
     const parsed = reportedStageVerdict(attempt, fenced, latest.message.text, latest.backgroundReportedAt, latest.reportProse) ?? fenced;
@@ -3838,28 +3964,30 @@ async function replaceInterruptedStageAttempt(
       return true;
     }
   }
+  /* A newer record under a live host is progress. Under a host this recovery
+     ended it is what the exit wrote, and the replacement goes ahead. */
   if (attempt.report || providerRecoveryOwnsTurn(attempt, latest) || attempt.state !== "running" || latest?.turn !== "busy" || latest.launchOnly
-    || (latest.lastRecordAt ?? null) !== lastRecordAt) {
+    || (!ended && (latest.lastRecordAt ?? null) !== lastRecordAt)) {
     return false;
   }
-  if (stopped === null) {
-    if (previous) attempt.restartRecovery = previous;
-    else delete attempt.restartRecovery;
-    persist();
-    return false;
-  }
+  const restarted = (ended ?? interruption).restarted;
   if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
-    park(pipeline, "restart recovery could not confirm termination of the interrupted stage host", attempt);
+    park(pipeline, interruptedTurnRecoveryParkDetail("termination", restarted), attempt);
     persist();
     return true;
   }
 
+  /* Named from what the recovery decided and did. Only a live host a stop of
+     this recovery ended was stopped by the engine; a host observed dead, or
+     gone by the time the stop looked, was lost. */
+  const cause: PipelineStageInterruptionCause = restarted ? "restart"
+    : ended && ended.kind !== "dead" ? "engine-stop" : "host-lost";
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  attempt.error = "interrupted by a Delegatus restart; replaced by a fresh stage attempt";
+  attempt.error = `${INTERRUPTION_WORDS[cause].error}; replaced by a fresh stage attempt`;
   const replacement = newAttempt(pipeline, stage);
   if (!runFor(pipeline, stage.id) || !replacement) {
-    park(pipeline, "restart recovery could not reserve a fresh stage attempt", attempt);
+    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", restarted), attempt);
     persist();
     return true;
   }
@@ -3867,12 +3995,12 @@ async function replaceInterruptedStageAttempt(
   replacement.definition = attempt.definition ? structuredClone(attempt.definition) : attempt.definition;
   replacement.input = attempt.input;
   replacement.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
-  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath! };
+  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath!, cause };
   replacement.restartRecovery = { bootId, requestedAt, lastRecordAt, replacedAttempt: attempt.n };
   attempt.restartRecovery.replacementAttempt = replacement.n;
   setCursorState(pipeline, stage.id, "pending");
   pipeline.state = "running";
-  pipeline.stateDetail = `stage attempt ${attempt.n} was interrupted by a restart; fresh attempt ${replacement.n} is starting`;
+  pipeline.stateDetail = `stage attempt ${attempt.n} ${INTERRUPTION_WORDS[cause].detail}; fresh attempt ${replacement.n} is starting`;
   persist();
   return true;
 }
@@ -3891,6 +4019,8 @@ async function recoverInterruptedStageTurn(
   if (!interrupted) return false;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
   if (durable?.turn !== "busy" || durable.launchOnly || providerRecoveryOwnsTurn(attempt, durable)) return false;
+  /* An idle host whose transcript is still growing is an agent at work. */
+  if (interrupted === "idle" && !idleTurnSilent(durable, ports)) return false;
   if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
   const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
   /* The runtime snapshot and transcript read above can go stale while the host
@@ -3903,7 +4033,8 @@ async function recoverInterruptedStageTurn(
     || attempt.conversationId !== observedIdentity.conversationId || attempt.agentPath !== observedIdentity.agentPath
     || attempt.startedAt !== observedIdentity.startedAt || !latestInterrupted
     || latestDurable?.turn !== "busy" || latestDurable.launchOnly
-    || latestDurable.lastRecordAt !== durable.lastRecordAt) return false;
+    || latestDurable.lastRecordAt !== durable.lastRecordAt
+    || (latestInterrupted === "idle" && !idleTurnSilent(latestDurable, ports))) return false;
   if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
   const recoveryEvidence = latestDurable;
   const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
@@ -3919,7 +4050,17 @@ async function recoverInterruptedStageTurn(
     delete attempt.severedTurn;
     persist();
   }
-  return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null);
+  /* The service restarted under this attempt when this process booted after
+     the attempt started and the transcript has not grown since that boot, or
+     the runtime host generation it launched under is no longer the one
+     answering. An attempt that worked on after a restart survived it: what
+     ends it later is a lost host or a stop, and is named as such. An undated
+     transcript proves no work after the boot. */
+  const newestRecordAt = recoveryEvidence.lastRecordAt ?? recoveryEvidence.message?.ts ?? null;
+  const restarted = (bootStartedAt > unixMs(attempt.startedAt) && (newestRecordAt === null || newestRecordAt <= bootStartedAt))
+    || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch);
+  return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null,
+    { kind: latestInterrupted, restarted });
 }
 /** Silence after a legacy continuation before the attempt parks for the operator. */
 const SEVERED_TURN_PARK_SILENCE_MS = 10 * 60_000;
@@ -3998,7 +4139,9 @@ async function reconcileSeveredStageTurn(
     if (attempt.state !== "running" || attempt.conversationId !== conversationId
       || latest?.turn !== "busy" || latest.launchOnly
       || (latest.lastRecordAt ?? latest.message?.ts ?? null) !== witness.silentSince) return "continue";
-    return await replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, latest.lastRecordAt ?? null)
+    /* This path runs only across a succession: the epoch the attempt launched under is gone. */
+    return await replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, latest.lastRecordAt ?? null,
+      { kind: "idle", restarted: true })
       ? "handled" : "continue";
   }
   if (nowMs - unixMs(witness.resumedAt) < SEVERED_TURN_PARK_SILENCE_MS) return "continue";
@@ -4074,6 +4217,9 @@ async function requestStageVerdictOnce(
     text: VERDICT_REQUEST_TEXT,
     project: pipeline.project,
     cwd: pipeline.repoDir,
+    /* The request continues this attempt; a recovered activation replays its
+       reserved start, so the stamp is the attempt's admission. */
+    ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
   });
   /* A refused admission leaves the request owed; the next tick asks again under
      the same identity, until the bound above runs out. */
@@ -4312,7 +4458,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
 
 function restartStagePrompt(prompt: string, attempt: PipelineStageAttempt): string {
   return attempt.restartContext
-    ? `${prompt}\n\nThis is a fresh attempt because stage attempt ${attempt.restartContext.previousAttempt} was interrupted by a Delegatus restart. Continue the same stage input and use its transcript for reference: ${attempt.restartContext.transcriptPath}.`
+    ? `${prompt}\n\nThis is a fresh attempt because stage attempt ${attempt.restartContext.previousAttempt} ${attempt.restartContext.cause ? INTERRUPTION_WORDS[attempt.restartContext.cause].handover : "was interrupted"}. Continue the same stage input and use its transcript for reference: ${attempt.restartContext.transcriptPath}.`
     : prompt;
 }
 
@@ -9707,12 +9853,12 @@ export async function patchPipeline(
       if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
         if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
           || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
-          return { error: "the restart-parked attempt still has a pending continuation", status: 409 };
+          return { error: "the attempt parked by turn recovery still has a pending continuation", status: 409 };
         }
         const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           persist();
-          return { error: "the restart-parked attempt host has not confirmed termination", status: 409 };
+          return { error: "the host of the attempt parked by turn recovery has not confirmed termination", status: 409 };
         }
       }
       if (pipeline.state === "running") {
@@ -9722,7 +9868,10 @@ export async function patchPipeline(
           || req.expectedStageId !== stage.id) return { error: "running retry requires the confirmed stalled stage and expectedAttempt", status: 409 };
         const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
         const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+        /* The same rule the automatic recovery reads: an idle host whose
+           transcript is still growing is an agent at work, never a stall. */
         if (!interrupted || durable?.turn !== "busy" || durable.launchOnly
+          || (interrupted === "idle" && !idleTurnSilent(durable, ports))
           || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
           || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           return { error: "the running attempt is not confirmed stalled or has a pending delivery", status: 409 };

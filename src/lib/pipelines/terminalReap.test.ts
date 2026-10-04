@@ -405,6 +405,8 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
 
 
 const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation", "shared-running-stage", "other-pipeline-running", "running-before-signal", "resumed-stage-before-signal", "publication-pending", "publication-running", "publication-committing", "publication-uncertain", "publication-unknown-result", "publication-malformed-result", "unknown-pipeline-record", "native-queued-work"];
+const DRAINED = "update-drain:";
+const drainedScenarios = ["idle", "live-seat", "resumed-before-actuation", "running-stage", "held-autonomous-work"];
 const socketChild = process.env.LLV_TERMINAL_REAP_SOCKET_CHILD === "1";
 
 // Task admission caches its store on module load. A fresh process gives each
@@ -440,7 +442,11 @@ async function isolatedSocketCase(name: string): Promise<void> {
 type SetupFailure = "readiness" | "admission" | "socket";
 type FixtureOwnership = { pids: number[]; signals: number[] };
 
-async function socketScenario(scenario: string, failure?: SetupFailure, ownership: FixtureOwnership = { pids: [], signals: [] }): Promise<void> {
+async function socketScenario(named: string, failure?: SetupFailure, ownership: FixtureOwnership = { pids: [], signals: [] }): Promise<void> {
+  // The same case under an update drain (#2381): the hold is taken before the
+  // first sweep and is still held when the finished host is finally retired.
+  const drained = named.startsWith(DRAINED);
+  const scenario = drained ? named.slice(DRAINED.length) : named;
   const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
   const { procBackend } = await import("@/lib/proc");
@@ -716,6 +722,9 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       h.ports.stopStageAgent = production.stopStageAgent;
       await tickPipelines([], h.ports);
     };
+    const { activeDrain, drainFile, writeDrain } = await import("@/lib/selfUpdate/drain");
+    if (drained) writeDrain(drainFile(), { id: "fixture-drain", target: "fixture-update",
+      since: new Date(Date.now() - 60_000).toISOString(), until: 0, persistent: true });
     await tick();
     expect(commands).toEqual([]);
     await bindStructuredDeliveryQueue([], { registry, client: runtimeHostClient(), recover: async () => null });
@@ -765,6 +774,18 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       journal.nativeQueueTransition("native-work", { phase: "observed-queued", submission: {
         id: "native-one", clientUserMessageId: "native-work", input: [{ type: "text", text: "queued work" }] } });
       expect(journal.operationResult("native-work")!.receipt.status).toBe("applied");
+    }
+    if (scenario === "held-autonomous-work") {
+      // The drain holds a fresh autonomous message for an idle finished host.
+      // It starts no turn, yet it is accepted work and the host stays its owner.
+      const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
+      publish(false);
+      setRegistryBusy(false);
+      expect(journal.executeOperation({ kind: "send", operationId: "drain-held-turn", idempotencyKey: "drain-held-turn",
+        conversationId, policy: "queue", text: "work admitted during the drain", origin: { kind: "agent", role: "builder" } }).receipt.status).toBe("queued");
+      await kickStructuredDeliveryQueue();
+      expect(journal.operationResult("drain-held-turn")!.receipt).toMatchObject({ status: "queued", reason: null });
+      expect(journal.readSession({ conversationId })!.retirementBlocked).toBe(true);
     }
     const pipelineDb = new Database(statePath("state.sqlite"));
     try {
@@ -842,6 +863,14 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
         designate("conversation_seat_successor");
       }
       if (scenario === "unreadable-seat-store") fs.unlinkSync(seatFile);
+      if (scenario === "held-autonomous-work") {
+        // Repeated sweeps under the hold neither signal the host nor spend the message.
+        await tick();
+        expect(signals).toEqual([]);
+        expect(commands).toEqual([]);
+        expect(journal.operationResult("drain-held-turn")!.receipt.status).toBe("queued");
+        journal.transitionOperation("drain-held-turn", "failed", { reason: "delivery-discarded" });
+      }
       if (scenario === "running-stage") {
         const record = loadPipelines()[0]!;
         record.runs[0]!.attempts[0] = { ...finished, state: "passed", completedAt: "2026-07-31T00:10:00.000Z", verdict: { status: "pass" } };
@@ -864,6 +893,8 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       expect(signals.length).toBeGreaterThan(0);
       expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 1, stopped: 1 });
     }
+    // The drain neither released itself nor stopped the finished host's retirement.
+    if (drained) expect(activeDrain()).toMatchObject({ id: "fixture-drain" });
   } finally {
     // Restore process-global overrides before any fallible resource cleanup.
     process.kill = originalKill;
@@ -906,6 +937,13 @@ test.each(socketScenarios)("automatic retirement over the production socket: %s"
   if (!socketChild) return isolatedSocketCase(`automatic retirement over the production socket: ${scenario}`);
   await socketScenario(scenario);
   process.stdout.write(`socket case completed: automatic retirement over the production socket: ${scenario}\n`);
+}, 15_000);
+
+test.each(drainedScenarios)("an update drain keeps automatic retirement's protections: %s", async (scenario) => {
+  const name = `an update drain keeps automatic retirement's protections: ${scenario}`;
+  if (!socketChild) return isolatedSocketCase(name);
+  await socketScenario(`${DRAINED}${scenario}`);
+  process.stdout.write(`socket case completed: ${name}\n`);
 }, 15_000);
 
 test.each(["readiness", "admission", "socket"] as const)("production socket fixture cleans up setup failure: %s", async (failure) => {

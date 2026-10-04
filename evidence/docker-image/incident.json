@@ -1,0 +1,122 @@
+{
+  "observedAt": "2026-10-02T16:50:00Z",
+  "method": "gh api actions/runs/{id}/jobs; job and build-step timestamps bracket the observation. Read-only reconstruction; no runs cancelled or rerun.",
+  "activeDockerJobs": [
+    {
+      "id": 37036465968,
+      "createdAt": "2026-10-02T16:48:50Z",
+      "headSha": "dc8e50e4a608bcc8ce580e29632ea5671335f480",
+      "jobs": [
+        {
+          "name": "build",
+          "startedAt": "2026-10-02T16:49:18Z",
+          "completedAt": "2026-10-02T16:56:16Z",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "name": "Build both architectures",
+              "startedAt": "2026-10-02T16:49:41Z",
+              "completedAt": "2026-10-02T16:55:34Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 37034216233,
+      "createdAt": "2026-10-02T16:28:52Z",
+      "headSha": "e5196f16f511d0c9c5f2dd2523cdfa037b671629",
+      "jobs": [
+        {
+          "name": "build",
+          "startedAt": "2026-10-02T16:36:05Z",
+          "completedAt": "2026-10-02T16:56:39Z",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "name": "Build both architectures",
+              "startedAt": "2026-10-02T16:36:25Z",
+              "completedAt": "2026-10-02T16:56:07Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 37034087384,
+      "createdAt": "2026-10-02T16:27:42Z",
+      "headSha": "ff3187187653384c90dd7069144b1188fde76079",
+      "jobs": [
+        {
+          "name": "build",
+          "startedAt": "2026-10-02T16:32:47Z",
+          "completedAt": "2026-10-02T16:55:52Z",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "name": "Build both architectures",
+              "startedAt": "2026-10-02T16:33:09Z",
+              "completedAt": "2026-10-02T16:55:19Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 37034008895,
+      "createdAt": "2026-10-02T16:27:01Z",
+      "headSha": "5f93f40e298f11f0fc811145a0f470298cd9264c",
+      "jobs": [
+        {
+          "name": "build",
+          "startedAt": "2026-10-02T16:33:09Z",
+          "completedAt": "2026-10-02T16:56:09Z",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "name": "Build both architectures",
+              "startedAt": "2026-10-02T16:33:23Z",
+              "completedAt": "2026-10-02T16:55:39Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 37033436562,
+      "createdAt": "2026-10-02T16:22:01Z",
+      "headSha": "bac5bed0e0eb66672e0cc13575a2a2857cd5fbe1",
+      "jobs": [
+        {
+          "name": "build",
+          "startedAt": "2026-10-02T16:35:02Z",
+          "completedAt": "2026-10-02T16:56:49Z",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "name": "Build both architectures",
+              "startedAt": "2026-10-02T16:35:19Z",
+              "completedAt": "2026-10-02T16:56:18Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "requiredChecks": [
+    {
+      "runId": 37036466214,
+      "name": "privacy-publication",
+      "createdAt": "2026-10-02T16:48:50Z",
+      "startedAt": "2026-10-02T17:10:39Z",
+      "queueSeconds": 1309
+    },
+    {
+      "runId": 37036466150,
+      "name": "privacy-tracker-audit",
+      "createdAt": "2026-10-02T16:48:50Z",
+      "startedAt": "2026-10-02T17:13:44Z",
+      "queueSeconds": 1494
+    }
+  ]
+}

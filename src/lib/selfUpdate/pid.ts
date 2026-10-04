@@ -55,11 +55,13 @@ export function signalGroup(record: RecordedPid, signal: NodeJS.Signals): boolea
 }
 
 
-/** Health and launcher records use different historical identity encodings.
-    Both must name the same live process before either format is admitted. */
+/** The launcher records its own start identity and the host answers in the
+    process backend's. The recorded process must be alive, and the answer must
+    be the identity this side reads for the recorded PID. */
 export function runtimeHostMatches(record: { pid: number | null; startIdentity: string | null },
-  health: { pid: number; startIdentity?: string | null } | null, alive: (pid: number, identity: string) => boolean): boolean {
+  health: { pid: number; startIdentity?: string | null } | null, alive: (pid: number, identity: string) => boolean,
+  identity: (pid: number) => string | null): boolean {
   if (!health || record.pid === null || record.startIdentity === null || health.pid !== record.pid
     || !health.startIdentity || !alive(record.pid, record.startIdentity)) return false;
-  return health.startIdentity === record.startIdentity || health.startIdentity === procBackend.processIdentity(record.pid);
+  return health.startIdentity === identity(record.pid);
 }

@@ -305,11 +305,14 @@ test("the phone Needs-you sheet names the long turn and offers both update choic
   const decision = { id: "drain", at: new Date().toISOString(), project: PROJECT, blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
     turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: PROJECT, stage: null, seat: false }] } };
   const host = mount(<MobileAttentionSheet entries={[{ kind: "update", id: "auto-update:drain", decision }]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} />);
-  expect(host.textContent).toContain("conversation_long_turn");
+  // The turn is named by what it is; its id stays off the screen.
+  expect(host.textContent).toContain("Codex agent");
+  expect(host.textContent).not.toContain("conversation_long_turn");
   expect(q(host, '[data-action="deploy-now"]')).not.toBeNull();
   expect(q(host, '[data-action="keep-waiting"]')).not.toBeNull();
   expect(q(host, '[data-needs-you-dismiss-all]')).toBeNull();
 });
+
 test("the header's funnel is drawn only when the host offers the filter, pressed state and 44 px target included", () => {
   const bare = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   expect(q(bare, "[data-attention-filter]")).toBeNull();

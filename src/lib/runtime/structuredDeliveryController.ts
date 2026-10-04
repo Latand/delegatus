@@ -1025,7 +1025,7 @@ export async function bindStructuredDeliveryQueue(
       return true;
     },
     () => scheduleAutomaticRetry(),
-    async (conversationId) => {
+    async (conversationId, admission = {}) => {
       if (!conversationId.startsWith("conversation_")) return false;
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
@@ -1035,6 +1035,7 @@ export async function bindStructuredDeliveryQueue(
       const recovered = await recover({
         path: generation.path,
         conversationId: conversation.id,
+        ...admission,
       }, {
         registry,
         client,
