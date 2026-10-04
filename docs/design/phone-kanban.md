@@ -545,7 +545,9 @@ at the price of drawing the pipeline twice, so they stay in the block and the
 | --- | --- | --- |
 | horizontal swipe | column area | previous / next column (snap); rubber-band at the ends |
 | tap | card | push the task screen |
-| long-press (500 ms) | card | card sheet: Move to Inbox / Assigned / Blocked / Done, Hide from board, Open first agent |
+| hold (350 ms), then drag | task card | the card lifts and a dock of the four columns appears; released over one it moves there, released in place it opens the card sheet (`whole-card-drag.md`) |
+| long-press (500 ms) | card no task owns | card sheet: Hide from board, Open first agent |
+| long-press sheet | task card | card sheet: Move to Inbox / Assigned / Blocked / Done, Hide from board, Open first agent |
 | tap | tab | jump to that column |
 | tap | dock | orchestrator conversation, keyboard up |
 | edge swipe / ‹ | any pushed screen | pop |
@@ -919,9 +921,10 @@ Round 1's 26 frames stay in `/var/tmp/phone-kanban/mockups/` for comparison.
 
 ## 8. Deferred — not currently justified
 
-- **Drag and drop between columns.** A long-press sheet and the task screen's
-  status sheet move a task in two taps; a drag across a paged pager is fragile and
-  nothing asks for it.
+- **Drag and drop between columns.** Taken up since: a hold lifts the card and a
+  dock of the four columns takes it (`whole-card-drag.md`). The long-press sheet
+  and the task screen's status sheet stay, and a hold released in place opens the
+  sheet.
 - **Search and filters inside a column.** The bar's search finds any message; a
   per-column filter is desktop parity nobody asked for on the phone.
 - **A `#t=` deep link to a task.** Links today name conversations and projects.

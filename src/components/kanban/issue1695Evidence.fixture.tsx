@@ -85,7 +85,10 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
+/* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
+   titles and descriptions over the four columns, a lane with a running stage on every second one. */
+const DRAG_BOARD = SCENARIO === "drag-board";
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -258,6 +261,11 @@ const GHOSTS = SCENARIO === "ghost-tasks";
    Beside them, a card with launches of its own that did not start: three rows
    from before launches reserved a conversation, and one whose receipt failed. */
 const UNSTARTED = SCENARIO === "unstarted-regression";
+/* The wall of «conversation outside this board» rows (#2459): a finished task
+   whose lanes left nine past attempts and whose orchestrator and helper agents
+   linked two dozen more conversations by transcript path, none loaded here; and
+   a finished task holding only such conversations. */
+const WALL = SCENARIO === "elsewhere-wall";
 /* Board order: working cards first, then recently worked, then idle. */
 const BOARD_ORDER = SCENARIO === "board-order";
 /* Task priority: an Inbox of high, normal and low tasks read in its order,
@@ -1201,6 +1209,23 @@ const unstartedPipelines: Pipeline[] = UNSTARTED ? [
   ownLane("s5", L("Retire flows, slice 5: freeze flows", "Прибрати флоу, зріз 5: заморозити флоу"), "t-lanes-flows", "closed", flowsRows, 2),
 ] : [];
 
+const wallRows = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({
+  path: `/elsewhere/${prefix}-${index + 1}.jsonl`, conversationId: `conversation_${prefix}-${index + 1}`, panePid: null, state: "linked", error: null, at: iso((3 * 60 + (count - index) * 12) * MIN),
+}));
+const wallPipelines: Pipeline[] = WALL ? (() => {
+  const run = (stageId: string, count: number, offset: number, via: string | null) => ({
+    stageId,
+    attempts: Array.from({ length: count }, (_, index) => attempt(index + 1, "passed", null, {
+      startedAt: iso((offset + index * 30) * MIN), completedAt: iso((offset + index * 30 - 20) * MIN), verdict: { status: "pass", findings: [] },
+      ...(via ? { activatedBy: { stageId: via, attempt: index + 1, edge: "pass" } } : {}),
+    })),
+  });
+  return [pipeline("p-wall", L("The privacy gate admits the sanctioned relay address", "Шлюз приватності пропускає дозволену адресу ретранслятора"), "t-wall", "completed",
+    [stage("build", "builder", "verify"), stage("verify", "verifier", "fix"), stage("fix", "builder", null)],
+    [run("build", 3, 600, null), run("verify", 3, 580, "build"), run("fix", 3, 560, "verify")],
+    null, { closedAt: iso(150 * MIN) })];
+})() : [];
+
 const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   const done = (at: number) => ({ startedAt: iso(at * MIN), completedAt: iso((at - 6) * MIN) });
   const passVia = (stageId: string) => ({ activatedBy: { stageId, attempt: 1, edge: "pass" } });
@@ -1242,6 +1267,7 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
 })() : [];
 
 const pipelines: Pipeline[] = [
+  ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
   ...flatPipelines,
@@ -1528,6 +1554,14 @@ const tasks: BoardTask[] = [
       assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],
     } as Partial<BoardTask>),
   ] : []),
+  ...(WALL ? [
+    task("t-wall", "done", L("The privacy gate admits the sanctioned relay address", "Шлюз приватності пропускає дозволену адресу ретранслятора"), L("A narrow allowlist of public addresses, masked before the known-value match.", "Вузький список дозволених публічних адрес, що маскуються перед перевіркою відомих значень."), 150 * MIN, [], {
+      assignments: wallRows("wall", 24) as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-wall-only", "done", L("Retire the old relay catalog entries", "Прибрати старі записи каталогу ретрансляторів"), "", 200 * MIN, [], {
+      assignments: wallRows("only", 12) as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+  ] : []),
   ...(UNSTARTED ? [
     task("t-lanes-sqlite", "inbox", L("Viewer state in SQLite: the remaining slices and dropping legacy JSON", "Стан Viewer у SQLite: решта зрізів і видалення legacy JSON"), L("Tasks, the agent registry, the board and accounts moved. Left: the remaining collections, one slice per lane.", "Переїхали задачі, реєстр агентів, дошка й акаунти. Лишилось: решта колекцій, по зрізу на лейн."), 2 * 24 * 60 * MIN, [], {
       assignments: sqliteRows as unknown as BoardTask["assignments"],
@@ -1711,6 +1745,27 @@ if (BALANCE) {
   /* A shelf with many cards, each with a title long enough to wrap. */
   for (let index = 0; index < 8; index += 1) {
     tasks.push(task(`t-bal-long-${index}`, "inbox", `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`, "", (index + 2) * 60 * MIN));
+  }
+}
+if (DRAG_BOARD) {
+  const columns: TaskStatus[] = ["inbox", "assigned", "assigned", "blocked", "done"];
+  for (let index = 0; index < 48; index += 1) {
+    const id = `t-drag-${index}`;
+    const status = columns[index % columns.length]!;
+    const title = `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`;
+    const members = status === "assigned" || index % 3 === 0
+      ? [add(conversation(`drag-${index}-impl`, `Implementer: ${title.slice(0, 60)}`, index % 2 === 0 ? working({ model: "opus" }) : {})), add(conversation(`drag-${index}-rev`, `Reviewer: ${title.slice(0, 60)}`, { engine: "codex", model: "gpt-5.6" }))]
+      : [];
+    tasks.push(task(id, status, title, "Rows from the late feed are written after the ledger closes, so the export sees a shorter table than the bank file. Compare both before the cut-off and name the first row that differs.", (index + 1) * 7 * MIN, members));
+    if (index % 2 === 0 && members[0]) {
+      pipelines.push(pipeline(`p-drag-${index}`, title, id, "running",
+        [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
+        [
+          { stageId: "build", attempts: [attempt(1, "passed", members[0], { startedAt: iso(80 * MIN) })] },
+          { stageId: "review", attempts: [attempt(1, "running", members[1] ?? null, { startedAt: iso(20 * MIN) })] },
+        ],
+        { stageId: "review", state: "running", input: null, activatedBy: null }));
+    }
   }
 }
 if (OVERVIEW_SCOPE) {

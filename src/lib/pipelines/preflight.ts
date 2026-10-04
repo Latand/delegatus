@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,17 +18,8 @@ export interface PipelineRepoPreflightPorts {
     a `probe_failed` transient (code `null`), never a false `not_git` (#353 AC3). */
 const GIT_PROBE_TIMEOUT_MS = 4000;
 
-const boundedGitExec: ExecPort = (command, args, cwd) => {
-  if (command !== "git") return realExec(command, args, cwd);
-  const res = spawnSync(command, args, { cwd, encoding: "utf8", timeout: GIT_PROBE_TIMEOUT_MS });
-  if (res.error) {
-    const reason = (res.error as NodeJS.ErrnoException).code === "ETIMEDOUT"
-      ? `git ${args.join(" ")} timed out after ${GIT_PROBE_TIMEOUT_MS}ms`
-      : res.error.message;
-    return { code: null, stdout: "", stderr: reason };
-  }
-  return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
-};
+const boundedGitExec: ExecPort = async (command, args, cwd) =>
+  (await realExec(command, args, cwd, undefined, { timeoutMs: GIT_PROBE_TIMEOUT_MS }));
 
 const DEFAULT_PORTS: PipelineRepoPreflightPorts = {
   homeDir: os.homedir,
@@ -137,11 +127,11 @@ export interface PreflightOptions {
   now?: () => number;
 }
 
-export function preflightPipelineRepo(
+export async function preflightPipelineRepo(
   rawPath: string,
   ports: PipelineRepoPreflightPorts = DEFAULT_PORTS,
   options: PreflightOptions = {},
-): PipelineRepoPreflight {
+): Promise<PipelineRepoPreflight> {
   const candidate = normalizeRepoPath(rawPath, ports.homeDir());
   const now = options.now ?? Date.now;
   if (options.cache) {
@@ -162,7 +152,7 @@ export function preflightPipelineRepo(
   if (denied(ports, candidate, fs.constants.R_OK)) return { ok: false, code: "repo_unreadable", path: candidate };
   if (denied(ports, candidate, fs.constants.X_OK)) return { ok: false, code: "repo_untraversable", path: candidate };
 
-  const topLevel = classifyGitProbe(ports.exec("git", ["rev-parse", "--show-toplevel"], candidate));
+  const topLevel = classifyGitProbe((await ports.exec("git", ["rev-parse", "--show-toplevel"], candidate)));
   if ("failCode" in topLevel) return probeFailure(topLevel, candidate);
   const repoDir = path.resolve(topLevel.value);
   if (repoDir !== candidate) {
@@ -170,7 +160,7 @@ export function preflightPipelineRepo(
     if (denied(ports, repoDir, fs.constants.X_OK)) return { ok: false, code: "repo_untraversable", path: repoDir };
   }
 
-  const common = classifyGitProbe(ports.exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir));
+  const common = classifyGitProbe((await ports.exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir)));
   if ("failCode" in common) return probeFailure(common, repoDir);
   const gitCommonDir = path.resolve(repoDir, common.value);
   if (denied(ports, gitCommonDir, fs.constants.W_OK | fs.constants.X_OK)) {
