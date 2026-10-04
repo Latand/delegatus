@@ -9,12 +9,12 @@ import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { readOrchestratorSeatFileOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -890,6 +890,24 @@ export async function bindStructuredDeliveryQueue(
         const entry = snapshot.entries[sessionKeyId(expectedKey)];
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
+        // Turn idleness cannot release a seat. Read designation and revocation
+        // epochs together, afresh before each signal; silence defers retirement.
+        const seats = readOrchestratorSeatFileOrNull();
+        if (!seats || !conversation) return false;
+        const namesConversation = (id: string | null) => id !== null
+          && resolveConversationAlias(snapshot, id as ViewerConversationId) === conversation.id;
+        const liveEpoch = Math.max(0, ...[
+          ...Object.values(seats.seats),
+          ...Object.values(seats.pending).filter(seat => seat.intent.error === null),
+          ...(seats.seatLineage ?? []),
+        ].filter(seat => namesConversation(seat.conversationId)).map(seat => seat.seatEpoch));
+        const revokedEpoch = Math.max(0, ...seats.revocations
+          .filter(seat => namesConversation(seat.conversationId)).map(seat => seat.seatEpoch));
+        if (liveEpoch > revokedEpoch) return false;
+        // Memberships persist after rotation. Only durable revocation can end
+        // their protection; a newer designation above restores it.
+        if (revokedEpoch === 0 && (snapshot.memberships[conversation.id] ?? [])
+          .some(membership => membership.kind === "orchestrator")) return false;
         // A host's terminal persistence callback releases its writer when the
         // captured tree prevents it clearing the row. The same captured tree
         // still belongs to this teardown; a replacement writer never does.

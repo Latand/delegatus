@@ -404,7 +404,7 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
 });
 
 
-const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle"];
+const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage"];
 const socketChild = process.env.LLV_TERMINAL_REAP_SOCKET_CHILD === "1";
 
 // Task admission caches its store on module load. A fresh process gives each
@@ -525,6 +525,34 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     if (settled.kind !== "settled") throw new Error("fixture settlement refused");
     setAgentRegistryForTests(registry);
     const conversationId = begun.receipt.conversationId;
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } = await import("@/lib/orchestrator/seats");
+    const { statePath } = await import("@/lib/configDir");
+    const seatProject = "fixture-seat-project";
+    let designation = 0;
+    const designate = (id: string, pending = false) => {
+      const clientRequestId = `fixture-seat-${++designation}`;
+      expect(beginOrchestratorSeatIntent({ project: seatProject, mandate: "run the board",
+        clientRequestId, mode: "existing", conversationId: id }).kind).toBe("begun");
+      if (!pending) expect(completeOrchestratorSeatIntent({ project: seatProject, clientRequestId,
+        conversationId: id, path: transcript }).kind).toBe("activated");
+    };
+    const rememberSeat = () => registry.rememberMembership(conversationId, { kind: "orchestrator", containerId: seatProject, role: "seat", slot: "orchestrator" });
+    if (["live-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat"].includes(scenario)) {
+      designate(conversationId, scenario === "pending-seat");
+      if (scenario !== "store-only-seat" && scenario !== "pending-seat") rememberSeat();
+    }
+    if (["rotated-seat", "rotated-seat-open-turn", "redesignated-seat"].includes(scenario)) {
+      designate("conversation_seat_successor");
+      expect(readOrchestratorSeatFile().revocations.some(row => row.conversationId === conversationId)).toBe(true);
+    }
+    if (scenario === "redesignated-seat") {
+      designate(conversationId);
+      const file = readOrchestratorSeatFile();
+      expect(file.seats[seatProject]!.seatEpoch).toBeGreaterThan(file.revocations.find(row => row.conversationId === conversationId)!.seatEpoch);
+    }
+    if (scenario === "legacy-seat") rememberSeat();
+    const seatFile = statePath("orchestrator-seats.json");
+    if (scenario === "unreadable-seat-store") fs.writeFileSync(seatFile, "{");
     const journal = journalResource = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
     journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
       conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "running",
@@ -552,6 +580,7 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     let observedIdle = false;
     let actuationChecked = false;
     let recovered = false;
+    let seatAcquired = false;
     const socket = path.join(root, "runtime.sock");
     process.env.LLV_RUNTIME_HOST_SOCKET = socket;
     process.env.LLV_STRUCTURED_HOSTS = "1";
@@ -569,7 +598,7 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       }
       if (request.method === "session-read" && unavailable && !recovered) {
         actuationChecked = true;
-        if (scenario === "resumed-before-actuation") publish(true);
+        if (scenario === "resumed-before-actuation" || scenario === "rotated-seat-open-turn") publish(true);
         const retirementClaimed = journal.effectBatch(100, ["runtime.kill"]).some(effect =>
           journal.operationResult(effect.payload.operationId as string)?.receipt.status === "delivering");
         if (scenario === "queued-before-actuation") journal.executeOperation({ kind: "send", operationId: "new-queued-turn",
@@ -593,6 +622,16 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
         }
         return response;
       }
+      if (request.method === "operation-status" && scenario === "seat-before-signal" && !recovered && !seatAcquired) {
+        // First authority read admits the idle host. Acquire a seat at the
+        // ladder's next async boundary, after its process tree was captured.
+        const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`];
+        if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) {
+          seatAcquired = true;
+          designate(conversationId);
+          rememberSeat();
+        }
+      }
       if (request.method === "command") commands.push(request.params?.command);
       return host.handle(request, options);
     } }, failure === "socket" ? { maxConnections: 1 } : {});
@@ -600,10 +639,10 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       server!.once("listening", resolve);
       server!.once("error", reject);
     });
-    const finished = attempt(1, conversationId, true);
+    const finished = attempt(1, conversationId, scenario !== "running-stage");
     finished.agentPath = transcript;
     finished.launchId = begun.receipt.launchId;
-    savePipelines([pipelineRecord({ id: "review-live-busy", state: "completed", attempts: [finished] })]);
+    savePipelines([pipelineRecord({ id: "review-live-busy", state: scenario === "running-stage" ? "needs_decision" : "completed", attempts: [finished] })]);
     const tick = async () => {
       const h = harness();
       const production = defaultPipelinePorts();
@@ -628,6 +667,10 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
         observableHost as unknown as Parameters<typeof bindCodexHostPersistence>[2], "structured-host:fixture", 1);
       void child!.exited.then(() => { for (const listener of [...listeners]) listener({ ...state, status: "dead", pid: null }); });
     }
+    if (scenario === "running-stage") {
+      publish(false);
+      setRegistryBusy(false);
+    }
     unavailable = true;
     const started = Date.now();
     await tick();
@@ -638,7 +681,7 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
     expect(commands.every(command => !!(command as { onlyIfIdle?: unknown }).onlyIfIdle)).toBe(true);
-    if (["idle", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper"].includes(scenario)) {
+    if (["idle", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "rotated-seat"].includes(scenario)) {
       await child.exited;
       expect(procBackend.pidAlive(recordedPid)).toBe(false);
       expect(signals.length).toBeGreaterThan(0);
@@ -651,11 +694,31 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     } else {
       expect(procBackend.pidAlive(recordedPid)).toBe(true);
       expect(signals).toEqual([]);
-      expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null });
-      if (scenario === "unavailable" || scenario === "resumed-after-snapshot" || scenario === "resumed-before-actuation") {
+      if (scenario === "running-stage") expect(loadPipelines()[0]!.terminalReap).toBeUndefined();
+      else expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null });
+      if (scenario === "unavailable" || scenario === "resumed-after-snapshot" || scenario === "resumed-before-actuation" || scenario === "rotated-seat-open-turn") {
         expect(journal.snapshot().sessions[0]?.turn).toBe("running");
       }
       if (["resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation"].includes(scenario)) expect(actuationChecked).toBe(true);
+      if (scenario === "seat-before-signal") expect(seatAcquired).toBe(true);
+      if (["live-seat", "legacy-seat", "store-only-seat", "pending-seat", "redesignated-seat", "seat-before-signal"].includes(scenario)) {
+        // Idle live seats survive repeated sweeps without spending the budget.
+        await tick();
+        expect(procBackend.pidAlive(recordedPid)).toBe(true);
+        expect(signals).toEqual([]);
+        expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null });
+        if (scenario === "pending-seat") expect(completeOrchestratorSeatIntent({ project: seatProject,
+          clientRequestId: "fixture-seat-1", conversationId, path: transcript }).kind).toBe("activated");
+        if (scenario === "legacy-seat") designate(conversationId);
+        designate("conversation_seat_successor");
+      }
+      if (scenario === "unreadable-seat-store") fs.unlinkSync(seatFile);
+      if (scenario === "running-stage") {
+        const record = loadPipelines()[0]!;
+        record.runs[0]!.attempts[0] = { ...finished, state: "passed", completedAt: "2026-07-31T00:10:00.000Z", verdict: { status: "pass" } };
+        record.state = "completed";
+        savePipelines([record]);
+      }
       // Deferred attempts remain eligible once the same recorded host is idle.
       recovered = true;
       if (scenario === "queued-before-actuation") {
