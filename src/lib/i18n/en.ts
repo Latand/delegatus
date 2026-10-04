@@ -1437,6 +1437,12 @@ export const en = {
   "keepAwake.unsupported": "This browser has no screen wake lock.",
 
   // MicButton
+  "mic.hint.iosSafari": "Safari asks for the microphone again after a reload or a ten-minute pause. To be asked once: in the address bar, Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
+  "mic.hint.iosOtherBrowser": "On iOS this browser has no setting that stops the microphone question after a reload or a ten-minute pause. Safari has one: open Delegatus in Safari, then Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
+  "mic.hint.iosWebApp": "On iOS a Home Screen app does not keep the microphone grant between launches. Safari does: open Delegatus there, then Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
+  "mic.hint.androidChrome": "Chrome asks again after «Allow this time». Choose «Allow while visiting the site» the next time it asks.",
+  "mic.hint.other": "This browser asks for the microphone again after a reload. To be asked once, allow the microphone for this site in the browser's site settings.",
+  "mic.hint.dismiss": "Hide this hint",
   "mic.stopRecognize": "Stop recording and transcribe",
   "mic.cancel": "Cancel recording",
   "mic.recognizing": "Transcribing…",
@@ -2932,7 +2938,9 @@ export const en = {
   "attention.empty": "Nothing is waiting for you.",
   "attention.reportQuestion": "Question",
   "attention.filterOn": "Show only those waiting on you (F)",
-  "attention.filterOff": "Show all nodes (F)",
+  "attention.filterOff": "Show all cards (F)",
+  "attention.filterOnTouch": "Show only those waiting on you",
+  "attention.filterOffTouch": "Show all cards",
   /* The one decision line every attention surface shares (#1167): the toast
      title, the island popover row and the orchestrator dock badge's tooltip.
      Lower-case to sit beside `rateLimit.badgeUntil`, which names the same class
@@ -3316,6 +3324,7 @@ export const en = {
      Keys are append-only per lane, prefixed by surface. */
   "mobile2.bar.back": "Back",
   "mobile2.bar.switchProject": "Switch project",
+  "mobile2.bar.filterOn": "showing only those waiting on you",
   "mobile2.bar.attention": { one: "{count} needs you", other: "{count} need you" },
   "mobile2.bar.search": "Find your messages",
   "mobile2.bar.more": "More actions",
