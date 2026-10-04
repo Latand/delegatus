@@ -239,13 +239,18 @@ for (const rollback of [false, true]) test(`Windows request-context terminal ent
   if (rollback) writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("synthetic import failure");\n');
   await stop(f.old); await stopRecorded(f.before);
   const run = f.bootstrap();
-  const record = await until(() => {
+  const healthy = await until(() => {
     const value = f.readRecord();
     return value?.launcher.pid !== f.before.launcher.pid && value?.web.state === "healthy" && value.runtimeHost.state === "healthy" ? value : null;
   }).catch(async error => { await f.diagnose("replacement owner with web/runtimeHost healthy", run); throw error; });
   await until(() => run.child.exitCode !== null ? true : null)
     .catch(async error => { await f.diagnose("bootstrap exit after replacement became healthy", run); throw error; });
   expect(run.child.exitCode).toBe(rollback ? 1 : 0);
+  // The launcher records its children healthy, then writes the request it
+  // settled in a second write. The bootstrap exits after that second write, so
+  // the record is read here and belongs to the launcher that became healthy.
+  const record = f.readRecord()!;
+  expect(record.launcher.pid).toBe(healthy.launcher.pid);
   if (rollback) {
     expect(run.error()).toContain("verified prior release");
     expect(readFileSync(f.pointer, "utf8")).toBe(f.rollbackPointer);
