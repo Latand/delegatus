@@ -5707,6 +5707,17 @@ async function selfUpdateAutoMain(): Promise<void> {
     stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }],
     turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", seat: false, stage: null }],
   } };
+  for (const [name, blockers] of Object.entries({
+    memory: { memoryMb: 3500 },
+    controller: { busy: true, busyReason: "pipeline-controller" as const },
+    health: { busy: true, busyReason: "runtime-host" as const, unreadable: "synthetic health evidence unavailable" },
+    operator: { operatorActiveAt: "2026-01-02T06:00:00Z" },
+    totals: { turns: 21, stages: 24 },
+  })) {
+    const decisionBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null, ...blockers };
+    states[`overran-${name}`] = { ...states.overran!, auto: { ...states.overran!.auto!, blockers: decisionBlockers,
+      decision: { id: "drain-example", at: "2026-01-02T06:00:00Z", project: "Delegatus", blockers: decisionBlockers } } };
+  }
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
@@ -5813,7 +5824,7 @@ async function selfUpdateAutoMain(): Promise<void> {
         fs.mkdirSync(evidenceDir, { recursive: true });
         fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
       }
-      if (name === "overran") {
+      if (name === "overran" || name.startsWith("overran-")) {
         await page.keyboard.press("Escape");
         // This existing case also checks the standing Needs-you control; all
         // update API answers are fixtures and neither choice is submitted.
@@ -5827,13 +5838,31 @@ async function selfUpdateAutoMain(): Promise<void> {
         if (await fold.count() && await fold.getAttribute("aria-expanded") === "false") await fold.click();
         const choice = page.locator('[data-auto-drain-decision="drain-example"]').first();
         await choice.waitFor({ state: "visible", timeout: 30_000 });
-        const choices = await choice.evaluate((element) => ({
-          overflow: element.scrollWidth - element.clientWidth,
-          named: element.textContent?.includes("conversation_long_turn"),
-          choices: element.querySelectorAll("button").length,
-        }));
+        const choices = await choice.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const rows = [...element.querySelectorAll<HTMLElement>("li")].map(row => {
+            const range = document.createRange(); range.selectNodeContents(row);
+            return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
+              clipped: [...range.getClientRects()].some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1) };
+          });
+          return { overflow: element.scrollWidth - element.clientWidth, text: element.textContent ?? "", rows,
+            prerequisites: element.querySelector("[data-deploy-prerequisites]")?.textContent ?? "",
+            overrides: element.querySelector("[data-deploy-overrides]")?.textContent ?? "", choices: element.querySelectorAll("button").length };
+        });
         report.frames[`${tag}-needs-you`] = choices;
-        if (choices.overflow > 1 || !choices.named || choices.choices !== 2) report.failures.push(`${tag}: Needs-you decision is unreadable`);
+        const blockers = snapshot.auto!.decision!.blockers!;
+        const copy = messages[lang];
+        const required: string[] = [];
+        const overridden: string[] = [];
+        if (blockers.memoryMb !== null) required.push(copy["selfUpdate.auto.block.memory"].replace("{mb}", String(Math.floor(blockers.memoryMb))));
+        if (blockers.busy) required.push(copy[blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` : "selfUpdate.auto.block.busy"]);
+        if (blockers.unreadable) required.push(copy["selfUpdate.auto.block.unreadable"].replace("{detail}", blockers.unreadable));
+        if (blockers.operatorActiveAt) overridden.push(copy["selfUpdate.auto.block.operator"]);
+        if (blockers.turns) overridden.push(copy["selfUpdate.auto.block.turns"].replace("{count}", String(blockers.turns)));
+        if (blockers.stages) overridden.push(copy["selfUpdate.auto.block.stages"].replace("{count}", String(blockers.stages)));
+        if (choices.overflow > 1 || choices.rows.some(row => row.overflow > 1 || row.clipped) || choices.choices !== 2
+          || required.some(text => !choices.prerequisites.includes(text)) || overridden.some(text => !choices.overrides.includes(text))
+          || name === "overran" && !choices.text.includes("conversation_long_turn")) report.failures.push(`${tag}: Needs-you blockers or decision are unreadable`);
         await choice.scrollIntoViewIfNeeded();
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-needs-you.png`) });
       }
