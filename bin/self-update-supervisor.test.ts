@@ -358,3 +358,28 @@ test("macOS orphan takeover verifies the kernel fence and retains legacy launche
     expect(stopped.length).toBe(1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watcher final response fence retains stale relaunch custody: %s", async change => {
+  const dir = mkdtempSync(join(root, "dispatch-response-"));
+  const file = join(dir, "request.json"), gateFile = join(dir, "auto-admission.json"), ownerFile = join(dir, "launcher.json");
+  const request = JSON.stringify({ requestId: "accepted-relaunch", role: "relaunch", target: "a".repeat(40), autoGateId: "issuer-gate" });
+  const gate = { id: "issuer-gate", until: Date.now() + 60000, issuerPid: process.pid, issuerIdentity: readStartIdentity(process.pid) };
+  writeFileSync(file, request); writeFileSync(gateFile, JSON.stringify(gate));
+  writeFileSync(ownerFile, JSON.stringify({ launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid) } }));
+  let resume!: () => void, entered!: () => void, dispatched = 0;
+  const wait = new Promise<void>(resolve => { resume = resolve; }), arrival = new Promise<void>(resolve => { entered = resolve; });
+  const watcher = watchRestartRequests(file, async () => { dispatched++; }, { intervalMs: 60000,
+    admitAuto: async () => { entered(); await wait; return true; } });
+  try {
+    const polling = watcher.poll(); await arrival;
+    if (change === "gate-expired") writeFileSync(gateFile, JSON.stringify({ ...gate, until: 0 }));
+    if (change === "issuer-changed") writeFileSync(gateFile, JSON.stringify({ ...gate, issuerIdentity: "stale-issuer" }));
+    if (change === "launcher-changed") writeFileSync(ownerFile, JSON.stringify({ launcher: { pid: process.pid, startIdentity: "stale-launcher" } }));
+    const expectedGate = readFileSync(gateFile, "utf8"), expectedOwner = readFileSync(ownerFile, "utf8");
+    resume(); await polling;
+    expect(dispatched).toBe(0); expect(readFileSync(file, "utf8")).toBe(request);
+    expect(readFileSync(gateFile, "utf8")).toBe(expectedGate); expect(readFileSync(ownerFile, "utf8")).toBe(expectedOwner);
+    expect(JSON.parse(readFileSync(`${file}.result.json`, "utf8"))).toMatchObject({ requestId: "accepted-relaunch", state: "rejected" });
+  } finally { resume(); watcher.stop(); }
+});
