@@ -1747,7 +1747,10 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["p
   const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);
   const page = await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(2000) });
-  expect(await page.text()).toBe(fixture.checkout);
+  // SIGKILL cannot write the stop marker. A durable starting trial is allowed
+  // to finish its accepted target; handled signals retain their rollback rule.
+  const completesTrial = signal === "SIGKILL" && boundary === "starting";
+  expect(await page.text()).toBe(completesTrial ? candidate.dir : fixture.checkout);
   const service = new SelfUpdateService({
     now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
     mode: async () => ({ mode: "checkout", reason: null, record: after as never }), check: async () => ({ ok: false, error: "fixture", installed: null }),
@@ -1759,9 +1762,9 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["p
   });
   try {
     const snapshot = await service.snapshot();
-    expect(snapshot.busy).toBeNull(); expect(new ApplyController(directory).current).toMatchObject({ requestId: apply.current!.requestId, state: "failed", rolledBack: true });
+    expect(snapshot.busy).toBeNull(); expect(new ApplyController(directory).current).toMatchObject({ requestId: apply.current!.requestId, state: completesTrial ? "done" : "failed", rolledBack: !completesTrial });
     expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
-    expect(existsSync(before.releasePointer)).toBe(false);
+    expect(existsSync(before.releasePointer)).toBe(completesTrial);
   } finally { service.stop(); }
 }, 60_000);
 
