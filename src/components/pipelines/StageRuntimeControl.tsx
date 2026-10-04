@@ -18,10 +18,30 @@ export function RuntimeSwitchLine({ attempt }: { attempt: PipelineStageAttempt |
   const record = attempt?.runtimeSwitches?.at(-1);
   if (!record) return null;
   const runtime = `${record.to.engine} · ${record.to.model ?? ""}`;
-  const key = ["requested", "cutting", "switching", "continuing"].includes(record.phase) ? "switching"
-    : record.phase === "committed" ? "continued" : "stayed";
-  return <p data-stage-runtime-status={record.phase} className="text-ui leading-relaxed text-secondary break-words" role="status">
-    {t(`stageRuntime.${key}`, { runtime: key === "stayed" ? `${attempt?.effectiveRole.engine} · ${attempt?.effectiveRole.model ?? ""}` : runtime, reason: record.outcome ?? "" })}
+  const open = ["requested", "cutting", "switching", "continuing"].includes(record.phase);
+  const key = open ? attempt?.state === "needs_decision" ? "waiting" : "switching"
+    : record.phase === "committed" ? "continued"
+      : record.phase === "rolled-back" ? "rolledBack"
+        : record.phase === "failed" ? "failed" : "superseded";
+  const outcome = record.outcome;
+  const reasonKey = outcome === "stage stopped by kill during runtime switch" ? "reason.kill"
+    : outcome?.startsWith("target account is no longer allowed") || outcome?.startsWith("runtime switch rollback refused") || outcome?.startsWith("actual account is no longer allowed") ? "reason.accountDisallowed"
+      : outcome?.startsWith("target engine is unavailable") ? "reason.engineUnavailable"
+        : outcome?.startsWith("runtime switch did not settle") ? "reason.didNotSettle"
+          : outcome?.startsWith("runtime switch failed") ? "reason.switchFailed"
+            : outcome?.startsWith("could not stop the running agent") ? "reason.stopFailed"
+              : outcome?.startsWith("runtime switch was not started") || outcome?.startsWith("stage stopped mid-turn") ? "reason.deliveryPending"
+                : outcome?.startsWith("runtime switch stop remains unconfirmed") || outcome?.startsWith("runtime switch launch could not be proven stopped") ? "reason.stopUnconfirmed"
+                  : outcome?.startsWith("runtime switch rollback waiting") || outcome?.startsWith("continued runtime generation is unavailable") ? "reason.sourceUnconfirmed"
+                    : outcome?.startsWith("continuation delivered") ? "reason.turnStartPending"
+                      : outcome?.startsWith("runtime switch continuation failed") ? "reason.continuationFailed"
+                        : outcome?.startsWith("runtime switch continuation fenced") ? "reason.accountDisallowed"
+                          : outcome ? "reason.generic" : null;
+  const reason = reasonKey ? t(`stageRuntime.${reasonKey}`) : "";
+  const oldRuntime = `${attempt?.effectiveRole.engine ?? record.from.engine} · ${attempt?.effectiveRole.model ?? record.from.model ?? ""}`;
+  const tone = key === "failed" || key === "rolledBack" || key === "waiting" ? "text-danger" : "text-secondary";
+  return <p data-stage-runtime-status={record.phase} className={`text-ui leading-relaxed break-words ${tone}`} role="status">
+    {t(`stageRuntime.${key}`, { runtime: key === "failed" || key === "rolledBack" ? oldRuntime : runtime, reason })}
   </p>;
 }
 const signature = (stage: PipelineStage) => JSON.stringify([stage.effectiveRole.engine, stage.effectiveRole.model, stage.effectiveRole.effort, stage.effectiveRole.serviceTier, stage.account]);
@@ -39,6 +59,7 @@ export function StageRuntimeControl({ pipeline, stage, ports = browserPipelinePo
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const parked = attempt?.state === "needs_decision" || pipeline.state === "needs_decision";
   useEffect(() => {
     let active = true;
     void fetch(`/api/account-project-bindings?project=${encodeURIComponent(pipeline.project)}`, { cache: "no-store" })
@@ -47,7 +68,7 @@ export function StageRuntimeControl({ pipeline, stage, ports = browserPipelinePo
     return () => { active = false; };
   }, [pipeline.project]);
   const open = attempt?.runtimeSwitches?.some(record => ["requested", "cutting", "switching", "continuing"].includes(record.phase));
-  const reason = open ? t("stageRuntime.busy") : attempt?.state === "spawning" ? t("stageRuntime.starting")
+  const reason = open ? t(parked ? "stageRuntime.parked" : "stageRuntime.busy") : attempt?.state === "spawning" ? t("stageRuntime.starting")
     : pipeline.state !== "running" || attempt?.state !== "running" ? t("stageRuntime.held") : attempt.report ? t("stageRuntime.reported") : null;
   const disabled = saving || !!reason;
   const save = async (applyNow: boolean) => {
@@ -67,7 +88,7 @@ export function StageRuntimeControl({ pipeline, stage, ports = browserPipelinePo
       if (account !== (stage.account ?? "") || engine !== role.engine) body.account = account || null;
       if (!applyNow && Object.keys(body).length === 3) { setSaved(true); return; }
       const answer = await ports.patch(pipeline.id, body);
-      if (answer.ok) { setSaved(true); ports.refresh(); }
+      if (answer.ok) { setSaved(!applyNow); ports.refresh(); }
       else setError(answer.unknown ? t("stageRuntime.unconfirmed") : answer.error);
     } catch { setError(t("stageRuntime.unconfirmed")); }
     finally { setSaving(false); }

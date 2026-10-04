@@ -2159,13 +2159,22 @@ const evidence = {
   storedPipeline(id: string) {
     return pipelines.find((entry) => entry.id === id) ?? null;
   },
-  setRuntimeSwitchPhase(pipelineId: string, stageId: string, phase: "requested" | "committed" | "rolled-back") {
+  setRuntimeSwitchPhase(pipelineId: string, stageId: string, phase: "requested" | "committed" | "rolled-back" | "failed" | "switching", outcome?: string) {
     const record = pipelines.find(entry => entry.id === pipelineId);
     const live = record?.runs.find(entry => entry.stageId === stageId)?.attempts.at(-1);
     const change = live?.runtimeSwitches?.at(-1);
     if (!live || !change) return;
     change.phase = phase;
-    change.outcome = phase === "rolled-back" ? L("Target account is unavailable", "Обраний акаунт недоступний") : undefined;
+    change.outcome = outcome ?? (phase === "rolled-back" ? "runtime switch failed; continued on previous runtime" : undefined);
+    if (phase === "switching" && outcome) {
+      live.state = "needs_decision";
+      record!.state = "needs_decision";
+      record!.stateDetail = outcome;
+    } else if (live.state === "needs_decision") {
+      live.state = "running";
+      if (record!.state === "needs_decision") record!.state = "running";
+      record!.stateDetail = null;
+    }
     const seat = phase === "committed" ? change.to : change.from;
     live.effectiveRole = { ...live.effectiveRole, engine: seat.engine, model: seat.model, effort: seat.effort, serviceTier: seat.serviceTier ?? undefined };
     window.dispatchEvent(new Event("llv:pipelines-changed"));

@@ -17991,15 +17991,60 @@ describe("running stage runtime control", () => {
           expect(patch).toMatchObject({ action: "override-stage", stageId: "build-ui", model: "fable", applyNow: true });
           expect(patch.prompt).toBeUndefined(); expect(patch.role).toBeUndefined(); expect(patch.access).toBeUndefined();
           const statuses: unknown[] = [];
+          const closedStatuses: unknown[] = [];
           for (const phase of ["requested", "committed", "rolled-back"] as const) {
             await page.evaluate(({ phase }) => (window as unknown as { evidence: { setRuntimeSwitchPhase(p: string, s: string, phase: string): void } }).evidence.setRuntimeSwitchPhase("p-upload", "build-ui", phase), { phase });
             const status = page.locator(`[data-stage-runtime-status="${phase}"]`).first(); await status.waitFor();
             const geometry = await status.evaluate(element => ({ text: element.textContent, width: element.clientWidth, scrollWidth: element.scrollWidth }));
             expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width + 1);
+            if (phase === "rolled-back") {
+              expect(geometry.text).toContain(translate(lang, "stageRuntime.reason.switchFailed"));
+              expect(await status.getAttribute("class")).toContain("text-danger");
+            }
             statuses.push({ phase, ...geometry });
             await page.screenshot({ path: path.join(out, `${width}-${lang}-${phase}.png`), fullPage: true });
           }
-          readings.push({ viewportWidth: width, lang, ...reading, patch, statuses }); expect(pageErrors).toEqual([]);
+          await page.evaluate(() => (window as unknown as { evidence: { setRuntimeSwitchPhase(p: string, s: string, phase: string, outcome?: string): void } }).evidence.setRuntimeSwitchPhase("p-upload", "build-ui", "failed", "stage stopped by kill during runtime switch"));
+          const failed = page.locator('[data-stage-runtime-status="failed"]').first(); await failed.waitFor();
+          const failedText = await failed.innerText();
+          expect(failedText).toContain(translate(lang, "stageRuntime.reason.kill"));
+          expect(await failed.getAttribute("class")).toContain("text-danger");
+          expect(await control.innerText()).not.toContain(translate(lang, "stageRuntime.saved"));
+          if (width === 390) {
+            const phoneStatus = page.locator('.pb-stage[data-stage="build-ui"] [data-stage-runtime-status="failed"]').first();
+            expect(await phoneStatus.innerText()).toContain(translate(lang, "stageRuntime.reason.kill"));
+          }
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-failed.png`), fullPage: true });
+          await page.evaluate(() => (window as unknown as { evidence: { setRuntimeSwitchPhase(p: string, s: string, phase: string, outcome?: string): void } }).evidence.setRuntimeSwitchPhase("p-upload", "build-ui", "switching", "runtime switch did not settle; cancellation unavailable"));
+          const waiting = page.locator('[data-stage-runtime-status="switching"]').first(); await waiting.waitFor();
+          const waitingText = await waiting.innerText();
+          expect(waitingText).toContain(translate(lang, "stageRuntime.waiting").split(":")[0]);
+          expect(waitingText).toContain(translate(lang, "stageRuntime.reason.didNotSettle"));
+          expect(waitingText).not.toContain(translate(lang, "stageRuntime.busy"));
+          expect(await control.innerText()).toContain(translate(lang, "stageRuntime.reason.didNotSettle"));
+          if (width === 390) {
+            const phoneStatus = page.locator('.pb-stage[data-stage="build-ui"] [data-stage-runtime-status]').first();
+            expect(await phoneStatus.innerText()).toContain(translate(lang, "stageRuntime.reason.didNotSettle"));
+          }
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-parked.png`), fullPage: true });
+          if (width === 1440) {
+            await page.keyboard.press("Escape");
+            for (const phase of ["requested", "committed", "rolled-back", "failed"] as const) {
+              await page.evaluate(({ phase }) => (window as unknown as { evidence: { setRuntimeSwitchPhase(p: string, s: string, phase: string, outcome?: string): void } }).evidence.setRuntimeSwitchPhase("p-upload", "build-ui", phase, phase === "failed" ? "stage stopped by kill during runtime switch" : undefined), { phase });
+              const paneStatus = page.locator(`.pane[data-stage="build-ui"] [data-stage-runtime-status="${phase}"]`);
+              await paneStatus.waitFor();
+              expect(await paneStatus.count()).toBe(1);
+              const text = await paneStatus.innerText();
+              if (phase === "rolled-back") {
+                expect(text).toContain(translate(lang, "stageRuntime.reason.switchFailed"));
+                expect(await paneStatus.getAttribute("class")).toContain("text-danger");
+              }
+              if (phase === "failed") expect(text).toContain(translate(lang, "stageRuntime.reason.kill"));
+              closedStatuses.push({ phase, text, count: await paneStatus.count() });
+              await page.screenshot({ path: path.join(out, `${width}-${lang}-${phase}-popover-closed.png`), fullPage: true });
+            }
+          }
+          readings.push({ viewportWidth: width, lang, ...reading, patch, statuses, closedStatuses, failed: failedText, waiting: waitingText }); expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/stage-runtime-control", { recursive: true });
