@@ -136,21 +136,23 @@ async function fixture() {
   const diagnosticsPreload = path.join(root, "diagnostics.preload.mjs");
   writeFileSync(diagnosticsPreload, `
     import cp from "node:child_process";
-    import { syncBuiltinESMExports } from "node:module";
+    import { mock } from "bun:test";
     import { appendFileSync, openSync, closeSync } from "node:fs";
     import path from "node:path";
     const directory = ${JSON.stringify(diagnosticsDir)};
+    appendFileSync(path.join(directory, process.pid + ".preload.jsonl"), JSON.stringify({ pid: process.pid, execArgv: process.execArgv }) + "\\n");
+    const observed = { ...cp };
     let sequence = 0;
     for (const method of ["spawn", "spawnSync"]) {
       const original = cp[method];
-      cp[method] = function(command, args, options) {
+      observed[method] = function(command, args, options) {
         if (command !== process.execPath || options?.stdio !== "ignore") return original(command, args, options);
         const name = process.pid + "-" + (++sequence);
         const files = ["stdout", "stderr"].map(stream => openSync(path.join(directory, name + "." + stream), "a"));
         const trace = value => appendFileSync(path.join(directory, name + ".jsonl"), JSON.stringify(value) + "\\n");
         try {
           const child = original(command, args, { ...options, stdio: ["ignore", ...files] });
-          trace({ method, pid: child.pid, entry: args.find(arg => /\\.(mjs|js)$/.test(arg)), status: child.status, signal: child.signal, error: child.error?.message });
+          trace({ method, pid: child.pid, entry: args.find(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message });
           if (method === "spawn") {
             child.once("exit", (code, signal) => trace({ code, signal }));
             child.once("error", error => trace({ error: error.message }));
@@ -159,7 +161,7 @@ async function fixture() {
         } finally { files.forEach(fd => closeSync(fd)); }
       };
     }
-    syncBuiltinESMExports();
+    mock.module("node:child_process", () => ({ ...observed, default: observed }));
   `);
   const bootstrap = (encoded = plan) => {
     const preload = ["--preload", diagnosticsPreload, ...(process.platform === "win32" ? [] : ["--preload", path.resolve("bin/__fixtures__/windows-state-paths.preload.ts")])];
@@ -171,10 +173,14 @@ async function fixture() {
     return { child, error: () => error, stdout: () => stdout };
   };
   const diagnose = async (observation: string, run: ReturnType<typeof bootstrap>) => {
-    const sanitize = (value: string) => value.split(root).join("<fixture>")
-      .split(root.replaceAll("\\", "\\\\")).join("<fixture>")
-      .split(process.execPath).join("<bun>").split(process.execPath.replaceAll("\\", "\\\\")).join("<bun>")
-      .split(path.resolve(".")).join("<repo>").split(path.resolve(".").replaceAll("\\", "\\\\")).join("<repo>")
+    const sanitize = (value: string) => [root, process.execPath, path.resolve(".")].reduce((text, localPath, index) => {
+      const label = ["<fixture>", "<bun>", "<repo>"][index];
+      for (let level = 0; level < 3; level++) {
+        text = text.split(localPath).join(label);
+        localPath = localPath.replaceAll("\\", "\\\\");
+      }
+      return text;
+    }, value)
       .split("synthetic-terminal-key").join("<synthetic-key>").slice(-4096);
     const print = (item: string, value: unknown) => console.error("[terminal-diagnostic] " + item + " " + sanitize(typeof value === "string" ? value : JSON.stringify(value)));
     const tail = (file: string) => {
@@ -193,7 +199,7 @@ async function fixture() {
       print("directory", { directory, names });
       for (const name of names.slice(0, 24)) {
         const file = path.join(directory, name);
-        if (statSync(file).isFile()) print(name, tail(file));
+        try { if (statSync(file).isFile()) print(name, tail(file)); } catch (error) { print(name, String(error)); }
       }
     }
     for (const [label, record] of [["before", before], ["current", readRecord()]] as const) {
