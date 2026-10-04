@@ -25,3 +25,15 @@ test("the second pass widens unquoted compound terms and identifiers only", () =
     expect(wider(query)).toBeNull();
   }
 });
+
+test("a duplicate of a quoted phrase stays quoted in either order", () => {
+  for (const [quoted, bare] of [['"account_project_binding"', "account_project_binding"], ['"account project binding"', "account-project-binding"]]) {
+    for (const query of [`${quoted} ${bare}`, `${bare} ${quoted}`]) {
+      const units = queryUnits(query);
+      expect(units).toHaveLength(1);
+      expect(units[0].quoted).toBe(true);
+      expect(widerExpression(units[0])).toBeNull();
+    }
+    expect(queryUnits(`${quoted} ${bare}`)[0]).toEqual({ ...queryUnits(bare)[0], quoted: true });
+  }
+});

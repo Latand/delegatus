@@ -1055,6 +1055,13 @@ test("a second pass finds a compound term's parts near each other in one message
   expect(page.items[0].matched).toEqual(["account_project_binding~"]);
   expect(page.items[0].missing).toEqual([]);
   expect(searchTranscripts({ query: '"account_project_binding"', order: "relevance" }).total).toBe(0);
+  for (const query of ['"account_project_binding" account_project_binding', 'account_project_binding "account_project_binding"',
+    '"account project binding" account-project-binding', 'account-project-binding "account project binding"']) {
+    const literal = searchTranscripts({ query, order: "relevance" });
+    expect(literal.total).toBe(0);
+    expect(literal.strongTotal).toBe(0);
+    expect(literal.interpretedAs?.units.some((unit) => unit.endsWith("~"))).toBe(false);
+  }
   expect(searchTranscripts({ query: "account_project_binding", order: "newest" }).total).toBe(0);
 });
 

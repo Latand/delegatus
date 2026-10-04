@@ -176,7 +176,8 @@ first pass dropped as common stays dropped. The rules that hold for every
 query:
 
 - no unit disappears and the coverage denominator can only grow;
-- a `"quoted phrase"` is never widened;
+- a `"quoted phrase"` is never widened, and the same term repeated outside
+  the quotation marks does not lift that, in either order;
 - the parts of a compound term never become separate units: they must meet in
   one message inside the window;
 - when no unit changes there is no second search, and the second page replaces
@@ -202,6 +203,20 @@ each recovered query at every window:
 A window of 16 adds no query, and 32 adds four that are all off topic: three
 are words that happen to sit in one long message and one is only adjacent to
 the subject. That is the "bag of words in a message" the operator rejected.
+
+**What the window still lets through.** The table reads the protocol's 1,000
+sampled queries. The same paired replay on the other 1,477 distinct recorded
+queries, with the same snapshot and fences, recovers 24 and loses none; read
+the same way, 22 are on topic and 2 are off topic. Both off-topic queries are
+a compound term of two common words whose parts met inside the window by
+chance: one returns 16 strong conversations and three of its first four are
+about something else, and the other's only strong match joins the last word
+of one sentence to the first word of the next. The frequency of the wider
+form, the frequencies of the parts and the size of the window were each
+measured and none separates these two from the 22, so the matching rule stays
+as specified. The reader is told instead: a widened unit carries `~`, and the
+`search_transcripts` description says that such a unit matched loosely and
+that its fragment decides whether the hit is on topic.
 
 ### D2. Two orders; each surface keeps a documented default
 

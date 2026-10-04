@@ -312,10 +312,10 @@ candidate. Recorded calls came from 479 transcripts (none unavailable) and
 | Zero queries | 65 / 1,000 | 61 / 1,000 |
 | **Strong-zero** | **117 (11.7%)** | **108 (10.8%)** |
 | Opened transcript in top-6 | 43 / 300 | 43 / 300 |
-| Replay latency p50 / p95, run 1 | 5.56 / 17.25 ms | 5.42 / 16.74 ms |
-| Replay latency p50 / p95, run 2 | 5.41 / 16.72 ms | 5.55 / 17.16 ms |
+| Replay latency p50 / p95, run 1 | 5.29 / 16.52 ms | 5.42 / 16.74 ms |
+| Replay latency p50 / p95, run 2 | 5.75 / 17.77 ms | 5.68 / 17.56 ms |
 | Page size p50 / p95 / max | 4,907 / 6,977 / 8,615 B | 4,915 / 6,977 / 8,615 B |
-| Peak RSS, larger run | 204 MiB | 190 MiB |
+| Peak RSS, larger run | 185 MiB | 194 MiB |
 
 A paired comparison loaded both implementations in one process against one
 copy and ran every query through each, alternating the order:
@@ -327,10 +327,17 @@ copy and ran every query through each, alternating the order:
   second-pass pages; the largest is 6,173 B. The page-size median moves by
   8 B because of those nine; p95 and max are main's.
 - **Top-6:** 43 and 43, with no win and no loss among the 300 pairs.
-- **Latency, best of seven rounds per query:** p50 4.96 → 5.05 ms and p95
-  16.24 → 16.23 ms. Two earlier paired runs gave +0.12 / +0.10 ms and
-  +0.11 / +0.05 ms. The cost falls on the 117 queries main leaves without a
-  strong match: p50 0.74 → 1.12 ms, p95 7.76 → 12.13 ms.
+- **Latency, best of seven rounds per query:** p50 4.82 → 4.91 ms and p95
+  15.73 → 15.92 ms. Three earlier paired runs gave +0.09 / −0.01 ms,
+  +0.12 / +0.10 ms and +0.11 / +0.05 ms. The cost falls on the 117 queries
+  main leaves without a strong match: p50 0.76 → 1.14 ms, p95 7.52 → 11.69 ms.
+
+The table and the paired figures are from the run repeated after the review
+fixes: a term repeated inside and outside quotation marks stays quoted in
+either order, and the `search_transcripts` description explains the `~` mark.
+Every count is the same as before those fixes; only the timings and the peak
+RSS are new readings. Peak RSS across the four runs was 171 and 185 MiB on
+main, 189 and 194 MiB on the candidate.
 
 The 8% follow-up is closed as unreachable on this protocol; the classes of the
 117 failures, the 8.4% floor and the choice of an 8-token window are in

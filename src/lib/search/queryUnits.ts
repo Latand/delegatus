@@ -67,7 +67,12 @@ export function queryUnits(query: string, frequency?: (term: string, prefix: boo
     const expression = terms.map(({ term, prefix }) => quote(term) + (prefix ? "*" : "")).join(" OR ");
     units.push({ label: stem + (prefix ? "*" : ""), expression: terms.length > 1 ? `(${expression})` : expression, terms, phrase: false });
   }
-  return [...new Map(units.map((unit) => [unit.expression, unit])).values()];
+  // Duplicates of one expression merge into the last; quotation marks on any of them hold.
+  const merged = new Map<string, QueryUnit>();
+  for (const unit of units) {
+    merged.set(unit.expression, merged.get(unit.expression)?.quoted ? { ...unit, quoted: true } : unit);
+  }
+  return [...merged.values()];
 }
 
 export function isFunctionWord(unit: QueryUnit): boolean {
