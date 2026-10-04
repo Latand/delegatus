@@ -42,23 +42,20 @@ import {
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
-   configuration pinned for its reads because it no longer inherits
-   XDG_CONFIG_HOME; its own names a directory that holds no account.
+   configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
    Built from the same inputs the boundary uses, never from its code. */
-function agentSandboxEnv(home?: string, source: Record<string, string | undefined> = { PATH: process.env.PATH }): Record<string, string> {
+function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
-  const identity = agentPublicationIdentityEnv(source) as Record<string, string>;
   return {
-    ...identity,
+    ...agentPublicationIdentityEnv({}),
     GIT_AUTHOR_NAME: "Delegatus",
     GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
     GIT_COMMITTER_NAME: "Delegatus",
     GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
     XDG_CONFIG_HOME: config,
     LLV_STATE_DIR: path.join(config, "agent-log-viewer", "state"),
-    LLV_AGENT_FORGE_READ_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
-    GH_CONFIG_DIR: path.join(identity.LLV_AGENT_FORGE_DIR!, "gh-config"),
+    GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
   };
 }
 
@@ -389,8 +386,7 @@ describe("ClaudeStreamBrokerHost", () => {
 
     expect(captured.args).toContain("--strict-mcp-config");
     expect(captured.options?.env).toMatchObject({
-      /* This host's own environment names no PATH. */
-      ...agentSandboxEnv(home, {}),
+      ...agentSandboxEnv(home),
       LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
       LLV_VIEWER_PORT: "8898",
     });
@@ -666,12 +662,10 @@ describe("ClaudeStreamBrokerHost", () => {
       });
       /* A forwarded value still wins; without one the boundary pins the
          operator's own, which the agent used to reach through
-         XDG_CONFIG_HOME (#1905). Either way it is what reads use: the
-         agent's own variable names a directory with no account in it. */
-      expect(captured.options?.env?.LLV_AGENT_FORGE_READ_CONFIG_DIR).toBe(
+         XDG_CONFIG_HOME (#1905). */
+      expect(captured.options?.env?.GH_CONFIG_DIR).toBe(
         forwardGitHubConfig ? "/shared/config/gh" : path.join(os.homedir(), ".config", "gh"),
       );
-      expect(captured.options?.env?.GH_CONFIG_DIR).toBe(path.join(captured.options!.env!.LLV_AGENT_FORGE_DIR!, "gh-config"));
       await host.release();
     }
   });
@@ -1000,7 +994,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcpPath = adoptedCapture.args![adoptedCapture.args!.indexOf("--mcp-config") + 1]!;
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
-    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({ PATH: process.env.PATH }) });
+    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({}) });
     expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     // Each hosted generation has its own FIFO hook receipt queue. Native
     // settings and policy remain identical across fresh/adopted launches.

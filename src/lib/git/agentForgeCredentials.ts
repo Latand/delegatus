@@ -3,18 +3,55 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { statePath } from "@/lib/configDir";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import type { AgentEnvironment } from "./agentHistoryGuard";
 
-import { FORGE_APP_USERNAME, FORGE_DIR_ENV, FORGE_READ_CONFIG_ENV } from "../../../bin/forge-app-token.mjs";
+import { FORGE_APP_USERNAME, FORGE_DIR_ENV, FORGE_REPOSITORIES_ENV, parseRepository } from "../../../bin/forge-app-token.mjs";
 
 const HELPER = "forge-app-token.mjs";
 /* Joined here so the sources hold no address-shaped literal for the publication gate. */
 const at = (user: string, host: string) => [user, host].join("@");
 const PUSH_BASE = `https://${at(FORGE_APP_USERNAME, "github.com")}`;
 const CREDENTIAL = `credential.${PUSH_BASE}`;
-const PUSH_REWRITE = `url.${PUSH_BASE}/.pushInsteadOf`;
+const pushRewrite = (repository: string) => `url.${PUSH_BASE}/${repository}.pushInsteadOf`;
+
+/**
+ * The declaration: a JSON array of `owner/name` in the state directory, for
+ * example `["acme/widgets"]`. A repository gets the App rule only when it is
+ * listed there; a second repository is one more string in the array, once the
+ * App is installed on it and its credential item exists. The file is read at
+ * every launch, so a change needs no restart. No file means no repository.
+ */
+export const FORGE_APP_REPOSITORIES_FILE = "forge-app-repositories.json";
+
+/** The repositories this installation declared as App repositories, as spelled.
+    A file that exists and cannot be read as that list refuses the launch: read
+    as empty, it would quietly send a declared repository's writes as a person. */
+export function forgeAppRepositories(file: string = statePath(FORGE_APP_REPOSITORIES_FILE)): string[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    /* No such file, or no such directory to hold one. */
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return [];
+    throw new Error(`The App repository declaration ${FORGE_APP_REPOSITORIES_FILE} could not be read`);
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  const slugs = Array.isArray(parsed) ? parsed.map((entry) => (typeof entry === "string" && !entry.includes(":") ? parseRepository(entry) : null)) : [null];
+  if (slugs.some((slug) => slug === null)) {
+    throw new Error(`The App repository declaration ${FORGE_APP_REPOSITORIES_FILE} must be a JSON array of owner/name strings`);
+  }
+  return [...new Set(slugs as string[])];
+}
+
+/** Whether the engine's own write to `repository` is under the App rule. */
+export function isForgeAppRepository(repository: string, declared: readonly string[] = forgeAppRepositories()): boolean {
+  const slug = parseRepository(repository)?.toLowerCase();
+  return !!slug && declared.some((entry) => entry.toLowerCase() === slug);
+}
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 const runner = (mode: string) => `#!/bin/sh
@@ -83,29 +120,32 @@ function gitConfigEntries(source: AgentEnvironment): Array<[string, string]> {
 }
 
 /**
- * What makes an agent's GitHub writes go out as the Delegatus GitHub App.
+ * What makes an agent's writes to a declared repository go out as the
+ * Delegatus GitHub App.
  *
- * `gh` resolves to a shim that sends reads on with the configuration reads
- * always had and gives a write an installation token minted for that one
- * command. `withAgentConfigSandbox` points the agent's own `GH_CONFIG_DIR` at
- * the empty directory made here, so a `gh` reached past the shim holds no
- * account at all. Git pushes to GitHub are
+ * With no repository declared this returns nothing and the launch is what it
+ * was. Otherwise `gh` resolves to a shim that gives a covered write to a
+ * declared repository an installation token minted for that one command, and
+ * runs every other command as typed. Git pushes to a declared repository are
  * rewritten to a URL only the App's credential helper answers, with every other
- * helper cleared for that URL, while fetches keep the remote and the helpers
- * they had. Nothing here touches git or gh configuration on disk, so the
- * operator's own terminal is as it was.
+ * helper cleared for that URL, while fetches, and pushes to every other
+ * repository, keep the remote and the helpers they had. Nothing here touches
+ * git or gh configuration on disk, so the operator's own terminal is as it was.
+ *
+ * The rewrite matches a remote spelled as the declaration spells it or in
+ * lower case, which is how GitHub and `gh` write clone URLs.
  *
  * Returns the variables to set, the whole `GIT_CONFIG_*` list among them. The
  * history guard appends its own entry after these and expects to stay last.
  */
-export function agentForgeWriteEnv(source: AgentEnvironment): Record<string, string | undefined> {
+export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly string[] = forgeAppRepositories()): Record<string, string | undefined> {
   /* The shims are POSIX shell. Windows keeps the environment it had. */
-  if (process.platform === "win32") return {};
+  if (process.platform === "win32" || declared.length === 0) return {};
   const directory = agentForgeDir(source);
   const previous = source[FORGE_DIR_ENV];
   const guard = source.LLV_AGENT_GIT_GUARD_DIR;
   const inherited = gitConfigEntries(source).filter(([key, value], index, all) =>
-    !(previous && (key.startsWith(CREDENTIAL + ".") || key === PUSH_REWRITE))
+    !(previous && (key.startsWith(CREDENTIAL + ".") || (key.startsWith(`url.${PUSH_BASE}/`) && key.endsWith(".pushInsteadOf"))))
     && !(index === all.length - 1 && key === "core.hooksPath" && value === guard));
   const entries: Array<[string, string]> = [
     ...inherited,
@@ -113,15 +153,20 @@ export function agentForgeWriteEnv(source: AgentEnvironment): Record<string, str
     [`${CREDENTIAL}.helper`, ""],
     [`${CREDENTIAL}.helper`, `!${quote(path.join(directory, "forge-git-credential"))}`],
     [`${CREDENTIAL}.useHttpPath`, "true"],
-    [PUSH_REWRITE, "https://github.com/"],
-    [PUSH_REWRITE, at("git", "github.com:")],
-    [PUSH_REWRITE, `ssh://${at("git", "github.com/")}`],
   ];
+  for (const repository of new Set(declared.flatMap((entry) => [entry, entry.toLowerCase()]))) {
+    entries.push(
+      [pushRewrite(repository), `https://github.com/${repository}`],
+      [pushRewrite(repository), `${at("git", "github.com")}:${repository}`],
+      [pushRewrite(repository), `ssh://${at("git", "github.com")}/${repository}`],
+    );
+  }
   const separator = path.delimiter;
   const rest = (source.PATH ?? "").split(separator).filter((entry) => entry && entry !== directory && entry !== previous);
   const env: Record<string, string | undefined> = {
     PATH: [directory, ...rest].join(separator),
     [FORGE_DIR_ENV]: directory,
+    [FORGE_REPOSITORIES_ENV]: declared.join(","),
     GIT_CONFIG_COUNT: String(entries.length),
   };
   entries.forEach(([key, value], index) => {
@@ -134,20 +179,11 @@ export function agentForgeWriteEnv(source: AgentEnvironment): Record<string, str
 /**
  * The same arrangement for a command the engine itself starts: the push that
  * publishes a lane's branch, and the push and `gh pr create` that finish a
- * workflow. Merged over the Viewer's environment for that one child, so its
- * push to GitHub is answered by the App's helper alone and its `gh` is the
- * shim. Remotes on other forges and local remotes are not rewritten.
+ * workflow. Merged over the Viewer's environment for that one child. Empty
+ * when no repository is declared, so that child starts as it always did.
  */
-export function engineForgeWriteEnv(source: AgentEnvironment = process.env): Record<string, string | undefined> {
-  const env = agentForgeWriteEnv(source);
-  const directory = env[FORGE_DIR_ENV];
-  if (!directory) return env;
-  return {
-    ...env,
-    [FORGE_READ_CONFIG_ENV]: source[FORGE_READ_CONFIG_ENV]?.trim() || source.GH_CONFIG_DIR?.trim()
-      || path.join(source.XDG_CONFIG_HOME?.trim() || path.join(source.HOME?.trim() || os.homedir(), ".config"), "gh"),
-    GH_CONFIG_DIR: path.join(directory, "gh-config"),
-  };
+export function engineForgeWriteEnv(source: AgentEnvironment = process.env, declared: readonly string[] = forgeAppRepositories()): Record<string, string | undefined> {
+  return agentForgeWriteEnv(source, declared);
 }
 
 /** For tests: forget the helper text read from `bin/`. */

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { agentForgeDir } from "@/lib/git/agentForgeCredentials";
+import { agentForgeDir, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
 
 import { refusalMessage } from "../../../bin/forge-app-token.mjs";
 
@@ -124,4 +124,17 @@ export function forgeAppWriter(cwd: string, timeoutMs: number, options: ForgeApp
       throw error;
     }
   };
+}
+
+/**
+ * The engine's writer for any repository: a declared App repository goes
+ * through `asApp`, and every other one through `run`, the same call with the
+ * same arguments the engine made before there was an App.
+ */
+export function forgeWriter(
+  run: (args: string[]) => Promise<string>,
+  asApp: ForgeAppWriter,
+  declared: (repository: string) => boolean = isForgeAppRepository,
+): ForgeAppWriter {
+  return (args, repository) => (declared(repository) ? asApp(args, repository) : run(args));
 }

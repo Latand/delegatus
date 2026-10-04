@@ -8,7 +8,6 @@ import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { LEGACY_APP_DIR } from "../../../bin/appDir.mjs";
-import { FORGE_DIR_ENV, FORGE_READ_CONFIG_ENV } from "../../../bin/forge-app-token.mjs";
 import { DELEGATUS_ENV_PREFIX } from "../../../bin/envAlias.mjs";
 
 /**
@@ -29,11 +28,9 @@ import { DELEGATUS_ENV_PREFIX } from "../../../bin/envAlias.mjs";
  * - the Viewer MCP server, which gets the real state directory through its own
  *   server entry (`viewerMcpServerEntry`) rather than through the agent's
  *   environment, so the agent's link to the Viewer keeps working;
- * - the operator's `gh` configuration, for reads only. `gh` reads its
- *   configuration out of `XDG_CONFIG_HOME` and a lane without one cannot reach
- *   GitHub at all, so `agentForgeWriteEnv` records where it is and the `gh`
- *   shim hands it to a read. The agent's own `GH_CONFIG_DIR` names an empty
- *   directory and a write goes out as the Delegatus GitHub App or not at all.
+ * - `GH_CONFIG_DIR`, pinned here to the operator's `gh` configuration, because
+ *   `gh` reads it out of `XDG_CONFIG_HOME` and a lane without it cannot reach
+ *   GitHub at all.
  */
 export const AGENT_SANDBOX_DIRNAME = "llv-spawn-sandbox";
 
@@ -120,20 +117,7 @@ export function withAgentConfigSandbox(
   delete env[QUIET_DIAGNOSTICS_ENV];
   /* Unconditional, and never probed on disk: what `gh` finds at the end of it
      is `gh`'s business, and a path that depends on what this machine happens
-     to hold would make the spawned environment unreproducible. Windows has no
-     shim (see agentForgeWriteEnv) and keeps the configuration itself. */
-  const forge = env[FORGE_DIR_ENV];
-  if (!forge) {
-    if (!env.GH_CONFIG_DIR) env.GH_CONFIG_DIR = path.join(realConfigRoot, "gh");
-    return env;
-  }
-  /* Reads keep that configuration: a forwarded value still wins, then the one
-     an agent that is itself launching this already reads with, then the
-     operator's own. The agent's `GH_CONFIG_DIR` names a directory with no
-     account in it, so a `gh` started past the shim cannot write as a person. */
-  const launcher = source[FORGE_DIR_ENV];
-  const forwarded = env.GH_CONFIG_DIR && !(launcher && env.GH_CONFIG_DIR.startsWith(launcher)) ? env.GH_CONFIG_DIR : undefined;
-  env[FORGE_READ_CONFIG_ENV] = forwarded ?? source[FORGE_READ_CONFIG_ENV] ?? path.join(realConfigRoot, "gh");
-  env.GH_CONFIG_DIR = path.join(forge, "gh-config");
+     to hold would make the spawned environment unreproducible. */
+  if (!env.GH_CONFIG_DIR) env.GH_CONFIG_DIR = path.join(realConfigRoot, "gh");
   return env;
 }

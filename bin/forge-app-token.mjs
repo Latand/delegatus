@@ -7,12 +7,15 @@
 
    Three entries:
      token [--repository owner/name] [--json]   one installation token on stdout
-     gh <args…>                                 `gh`, with writes sent as the App
+     gh <args…>                                 `gh`, with covered writes sent as the App
      git-credential <get|store|erase>           git's helper for push URLs
 
-   A write with no usable App credential is refused with REFUSAL below. Nothing
-   here ever reads a person's token, and no token is written to a file or to a
-   terminal. */
+   The rule applies to the repositories this installation declared (see
+   FORGE_REPOSITORIES_ENV) and to the kinds of write listed in
+   FORGE_APP_GH_COMMANDS and FORGE_APP_API_WRITES. Such a write with no usable
+   App credential is refused with the message below and nothing is sent.
+   Everything else reaches `gh` exactly as it was typed, with the environment
+   it was typed in. No token is written to a file or to a terminal. */
 
 import { execFile, spawn } from "node:child_process";
 import { createSign } from "node:crypto";
@@ -25,8 +28,10 @@ export const FORGE_APP_PERMISSIONS = Object.freeze({ contents: "write", pull_req
 export const FORGE_APP_USERNAME = "x-access-token";
 /** Set by the launch environment: the directory holding the `gh` shim. */
 export const FORGE_DIR_ENV = "LLV_AGENT_FORGE_DIR";
-/** Set by the launch environment: the `gh` configuration reads keep using. */
-export const FORGE_READ_CONFIG_ENV = "LLV_AGENT_FORGE_READ_CONFIG_DIR";
+/** Set by the launch environment: the repositories this installation declared
+    as App repositories, `owner/name` separated by commas. Empty or unset means
+    none, and then nothing here changes any command. */
+export const FORGE_REPOSITORIES_ENV = "LLV_AGENT_FORGE_REPOSITORIES";
 
 const API = "https://api.github.com/";
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
@@ -72,6 +77,17 @@ export function appJwt(app, nowSeconds) {
   const signer = createSign("RSA-SHA256");
   signer.update(message);
   return `${message}.${signer.sign(app.pem).toString("base64url")}`;
+}
+
+/** The declared App repositories an environment carries, lower-cased. */
+export function declaredRepositories(env = {}) {
+  return (env[FORGE_REPOSITORIES_ENV] ?? "").split(",").map((entry) => parseRepository(entry)?.toLowerCase()).filter(Boolean);
+}
+
+/** Whether `repository` is one this installation declared as an App repository. */
+export function isDeclaredRepository(repository, env = {}) {
+  const slug = parseRepository(repository)?.toLowerCase();
+  return !!slug && declaredRepositories(env).includes(slug);
 }
 
 function sameRepository(left, right) {
@@ -162,11 +178,27 @@ export async function revokeInstallationToken(token, ports) {
 
 /* ── `gh` ─────────────────────────────────────────────────────────────────── */
 
-const READ_SUBCOMMANDS = new Set(["view", "list", "status", "checks", "diff", "watch", "download", "verify", "verify-asset",
-  "item-list", "field-list", "check", "get", "logs", "checkout", "clone"]);
-const READ_COMMANDS = new Set(["search", "status", "browse", "help", "version", "completion"]);
+/**
+ * The kinds of GitHub write the App is permitted to make, which are the only
+ * ones sent as the App. The list is explicit on purpose: a kind that is absent
+ * (an issue, a workflow dispatch, a release, a comment) is not rerouted and
+ * runs as it always did, because the App holds no permission for it and a
+ * refusal would stop work that depends on it. Adding a kind here is a decision
+ * about the App's permissions, never an inference from the command's shape.
+ */
+export const FORGE_APP_GH_COMMANDS = Object.freeze(["pr create", "pr edit", "pr merge", "pr update-branch"]);
+const REPOSITORY_SEGMENT = "(\\{owner\\}/\\{repo\\}|[^/{}]+/[^/{}]+)";
+/** The same kinds through `gh api`, as method and REST path. */
+export const FORGE_APP_API_WRITES = Object.freeze([
+  Object.freeze({ method: "POST", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls$`) }),
+  Object.freeze({ method: "PATCH", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+$`) }),
+  Object.freeze({ method: "PUT", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+/merge$`) }),
+  Object.freeze({ method: "PUT", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+/update-branch$`) }),
+]);
+
 const API_VALUE_FLAGS = new Set(["-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
   "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+const PASS = Object.freeze({ kind: "pass" });
 
 function repositoryFlag(args) {
   for (let index = 0; index < args.length; index++) {
@@ -182,15 +214,13 @@ function classifyApi(args) {
   let method = null;
   let body = false;
   let endpoint = null;
-  const fields = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, null];
     if (API_VALUE_FLAGS.has(flag)) {
       const value = inline ?? args[++index] ?? "";
       if (flag === "-X" || flag === "--method") method = value.toUpperCase();
-      if (["-f", "--raw-field", "-F", "--field"].includes(flag)) { body = true; fields.push(value); }
-      if (flag === "--input") { body = true; fields.push("\0input"); }
+      if (["-f", "--raw-field", "-F", "--field", "--input"].includes(flag)) body = true;
       continue;
     }
     if (/^-X.+/.test(arg)) { method = arg.slice(2).toUpperCase(); continue; }
@@ -198,24 +228,23 @@ function classifyApi(args) {
     endpoint ??= arg;
   }
   const target = (endpoint ?? "").replace(/^\/+/, "");
-  const effective = method ?? (body ? "POST" : "GET");
   /* The installation endpoints answer only an installation token: the batch
      lander's principal check reads one of them. */
-  if (/^installation(?:\/|$|\?)/.test(target)) return { kind: "write", repository: null };
-  const repository = /^repos\/([^/{]+\/[^/{?]+)/.exec(target)?.[1] ?? null;
-  if (target === "graphql") {
-    /* A query is a read whatever its HTTP method; a body this cannot see is not. */
-    const visible = fields.every((field) => field !== "\0input" && !/^query=@/.test(field));
-    return visible && !fields.some((field) => /\bmutation\b/.test(field)) ? { kind: "read" } : { kind: "write", repository: null };
+  if (/^installation(?:\/|$|\?)/.test(target)) return { kind: "app", repository: null };
+  const effective = method ?? (body ? "POST" : "GET");
+  const route = target.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  for (const write of FORGE_APP_API_WRITES) {
+    const match = write.method === effective ? write.path.exec(route) : null;
+    if (match) return { kind: "app", repository: match[1].startsWith("{") ? null : match[1] };
   }
-  return effective === "GET" || effective === "HEAD" ? { kind: "read" } : { kind: "write", repository };
+  return PASS;
 }
 
 /**
- * What one `gh` invocation is: a read, which keeps the credentials reads always
- * had; a write, which goes out as the App or not at all; or a command an agent
- * is not given. Anything this does not recognise as a read is a write, so a
- * command added to `gh` later can never reach a person's token by being new.
+ * What one `gh` invocation is: one of the covered kinds of write, which goes
+ * out as the App when its repository is declared, or anything else, which
+ * passes through untouched. `repository` is null when the command names none
+ * and `gh` would take it from the checkout.
  */
 export function classifyGh(args, env = {}) {
   const positional = [];
@@ -225,50 +254,36 @@ export function classifyGh(args, env = {}) {
     if (!arg.startsWith("-")) positional.push(arg);
   }
   const [command, sub] = positional;
-  if (!command) return { kind: "read" };
-  if (args.includes("--help") || args.includes("-h")) return { kind: "read" };
-  if (command === "auth") {
-    if (sub === "status") return { kind: "read" };
-    if (sub === "git-credential") return { kind: "git-credential", action: args[args.indexOf("git-credential") + 1] ?? "" };
-    return { kind: "refuse", reason: `\`gh auth${sub ? ` ${sub}` : ""}\` is not available to an agent` };
-  }
+  if (!command || args.includes("--help") || args.includes("-h")) return PASS;
   if (command === "api") return classifyApi(args.slice(args.indexOf("api") + 1));
-  if (READ_COMMANDS.has(command) || (sub && READ_SUBCOMMANDS.has(sub))) return { kind: "read" };
-  const flagged = repositoryFlag(args) ?? env.GH_REPO ?? null;
-  return { kind: "write", repository: flagged };
+  if (!FORGE_APP_GH_COMMANDS.includes(`${command} ${sub ?? ""}`)) return PASS;
+  return { kind: "app", repository: repositoryFlag(args) ?? env.GH_REPO ?? null };
 }
 
 /** Runs `gh` for an agent. Returns the exit status. */
 export async function runGh(args, ports) {
-  const decision = classifyGh(args, ports.env);
-  if (decision.kind === "refuse") {
-    ports.stderr(`Delegatus: ${decision.reason}; it would hand out or change a person's GitHub credentials.\n`);
-    return 1;
-  }
-  if (decision.kind === "git-credential") return gitCredential(decision.action, await ports.readStdin(), ports);
   const gh = ports.findGh();
   if (!gh) {
     ports.stderr("Delegatus: the gh command line tool was not found on PATH.\n");
     return 127;
   }
-  if (decision.kind === "read") {
-    const env = { ...ports.env };
-    if (ports.env[FORGE_READ_CONFIG_ENV]) env.GH_CONFIG_DIR = ports.env[FORGE_READ_CONFIG_ENV];
-    return ports.exec(gh, args, env);
-  }
+  const decision = classifyGh(args, ports.env);
+  const named = decision.kind !== "app" ? null
+    : decision.repository == null ? await ports.originRepository() : parseRepository(decision.repository);
+  /* Not a covered kind, or not a declared repository: the command as typed,
+     in the environment it was typed in. */
+  if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, ports.env);
   let issued;
   try {
-    const named = decision.repository == null ? await ports.originRepository() : parseRepository(decision.repository);
-    if (!named) throw new ForgeAppRefusal(null, "the repository this write targets could not be determined");
     issued = await mintInstallationToken(named, ports);
   } catch (error) {
-    ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(null, "the GitHub App credential could not be used")}\n`);
+    ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(named, "the GitHub App credential could not be used")}\n`);
     return 1;
   }
   /* The App token and nothing else: no inherited token of either spelling, and
-     the configuration directory the launch handed the agent, which holds no
-     account. `gh` is never started for a write without the token in place. */
-  const env = { ...ports.env, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1" };
+     a configuration directory that holds no account. `gh` is never started for
+     a covered write without the token in place. */
+  const env = { ...ports.env, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: ports.emptyGhConfigDir() };
   for (const name of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete env[name];
   try {
     return await ports.exec(gh, args, env);
@@ -280,25 +295,35 @@ export async function runGh(args, ports) {
 /* ── git ──────────────────────────────────────────────────────────────────── */
 
 /**
- * Git's credential helper for the push URL the launch environment rewrites
- * GitHub pushes to. A refusal answers `quit`, so git stops there instead of
- * asking the next helper or a terminal.
+ * Git's credential helper for the push URL the launch environment rewrites a
+ * declared repository's pushes to. A refusal answers `quit`, so git stops there
+ * instead of asking the next helper or a terminal.
+ *
+ * The rewrite matches by prefix, so a sibling repository whose name merely
+ * starts with a declared one arrives here too. It is not declared: its push is
+ * answered by the helpers git would have asked without this arrangement.
  */
 export async function gitCredential(action, input, ports) {
   if (action !== "get") return 0;
   const fields = Object.fromEntries(input.split("\n").filter((line) => line.includes("=")).map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]));
+  let named = null;
   try {
     if (fields.protocol !== "https" || (fields.host ?? "").toLowerCase() !== "github.com") {
       throw new ForgeAppRefusal(null, "the push does not go to github.com over HTTPS");
     }
-    const named = (fields.path ? parseRepository(fields.path) : null) ?? await ports.originRepository();
+    named = (fields.path ? parseRepository(fields.path) : null) ?? await ports.originRepository();
     if (!named) throw new ForgeAppRefusal(null, "the repository this push targets could not be determined");
+    if (!isDeclaredRepository(named, ports.env)) {
+      const own = await ports.ordinaryCredential(fields.path ?? "");
+      if (own) ports.stdout(own);
+      return 0;
+    }
     const issued = await mintInstallationToken(named, ports);
     /* Git's own field names, joined so no credential-shaped literal sits in the source. */
     ports.stdout(`${["username", FORGE_APP_USERNAME].join("=")}\n${["password", issued.token].join("=")}\n`);
     return 0;
   } catch (error) {
-    ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(null, "the GitHub App credential could not be used")}\n`);
+    ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(named, "the GitHub App credential could not be used")}\n`);
     ports.stdout("quit=true\n");
     return 1;
   }
@@ -352,6 +377,23 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
       try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
       return { status: response.status, body: parsed };
     },
+    /* What git's own helpers answer for an undeclared repository: `git
+       credential fill` without the entries the launch added through the
+       environment. Only the two fields git needs are passed on. */
+    ordinaryCredential: (repositoryPath) => new Promise((resolve) => {
+      const childEnv = Object.fromEntries(Object.entries(env).filter(([name]) => !/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/.test(name)));
+      const child = spawn("git", ["credential", "fill"], { stdio: ["pipe", "pipe", "ignore"], env: { ...childEnv, GIT_TERMINAL_PROMPT: "0" }, cwd });
+      let text = "";
+      child.stdout.on("data", (chunk) => { text += chunk; });
+      child.on("error", () => resolve(null));
+      child.on("exit", (code) => {
+        const kept = text.split("\n").filter((line) => /^(?:username|password)=/.test(line));
+        resolve(code === 0 && kept.length === 2 ? `${kept.join("\n")}\n` : null);
+      });
+      child.stdin.on("error", () => {});
+      child.stdin.end(`protocol=https\nhost=github.com\n${repositoryPath ? `path=${repositoryPath}\n` : ""}\n`);
+    }),
+    emptyGhConfigDir: () => path.join(env[FORGE_DIR_ENV] || path.dirname(fileURLToPath(import.meta.url)), "gh-config"),
     findGh: () => {
       const own = [env[FORGE_DIR_ENV], path.dirname(fileURLToPath(import.meta.url))].filter(Boolean).map((dir) => { try { return fs.realpathSync(dir); } catch { return dir; } });
       for (const dir of (env.PATH ?? "").split(path.delimiter)) {

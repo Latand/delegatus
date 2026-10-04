@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 
 import {
-  FORGE_APP_PERMISSIONS, FORGE_READ_CONFIG_ENV, ForgeAppRefusal, classifyGh, gitCredential, mintInstallationToken, parseRepository, runGh,
+  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_PERMISSIONS, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
+  isDeclaredRepository, mintInstallationToken, parseRepository, runGh,
 } from "./forge-app-token.mjs";
 
 /* The App helper against an invented App: a key generated here, an invented
@@ -36,7 +37,11 @@ function fakeGitHub(overrides: Record<string, Answer> = {}) {
   };
 }
 
-function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null } = {}) {
+/* What the agent's shell holds when it types `gh`: the operator's configuration,
+   as the launch pins it, and the declaration naming the one App repository. */
+const AGENT_ENV = { [FORGE_REPOSITORIES_ENV]: "Acme/Widgets", GH_CONFIG_DIR: OPERATOR_CONFIG, GITHUB_TOKEN: "inherited-token" };
+
+function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; ordinary?: string | null } = {}) {
   const github = options.github ?? fakeGitHub();
   const started: Array<{ command: string; args: string[]; env: Record<string, string | undefined> }> = [];
   const out: string[] = [];
@@ -44,7 +49,9 @@ function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeG
   const credential = "credential" in options ? options.credential : { id: 7, pem, installation_id: 42 };
   return {
     github, started, out, err,
-    env: options.env ?? { [FORGE_READ_CONFIG_ENV]: OPERATOR_CONFIG, GH_CONFIG_DIR: "/agent/empty", GITHUB_TOKEN: "inherited-token" },
+    env: options.env ?? AGENT_ENV,
+    ordinaryCredential: async () => options.ordinary ?? null,
+    emptyGhConfigDir: () => "/agent/empty",
     now: () => Date.parse("2030-01-01T00:00:00Z"),
     originRepository: async () => (options.origin === undefined ? REPO : options.origin),
     readCredential: async () => (credential == null ? null : JSON.stringify(credential)),
@@ -118,54 +125,68 @@ test("repositories are named from slugs and GitHub URLs only", () => {
   expect(parseRepository("")).toBeNull();
 });
 
+describe("the declaration an environment carries", () => {
+  test("names repositories whatever their case, and nothing when it is absent", () => {
+    expect(declaredRepositories(AGENT_ENV)).toEqual([REPO]);
+    expect(declaredRepositories({ [FORGE_REPOSITORIES_ENV]: "acme/widgets,acme/gadgets, ,not a repository" })).toEqual([REPO, "acme/gadgets"]);
+    expect(declaredRepositories({})).toEqual([]);
+    expect(isDeclaredRepository("https://github.com/ACME/widgets.git", AGENT_ENV)).toBe(true);
+    expect(isDeclaredRepository("acme/widgets-site", AGENT_ENV)).toBe(false);
+    expect(isDeclaredRepository(REPO, {})).toBe(false);
+  });
+});
+
 describe("what a gh command is", () => {
-  test.each([
-    [["pr", "view", "5"]], [["pr", "list"]], [["pr", "checks", "5"]], [["pr", "diff"]], [["pr", "checkout", "5"]],
-    [["issue", "list"]], [["repo", "view", "--json", "name"]], [["run", "watch", "9"]], [["search", "prs", "x"]],
-    [["auth", "status"]], [["--version"]], [["pr", "merge", "--help"]], [[]],
-    [["api", `repos/${REPO}/pulls`]], [["api", "-X", "GET", `repos/${REPO}/pulls`, "-f", "state=open"]],
-    [["api", "--method=GET", "user"]], [["api", "graphql", "-f", "query=query { viewer { login } }"]],
-    [["-R", REPO, "pr", "view", "5"]],
-  ])("%j keeps the credentials reads always had", (args) => {
-    expect(classifyGh(args).kind).toBe("read");
+  test("the covered kinds are a written list, and it is exactly what the App is permitted to do", () => {
+    expect([...FORGE_APP_GH_COMMANDS]).toEqual(["pr create", "pr edit", "pr merge", "pr update-branch"]);
+    expect(FORGE_APP_API_WRITES.map((write) => `${write.method} ${write.path.source}`)).toEqual([
+      "POST ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls$",
+      "PATCH ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls\\/\\d+$",
+      "PUT ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls\\/\\d+\\/merge$",
+      "PUT ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls\\/\\d+\\/update-branch$",
+    ]);
   });
 
   test.each([
     [["pr", "merge", "5", "--squash"], null], [["pr", "create", "--title", "t"], null], [["pr", "edit", "5", "--body", "b"], null],
-    [["pr", "comment", "5", "-b", "x"], null], [["pr", "close", "5"], null], [["pr", "update-branch", "5"], null],
-    [["pr", "merge", "5", "--repo", REPO], REPO], [["pr", "merge", "5", `--repo=${REPO}`], REPO], [["-R", REPO, "pr", "ready", "5"], REPO],
-    [["issue", "create", "-t", "t"], null], [["release", "create", "v1"], null], [["run", "rerun", "9"], null], [["workflow", "run", "ci"], null],
+    [["pr", "update-branch", "5"], null],
+    [["pr", "merge", "5", "--repo", REPO], REPO], [["pr", "merge", "5", `--repo=${REPO}`], REPO], [["-R", REPO, "pr", "edit", "5"], REPO],
     [["api", "-X", "PUT", `repos/${REPO}/pulls/5/update-branch`, "-f", "expected_head_sha=abc"], REPO],
-    [["api", `repos/${REPO}/issues/5/comments`, "-f", "body=x"], REPO], [["api", "-XDELETE", `repos/${REPO}/git/refs/heads/x`], REPO],
-    [["api", "--input", "body.json", `repos/${REPO}/pulls`], REPO],
-    [["api", "graphql", "-f", "query=mutation { mergePullRequest(input: {}) { clientMutationId } }"], null],
-    [["api", "graphql", "--input", "query.json"], null], [["api", "graphql", "-F", at("query=", "query.graphql")], null],
+    [["api", "--method=PUT", `/repos/${REPO}/pulls/5/merge`], REPO],
+    [["api", `repos/${REPO}/pulls`, "-f", "title=t"], REPO], [["api", "--input", "body.json", `repos/${REPO}/pulls`], REPO],
+    [["api", "-XPATCH", `repos/${REPO}/pulls/5`, "-f", "body=b"], REPO],
+    [["api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/5", "-f", "body=b"], null],
     /* An installation endpoint answers nothing but an installation token. */
     [["api", "installation/repositories?per_page=100", "--paginate"], null],
-    [["some-command-gh-adds-later", "do"], null],
-  ] as const)("%j goes out as the App", (args, repository) => {
-    expect(classifyGh([...args])).toEqual({ kind: "write", repository });
+  ] as const)("%j is a covered kind", (args, repository) => {
+    expect(classifyGh([...args])).toEqual({ kind: "app", repository });
   });
 
-  test("a write names its repository from GH_REPO when no flag does", () => {
-    expect(classifyGh(["pr", "merge", "5"], { GH_REPO: REPO })).toEqual({ kind: "write", repository: REPO });
+  test("a covered write names its repository from GH_REPO when no flag does", () => {
+    expect(classifyGh(["pr", "merge", "5"], { GH_REPO: REPO })).toEqual({ kind: "app", repository: REPO });
   });
 
-  test.each([[["auth", "token"]], [["auth", "login"]], [["auth", "setup-git"]], [["auth", "refresh"]]])("%j is not given to an agent", (args) => {
-    expect(classifyGh(args).kind).toBe("refuse");
+  /* Reads, and every kind of write the App holds no permission for. */
+  test.each([
+    [["pr", "view", "5"]], [["pr", "list"]], [["pr", "checks", "5"]], [["pr", "diff"]], [["pr", "checkout", "5"]],
+    [["issue", "list"]], [["repo", "view", "--json", "name"]], [["run", "watch", "9"]], [["search", "prs", "x"]],
+    [["auth", "status"]], [["auth", "token"]], [["auth", "git-credential", "get"]], [["--version"]], [["pr", "merge", "--help"]], [[]],
+    [["api", `repos/${REPO}/pulls`]], [["api", "-X", "GET", `repos/${REPO}/pulls`, "-f", "state=open"]],
+    [["api", "--method=GET", "user"]], [["api", "graphql", "-f", "query=query { viewer { login } }"]],
+    [["issue", "create", "-t", "t"]], [["issue", "comment", "5", "-b", "x"]], [["run", "rerun", "9"]], [["workflow", "run", "ci"]],
+    [["release", "create", "v1"]], [["label", "create", "x"]], [["pr", "comment", "5", "-b", "x"]], [["pr", "review", "5", "--approve"]],
+    [["pr", "close", "5"]], [["pr", "ready", "5"]],
+    [["api", `repos/${REPO}/issues/5/comments`, "-f", "body=x"]], [["api", "-XDELETE", `repos/${REPO}/git/refs/heads/x`]],
+    [["api", "-X", "POST", `repos/${REPO}/actions/workflows/ci.yml/dispatches`, "-f", "ref=main"]],
+    [["api", "graphql", "-f", "query=mutation { mergePullRequest(input: {}) { clientMutationId } }"]],
+    [["some-command-gh-adds-later", "do"]],
+  ])("%j is not a covered kind", (args) => {
+    expect(classifyGh(args)).toEqual({ kind: "pass" });
   });
 });
 
 describe("running gh for an agent", () => {
-  test("a read starts gh with the configuration reads use and mints nothing", async () => {
-    const p = ports();
-    expect(await runGh(["pr", "view", "5"], p)).toBe(0);
-    expect(p.started).toHaveLength(1);
-    expect(p.started[0]!.env.GH_CONFIG_DIR).toBe(OPERATOR_CONFIG);
-    expect(p.github.calls).toEqual([]);
-  });
-
-  test("a write starts gh with the App token as its whole identity, then revokes it", async () => {
+  test("a covered write to a declared repository starts gh with the App token as its whole identity, then revokes it", async () => {
     const p = ports();
     expect(await runGh(["pr", "merge", "5", "--squash"], p)).toBe(0);
     expect(p.started).toHaveLength(1);
@@ -177,9 +198,12 @@ describe("running gh for an agent", () => {
     expect(`${p.out.join("")}${p.err.join("")}`).not.toContain(ISSUED);
   });
 
-  test("negative control: with no App credential a write starts no gh at all and says why", async () => {
+  test("negative control: a covered write with no App credential starts no gh at all and says why", async () => {
     const p = ports({ credential: null });
-    expect(await runGh(["pr", "merge", "5", "--squash"], p)).toBe(1);
+    for (const write of [["pr", "merge", "5", "--squash"], ["pr", "create", "--fill"], ["pr", "edit", "5", "-b", "x"], ["pr", "update-branch", "5"],
+      ["api", "-X", "PUT", `repos/${REPO}/pulls/5/update-branch`]]) {
+      expect(await runGh(write, p)).toBe(1);
+    }
     /* `gh` is the only thing here that could reach a person's token, through
        the configuration directory or an inherited variable. It never ran. */
     expect(p.started).toEqual([]);
@@ -188,7 +212,7 @@ describe("running gh for an agent", () => {
     expect(p.err.join("")).toContain("never with a person's credentials, so nothing was sent");
   });
 
-  test("a write GitHub refuses to authenticate for starts no gh either", async () => {
+  test("a covered write GitHub refuses to authenticate for starts no gh either", async () => {
     const github = fakeGitHub({ "POST app/installations/42/access_tokens": { status: 403, body: { message: "suspended" } } });
     const p = ports({ github });
     expect(await runGh(["api", "-X", "PUT", `repos/${REPO}/pulls/5/update-branch`], p)).toBe(1);
@@ -196,18 +220,27 @@ describe("running gh for an agent", () => {
     expect(p.err.join("")).toContain("HTTP 403");
   });
 
-  test("a write whose repository cannot be named is refused", async () => {
-    const p = ports({ origin: null });
-    expect(await runGh(["pr", "create", "--fill"], p)).toBe(1);
-    expect(p.started).toEqual([]);
-    expect(p.err.join("")).toContain("could not be determined");
-  });
-
-  test("gh auth token is refused and starts nothing", async () => {
-    const p = ports();
-    expect(await runGh(["auth", "token"], p)).toBe(1);
-    expect(p.started).toEqual([]);
-    expect(p.err.join("")).toContain("not available to an agent");
+  /* Each of these reaches gh with the arguments and the environment object the
+     caller had: same array, same variables, nothing minted. */
+  test.each([
+    ["a read", ["pr", "view", "5"], {}],
+    ["an uncovered write in a declared repository: an issue", ["issue", "create", "-t", "t"], {}],
+    ["an uncovered write in a declared repository: a workflow dispatch", ["workflow", "run", "ci.yml", "--ref", "main"], {}],
+    ["an uncovered write in a declared repository: a run rerun", ["run", "rerun", "9"], {}],
+    ["gh auth token", ["auth", "token"], {}],
+    ["a covered kind in an undeclared repository, by flag", ["pr", "merge", "5", "--repo", "acme/gadgets"], {}],
+    ["a covered kind in an undeclared repository, by checkout", ["pr", "create", "--fill"], { origin: "acme/gadgets" }],
+    ["a covered kind where no repository can be named", ["pr", "create", "--fill"], { origin: null }],
+    ["a covered kind with nothing declared", ["pr", "merge", "5"], { env: { GH_CONFIG_DIR: OPERATOR_CONFIG } }],
+  ] as const)("%s passes through unchanged", async (_name, args, options) => {
+    const p = ports({ ...options, credential: null });
+    const typed = [...args];
+    expect(await runGh(typed, p)).toBe(0);
+    expect(p.started).toEqual([{ command: "/usr/bin/gh", args: typed, env: p.env }]);
+    expect(p.started[0]!.args).toBe(typed);
+    expect(p.started[0]!.env).toBe(p.env);
+    expect(p.github.calls).toEqual([]);
+    expect(p.err).toEqual([]);
   });
 });
 
@@ -221,11 +254,19 @@ describe("git's push credential helper", () => {
     expect(p.github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { ...FORGE_APP_PERMISSIONS } });
   });
 
-  test("negative control: with no App credential git is told to stop asking", async () => {
-    const p = ports({ credential: null });
+  test("negative control: with no App credential git is told to stop asking, and the ordinary helpers are not consulted", async () => {
+    const p = ports({ credential: null, ordinary: "username=operator\n" });
     expect(await gitCredential("get", ask, p)).toBe(1);
     expect(p.out.join("")).toBe("quit=true\n");
     expect(p.err.join("")).toContain("Delegatus refused this GitHub write");
+  });
+
+  test("a sibling repository the prefix rewrite caught is answered by git's ordinary helpers, never by the App", async () => {
+    const ordinary = `username=operator\n${["password", "fixture"].join("=")}\n`;
+    const p = ports({ ordinary });
+    expect(await gitCredential("get", ask.replace("widgets.git", "widgets-site.git"), p)).toBe(0);
+    expect(p.out.join("")).toBe(ordinary);
+    expect(p.github.calls).toEqual([]);
   });
 
   test("another host is refused, and store and erase do nothing", async () => {

@@ -214,7 +214,8 @@ function extractPrUrl(text: string): string | null {
 
 /** Push the wf/ branch and open the PR against the captured base branch (W7). */
 export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Promise<FinishResult> {
-  /* Both writes go out as the Delegatus GitHub App or are refused. */
+  /* In a declared App repository both writes go out as the Delegatus GitHub
+     App or are refused; anywhere else this adds nothing. */
   const forge = engineForgeWriteEnv();
   const push = (await exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir, forge));
   if (push.code !== 0) return failure("git push", push);

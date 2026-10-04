@@ -16,8 +16,9 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
     || email.toLowerCase() === ["noreply", "github.com"].join("@")) {
     throw new Error("Invalid agent publication identity: use a machine name and a no-reply role mailbox");
   }
-  /* GitHub writes go out as the App. Its Git entries come first: the history
-     guard appends its own after them and has to stay the last one. */
+  /* Writes to a declared App repository go out as the App. Its Git entries
+     come first: the history guard appends its own after them and has to stay
+     the last one. */
   const forge = agentForgeWriteEnv(source);
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,

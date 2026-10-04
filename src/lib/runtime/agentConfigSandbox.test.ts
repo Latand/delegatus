@@ -12,8 +12,8 @@ import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSan
    command carries this; these cases pin what "isolated" means. */
 
 test("a spawned agent's environment carries its own config and state root", () => {
-  /* The launch writes its Git hooks and the App helper under the home's cache,
-     so the home is a real directory here. */
+  /* The launch writes its Git hooks under the home's cache, so the home is a
+     real directory here. */
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "operator-home-"));
   const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
   const source: NodeJS.ProcessEnv = {
@@ -36,11 +36,8 @@ test("a spawned agent's environment carries its own config and state root", () =
   /* So does the CLI launcher's quiet terminal. */
   expect(env[QUIET_DIAGNOSTICS_ENV]).toBeUndefined();
   expect(env[pluginKey]).toBeUndefined();
-  /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned for
-     reads; the agent's own names a directory that holds no account. */
-  expect(env.LLV_AGENT_FORGE_READ_CONFIG_DIR).toBe(path.join(home, ".config", "gh"));
-  expect(env.GH_CONFIG_DIR).toBe(path.join(env.LLV_AGENT_FORGE_DIR!, "gh-config"));
-  expect(fs.readdirSync(env.GH_CONFIG_DIR!)).toEqual([]);
+  /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */
+  expect(env.GH_CONFIG_DIR).toBe(path.join(home, ".config", "gh"));
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -60,8 +57,7 @@ test("an account home with no usable name still gets a root of its own, and a fo
   const source: NodeJS.ProcessEnv = { NODE_ENV: "production", TMPDIR: "/scratch/tmp", XDG_CONFIG_HOME: "/shared/config" };
   const env = withAgentConfigSandbox({ NODE_ENV: "production", GH_CONFIG_DIR: "/forwarded/gh" }, source, undefined);
   expect(env.XDG_CONFIG_HOME).toBe(path.join("/scratch/tmp", "llv-spawn-sandbox", "default", "config"));
-  expect(env.LLV_AGENT_FORGE_READ_CONFIG_DIR).toBe("/forwarded/gh");
-  expect(env.GH_CONFIG_DIR).toBe(path.join(env.LLV_AGENT_FORGE_DIR!, "gh-config"));
+  expect(env.GH_CONFIG_DIR).toBe("/forwarded/gh");
 });
 
 test("a TMPDIR inside the operator's state directory is not where the sandbox goes", () => {

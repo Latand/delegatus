@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { FORGE_APP_TOKEN_MARGIN_MS, ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, mintForgeAppToken } from "./appWrite";
+import { FORGE_APP_TOKEN_MARGIN_MS, ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter, mintForgeAppToken } from "./appWrite";
 
 /* The engine's write seam with an invented repository and tokens. `gh` is a
    function here and the minting helper a stand-in or the real one facing an
@@ -92,6 +92,34 @@ describe("a write by the engine", () => {
     await expect(write(["pr", "merge", "5"], REPO)).rejects.toThrow();
     await write(["pr", "merge", "5"], REPO);
     expect(seen).toEqual(["token-1", "token-2"]);
+  });
+});
+
+describe("which repositories the engine writes to as the App", () => {
+  const merge = ["pr", "merge", "5", "--repo", "acme/gadgets", "--squash", "--match-head-commit", "abc"];
+
+  test("an undeclared repository's write is the call the engine always made: same runner, same arguments", async () => {
+    const ran: string[][] = [];
+    const asApp: string[][] = [];
+    const write = forgeWriter(async (args) => { ran.push(args); return "merged"; }, async (args) => { asApp.push(args); return "app"; }, (repository) => repository === REPO);
+    expect(await write(merge, "acme/gadgets")).toBe("merged");
+    expect(ran).toEqual([merge]);
+    expect(ran[0]).toBe(merge);
+    expect(asApp).toEqual([]);
+  });
+
+  test("a declared repository's write goes through the App seam and never through the plain runner", async () => {
+    const ran: string[][] = [];
+    const write = forgeWriter(async (args) => { ran.push(args); return "merged"; }, async () => { throw new ForgeAppWriteRefused("refused"); }, (repository) => repository === REPO);
+    await expect(write(["pr", "merge", "5", "--repo", REPO], REPO)).rejects.toBeInstanceOf(ForgeAppWriteRefused);
+    expect(ran).toEqual([]);
+  });
+
+  test("with no declaration file nothing is declared", async () => {
+    const ran: string[][] = [];
+    const write = forgeWriter(async (args) => { ran.push(args); return ""; }, async () => { throw new Error("the App seam was used"); });
+    await write(merge, REPO);
+    expect(ran).toEqual([merge]);
   });
 });
 

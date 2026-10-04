@@ -1625,8 +1625,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   }
   // Full repository hooks exceed the generic command budget. Publication
   // remains finite and the ownership watcher can cancel it throughout.
-  /* A push to GitHub goes out as the Delegatus GitHub App or is refused; it
-     never uses the credentials of whoever started the Viewer. */
+  /* A push to a declared App repository goes out as the Delegatus GitHub App
+     or is refused; any other push is the one it always was. */
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 900_000 }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
