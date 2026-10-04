@@ -271,6 +271,14 @@ export class RuntimeHost {
         }
         const details = request.params?.details;
         const fromStatuses = request.params?.fromStatuses;
+        const retirementClaim = request.params?.retirementClaim as import("@/lib/runtime/contracts").RuntimeRetirementClaim | undefined;
+        if (retirementClaim !== undefined && (!retirementClaim || typeof retirementClaim.executorId !== "string"
+          || !retirementClaim.executorId || !retirementClaim.process
+          || !Number.isSafeInteger(retirementClaim.process.pid) || retirementClaim.process.pid <= 0
+          || typeof retirementClaim.process.startIdentity !== "string" || !retirementClaim.process.startIdentity
+          || typeof retirementClaim.process.bootEpoch !== "string" || !retirementClaim.process.bootEpoch)) {
+          throw new Error("runtime retirement claim is invalid");
+        }
         const awaitProjection = request.params?.awaitProjection;
         if (awaitProjection !== undefined && typeof awaitProjection !== "boolean") {
           throw new Error("runtime operation projection retention flag is invalid");
@@ -286,6 +294,7 @@ export class RuntimeHost {
           details && typeof details === "object" ? details as RuntimeTransitionDetails : {},
           {
             ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
+            ...(retirementClaim ? { retirementClaim } : {}),
             ...(awaitProjection === true ? { awaitProjection: true } : {}),
           },
         );

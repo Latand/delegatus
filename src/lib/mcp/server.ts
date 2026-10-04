@@ -4204,5 +4204,15 @@ export async function startViewerMcpServer(): Promise<void> {
   const service = await createProductionViewerMcpService(hostHealthProbe);
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();
+  // The SDK does not close its transport on EOF. A dead client (including a
+  // killed launcher) must not leave domain timers or in-flight reads resident.
+  // This entry point owns a dedicated stdio process, never the Viewer server.
+  process.stdin.once("end", () => {
+    setTimeout(() => process.exit(0), 1_000);
+    void server.close().then(
+      () => process.exit(0),
+      (error: unknown) => { console.error("MCP shutdown failed", error); process.exit(1); },
+    );
+  });
   await server.connect(transport);
 }

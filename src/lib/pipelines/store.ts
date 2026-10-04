@@ -971,7 +971,7 @@ export function loadPipelines(): Pipeline[] {
     collections in one SQLite snapshot without projection caches or lenient
     archive decoding. Before cutover, validate the legacy sources in memory;
     this evidence read never migrates or rewrites an unreadable source. */
-export function loadPipelinesForStartup(): Pipeline[] {
+function readCompletePipelineRecords(): unknown[] {
   const collections = readStateCollectionsRows(stateDatabaseFile(), ["pipelines", "pipelines_archive"]);
   const active = collections.get("pipelines");
   const archived = collections.get("pipelines_archive");
@@ -984,7 +984,22 @@ export function loadPipelinesForStartup(): Pipeline[] {
   if (new Set(records.map(registryRecordKey)).size !== records.length) {
     throw new PipelineStoreError("pipeline startup records have contradictory identities");
   }
-  return records.flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
+  return records;
+}
+
+export function loadPipelinesForStartup(): Pipeline[] {
+  return readCompletePipelineRecords().flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
+}
+
+/** Retirement needs positive evidence about every owner. An opaque or malformed
+    row may hold live work; projection/startup's rejected-row isolation cannot
+    establish that a host is unused. Never cache or migrate this evidence. */
+export function loadPipelinesForRetirement(): Pipeline[] {
+  return readCompletePipelineRecords().map((record) => {
+    const decoded = decodePipeline(record);
+    if (!decoded) throw new PipelineStoreError("pipeline retirement ownership is unknown");
+    return decoded;
+  });
 }
 
 function parsePipelinesFile(filename: string, strictPresence = false): unknown[] {
