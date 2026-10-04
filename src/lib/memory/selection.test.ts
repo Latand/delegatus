@@ -1,11 +1,21 @@
 import { expect, test } from "bun:test";
 import { requestBody } from "../../../scripts/memory-selection";
 import { groundedRequest, selectOffers, memoryGate } from "./selection";
+import { en } from "@/lib/i18n/en";
+import { uk } from "@/lib/i18n/uk";
 
 const candidate = { id: "m_fixture", title: "Widget parser", summary: "Widget delimiters must be escaped twice.", body: "Apply this to the legacy widget parser.", engine: "claude", kind: "project_fact", scope: "project", writtenAt: "2026-10-01" };
 const input = { id: "case", prompt: "Update the widget parser for escaped delimiters", engine: "codex", project: "project-widget", context: [{ role: "user", text: "Fix widget parsing" }, { role: "assistant", text: "I will inspect the parser." }], candidates: [candidate], retrievalMs: 0, strictCount: 0 };
 test("the live request is exactly the research grounded request, including body evidence and examples", () => {
   expect(JSON.stringify(groundedRequest(input))).toBe(JSON.stringify(requestBody(input, "grounded")));
+});
+for (const [locale, dictionary] of [["en", en], ["uk", uk]] as const) for (const key of ["draft.readPrompt", "link.handoffContext"] as const) test(`${locale} ${key} context matches main's grounded request`, () => {
+  const template = dictionary[key];
+  if (typeof template !== "string") throw Error("Expected a string UI template");
+  const text = template.replaceAll("{src}", "fixture").replaceAll("{title}", "Widget parser")
+    .replaceAll("{path}", "workspace/widget.jsonl").replaceAll("{ask}", "Update widget parser") + (key === "draft.readPrompt" ? "Update widget parser" : "");
+  const wrapped = { ...input, context: [{ role: "user", text }, { role: "assistant", text: "Ready" }] };
+  expect(JSON.stringify(groundedRequest(wrapped))).toBe(JSON.stringify(requestBody(wrapped, "grounded")));
 });
 test("every operator message, including short followups, is eligible; machine and unknown origins abstain", () => {
   expect(memoryGate({ enabled: true, origin: "operator", prompt: "Proceed" })).toBe(true);

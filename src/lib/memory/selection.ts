@@ -1,5 +1,7 @@
 import { JEV_MODEL, redactForClassifier } from "@/lib/asks/jev";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { en } from "@/lib/i18n/en";
+import { uk } from "@/lib/i18n/uk";
 export interface Candidate {
   id: string; title: string; summary: string; body: string; engine: string;
   kind: string; scope: string; writtenAt: string;
@@ -12,13 +14,32 @@ type Case = SelectionInput;
 export function memoryGate(input: { enabled: boolean; origin: string; prompt: string }): boolean {
   return input.enabled && input.origin === "operator" && input.prompt.trim().length > 0;
 }
-export function cleanEnvelope(text: string): string {
+// Match the complete UI-owned prefix. A partial
+// phrase may be the operator's own prose and must remain untouched.
+const uiPrefixes = [en, uk].flatMap(dictionary => ["draft.readPrompt", "link.handoffContext"].map(key => {
+  const message = dictionary[key as "draft.readPrompt" | "link.handoffContext"];
+  if (typeof message !== "string") throw new Error("Expected a string UI continuation template");
+  const template = message.replace(/\{ask\}$/, "").trimEnd();
+  const parts = template.split(/\{(?:src|title|path)\}/);
+  return new RegExp("^" + parts.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^\\n]+?") + "(?:\\s*|$)");
+}));
+
+export function operatorEnvelope(text: string): { text: string; uiContext?: string } {
   const withoutAttachments = text.replace(/<image\b[^>]*>[\s\S]*?<\/image>/g, "").trimStart();
-  return decodeCodexStructuredUserText(withoutAttachments).text
+  const body = decodeCodexStructuredUserText(withoutAttachments).text
     .replace(/^(?:While you were away the manager reported:|Other sessions also reported \(NOT the manager)[\s\S]*?Mention what matters in your own words\. Do not read this list aloud\.\s*/, "")
-    .replace(/^\[viewer context[^\n]*\]\s*/i, "")
-    .replace(/^Тобі передали контекст іншого агента[^\n]*\n\n/, "").trim();
+    .replace(/^\[viewer context[^\n]*\]\s*/i, "").trim();
+  for (const prefix of uiPrefixes) {
+    const match = body.match(prefix);
+    if (match) return { text: body.slice(match[0].length).trim(), uiContext: match[0].trim() };
+  }
+  return { text: body };
 }
+
+export function cleanEnvelope(text: string): string {
+  return operatorEnvelope(text).text;
+}
+
 export function replayText(text: string): string {
   return redactForClassifier(text)
     .replace(/^.*(?:password|passwd|парол|api[_ -]?key|authorization|bearer|credential).*$/gim, "[credential line withheld]")
@@ -28,7 +49,10 @@ export function replayText(text: string): string {
 /** Keep the complete prefix privately; the decider gets a bounded trailing
  * view because Jev has a 32K-token input window. Truncation is explicit. */
 export function contextView(c: Case): string {
-  const text = (c.context ?? []).map(t => `${t.role}: ${cleanEnvelope(t.text)}`).join("\n\n");
+  const text = (c.context ?? []).map(t => {
+    const envelope = operatorEnvelope(t.text);
+    return [envelope.uiContext ? `context: ${envelope.uiContext}` : "", envelope.text ? `${t.role}: ${envelope.text}` : ""].filter(Boolean).join("\n\n");
+  }).join("\n\n");
   const safe = replayText(text);
   return safe.length > 16_000 ? "[earlier context omitted]\n" + safe.slice(-16_000) : safe;
 }

@@ -314,10 +314,12 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   expect(memoryIndex().turnOffers(receipt.conversationId)).toEqual([]);
   expect(await offerForHook(request, { ...input, prompt: wire, prompt_id: "synthetic-typed", turn_id: "synthetic-typed" })).toContain("Delegatus shared memory");
   expect(calls).toBe(1);
-  const userLine = (ts: string) => JSON.stringify(engine === "claude"
-    ? { type: "user", uuid: crypto.randomUUID(), timestamp: ts, message: { role: "user", content: wire } }
-    : { type: "response_item", timestamp: ts, payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } });
-  const offeredLine = userLine("2026-10-02T12:00:01.000Z"), repeatedLine = userLine("2026-10-02T12:00:03.000Z");
+  const userLine = (id: string, ts: string) => JSON.stringify(engine === "claude"
+    ? { type: "user", uuid: id, timestamp: ts, message: { role: "user", content: wire } }
+    : { type: "response_item", timestamp: ts, payload: { type: "message", turn_id: id, role: "user", content: [{ type: "input_text", text: wire }] } });
+  // Both hooks ran before their journal rows; the machine row lands first.
+  if (queued === "different") fs.appendFileSync(transcript, userLine("synthetic-machine", "2026-10-02T12:00:00.000Z") + "\n");
+  const offeredLine = userLine("synthetic-typed", "2026-10-02T12:00:01.000Z"), repeatedLine = userLine("synthetic-repeat", "2026-10-02T12:00:03.000Z");
   fs.appendFileSync(transcript, offeredLine + "\n" + repeatedLine + "\n");
   memoryIndex().close(); // Reload every persisted join, as the conversation does.
   const offers = offeredMemoryForTranscript(transcript);

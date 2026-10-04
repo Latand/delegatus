@@ -35,8 +35,8 @@ export function memoryTurnContext(filename: string, engine: "claude" | "codex", 
         const row = JSON.parse(line);
         const sourceId = engine === "claude" && typeof row.uuid === "string" ? row.uuid : undefined;
         for (const { record } of normalizeSessionLine(engine, row)) {
-          if (record.kind === "message" && roleFor(record.role, record.text, sourceId, offset) === "user" && !/^(# AGENTS\.md|<environment_context>|<permissions instructions>)/.test(record.text.trim())) {
-            opening = { role: "user", text: cleanEnvelope(record.text) }; break;
+          if (record.kind === "message" && roleFor(record.role, record.text, sourceId, offset) === "user" && cleanEnvelope(record.text) && !/^(# AGENTS\.md|<environment_context>|<permissions instructions>)/.test(record.text.trim())) {
+            opening = { role: "user", text: record.text }; break;
           }
         }
       } catch { /* incomplete prefix line */ }
@@ -44,13 +44,15 @@ export function memoryTurnContext(filename: string, engine: "claude" | "codex", 
     }
     const page = readMessagesPage({ descriptor: fd, size, engine }, { kinds: new Set(["message"]), roles: new Set(["user", "assistant"]), limit: 16, maxChars: 4000 });
     const recent: MemoryTurn[] = page.records.reverse().map(r => {
-      const turn: MemoryTurn = { role: roleFor(r.role, r.text, r.sourceId, r.seq), text: cleanEnvelope(r.text) };
+      // Keep the full envelope for selection.contextView to separate UI-owned
+      // context from operator text without losing the supplied transcript ref.
+      const turn: MemoryTurn = { role: roleFor(r.role, r.text, r.sourceId, r.seq), text: r.text };
       // The reader already bounds transcript work. Keep only a bounded tail
       // for local outcome accounting, outside the serialized Jev context.
       if (r.role === "assistant") Object.defineProperty(turn, "citationText", { value: (r.sourceText ?? r.text).slice(-16000), enumerable: false });
       return turn;
     });
-    if (recent.at(-1)?.role === "user" && recent.at(-1)?.text === cleanEnvelope(latest)) recent.pop();
+    if (recent.at(-1)?.role === "user" && cleanEnvelope(recent.at(-1)!.text) === cleanEnvelope(latest)) recent.pop();
     return opening ? [opening, ...recent.filter(r => r.text !== opening.text)] : recent;
   } catch { return []; }
   finally { if (fd !== undefined) fs.closeSync(fd); }

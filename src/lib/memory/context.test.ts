@@ -9,6 +9,30 @@ import { memoryTurnContext } from "./context";
 import { groundedRequest } from "./selection";
 import { MemoryIndex } from "./index";
 import { memoryIndex } from "./service";
+import { en } from "@/lib/i18n/en";
+import { uk } from "@/lib/i18n/uk";
+
+for (const engine of ["claude", "codex"] as const) for (const [locale, dictionary] of [["en", en], ["uk", uk]] as const) for (const key of ["draft.readPrompt", "link.handoffContext"] as const) test(`${engine} ${locale} ${key} retains UI context through native transcript reading`, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-ui-context-"));
+  const filename = path.join(root, "synthetic.jsonl"), ask = "Update widget parser";
+  const template = dictionary[key];
+  if (typeof template !== "string") throw Error("Expected a string UI template");
+  const text = template.replaceAll("{src}", "fixture").replaceAll("{title}", "Widget parser")
+    .replaceAll("{path}", "workspace/widget.jsonl").replaceAll("{ask}", ask) + (key === "draft.readPrompt" ? ask : "");
+  const line = (text: string) => JSON.stringify(engine === "claude" ? { type: "user", uuid: crypto.randomUUID(), message: { role: "user", content: text } }
+    : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+  try {
+    for (const first of [true, false]) {
+      fs.writeFileSync(filename, (first ? "" : line("Earlier operator task") + "\n") + line(text) + "\n");
+      const context = memoryTurnContext(filename, engine, "Proceed");
+      const state = groundedRequest({ engine, prompt: "Proceed", candidates: [], context }).state;
+      expect(state.openingRequest).toBe(first ? ask : "Earlier operator task");
+      expect(state.precedingTurns).toContain(key === "draft.readPrompt" ? "fixture" : "workspace/widget.jsonl");
+      expect(state.precedingTurns).toContain("context: ");
+      expect(state.precedingTurns).toContain(`user: ${ask}`);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("grounded opening request is the first operator turn on both engines, after a machine launch", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-context-"));
