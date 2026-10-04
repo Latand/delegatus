@@ -14,6 +14,7 @@ import {
 import { chime } from "@/lib/chime";
 import { CAP_SECONDS, dictationCues, remaining as remainingSeconds } from "@/lib/dictationTimer";
 import { useLocale } from "@/lib/i18n";
+import { rememberMicGrant } from "@/lib/micPermission";
 import {
   applySonioxFrame,
   sonioxLiveInitialState,
@@ -544,6 +545,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         takeLiveToken(),
       ]);
       stream = mediaStream;
+      rememberMicGrant();
       if (!mountedRef.current || discardRef.current) return;
       setLiveText("");
 

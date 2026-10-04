@@ -9,6 +9,7 @@ import type { VoiceBackingHost } from "@/hooks/useCodexRealtime";
 
 
 import { viewBus } from "@/hooks/viewPresenceBus";
+import { rememberMicGrant } from "@/lib/micPermission";
 import { viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 
 import { reportCallPhase } from "./activeCall";
@@ -584,6 +585,7 @@ class CodexRealtimeClient {
       const media = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      rememberMicGrant();
       const peer = new RTCPeerConnection();
       const events = peer.createDataChannel("oai-events");
       const audio = new Audio();

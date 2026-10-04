@@ -646,6 +646,153 @@ browserTest("composer queue: a lost seat read drains once on the phone and survi
 }, 90_000);
 
 /*
+ * The microphone hint: on a phone whose browser will ask for the microphone
+ * again although this device already allowed it, the composer carries one row
+ * naming the setting that ends the question.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "microphone hint"
+ *
+ * Chromium stands in for Edge on an iPhone, the operator's browser: the user
+ * agent is Edge's and the Permissions API answers "prompt", which is what a
+ * WebKit view reports when it will ask. Readings go to
+ * `evidence/mic-permission-hint/phone.json`; frames to
+ * `.artifacts/mic-permission-hint/`, which is not committed.
+ */
+const MIC_HINT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/138.0.0.0 Mobile/15E148 Safari/604.1";
+
+browserTest("microphone hint: the record button with and without the hint at 390, en and uk, dark", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/mic-permission-hint");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      const mic = `button[aria-label="${translate(locale, "mic.dictate")}"]`;
+      const surfaces = { hint: "[data-mic-permission-hint]", unit: '[data-testid="composer-input-unit"]', send: "[data-mobile2-send]", mic };
+      /* The visible composer's parts, and what a tap at the middle of each
+         control would land on. */
+      const read = (page: Page) => page.evaluate((selectors) => {
+        const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)].find((element) => element.getClientRects().length > 0) ?? null;
+        const rect = (element: HTMLElement | null) => {
+          if (!element) return null;
+          const r = element.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        };
+        const reachable = (element: HTMLElement | null) => {
+          if (!element) return false;
+          const r = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          return Boolean(hit && (hit === element || element.contains(hit)));
+        };
+        const hint = visible(selectors.hint);
+        const unit = visible(selectors.unit);
+        const send = visible(selectors.send);
+        const micButton = visible(selectors.mic);
+        const textarea = visible("textarea");
+        return {
+          hint: rect(hint), hintText: hint?.textContent ?? null, hintCount: document.querySelectorAll(selectors.hint).length,
+          /* The text itself: the row's own scroll size counts the dismiss
+             button's enlarged touch target. */
+          hintCut: [...(hint?.querySelectorAll("span") ?? [])].some((text) => text.scrollWidth > text.clientWidth || text.scrollHeight > text.clientHeight),
+          /* What a finger reaches: a walk from the button's centre, one pixel
+             at a time, for as long as the point still lands on the button. The
+             accessory region is a scrollport and clips whatever leaves it, so
+             the style's own numbers overstate the target. */
+          dismissTarget: (() => {
+            const button = hint?.querySelector<HTMLElement>("[data-mic-permission-hint-dismiss]");
+            if (!button) return null;
+            const r = button.getBoundingClientRect();
+            const cx = r.x + r.width / 2;
+            const cy = r.y + r.height / 2;
+            const lands = (x: number, y: number) => {
+              const hit = document.elementFromPoint(x, y);
+              return Boolean(hit && (hit === button || button.contains(hit)));
+            };
+            const reach = (dx: number, dy: number) => {
+              let steps = 0;
+              while (steps < 100 && lands(cx + dx * (steps + 1), cy + dy * (steps + 1))) steps += 1;
+              return steps;
+            };
+            if (!lands(cx, cy)) return { width: 0, height: 0 };
+            return { width: reach(-1, 0) + reach(1, 0) + 1, height: reach(0, -1) + reach(0, 1) + 1 };
+          })(),
+          unit: rect(unit), send: rect(send), mic: rect(micButton), textarea: rect(textarea),
+          sendReachable: reachable(send), micReachable: reachable(micButton), textareaReachable: reachable(textarea),
+          overflow: document.documentElement.scrollWidth > window.innerWidth,
+        };
+      }, surfaces);
+      for (const scene of ["plain", "hint"] as const) {
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, colorScheme: "dark", userAgent: MIC_HINT_UA });
+        try {
+          await context.addInitScript(({ lang, granted }) => {
+            localStorage.setItem("llv_lang", lang);
+            if (granted) localStorage.setItem("llv_mic_granted", "1");
+            Object.defineProperty(navigator, "permissions", { configurable: true, value: { query: async () => ({ state: "prompt" }) } });
+          }, { lang: locale, granted: scene === "hint" });
+          const page = await context.newPage();
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${base}/?runtime=structured#c=conversation_running`);
+          await page.waitForSelector("textarea", { timeout: 15_000 });
+          if (scene === "hint") await page.waitForSelector(surfaces.hint, { timeout: 5_000 });
+          await pause(page, 600);
+          const reading = await read(page);
+          await page.screenshot({ path: path.join(out, `390-${locale}-${scene}.png`) });
+          const at = `${locale} ${scene}`;
+          if (!reading.unit || !reading.send || !reading.mic || !reading.textarea) { failures.push(`${at}: the composer is not whole`); continue; }
+          if (reading.overflow) failures.push(`${at}: the page overflows sideways`);
+          if (!reading.sendReachable || !reading.micReachable || !reading.textareaReachable) failures.push(`${at}: a composer control is covered`);
+          if (scene === "plain") {
+            if (reading.hintCount !== 0) failures.push(`${at}: a hint with no prior grant`);
+            readings.push({ locale, scene, ...reading });
+            continue;
+          }
+          if (!reading.hint || reading.hintCount !== 1) { failures.push(`${at}: expected one visible hint, found ${reading.hintCount}`); continue; }
+          if (reading.hintText !== translate(locale, "mic.hint.iosOtherBrowser")) failures.push(`${at}: hint text is ${reading.hintText}`);
+          if (reading.hintCut) failures.push(`${at}: the hint's text is cut`);
+          if (!reading.dismissTarget || reading.dismissTarget.width < 44 || reading.dismissTarget.height < 44) failures.push(`${at}: the dismiss target is under 44 px`);
+          if (reading.hint.x < 0 || reading.hint.x + reading.hint.width > viewport.width) failures.push(`${at}: the hint leaves the viewport`);
+          if (reading.hint.y + reading.hint.height > reading.unit.y) failures.push(`${at}: the hint reaches into the input unit`);
+          for (const [name, box] of [["send", reading.send], ["mic", reading.mic], ["textarea", reading.textarea]] as const) {
+            if (overlaps(reading.hint, box)) failures.push(`${at}: the hint covers ${name}`);
+          }
+          /* Shown once per device: being on screen settles it, with no touch. */
+          const reload = async () => {
+            await page.reload();
+            await page.waitForSelector("textarea", { timeout: 15_000 });
+            await pause(page, 1_000);
+            return read(page);
+          };
+          const seen = await page.evaluate(() => localStorage.getItem("llv_mic_hint_seen"));
+          if (seen !== "1") failures.push(`${at}: the shown hint was not kept for the device`);
+          const untouched: number[] = [];
+          for (let load = 0; load < 3; load += 1) untouched.push((await reload()).hintCount);
+          if (untouched.some((count) => count !== 0)) failures.push(`${at}: the hint came back on a reload nobody dismissed it before (${untouched.join(", ")})`);
+          await page.screenshot({ path: path.join(out, `390-${locale}-untouched-reload.png`) });
+          /* A device that has not seen it yet: a touch on the dismiss control
+             removes the row at once, and it stays away after a reload. */
+          await page.evaluate(() => localStorage.removeItem("llv_mic_hint_seen"));
+          if ((await reload()).hintCount !== 1) { failures.push(`${at}: no hint to dismiss`); continue; }
+          await tap(page, cdp, "[data-mic-permission-hint-dismiss]");
+          await page.waitForSelector(surfaces.hint, { state: "detached", timeout: 3_000 });
+          const after = await reload();
+          if (after.hintCount !== 0) failures.push(`${at}: the hint came back after a dismissal and a reload`);
+          await page.screenshot({ path: path.join(out, `390-${locale}-dismissed-reload.png`) });
+          readings.push({ locale, scene, ...reading, shownKept: seen === "1", hintsAfterUntouchedReloads: untouched, hintsAfterDismissedReload: after.hintCount });
+        } finally { await context.close(); }
+      }
+    }
+  } finally { await browser.close(); stop(); }
+  const evidence = path.resolve("evidence/mic-permission-hint");
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ viewport, scheme: "dark", browser: "Edge on iOS (user agent)", readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 180_000);
+
+/*
  * #1795 — the runtime pill's sheet, on the same real Viewer, at the two phone
  * surfaces the operator reached it from and at a desktop viewport:
  *
