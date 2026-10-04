@@ -593,7 +593,7 @@ function ProcessBlock({ s, role, state, actions, t }: { s: Snapshot; role: "web"
   const disabled = blocked || status.state === "stopping" || status.state === "starting";
 
   let action: ReactNode = null;
-  if (managed || wholeInstallationPending(s)) {
+  if (managed || s.meta.maintenanceRestart === false || wholeInstallationPending(s)) {
     action = null;
   } else if (isHost && state.armed && !acting) {
     action = (

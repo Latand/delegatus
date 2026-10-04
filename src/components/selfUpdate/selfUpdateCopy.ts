@@ -54,8 +54,11 @@ export function staleProcesses(s: Snapshot): { web: boolean; host: boolean } {
 export function wholeInstallationPending(s: Snapshot): boolean {
   const stale = staleProcesses(s);
   const switching = s.update.steps.some(step => step.name === "switch" && ["pending", "running"].includes(step.state));
-  const prerequisite = s.action && ["restart-service", "restart-terminal", "start-service", "start-launcher", "secure-handoff"].includes(s.action.id);
-  return (s.mode === "checkout" || s.mode === "package") && (!!prerequisite || stale.web || stale.host || switching);
+  const prerequisite = s.action && !s.action.terminalEveryUpdate
+    && ["restart-service", "restart-terminal", "start-service", "start-launcher", "secure-handoff"].includes(s.action.id);
+  const launcherBehind = !!s.installed.sha && (s.meta.launcherRevision !== undefined || s.action?.terminalEveryUpdate)
+    && s.meta.launcherRevision !== s.installed.sha;
+  return (s.mode === "checkout" || s.mode === "package") && (!!prerequisite || launcherBehind || stale.web || stale.host || switching);
 }
 
 export interface HeaderStatus { icon: IconKind; text: string; next: string | null; edge: "warning" | "danger" | null }
@@ -66,7 +69,7 @@ export function headerStatus(s: Snapshot, t: TFunction): HeaderStatus {
   const time = clock(check.at);
   const stale = staleProcesses(s);
   if (check.state === "checking") return { icon: "running", text: t("selfUpdate.status.checking", { branch }), next: null, edge: null };
-  if (check.state === "up-to-date" && (stale.web || stale.host)) {
+  if (check.state === "up-to-date" && (stale.web || stale.host || wholeInstallationPending(s))) {
     /* Built is not running: green waits until every live process runs it. */
     const sha = s.installed.short;
     let text: string;

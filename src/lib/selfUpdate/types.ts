@@ -198,6 +198,8 @@ export interface Snapshot {
     checkout: string | null;
     pollMinutes: number;
     serverTime: string;
+    launcherRevision?: string | null;
+    maintenanceRestart?: boolean;
   };
 }
 

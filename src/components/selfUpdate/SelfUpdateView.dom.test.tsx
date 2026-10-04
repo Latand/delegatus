@@ -886,3 +886,18 @@ test(`launcher prerequisite still owns apply when both children serve the build:
   expect(button(el, "restart-web")).toBeNull(); expect(button(el, "arm-host")).toBeNull();
   expect(text(el.querySelector('[data-outcome="done"]'))).toContain(locale === "en" ? "installation action above" : "дією для встановлення вище");
 });
+
+
+for (const locale of ["en", "uk"] as const) test(`current Windows launcher keeps its legitimate maintenance controls in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ action: { id: "restart-terminal", button: false, terminalEveryUpdate: true } });
+  s.meta = { ...s.meta, launcherRevision: OLD, maintenanceRestart: true };
+  const el = render(s);
+  expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
+});
+for (const locale of ["en", "uk"] as const) test(`a backend maintenance refusal is not offered as a button in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot(); s.meta.maintenanceRestart = false;
+  const el = render(s);
+  expect(button(el, "restart-web")).toBeNull(); expect(button(el, "arm-host")).toBeNull();
+});

@@ -1772,6 +1772,9 @@ export class SelfUpdateService {
         checkout: decision.record?.checkout ?? null,
         pollMinutes: this.deps.pollMinutes,
         serverTime: new Date(now).toISOString(),
+        launcherRevision: decision.record?.launcher.revision ?? null,
+        maintenanceRestart: !!decision.record && (decision.record.launcher.relaunch === 1
+          || decision.supervision !== "adopted" && !this.deps.env.LLV_TOKEN),
       },
     };
     const snapshot: Snapshot = (decision.mode === "checkout" || decision.mode === "package") && decision.record ? { ...base, ...await this.checkoutPart(decision.record, now) }
