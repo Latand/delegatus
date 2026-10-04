@@ -63,7 +63,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (changedFiles.some(file => file.startsWith(".githooks/") || file === "scripts/gate-slot.sh")) {
     for (const file of env.tests) if (/scripts\/(?:local-gate|gate-slot).*\.test\.ts$/.test(file)) touched.add(file);
   }
-  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "test", ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
+  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
   if (env.linux) {
     steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
     steps.push({ name: "Linux tests", command: ["bun", "test", ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
