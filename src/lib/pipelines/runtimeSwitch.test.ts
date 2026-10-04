@@ -216,6 +216,50 @@ test("a failed account switch releases the hold and delivers a keyed rollback", 
   expect(h.continuations.filter(item => item.clientMessageId.endsWith("rollback"))).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ n: 1, effectiveRole: { model: "fable" }, runtimeSwitches: [{ phase: "rolled-back" }] });
 });
+test("a delivered failed switch cannot settle on a source account after its project authorization is revoked", async () => {
+  const h = switchHarness(); h.setOutcome("pending");
+  let allowed = ["default"];
+  h.ports.allowedAccountIds = () => allowed;
+  const readOutcome = h.ports.runtimeSwitchOutcome!;
+  h.ports.runtimeSwitchOutcome = async (...args) => {
+    const outcome = await readOutcome(...args);
+    if (outcome?.state === "failed") allowed = ["other"];
+    return outcome;
+  };
+  await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
+  h.setOutcome("failed");
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(lane.state).toBe("needs_decision");
+  expect(lane.stateDetail).toContain("source account is no longer allowed");
+  expect(attempt.accountId).toBe("default");
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("switching");
+});
+test("an externally superseded continuation cannot adopt an account outside project policy", async () => {
+  const h = switchHarness(); h.setOutcome("pending");
+  h.ports.allowedAccountIds = () => ["default"];
+  const readOutcome = h.ports.runtimeSwitchOutcome!;
+  h.ports.runtimeSwitchOutcome = async (...args) => {
+    const outcome = await readOutcome(...args);
+    if (outcome?.state === "superseded") {
+      h.setSeat({ engine: "claude", model: "sonnet", effort: "high", serviceTier: null, accountId: "outside", sessionId: "session-external", agentPath: STAGE_TRANSCRIPT });
+    }
+    return outcome;
+  };
+  await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.setOutcome("superseded");
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(lane.state).toBe("needs_decision");
+  expect(lane.stateDetail).toContain("actual account is no longer allowed");
+  expect(attempt.accountId).toBe("default");
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("continuing");
+});
 test("apply now refuses prompt edits, reports and unrelated agents", async () => {
   const h = switchHarness(); const pipeline = await runningStage(h);
   expect(await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", prompt: "Changed", applyNow: true }, h.ports)).toMatchObject({ status: 400 });
@@ -296,6 +340,232 @@ test("retry-stage stays fenced while a parked runtime switch still owns its cont
   expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "switching", continuationDispatch: { key: expect.any(String) } });
   expect(lane.cursor).toMatchObject({ stageId: "plan", state: "running" });
   expect(h.continuations).toHaveLength(1);
+});
+test("retry-stage refuses a dead-host running attempt while its runtime switch remains open", async () => {
+  const h = switchHarness();
+  const requested = await requestSwitch(h);
+  let stops = 0;
+  h.ports.resumeSeveredTurn = async () => false;
+  h.ports.conversationTurnInterrupted = async () => "dead";
+  h.ports.stopStageAgent = async () => { stops++; return { outcome: "not-running" }; };
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
+
+  const restarted = await import(`./engine?retry-open-switch=${crypto.randomUUID()}`) as typeof import("./engine");
+  const retry = await restarted.patchPipeline(requested.pipeline!.id, {
+    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+  }, h.ports);
+  expect(retry).toMatchObject({ status: 409, error: expect.stringContaining("runtime switch") });
+  await restarted.tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
+  expect(stops).toBe(0);
+  expect(h.spawnCount()).toBe(1);
+});
+test("a late successful parked switch accepts its successor verdict once after engine restart", async () => {
+  const h = switchHarness(); h.setOutcome("pending");
+  h.ports.cancelRuntimeSwitch = async () => { throw new Error("switch has already started"); };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  h.setOutcome("applied");
+  h.setSeat({ engine: "claude", model: "opus", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-fork", agentPath: STAGE_TRANSCRIPT });
+  h.setTurn({ turn: "terminal", turnStartedAt: h.wallClock() + 2, message: { text: "Completed in the fork", ts: h.wallClock() + 3 }, lastRecordAt: h.wallClock() + 3 });
+  const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed in the fork" },
+    { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  expect(report.error).toBeUndefined();
+
+  const restarted = await import(`./engine?late-switch-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("committed");
+  expect(attempt).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, effectiveRole: { model: "opus" }, verdict: { status: "pass" } });
+  expect(attempt.report?.calls).toBe(1);
+  expect(attempt.runtimeSwitches).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
+});
+test("a parked fork with a failed send uses one replacement continuation after its outcome settles", async () => {
+  const h = switchHarness(); h.setOutcome("pending");
+  h.ports.cancelRuntimeSwitch = async () => { throw new Error("switch has already started"); };
+  let firstKey: string | null = null;
+  h.ports.resumeSeveredTurn = async input => {
+    if (firstKey === null) {
+      firstKey = input.clientMessageId;
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "failed", at: new Date(h.wallClock() + 1).toISOString() });
+    } else if (input.clientMessageId !== firstKey) {
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "delivered", at: new Date(h.wallClock() + 1).toISOString() });
+    }
+    return true;
+  };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  h.setOutcome("applied");
+  h.setSeat({ engine: "claude", model: "opus", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-fork", agentPath: STAGE_TRANSCRIPT });
+  const restarted = await import(`./engine?late-send-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const continuationKeys = h.continuations.map(item => item.clientMessageId);
+  expect(continuationKeys).toHaveLength(2);
+  expect(new Set(continuationKeys).size).toBe(2);
+  expect(continuationKeys[1]).toContain("continue-2");
+  expect(h.deliveries.get(continuationKeys[1]!)?.state).toBe("delivered");
+
+  h.setTurn({ turn: "terminal", turnStartedAt: h.wallClock() + 2, message: { text: "Completed after retry", ts: h.wallClock() + 3 }, lastRecordAt: h.wallClock() + 3 });
+  const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed after retry" },
+    { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  expect(report.error).toBeUndefined();
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("committed");
+  expect(attempt).toMatchObject({ n: 1, effectiveRole: { model: "opus" }, verdict: { status: "pass" }, report: { calls: 1 } });
+  expect(attempt.runtimeSwitches).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
+});
+test("a completed parked handoff receipt settles its successor after engine restart", async () => {
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
+  let handoffCalls = 0;
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.spawnAgent = async (_input, reserved) => {
+    handoffCalls++;
+    await reserved({ launchId: "launch-handoff", conversationId: "conversation_fork", accountId: "default" });
+    throw new Error("launch acknowledgement lost");
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ conversationId: "conversation_fork", launchId: "launch-handoff", runtimeSwitches: [{ mode: "handoff", phase: "switching" }] });
+  h.ports.stopStageAgent = async () => ({ outcome: "unconfirmed", operationId: null, detail: "receipt still pending" });
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  receipt = { state: "completed", launchId: "launch-handoff", conversationId: "conversation_fork", accountId: "default",
+    sessionId: "session-fork", transcript: "/codex/fork.jsonl", paneId: null } as never;
+  h.setTurn({ turn: "terminal", turnStartedAt: h.wallClock() + 2, message: { text: "Finished handoff", ts: h.wallClock() + 3 }, lastRecordAt: h.wallClock() + 3 });
+  const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Finished handoff" },
+    { kind: "agent", conversationId: "conversation_fork", role: "builder" }, h.ports);
+  expect(report.error).toBeUndefined();
+
+  const restarted = await import(`./engine?handoff-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("committed");
+  expect(attempt).toMatchObject({ n: 1, launchId: "launch-handoff", conversationId: "conversation_fork", verdict: { status: "pass" } });
+  expect(attempt.report?.calls).toBe(1);
+  expect(handoffCalls).toBe(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
+});
+test("a late failed reconfigure restores the authorized source continuation and its verdict", async () => {
+  const h = switchHarness(); h.setOutcome("pending");
+  h.ports.cancelRuntimeSwitch = async () => { throw new Error("switch has already started"); };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  h.setOutcome("failed");
+  h.setTurn({ turn: "terminal", turnStartedAt: h.wallClock() + 2, message: { text: "Finished on source runtime", ts: h.wallClock() + 3 }, lastRecordAt: h.wallClock() + 3 });
+  const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Finished on source runtime" },
+    { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  expect(report.error).toBeUndefined();
+
+  const restarted = await import(`./engine?late-failure-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("rolled-back");
+  expect(attempt).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, effectiveRole: { model: "fable" }, verdict: { status: "pass" } });
+  expect(attempt.report?.calls).toBe(1);
+  expect(h.continuations).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
+});
+test("a parked handoff resumes after the original stop is confirmed", async () => {
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  let stopConfirmed = false;
+  let handoffCalls = 0;
+  h.ports.stopStageAgent = async () => stopConfirmed
+    ? { outcome: "stopped" }
+    : { outcome: "unconfirmed", operationId: null, detail: "host stop is unconfirmed" };
+  h.ports.spawnAgent = async (_input, reserved) => {
+    handoffCalls++;
+    await reserved({ launchId: "launch-resumed-handoff", conversationId: "conversation_fork", accountId: "default" });
+    return { launchId: "launch-resumed-handoff", conversationId: "conversation_fork", sessionId: "session-fork",
+      "transcript": "/codex/fork.jsonl", paneId: null, accountId: "default" } as never;
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("cutting");
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  stopConfirmed = true;
+  const restarted = await import(`./engine?cutting-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(lane.state).toBe("running");
+  expect(attempt).toMatchObject({ n: 1, state: "running", launchId: "launch-resumed-handoff", conversationId: "conversation_fork", runtimeSwitches: [{ phase: "committed" }] });
+  expect(handoffCalls).toBe(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
+});
+test("a late failed handoff receipt restores the authorized source conversation", async () => {
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.spawnAgent = async (_input, reserved) => {
+    await reserved({ launchId: "launch-failed-handoff", conversationId: "conversation_fork", accountId: "default" });
+    throw new Error("launch acknowledgement lost");
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
+  const prematureReport = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Unverified successor" },
+    { kind: "agent", conversationId: "conversation_fork", role: "builder" }, h.ports);
+  expect(prematureReport).toMatchObject({ status: 409, code: "STAGE_REPORT_RUNTIME_SWITCH" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
+  h.ports.stopStageAgent = async () => ({ outcome: "unconfirmed", operationId: null, detail: "receipt still pending" });
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  receipt = { state: "failed", launchId: "launch-failed-handoff", conversationId: "conversation_fork", accountId: "default", error: "spawn refused" } as never;
+  const restarted = await import(`./engine?failed-handoff-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(lane.state).toBe("running");
+  expect(attempt.runtimeSwitches?.[0]?.phase).toBe("rolled-back");
+  expect(attempt).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, launchId: "launch-1", state: "running", effectiveRole: { engine: "claude", model: "fable" } });
+  expect(h.continuations).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
 });
 test("operator kill supersedes the switch without resurrecting the stage", async () => {
   const h = switchHarness(); await requestSwitch(h); h.ports.runtimeSwitchKilled = async () => true;
@@ -642,19 +912,21 @@ test("the verdict evidence boundary survives bounded switch-history eviction", a
 });
 
 
-test("a handoff successor may report before its launch acknowledgement", async () => {
+test("a handoff successor report waits for its completed launch receipt", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
   await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
-  let report: Awaited<ReturnType<typeof reportStageCompletion>> | undefined;
   let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
   h.ports.spawnReceipt = () => receipt;
   h.ports.spawnAgent = async (_input, reserved) => {
     await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" });
-    report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed in the successor" }, { kind: "agent", conversationId: "conversation_new", role: "builder" }, h.ports);
-    receipt = { state: "completed", launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null } as never;
-    return receipt as never;
+    throw new Error("launch acknowledgement unavailable");
   };
   await tickPipelines([], h.ports);
+  const prematureReport = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed in the successor" }, { kind: "agent", conversationId: "conversation_new", role: "builder" }, h.ports);
+  expect(prematureReport).toMatchObject({ status: 409, code: "STAGE_REPORT_RUNTIME_SWITCH" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
+  receipt = { state: "completed", launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null } as never;
+  const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed in the successor" }, { kind: "agent", conversationId: "conversation_new", role: "builder" }, h.ports);
   expect(report?.error).toBeUndefined();
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report?.verdict.status).toBe("pass");
   h.setTurn({ turn: "terminal", message: null, lastRecordAt: h.wallClock() + 10 });

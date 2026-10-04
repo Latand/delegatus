@@ -213,6 +213,11 @@ export async function driveRuntimeSwitch(
       if (outcome.state === "failed") {
         const delivery = await ports.runtimeSwitchDelivery?.(record.from.conversationId, continueKey);
         if (delivery?.state === "delivered") {
+          if (!await rollbackAccountAllowed()) return;
+          const generation = ports.conversationGeneration?.(attempt.conversationId!);
+          if (!generation || !runtimeTargetsEqual(generation, record.from)) {
+            await park("runtime switch rollback waiting: the source runtime generation is not confirmed"); return;
+          }
           const floor = await continuationFloor(record.from.engine, record.from.agentPath, delivery.at);
           if (!floor) return;
           record.continuedAt = floor; clearOldWaits(attempt); await settle("rolled-back", outcome.error ?? "runtime switch failed; continued on previous runtime"); return;
@@ -273,7 +278,7 @@ export async function driveRuntimeSwitch(
             const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: receipt.conversationId, launchId: receipt.launchId, agentPath: receipt.transcript, paneId: receipt.paneId }, { operationId: switchOperationKey(record, "stop-launch") });
             if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") { await park("runtime switch launch could not be proven stopped"); return; }
           }
-          await rollback(receipt.error ?? "runtime switch launch failed");
+          await rollback(receipt.error ?? "runtime switch launch failed"); return;
         } else { await ports.recoverStagedLaunch?.(receipt.launchId, () => pipeline.state === "running"); ports.scheduleTick?.(1000); }
         return;
       }
@@ -307,6 +312,12 @@ export async function driveRuntimeSwitch(
       if (delivered?.state === "delivered") {
         const generation = ports.conversationGeneration?.(attempt.conversationId!);
         if (!generation) { if (expired) await park("continued runtime generation is unavailable"); else ports.scheduleTick?.(1000); return; }
+        let allowed: string[] | null | undefined;
+        try { allowed = ports.allowedAccountIds?.(pipeline.project, generation.engine); }
+        catch (error) { await park(`runtime switch continuation fenced: account authorization unavailable: ${String(error)}`); return; }
+        if (allowed && (!generation.accountId || !allowed.includes(generation.accountId))) {
+          await park("runtime switch continuation fenced: actual account is no longer allowed"); return;
+        }
         const floor = await continuationFloor(generation.engine, generation.agentPath, delivered.at);
         if (!floor) return;
         record.continuedAt = floor;
@@ -319,7 +330,14 @@ export async function driveRuntimeSwitch(
         if (!record.rollback && !record.outcome) attempt.runtimeAccountPin = record.to.accountPinned ? record.to.accountId : null;
         await settle(record.rollback ? "rolled-back" : record.outcome ? "superseded" : "committed", record.outcome ?? `continued on ${generation.engine}/${generation.model}`);
       } else if (delivered?.state === "failed") {
-        if (record.continuationKey) { await park(`runtime switch continuation failed: ${delivered.error ?? "delivery failed"}`); return; }
+        const outcome = record.mode === "fork"
+          ? await ports.runtimeSwitchOutcome?.(record.from.conversationId, reconfigureKey)
+          : null;
+        const operationSettled = outcome && ["applied", "superseded", "failed"].includes(outcome.state);
+        const alreadyRetried = record.continuationKey === switchOperationKey(record, "continue-2");
+        if (alreadyRetried || (record.continuationKey && !operationSettled)) {
+          await park(`runtime switch continuation failed: ${delivered.error ?? "delivery failed"}`); return;
+        }
         record.continuationKey = switchOperationKey(record, "continue-2"); await persist(); await resume(record.continuationKey);
       } else if (expired) await park("stage stopped mid-turn; runtime switch continuation delivery is still pending");
       else { await resume(key); ports.scheduleTick?.(1000); }
