@@ -27,13 +27,16 @@ interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
 const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
 
-/** Confirm assertions that failed the first head sample. Any observed base
- * failure makes the assertion non-blocking FLAKY; runner errors retain their
- * existing comparison. Never treat absence as a pass.
+/** Confirm assertions that failed the first head sample and did not fail the
+ * first base sample: those alone can refuse the push. A failure the base sample
+ * already showed stays PRE-EXISTING on that one sample per side and costs no
+ * reruns, since neither label it could end with blocks. Mixed results on either
+ * side make a confirmed assertion non-blocking FLAKY; runner errors retain
+ * their existing comparison. Never treat absence as a pass.
  */
 export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun) {
   const comparison = compareTests(base, head);
-  const candidates = [...new Map(head.failures.filter(site => site.kind === "test").map(site => [occurrenceKey(site), site])).values()];
+  const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test").map(site => [occurrenceKey(site), site])).values()];
   const flaky: FlakySite[] = [];
   if (!candidates.length) return { ...comparison, flaky };
   const evidence = candidates.map(site => ({ site,
@@ -62,7 +65,7 @@ export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "bas
   for (const item of evidence) {
     // Keep evidence attached to its duplicate assertion. A base retry failure
     // and a different occurrence's head recovery cannot cancel each other.
-    if (!item.base.fail && !item.baseRetryFailed && !item.headRetryPassed) continue;
+    if (!item.baseRetryFailed && !item.headRetryPassed) continue;
     flakyOccurrences.add(occurrenceKey(item.site));
     flaky.push({ ...item.site, base: item.base, head: item.head });
   }
