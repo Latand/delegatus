@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -14,12 +15,21 @@ import { ApplyController } from "../src/lib/selfUpdate/apply";
 import { resetWindowsSnapshotForTests, windowsBackend } from "../src/lib/proc/windows";
 
 const fixtures: string[] = [];
+const fixtureRoots = new Map<string, { tempRoot: string; dev: number; ino: number; label: string }>();
+let cleanupCase: string | null = null;
 const children = new Set<ReturnType<typeof spawn>>();
 const owners = new Map<number, string>();
 const terminalOwners = new Map<number, { startIdentity: string; role: string; fixtureCwd: boolean }>();
 const ownedIdentity = (pid: number) => process.platform === "win32" ? windowsBackend.processIdentity(pid) : readStartIdentity(pid);
 function cleanupEvidence(event: string, facts: Record<string, unknown> = {}) {
-  if (process.platform === "win32") console.error("[custody-cleanup]", JSON.stringify({ event, ...facts }));
+  if (process.platform === "win32") console.error("[custody-cleanup]", JSON.stringify({ event, case: cleanupCase, ...facts }));
+}
+function assertFixtureRoot(root: string) {
+  const held = fixtureRoots.get(root);
+  if (!held || path.dirname(root) !== held.tempRoot || !path.basename(root).startsWith("dlg-custody-")) throw new Error("Removal requires this test's own temp fixture");
+  const current = lstatSync(root);
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== held.dev || current.ino !== held.ino
+    || realpathSync(root) !== root || realpathSync(path.dirname(root)) !== held.tempRoot) throw new Error("Removal fixture identity changed");
 }
 function track(child: ReturnType<typeof spawn>) {
   children.add(child);
@@ -71,20 +81,34 @@ afterEach(async () => {
     cleanupEvidence("owner-exited", { pid, startIdentity: identity });
   }
   for (const [pid, identity] of owners) if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
+  cleanupEvidence("all-owners-exited-before-remove");
+  for (const root of fixtures) {
+    assertFixtureRoot(root);
+    // Only verified, exited owners admit this bounded NTFS handle-release
+    // retry. Exhaustion rejects the hook; no permission or ACL is repaired.
+    const started = Date.now();
+    await rm(root, { force: true, recursive: true, maxRetries: process.platform === "win32" ? 6 : 0, retryDelay: 100 });
+    if (existsSync(root)) throw new Error("Fixture removal did not complete");
+    cleanupEvidence("fixture-removed", { case: fixtureRoots.get(root)!.label, elapsedMs: Date.now() - started, maxRetries: process.platform === "win32" ? 6 : 0, retryDelayMs: 100 });
+    fixtureRoots.delete(root);
+  }
+  fixtures.length = 0;
   owners.clear();
   terminalOwners.clear();
-  cleanupEvidence("all-owners-exited-before-remove");
-  for (const root of fixtures) rmSync(root, { force: true, recursive: true }); fixtures.length = 0;
-  cleanupEvidence("fixture-removed");
+  cleanupCase = null;
 }, 30000);
 async function until<T>(read: () => T | false | null, budget = 30000): Promise<T> {
   const deadline = Date.now() + budget;
   while (Date.now() < deadline) { const value = read(); if (value) return value; await Bun.sleep(50); }
   throw new Error("Private handoff did not settle");
 }
-async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN") {
+async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN", label = "custody-fixture") {
+  cleanupCase = label;
   if (process.platform === "win32" && !ownedIdentity(process.pid)) throw new Error("Native kernel identity reader is unavailable");
-  const root = mkdtempSync(path.join(process.platform === "win32" ? tmpdir() : "/var/tmp", "dlg-custody-")); fixtures.push(root);
+  const tempRoot = realpathSync(process.platform === "win32" ? tmpdir() : "/var/tmp");
+  const root = realpathSync(mkdtempSync(path.join(tempRoot, "dlg-custody-"))); fixtures.push(root);
+  const created = lstatSync(root);
+  fixtureRoots.set(root, { tempRoot, dev: created.dev, ino: created.ino, label });
   const base = path.join(root, "package"), candidate = path.join(root, "candidate"), state = path.join(root, "state");
   mkdirSync(state);
   const gate = await Bun.build({ entrypoints: [path.resolve("src/proxy.ts")], target: "bun", external: ["next/server"] });
@@ -146,7 +170,7 @@ async function gateIntact(port: number, key: string) {
 }
 for (const alias of ["LLV_TOKEN", "DELEGATUS_TOKEN"] as const) for (const actionId of ["start-launcher", "restart-terminal"] as const)
 for (const rollback of [false, true]) test(`native protected terminal gate ${alias}/${actionId}, rollback=${rollback}`, async () => {
-  const f = await fixture(alias);
+  const f = await fixture(alias, `transition/${alias}/${actionId}/rollback=${rollback}`);
   const listener = net.createServer(); await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
   const port = (listener.address() as net.AddressInfo).port; await new Promise<void>(resolve => listener.close(() => resolve()));
   const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); track(old);
@@ -225,7 +249,7 @@ function alterAcl(file: string, right: "Read" | "Write") {
   expect(result.status).toBe(0);
 }
 for (const unsafe of ["readable", "writable", "directory", "link", "foreign-identity", "stale-key"] as const) test(`native private custody refuses ${unsafe} before reading its credential`, async () => {
-  const f = await fixture();
+  const f = await fixture("LLV_TOKEN", `unsafe/${unsafe}`);
   const listener = net.createServer(); await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
   const port = (listener.address() as net.AddressInfo).port; await new Promise<void>(resolve => listener.close(() => resolve()));
   const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); track(old);
@@ -268,7 +292,10 @@ for (const unsafe of ["readable", "writable", "directory", "link", "foreign-iden
 }, 120000);
 
 test("custody survives an incompatible inherited PowerShell module path", async () => {
-  const f = await fixture();
+  const f = await fixture("LLV_TOKEN", "module-path");
+  assertFixtureRoot(f.root);
+  expect(() => assertFixtureRoot(f.base)).toThrow("Removal requires this test's own temp fixture");
+  expect(() => assertFixtureRoot(process.cwd())).toThrow("Removal requires this test's own temp fixture");
   const modules = path.join(f.root, "incompatible-modules"), security = path.join(modules, "Microsoft.PowerShell.Security");
   mkdirSync(security, { recursive: true });
   // A module that Windows PowerShell cannot import makes the old child
@@ -304,7 +331,7 @@ test("custody survives an incompatible inherited PowerShell module path", async 
 }, 120000);
 
 test("native custody refuses a launcher with an incompatible credential reader", async () => {
-  const f = await fixture();
+  const f = await fixture("LLV_TOKEN", "incompatible-reader");
   expect(prepareLauncherCredentials(f.base, f.env)).toBe(true);
   writeFileSync(path.join(f.base, "bin/cli.mjs"), "// Prior launcher without a protected credential reader\n");
   const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: f.env });
