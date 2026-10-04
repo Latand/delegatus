@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
@@ -48,6 +48,72 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("shared memory settings", () => {
+  browserTest("project switch and explanation render in both languages at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/shared-memory"); fs.mkdirSync(out, { recursive: true });
+    let enabled = true;
+    const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+      "/api/memory/settings": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ enabled, capUsd: 1, spentUsd: .002 });
+      },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+    });
+    const browser = await launchChromium();
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        enabled = true;
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const offers = page.locator("[data-memory-offer]"); await offers.nth(1).waitFor();
+          const offer = offers.first(), shortOffer = offers.nth(1);
+          expect(await shortOffer.evaluate(el => el.tagName)).toBe("P");
+          expect(await shortOffer.locator("summary").count()).toBe(0);
+          /* The folded line keeps the bubble's trailing edge and measure, and on the phone its target is 44 px
+             and clear of the copy control above it. */
+          const edges = await page.evaluate(() => {
+            const box = (el: Element | null) => el?.getBoundingClientRect();
+            const bubble = box(document.querySelector("[data-user-bubble]")), summary = box(document.querySelector("[data-memory-offer] summary"));
+            const actions = box(document.querySelector("[data-mobile-message-actions] button"));
+            return { bubbleRight: bubble!.right, summaryLeft: summary!.left, summaryRight: summary!.right, summaryTop: summary!.top, summaryHeight: summary!.height, actionsBottom: actions?.bottom ?? 0, row: document.querySelector("[data-memory-offer]")!.parentElement!.getBoundingClientRect().width };
+          });
+          expect(Math.abs(edges.summaryRight - edges.bubbleRight)).toBeLessThanOrEqual(1);
+          expect(edges.summaryLeft).toBeGreaterThanOrEqual(edges.summaryRight - edges.row * (width === 390 ? .86 : .75) - 1);
+          if (width === 390) {
+            expect(edges.summaryHeight).toBeGreaterThanOrEqual(44);
+            expect(edges.summaryTop).toBeGreaterThanOrEqual(edges.actionsBottom - 1);
+            const top = await page.evaluate(() => { const r = document.querySelector("[data-memory-offer] summary")!.getBoundingClientRect(); return document.elementFromPoint(r.right - 4, r.top + .5)?.closest("summary") !== null; });
+            expect(top).toBe(true);
+          } else {
+            const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
+            expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
+          await offer.locator("summary").click();
+          /* Opened, the same line carries every title once: nothing is repeated under it. */
+          expect(await offer.locator("p").count()).toBe(0);
+          const opened = await offer.innerText();
+          for (let i = 1; i <= 15; i++) expect(opened.match(new RegExp(`constraint ${i}(?!\\d)`, "g"))).toHaveLength(1);
+          await page.screenshot({ path: path.join(out, `offer-open-${locale}-${width}.png`) });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
+          const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);
+          await control.click(); await page.waitForFunction(() => !(document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked);
+          const geometry = await setting.evaluate(el => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/settings.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
 
 describe("runtime idle performance", () => {
   browserTest("limits keep the phone stream joined without snapshot refetches", async () => {
@@ -1456,12 +1522,11 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
  *     hangs past its call into the next one; the desktop keeps its small
  *     22 px controls;
  *   - with the task strip right above the feed, the first visible feed row
- *     starts at or below the strip's bottom edge, and no glyph line and no
- *     control straddles the feed's top edge: following the tail, after the card opens, and at rest
- *     after a drag released it from the tail, with the first lines of a
- *     result taller than the screen under the strip at a sweep of offsets
- *     (every stop comes to rest), and once the conversation is closed to the
- *     board and opened again.
+ *     starts at or below the strip's bottom edge, and while following the tail no glyph line or control straddles its
+ *     top edge, including after the card opens. Released phone rests are
+ *     asserted across long results, drags, control overhangs and remounts.
+ *     The long-history case below separately asserts reader stability through
+ *     prepends and late layout, which never arm gesture-end alignment.
  *
  * Readings go to `evidence/issue-1978/phone.json`; frames to `.artifacts/issue-1978/`.
  */
@@ -1604,7 +1669,7 @@ async function feedAtRest(page: Page): Promise<void> {
   if (still < 4) throw new Error("the feed never came to rest");
 }
 
-browserTest("#1978: a command card's copy controls stay apart and off the text, and the task strip never cuts a line", async () => {
+browserTest("#1978: copy controls stay apart and followed content and released phone rests clear the task strip", async () => {
   fs.mkdirSync(EDGE_OUT, { recursive: true });
   fs.mkdirSync(EDGE_EVIDENCE, { recursive: true });
   const { base: fixtureBase, stop } = await serveFixture();
@@ -1684,6 +1749,20 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
             await feedAtRest(page);
             readings[`rest-${distance}`] = await readInk(page);
           }
+          // A phone action's negative margin can leave its control under the
+          // edge after the enclosing message has gone. Exercise that narrow
+          // overhang with a real wheel settle, rather than relying on a drag
+          // landing on its fractional boundary by chance.
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const control = feed.querySelector<HTMLElement>('[aria-label="Copy message (Markdown)"]')!;
+            feed.scrollTop += control.getBoundingClientRect().bottom
+              - (feed.getBoundingClientRect().top + feed.clientTop) - 2.75;
+          });
+          await pause(page, 400);
+          await page.mouse.wheel(0, 2);
+          await feedAtRest(page);
+          readings["rest-control-overhang"] = await readInk(page);
           await page.screenshot({ path: path.join(EDGE_OUT, `${key}-rest.png`) });
           /* Close to the board and come back to the conversation through
              history: the feed comes back where it was left and still rests
@@ -7005,4 +7084,604 @@ describe("older history on the phone", () => {
       stop();
     }
   }, 300_000);
+});
+
+describe("long conversation scroll", () => {
+  /*
+   * A reader partway up a long conversation while an older page arrives. The
+   * scene is the fixture's `?scroll-history` feed: 120 loaded records, 60
+   * prepended while a real wheel and touch gesture are in flight, then late
+   * image and code growth above the reader, a tail append and a toolbar
+   * resize. The message under the reader's eye may move by no more than 3 px
+   * through all of it, at 390 px in both languages and at 1440 px. Readings
+   * and frames go to `.artifacts/scroll-history/`.
+   */
+  browserTest("history and late layout preserve the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const [width, locale] of [[390, "en"], [390, "uk"], [1440, "en"]] as const) for (const compact of [false, true]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 },
+          ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          // Start within the oldest loaded answer, then drive actual upward input.
+          await scroller.evaluate((el) => { el.scrollTop = 300; });
+          await page.waitForTimeout(400);
+          await scroller.hover();
+          await page.mouse.wheel(0, -220);
+          await page.waitForFunction(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending);
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const el = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const row = [...el.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top)!;
+            const state = window as unknown as { scrollTrace: { anchor: string; frames: Array<Record<string, unknown>>; phase: string; running: boolean } };
+            state.scrollTrace = { anchor: row.dataset.feedKey!, frames: [], phase: "idle", running: true };
+            const frame = (time: number) => {
+              if (!state.scrollTrace.running) return;
+              const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
+              state.scrollTrace.frames.push({ time, phase: state.scrollTrace.phase, scrollTop: el.scrollTop,
+                anchorY: row.getBoundingClientRect().top, height: el.scrollHeight, viewport: el.clientHeight,
+                viewportTop: el.getBoundingClientRect().top, visualHeight: visualViewport?.height,
+                overflowAnchor: getComputedStyle(el).overflowAnchor });
+              requestAnimationFrame(frame);
+            };
+            // rAF runs before ResizeObserver in the rendering algorithm. Keep
+            // that raw reading, then record the offset that survives pre-paint
+            // resize restoration (the production observer was registered first).
+            const settled = new ResizeObserver(() => {
+              const latest = state.scrollTrace.frames.at(-1);
+              if (!latest || !state.scrollTrace.running) return;
+              const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
+              latest.preResizeAnchorY ??= latest.anchorY;
+              latest.preResizeScrollTop ??= latest.scrollTop;
+              latest.anchorY = row.getBoundingClientRect().top;
+              latest.scrollTop = el.scrollTop;
+              latest.resizeObserved = true;
+            });
+            settled.observe(el);
+            settled.observe(el.firstElementChild!);
+            requestAnimationFrame(frame);
+          });
+          const phase = async (name: string, action: () => Promise<unknown>) => {
+            await page.evaluate((name) => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = name; }, name);
+            await action();
+            await page.waitForTimeout(650);
+          };
+          await phase("wheel-up", () => page.mouse.wheel(0, -20));
+          if (width === 390) {
+            const cdp = await context.newCDPSession(page);
+            await phase("touch-up", async () => {
+              await touch(cdp, along([190, 260], [190, 295]), 24);
+              await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "touch-rest"; });
+            });
+            await cdp.detach();
+          }
+          await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "steady"; });
+          await page.waitForTimeout(100);
+          const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-before.png`) });
+          await phase("prepend", () => page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend()));
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-prepend.png`) });
+          await phase("live-bottom", () => page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append()));
+          await phase("late-image-above", () => page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
+            const img = document.createElement("img"); img.width = 200; img.height = 180;
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            row.append(img);
+          }));
+          await phase("late-code-markdown-above", () => page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
+            const pre = document.createElement("pre");
+            pre.textContent = "const late = 1;\n".repeat(8);
+            const paragraph = document.createElement("p");
+            paragraph.textContent = "Late markdown wrapping on a phone. ".repeat(12);
+            row.append(pre, paragraph);
+          }));
+          await phase("toolbar-resize", () => page.setViewportSize({ width, height: 780 }));
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-after.png`) });
+          const result = await page.evaluate(() => {
+            const trace = (window as unknown as { scrollTrace: { frames: Array<{phase: string; anchorY: number; scrollTop: number}>; running: boolean } }).scrollTrace;
+            trace.running = false;
+            const baseline = trace.frames.filter((f) => f.phase === "steady").at(-1)!.anchorY;
+            const stationary = trace.frames.filter((f) => ["prepend", "live-bottom", "late-image-above", "late-code-markdown-above", "toolbar-resize"].includes(f.phase));
+            const rest = trace.frames.filter((f) => f.phase === "touch-rest");
+            const restSteps = rest.slice(1).map((f, i) => Math.abs(f.anchorY - rest[i].anchorY));
+            return { frames: trace.frames, baseline, maxDrift: Math.max(...stationary.map((f) => Math.abs(f.anchorY - baseline))),
+              gestureRestMaxStep: Math.max(0, ...restSteps), gestureRestTravel: restSteps.reduce((sum, step) => sum + step, 0),
+              gestureRestMovingFrames: restSteps.filter((step) => step > 0).length };
+          });
+
+          console.log(`scroll-history width=${width} locale=${locale} compact=${compact} maxDrift=${result.maxDrift}`);
+          // Re-follow at the bottom, then prove new tail rows remain visible.
+          await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+          await page.mouse.wheel(0, 100);
+          const back = page.getByRole("button", { name: locale === "uk" ? "Повернутись до живого хвоста" : "Back to the live tail" });
+          if (await back.count()) await back.click();
+          await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+          await page.waitForTimeout(300);
+          const bottomGap = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
+          readings.push({ width, locale, compact, ...result, bottomGap, errors });
+          expect(bottomGap).toBeLessThanOrEqual(50);
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
+    fs.writeFileSync(path.join(out, `${label}.json`), `${JSON.stringify({ readings }, null, 2)}\n`);
+    if (label === "after") for (const reading of readings as Array<{ width: number; maxDrift: number; gestureRestMaxStep: number; gestureRestTravel: number; gestureRestMovingFrames: number }>) {
+      expect(reading.maxDrift).toBeLessThanOrEqual(3);
+      if (reading.width === 390) {
+        // Native smooth scrolling follows the browser's easing curve. Require
+        // the settle to span several frames, rather than a one-frame snap.
+        expect(reading.gestureRestMaxStep).toBeLessThan(reading.gestureRestTravel);
+        expect(reading.gestureRestMovingFrames).toBeGreaterThanOrEqual(3);
+      }
+    }
+  }, 240_000);
+
+  /*
+   * A page that lands while a flick's momentum is still travelling: the
+   * finger is up, so nothing marks the reader as holding the feed, and the
+   * feed's own restore write fires a scrollend of its own. The feed neither
+   * pulls itself back against the reader (a glide aimed at a boundary the
+   * momentum then passes) nor reads the momentum as drift and writes it back.
+   */
+  browserTest("a page landing during momentum leaves the feed to the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const rounds: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (let round = 0; round < 3; round += 1) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${base}/?scroll-history=1`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            feed.scrollTop = 6000;
+            const state = { frames: [] as Array<{ top: number; height: number; time: number }>,
+              writes: [] as Array<{ time: number; delta: number }>, glides: [] as number[] };
+            (window as unknown as { momentum: typeof state }).momentum = state;
+            // Every write the page makes to the feed's offset, and every glide it starts.
+            const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+            Object.defineProperty(Element.prototype, "scrollTop", { ...descriptor, set(this: Element, value: number) {
+              const before = this.scrollTop;
+              descriptor.set!.call(this, value);
+              if (this === feed) state.writes.push({ time: performance.now(), delta: this.scrollTop - before });
+            } });
+            const scrollBy = Element.prototype.scrollBy as (...args: unknown[]) => void;
+            Element.prototype.scrollBy = function (this: Element, ...args: unknown[]) {
+              if (this === feed) state.glides.push(performance.now());
+              return scrollBy.apply(this, args);
+            } as typeof Element.prototype.scrollBy;
+            const frame = (time: number) => {
+              state.frames.push({ top: feed.scrollTop, height: feed.scrollHeight, time });
+              requestAnimationFrame(frame);
+            };
+            requestAnimationFrame(frame);
+          });
+          const rect = await rectOf(page, "[data-log-feed-scroller]");
+          if (!rect) throw new Error("no feed");
+          const x = rect.x + rect.width / 2;
+          let landed = false;
+          for (let gesture = 0; gesture < 60 && !landed; gesture += 1) {
+            await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 20));
+            // Finger up, momentum travelling: this is when the page lands.
+            if (await page.evaluate(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending)) {
+              await page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend());
+              landed = true;
+            } else await page.waitForTimeout(140);
+          }
+          expect(landed).toBe(true);
+          await page.waitForTimeout(1_500);
+          const reading = await page.evaluate(() => {
+            const { frames, writes, glides } = (window as unknown as { momentum: { frames: Array<{ top: number; height: number; time: number }>;
+              writes: Array<{ time: number; delta: number }>; glides: number[] } }).momentum;
+            const arrival = frames.findIndex((f, i) => i > 0 && f.height - frames[i - 1]!.height > 1_000);
+            const speed = (i: number) => Math.abs(frames[i]!.top - frames[i - 1]!.top);
+            // The momentum is over once the offset has stayed put for six frames.
+            let end = arrival + 1;
+            for (let still = 0; end < frames.length && still < 6; end += 1) still = speed(end) < 0.5 ? still + 1 : 0;
+            const travelling = frames.slice(arrival + 1, end);
+            const rises = travelling.map((f, i) => f.top - frames[arrival + i]!.top);
+            const restore = writes.find((w) => w.time >= frames[arrival]!.time - 20);
+            return {
+              arrival, framesInFlight: travelling.length, speedBefore: arrival > 0 ? speed(arrival - 1) : 0,
+              maxRise: Math.max(0, ...rises),
+              // Frames right after the landing in which the feed stood still against a moving flick.
+              stalled: frames.slice(arrival + 1, arrival + 6).filter((f, i) => Math.abs(f.top - frames[arrival + i]!.top) < 0.5).length,
+              laterWrites: writes.filter((w) => w !== restore && w.time >= frames[arrival]!.time - 20 && Math.abs(w.delta) > 3).map((w) => Math.round(w.delta)),
+              glidesInFlight: glides.filter((time) => time >= frames[arrival]!.time && time < frames[Math.min(end, frames.length - 1)]!.time).length,
+            };
+          });
+          rounds.push({ locale, round, ...reading });
+          console.log(`scroll-history momentum locale=${locale} round=${round} ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          // The check means something only if the flick was still carrying the feed when the page landed.
+          expect(reading.framesInFlight).toBeGreaterThanOrEqual(5);
+          expect(reading.speedBefore).toBeGreaterThan(20);
+          expect(reading.maxRise).toBeLessThanOrEqual(3);
+          expect(reading.stalled).toBe(0);
+          expect(reading.laterWrites).toEqual([]);
+          expect(reading.glidesInFlight).toBe(0);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "momentum.json"), `${JSON.stringify({ rounds }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * Late layout above the reader inside the message being read. A long answer
+   * or a long tool run is one row taller than the screen, and the reader rests
+   * deep inside it: an image that decodes above them in the same row leaves
+   * the row's top where it was, so the row alone cannot say the text moved.
+   * The block under the reader is held across the growth. The first-child
+   * image grows the row above the reader; the same image added to the row
+   * above is the control.
+   */
+  browserTest("late content above the reader inside the row being read keeps the text still", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const [width, locale] of [[390, "en"], [390, "uk"], [1440, "en"]] as const) for (const compact of [false, true]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 },
+          ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          // One message taller than the screen: sixteen more paragraphs in its row.
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const rows = [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")];
+            const row = rows[40]!;
+            row.dataset.reading = "1";
+            rows[39]!.dataset.above = "1";
+            for (let n = 0; n < 16; n += 1) {
+              const paragraph = document.createElement("p");
+              paragraph.dataset.late = String(n);
+              paragraph.style.cssText = "margin:0 0 16px";
+              paragraph.textContent = `Paragraph ${n} of a long answer. `.repeat(6);
+              row.append(paragraph);
+            }
+            feed.scrollTop = row.getBoundingClientRect().top - feed.getBoundingClientRect().top + feed.scrollTop - 200;
+          });
+          await page.waitForTimeout(400);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          const box = await rectOf(page, "[data-log-feed-scroller]");
+          if (!box) throw new Error("no feed");
+          // Real input releases the tail and walks into the message: about 685 px in.
+          const depth = () => page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            return feed.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-reading]")!.getBoundingClientRect().top;
+          });
+          const cdp = width === 390 ? await context.newCDPSession(page) : null;
+          if (!cdp) await scroller.hover();
+          for (let step = 0; step < 40 && Math.abs((await depth()) - 685) > 40; step += 1) {
+            const move = Math.max(-300, Math.min(300, 685 - (await depth())));
+            if (cdp) await touch(cdp, along([box.x + box.width / 2, box.y + box.height * 0.6], [box.x + box.width / 2, box.y + box.height * 0.6 - move], 12), 40);
+            else await page.mouse.wheel(0, move);
+            await page.waitForTimeout(700);
+          }
+          const rested = await depth();
+          // The paragraph under the reader's eye, and the first-child image added above it.
+          const under = () => page.evaluate(() => {
+            const top = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.getBoundingClientRect().top;
+            const hit = [...document.querySelectorAll<HTMLElement>("[data-late]")].find((p) => p.getBoundingClientRect().bottom > top + 1)!;
+            return { id: hit.dataset.late!, y: hit.getBoundingClientRect().top - top };
+          });
+          const before = await under();
+          await page.screenshot({ path: path.join(out, `inside-${width}-${locale}-${compact}-before.png`) });
+          const grow = (selector: string) => page.evaluate((selector) => {
+            const img = document.createElement("img");
+            img.width = 200; img.height = 180; img.style.display = "block";
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            document.querySelector<HTMLElement>(selector)!.prepend(img);
+          }, selector);
+          await grow("[data-above]");
+          await page.waitForTimeout(650);
+          const afterNeighbour = await under();
+          await grow("[data-reading]");
+          await page.waitForTimeout(650);
+          const afterInside = await under();
+          await page.screenshot({ path: path.join(out, `inside-${width}-${locale}-${compact}-after.png`) });
+          const reading = { width, locale, compact, rested: Math.round(rested), sameParagraph: before.id === afterInside.id && before.id === afterNeighbour.id,
+            neighbourDrift: Math.abs(afterNeighbour.y - before.y), insideDrift: Math.abs(afterInside.y - before.y) };
+          readings.push(reading);
+          console.log(`scroll-history inside-row ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          expect(reading.rested).toBeGreaterThan(600);
+          expect(reading.sameParagraph).toBe(true);
+          expect(reading.neighbourDrift).toBeLessThanOrEqual(3);
+          expect(reading.insideDrift).toBeLessThanOrEqual(3);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "inside-row.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * The reading that brings a released feed to rest on a line costs the same
+   * on a long history as on a short one. With 1500 rows mounted at 4x CPU, 24
+   * short drags each come to rest; the layout reads made between a scrollend
+   * and the first scroll event after it are the rest reading (its longest
+   * task is timed), and an edge on a row boundary used to walk every mounted
+   * row there.
+   */
+  browserTest("the rest reading does not walk the mounted rows", async () => {
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    const walks: Array<{ rows: number; mounted: number; rests: number[]; restMs: number[]; restBursts: string[]; slowFrames: number }> = [];
+    try {
+      for (const turns of [60, 600]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+          await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=${turns}&window=${turns * 4}&page=100`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+          await pause(page, 600);
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const state = { counting: false, reads: 0, bursts: [] as Array<{ reads: number; start: number; end: number }>, rests: [] as number[], restMs: [] as number[], restBursts: [] as string[], gaps: [] as number[] };
+            (window as unknown as { rest: typeof state }).rest = state;
+            const count = <T extends object>(target: T, name: keyof T) => {
+              const original = target[name] as unknown as (...args: unknown[]) => unknown;
+              (target as Record<keyof T, unknown>)[name] = function (this: unknown, ...args: unknown[]) {
+                if (!state.counting) return original.apply(this, args);
+                const started = performance.now();
+                state.reads += 1;
+                try { return original.apply(this, args); } finally {
+                  const ended = performance.now();
+                  const burst = state.bursts.at(-1);
+                  // Reads of one task follow each other; another task starts a new burst.
+                  if (burst && started - burst.end < 8) { burst.reads += 1; burst.end = ended; } else state.bursts.push({ reads: 1, start: started, end: ended });
+                }
+              };
+            };
+            count(Element.prototype, "getBoundingClientRect");
+            count(Range.prototype, "getClientRects");
+            count(Document.prototype, "elementFromPoint");
+            count(window, "getComputedStyle");
+            // The reading's own span: from its first layout read to its last.
+            const finish = () => {
+              if (!state.counting) return;
+              state.counting = false;
+              state.rests.push(state.reads);
+              state.restMs.push(Math.max(0, ...state.bursts.map((burst) => burst.end - burst.start)));
+              state.restBursts.push(state.bursts.map((burst) => `${burst.reads}r/${Math.round(burst.end - burst.start)}ms`).join(" "));
+            };
+            window.addEventListener("scrollend", (event) => {
+              if (event.target !== feed) return;
+              state.counting = true; state.reads = 0; state.bursts = [];
+              window.setTimeout(finish, 400);
+            }, true);
+            feed.addEventListener("scroll", finish);
+            let last = performance.now();
+            const tick = (now: number) => { state.gaps.push(now - last); last = now; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+          });
+          const rect = await rectOf(page, "[data-log-feed-scroller]");
+          if (!rect) throw new Error("no feed");
+          const x = rect.x + rect.width / 2;
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.scrollTop = 4000; });
+          // The page's own start-up and this jump are not rests: measure from the first touch.
+          await pause(page, 2_000);
+          await page.evaluate(() => { (window as unknown as { rest: { gaps: number[]; rests: number[] } }).rest.gaps.length = 0; (window as unknown as { rest: { rests: number[]; restMs: number[] } }).rest.rests.length = 0; (window as unknown as { rest: { restMs: number[] } }).rest.restMs.length = 0; });
+          for (let drag = 0; drag < 24; drag += 1) {
+            // A short drag: a few lines, no momentum worth the name, then rest.
+            await touch(cdp, along([x, rect.y + rect.height * 0.5], [x, rect.y + rect.height * (drag % 2 ? 0.58 : 0.42) + drag], 8), 40);
+            await pause(page, 900);
+          }
+          const walk = await page.evaluate(() => {
+            const { rests, restMs, gaps } = (window as unknown as { rest: { rests: number[]; restMs: number[]; gaps: number[] } }).rest;
+            return { mounted: document.querySelectorAll("[data-feed-key]").length, rests, restMs: restMs.map((ms) => Math.round(ms * 10) / 10),
+              restBursts: (window as unknown as { rest: { restBursts: string[] } }).rest.restBursts, slowFrames: gaps.slice(1).filter((ms) => ms > 100).length };
+          });
+          walks.push({ rows: turns * 4, ...walk });
+          console.log(`scroll-history rest turns=${turns} mounted=${walk.mounted} rests=${walk.rests.length} maxReads=${Math.max(0, ...walk.rests)} maxRestMs=${Math.max(0, ...walk.restMs)} slowFrames=${walk.slowFrames}`);
+          expect(errors).toEqual([]);
+          expect(walk.rests.length).toBeGreaterThanOrEqual(12);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "rest-reads.json"), `${JSON.stringify({ walks }, null, 2)}\n`);
+    }
+    const [short, long] = walks;
+    expect(long!.mounted).toBeGreaterThan(1_000);
+    // Reads per rest do not grow with the rows mounted.
+    expect(Math.max(...long!.rests)).toBeLessThanOrEqual(Math.max(...short!.rests) + 20);
+    // No rest reading takes over 100 ms at 4x. Its reads are one task; the
+    // frames of the whole walk are recorded for the evidence, not asserted:
+    // a frame of the page's own rendering can be long on a busy machine.
+    expect(Math.max(...long!.restMs)).toBeLessThan(100);
+  }, 300_000);
+
+  /*
+   * Folding a long operator message under the reader. Its «collapse» label is
+   * the deepest block under the top edge while the message is open; folding
+   * leaves the label in the DOM with no box, and a label with no box reads as
+   * a rectangle of zeros, which the feed used to take for the content having
+   * moved by the feed's own offset from the window. The message must stay put
+   * at every depth the label can sit at, and a row appended at the tail
+   * afterwards must not push it either.
+   */
+  browserTest("folding a long message under the reader leaves it where it was", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const depth of [-3, 3, 8, 14]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1&compact=1&long-operator=1`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          const cdp = await context.newCDPSession(page);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          // The twelfth long operator message, opened with a tap on its summary.
+          const mark = () => page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const details = feed.querySelectorAll<HTMLElement>("[data-user-bubble] details")[12]!;
+            details.dataset.probe = "1";
+            details.closest<HTMLElement>("[data-feed-key]")!.dataset.probeRow = "1";
+            feed.scrollTop += details.getBoundingClientRect().top - feed.getBoundingClientRect().top - 300;
+          });
+          await mark();
+          await page.waitForTimeout(400);
+          await tap(page, cdp, "[data-probe] > summary");
+          await page.waitForTimeout(400);
+          const rowTop = () => page.evaluate(() => document.querySelector<HTMLElement>("[data-probe-row]")!.getBoundingClientRect().top
+            - document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.getBoundingClientRect().top);
+          await scroller.evaluate((el, target) => {
+            const row = el.querySelector<HTMLElement>("[data-probe-row]")!;
+            el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - target;
+          }, depth);
+          await page.waitForTimeout(300);
+          // One real wheel step releases the tail, so the feed keeps an anchor of its own.
+          await scroller.hover();
+          await page.mouse.wheel(0, 1);
+          await page.waitForTimeout(900);
+          const before = await rowTop();
+          await page.screenshot({ path: path.join(out, `fold-${locale}-${depth}-before.png`) });
+          await tap(page, cdp, "[data-probe] > summary");
+          await page.waitForTimeout(900);
+          const folded = await rowTop();
+          const closed = await page.evaluate(() => !document.querySelector<HTMLDetailsElement>("[data-probe]")!.open);
+          for (let n = 0; n < 5; n += 1) {
+            await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+            await page.waitForTimeout(150);
+          }
+          await page.waitForTimeout(500);
+          const appended = await rowTop();
+          await page.screenshot({ path: path.join(out, `fold-${locale}-${depth}-after.png`) });
+          const reading = { locale, depth, before: Math.round(before * 100) / 100, folded: Math.round(folded * 100) / 100,
+            appended: Math.round(appended * 100) / 100, closed };
+          readings.push(reading);
+          console.log(`scroll-history fold ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          expect(closed).toBe(true);
+          expect(Math.abs(folded - before)).toBeLessThanOrEqual(3);
+          expect(Math.abs(appended - before)).toBeLessThanOrEqual(3);
+          await cdp.detach();
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "fold.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * The desktop canvas scales a pane with a transform, and a zoom moves the
+   * pane's rectangles without a scroll event. The reader's anchor is kept in
+   * the scroller's own layout pixels, so a zoom between taking it and the next
+   * layout change is not read as the content having moved: after a real wheel
+   * walk off the tail, the pane is scaled to 0.6, 1, 0.8 and 0.5 with a row
+   * appended after each, and neither scrollTop nor the row under the reader
+   * (in layout pixels) may move by more than 3.
+   */
+  browserTest("a zoom of the pane between layout changes does not move the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 844 } });
+      try {
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?scroll-history=1&compact=1`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+        await page.waitForTimeout(500);
+        const scroller = page.locator("[data-log-feed-scroller]");
+        await scroller.hover();
+        for (let step = 0; step < 6; step += 1) {
+          await page.mouse.wheel(0, -260);
+          await page.waitForTimeout(200);
+        }
+        await page.waitForTimeout(900);
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const bounds = feed.getBoundingClientRect();
+          const scale = bounds.height / feed.offsetHeight;
+          const row = [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > bounds.top + 1)!;
+          return { scrollTop: feed.scrollTop, scale, key: row.dataset.feedKey!, rowTop: (row.getBoundingClientRect().top - bounds.top) / scale };
+        });
+        let last = await read();
+        expect(last.scrollTop).toBeGreaterThan(0);
+        await page.screenshot({ path: path.join(out, "zoom-before.png") });
+        for (const zoom of [0.6, 1, 0.8, 0.5]) {
+          await page.evaluate((zoom) => {
+            const root = document.getElementById("root")!;
+            root.style.transformOrigin = "top left";
+            root.style.transform = `scale(${zoom})`;
+          }, zoom);
+          await page.waitForTimeout(200);
+          const zoomed = await read();
+          await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+          await page.waitForTimeout(700);
+          const after = await read();
+          const reading = { zoom, scale: Math.round(after.scale * 100) / 100, scrollTopMoved: Math.round((after.scrollTop - last.scrollTop) * 100) / 100,
+            sameRow: after.key === last.key, rowMoved: Math.round((after.rowTop - last.rowTop) * 100) / 100,
+            zoomItselfMoved: Math.round((zoomed.scrollTop - last.scrollTop) * 100) / 100 };
+          readings.push(reading);
+          console.log(`scroll-history zoom ${JSON.stringify(reading)}`);
+          expect(Math.abs(reading.scrollTopMoved)).toBeLessThanOrEqual(3);
+          expect(reading.sameRow).toBe(true);
+          expect(Math.abs(reading.rowMoved)).toBeLessThanOrEqual(3);
+          last = after;
+        }
+        await page.screenshot({ path: path.join(out, "zoom-after.png") });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "zoom.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 120_000);
 });

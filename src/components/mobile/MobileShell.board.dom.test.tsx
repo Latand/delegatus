@@ -73,6 +73,7 @@ const OVERRIDES: Record<string, unknown> = {
   /* A tiny in-memory board API: the view switch writes through /api/board, and
      the store needs a real `{ board }` envelope back to fold the write in. */
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     if (url.startsWith("/api/board")) {
       if (init?.method === "PATCH") {
@@ -309,7 +310,7 @@ test("⋯ opens the board menu over the board with every former header control a
      slice 4), and the hidden tasks beside it since they left the board's top
      (#2098); the setup rows are the onboarding entries, the interface walk
      among them (#2166), and self-update. */
-  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "setup-guide", "interface-walk", "agent-mapping", "dictation", "self-update", "archive"]);
+  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "team", "setup-guide", "interface-walk", "agent-mapping", "dictation", "settings", "linked-settings", "external-relay", "self-update", "archive"]);
   expect(q(root, '[data-mobile2-menu-row="pipelines"]')!.getAttribute("data-mobile2-go")).toBe("pipelines");
   for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toContain("min-h-11");
   expect(q(root, '[data-mobile2-go="accounts"]')).not.toBeNull();

@@ -1,5 +1,6 @@
 "use client";
 
+import { Filter } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ChevronDown, ChevronRight, X } from "@/components/icons";
@@ -8,6 +9,7 @@ import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardMode
 import { showReceipt } from "@/components/mobile/MobileReceipt";
 import { topScreen, useMobileNav, type MobileScreen } from "@/components/mobile/mobileNav";
 import { MobileSheet, MobileSheetSection } from "@/components/mobile/MobileSheet";
+import { BAR_PRESSED } from "@/components/ProjectBar";
 import type { AttentionNotice } from "@/lib/attention/types";
 import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
@@ -93,6 +95,12 @@ export interface MobileAttentionSheetProps {
   onClearNotice?: (id: string) => void;
   /** Called with the notices the sheet showed, so the bar's dot goes out. */
   onNoticesSeen?: (ids: readonly string[]) => void;
+  /** The «show only those waiting on you» filter is on: the board dims every
+      card that does not wait. */
+  filterActive?: boolean;
+  /** Absent while nothing on the board waits, so no funnel is drawn (the
+      island's contract). */
+  onToggleFilter?: () => void;
 }
 
 const ROW = "flex min-h-11 w-full items-center gap-3 px-4 py-1.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
@@ -103,7 +111,7 @@ const NO_NOTICES: readonly MobileNoticeRow[] = [];
 const NO_PIPELINES: readonly Pipeline[] = [];
 const NO_NAMES: Readonly<Record<string, string>> = {};
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter }: MobileAttentionSheetProps) {
   const { t } = useLocale();
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
@@ -160,16 +168,33 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       name="attention"
       title={title}
       onClose={onClose}
-      extra={entries.length ? (
-        <button
-          type="button"
-          data-needs-you-dismiss-all=""
-          className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          title={t("attention.dismissAllTitle")}
-          onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: entries.length }) }))}
-        >
-          {t("attention.dismissAll", { count: entries.length })}
-        </button>
+      extra={entries.length || onToggleFilter ? (
+        <>
+          {onToggleFilter ? (
+            <button
+              type="button"
+              data-attention-filter=""
+              className={`inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-[8px] border active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${filterActive ? BAR_PRESSED : "border-transparent text-muted"}`}
+              aria-pressed={filterActive}
+              title={filterActive ? t("attention.filterOffTouch") : t("attention.filterOnTouch")}
+              aria-label={filterActive ? t("attention.filterOffTouch") : t("attention.filterOnTouch")}
+              onClick={onToggleFilter}
+            >
+              <Filter className="h-[18px] w-[18px]" aria-hidden />
+            </button>
+          ) : null}
+          {entries.length ? (
+            <button
+              type="button"
+              data-needs-you-dismiss-all=""
+              className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              title={t("attention.dismissAllTitle")}
+              onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: entries.length }) }))}
+            >
+              {t("attention.dismissAll", { count: entries.length })}
+            </button>
+          ) : null}
+        </>
       ) : null}
     >
       {notices.length ? (

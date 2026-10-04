@@ -47,6 +47,8 @@ function bindDomGlobals(dom: HappyWindow) {
   Object.assign(globalThis, {
     ResizeObserver: TestResizeObserver,
     window: dom,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     document: dom.document,
     navigator: dom.navigator,
     Node: dom.Node,
@@ -176,7 +178,7 @@ test("desktop is untouched: both header rows stay inline, with no fold control",
      the phone never had, and the goal objective on its chip. */
   const meta = host.querySelector('[data-testid="mobile-conv-meta"]') as HTMLElement;
   expect(meta).toBeTruthy();
-  expect(meta.textContent).toContain("sonnet");
+  expect(meta.textContent).toContain("Sonnet");
   expect(meta.querySelector("[data-effort-pills]")).toBeTruthy();
   expect(meta.querySelector('[aria-label*="Ship the chat-first repair"]')).toBeTruthy();
 });

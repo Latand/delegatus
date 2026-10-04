@@ -206,6 +206,12 @@ const REPORT_TELEGRAM: { chat: string; name: string; changedAt: string; changedB
 const REPORT_DESTINATION = TELEGRAM_BOT === "chosen"
   ? { chat: "team-reports", name: "Atlas", source: "chosen" }
   : TELEGRAM_BOT === "refused" ? { chat: "design-lounge", name: "Atlas", source: "chosen" } : null;
+/* The «Needs you» filter (docs/design/needs-me-filter.md): one board holding a
+   conversation that asks, a lane parked on a decision, a card whose only
+   reason was dismissed, and cards that wait on no one. `&nothing=1` answers the
+   same cards with nothing waiting, where the funnel is not offered. */
+const NEEDS_FILTER = SCENARIO === "needs-filter";
+const NEEDS_NOTHING = new URLSearchParams(location.search).get("nothing") === "1";
 const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
@@ -2265,6 +2271,41 @@ function fixtureWorkLinks(): FilesWorkLinks {
 }
 const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
 
+/* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
+   that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`
+   a lane whose decision the operator already dismissed (it no longer waits),
+   and `t-nf-run` and `t-nf-idle` wait on no one. `t-nf-wall` is finished and
+   holds only conversations from outside this board, folded into one line
+   (#2459), in a column that starts narrow. */
+const needsFiles: FileEntry[] = [];
+const needsAdd = (file: FileEntry) => { needsFiles.push(file); return file; };
+const nfAsk = needsAdd(conversation("nf-ask", "Which export presets should ship first?", NEEDS_NOTHING ? { mtime: now - 20 * MIN } : {
+  mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
+}));
+const nfLaneBuild = needsAdd(conversation("nf-lane-build", "Reconciling the ledger export", working({ plan: { current: "Reconciling the ledger export" } })));
+const nfClearedBuild = needsAdd(conversation("nf-cleared-build", "Rotating the search alias", { mtime: now - 40 * MIN }));
+const nfRun = needsAdd(conversation("nf-run", "Writing the migration notes", working({ plan: { current: "Writing the migration notes" } })));
+const nfIdle = needsAdd(conversation("nf-idle", "Listing every export toggle", { mtime: now - 2 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
+const needsLane = (id: string, title: string, taskId: string, member: FileEntry, over: Record<string, unknown> = {}) => pipeline(id, title, taskId, "needs_decision",
+  [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
+  [{ stageId: "implement", attempts: [attempt(1, "failed", member, { startedAt: iso(50 * MIN), completedAt: iso(30 * MIN), verdict: { status: "fail", findings: ["The export drops the last row."] } })] }],
+  { stageId: "implement", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(120 * MIN), ...over });
+const needsPipelines: Pipeline[] = NEEDS_NOTHING ? [] : [
+  needsLane("p-nf-lane", "Reconcile the ledger export", "t-nf-lane", nfLaneBuild),
+  needsLane("p-nf-cleared", "Rotate the search alias", "t-nf-cleared", nfClearedBuild, { dismissedAt: iso(5 * MIN), dismissedBy: { kind: "operator", surface: "desktop" } }),
+];
+const needsTasks: BoardTask[] = [
+  task("t-nf-ask", "assigned", L("Choose the export presets", "Обрати набір пресетів експорту"), L("Three presets and one advanced drawer.", "Три пресети і одна розширена шухляда."), 9 * MIN, [nfAsk]),
+  task("t-nf-lane", "assigned", L("Reconcile the ledger export", "Звірити експорт книги"), L("The export drops its last row.", "Експорт губить останній рядок."), 30 * MIN, [nfLaneBuild]),
+  task("t-nf-cleared", "assigned", L("Rotate the search alias", "Перемкнути псевдонім пошуку"), L("Waits for the warm-up query to return.", "Чекає, поки повернеться прогрівальний запит."), 40 * MIN, [nfClearedBuild]),
+  task("t-nf-run", "assigned", L("Write the migration notes", "Написати нотатки про міграцію"), L("A draft for the release page.", "Чернетка для сторінки релізу."), 5 * MIN, [nfRun]),
+  task("t-nf-idle", "assigned", L("List every export toggle", "Перелічити всі перемикачі експорту"), L("One row per toggle, with its default.", "Один рядок на перемикач, зі значенням за замовчуванням."), 2 * 60 * MIN, [nfIdle]),
+  task("t-nf-wall", "done", L("Retire the old export presets", "Прибрати старі пресети експорту"), "", 200 * MIN, [], {
+    assignments: wallRows("nf", 12) as unknown as BoardTask["assignments"],
+  } as Partial<BoardTask>),
+];
+
 /* The launch the page runs on a clock (`?scenario=launch-cls`). POST /api/spawn answers the receipt after the
    latency a real launch has; /api/files then shows the `spawn:` projection, and from the adoption on the
    scanned transcript, whose rows arrive on the timeline below. */
@@ -2441,6 +2482,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      : NEEDS_FILTER
+      ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {

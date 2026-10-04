@@ -131,10 +131,10 @@ test("the status dot follows the tone matrix (accent busy, amber attention, ok d
     const html = render(pipeline({ state, ...over }));
     return html.slice(0, html.indexOf("aria-hidden"));
   };
-  /* Running → accent, never green; needs_decision + paused → warning, never red. */
+  /* Running is active, a decision needs attention, and an intentional pause is neutral. */
   expect(dotClass("running")).toContain("bg-accent");
   expect(dotClass("needs_decision")).toContain("bg-warning");
-  expect(dotClass("paused")).toContain("bg-warning");
+  expect(dotClass("paused")).toContain("bg-strong");
   expect(dotClass("completed")).toContain("bg-success");
   /* Red is reserved for chip/verdict failures — the dot never uses it. */
   expect(render(pipeline({ state: "needs_decision" }))).not.toContain("rounded-full bg-danger");

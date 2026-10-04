@@ -4,6 +4,10 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "memory.label": "Спільна пам’ять для цього проєкту",
+  "memory.explanation": "Jev добирає доречну пам’ять для кожного вашого повідомлення й передає агенту; до Jev надсилається контекст із прихованими секретами.",
+  "memory.spend": "Спільний бюджет Jev: ${spent} із ${cap} цього місяця.",
+  "memory.offered": "Запропонована пам’ять: {names}",
   "stateWrites.title": "Диск заповнений: зміни стану не зберігаються",
   "stateWrites.free": "Вільне місце: {free}.",
   "stateWrites.unknown": "невідомо",
@@ -2879,7 +2883,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "attention.empty": "Ніщо не чекає на вас.",
   "attention.reportQuestion": "Питання",
   "attention.filterOn": "Показати лише тих, хто чекає на тебе (F)",
-  "attention.filterOff": "Показати всі вузли (F)",
+  "attention.filterOff": "Показати всі картки (F)",
+  "attention.filterOnTouch": "Показати лише тих, хто чекає на тебе",
+  "attention.filterOffTouch": "Показати всі картки",
   "attention.decisionQuestion": "питання",
   "attention.decisionPlan": "затвердження плану",
   "attention.decisionPermission": "запит дозволу",
@@ -3253,6 +3259,7 @@ export const uk: Record<keyof typeof en, Message> = {
      примітиви аркуша й квитанції, перемикач проєктів і меню дошки. */
   "mobile2.bar.back": "Назад",
   "mobile2.bar.switchProject": "Змінити проєкт",
+  "mobile2.bar.filterOn": "показано лише тих, хто чекає на вас",
   "mobile2.bar.attention": { one: "{count} чекає на вас", few: "{count} чекають на вас", many: "{count} чекають на вас", other: "{count} чекає на вас" },
   "mobile2.bar.search": "Знайти ваші повідомлення",
   "mobile2.bar.more": "Більше дій",

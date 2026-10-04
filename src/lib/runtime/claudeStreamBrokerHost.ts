@@ -235,6 +235,7 @@ export interface ClaudeAuthStatus {
 export interface ClaudeSessionIdentity { sessionId: string }
 
 export interface ClaudeStreamBrokerHostOptions {
+  memoryQueuePath?: string;
   cwd: string;
   sessionId?: string;
   claudeConfigDir?: string;
@@ -617,6 +618,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;
+  private readonly memoryQueuePath?: string;
   private readonly eventStore: RuntimeEventStore;
   private readonly deliveryLedger: ClaudeDeliveryLedger;
   private readonly readImage: (ref: StructuredImageRef) => Buffer;
@@ -678,6 +680,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     options: ClaudeStreamBrokerHostOptions,
   ) {
     this.child = child;
+    this.memoryQueuePath = options.memoryQueuePath;
     this.memoryCell = options.memoryCell ?? null;
     this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
@@ -752,6 +755,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     resume: boolean,
     options: ClaudeStreamBrokerHostOptions,
   ): Promise<ClaudeStreamBrokerHost> {
+    if (options.claudeConfigDir && (options.env ?? process.env).LLV_SPAWN_CAPABILITY) {
+      const queueRoot = path.join(options.claudeConfigDir, ".llv", "memory-queues");
+      try {
+        fs.mkdirSync(queueRoot, { recursive: true, mode: 0o700 });
+        const memoryQueuePath = path.join(queueRoot, `${crypto.randomUUID()}.jsonl`);
+        fs.writeFileSync(memoryQueuePath, "", { mode: 0o600 });
+        options = { ...options, memoryQueuePath };
+      } catch { /* hook installation remains optional */ }
+    }
     const binary = options.binary ?? process.env.LLV_CLAUDE_BINARY ?? "claude";
     let env: NodeJS.ProcessEnv;
     let auth: ClaudeAuthStatus;
@@ -819,6 +831,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           baseSettingsPath: options.spawnPolicyBaseSettingsPath,
           providerAccount: options.providerAccount,
           publicationEnv: options.env ?? process.env,
+          memoryQueuePath: options.memoryQueuePath,
           profileId,
           cwd: options.cwd,
           mcpServers: options.mcpServers,
@@ -966,6 +979,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       timer,
     };
     this.pendingDeliveries.set(entry.id, pending);
+    if (this.memoryQueuePath) {
+      try { fs.appendFileSync(this.memoryQueuePath, JSON.stringify({ id: entry.id, digest: crypto.createHash("sha256").update(normalized.content.text).digest("hex") }) + "\n"); }
+      catch { /* no matching receipt means the hook abstains */ }
+    }
     this.write({
       type: "user",
       session_id: this.identity.sessionId,
@@ -1270,6 +1287,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (competingDeliveries.length !== 1) continue;
       const confirmation = this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null, "inferred");
       if (confirmation === "refused") continue;
+      if (this.memoryQueuePath) { try { fs.appendFileSync(this.memoryQueuePath + ".consumed", delivery.entry.id + "\n", { mode: 0o600 }); } catch { /* optional hook receipt */ } }
       delivery.delivered = true;
       delivery.engineMessageId = user?.uuid ?? null;
       delivery.confirmation = "inferred";
@@ -1375,6 +1393,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
             this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed" });
             return;
           }
+          if (this.memoryQueuePath) { try { fs.appendFileSync(this.memoryQueuePath + ".consumed", delivery.entry.id + "\n", { mode: 0o600 }); } catch { /* optional hook receipt */ } }
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
           delivery.confirmation = "inferred";

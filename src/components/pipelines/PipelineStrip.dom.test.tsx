@@ -82,7 +82,7 @@ test("planned stage configuration opens on demand and Escape restores the compac
   const body = dom.document.body as unknown as HTMLElement;
   const dialog = body.querySelector<HTMLElement>('[role="dialog"]');
   expect(dialog?.getAttribute("aria-label")).toBe("Configuration for stage Builder");
-  expect(dialog?.textContent).toContain("reasoning");
+  expect(dialog?.textContent).toContain("GPT-5.6-Sol · high");
 
   flushSync(() => window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(body.querySelector('[role="dialog"]')).toBeNull();

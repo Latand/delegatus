@@ -1,3 +1,4 @@
+import { closeAgentRegistryForTests } from "../agent/registry";
 import { appendFile, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import fs, { existsSync } from "node:fs";
 import os from "node:os";
@@ -77,6 +78,7 @@ test("pure project-catalog discovery leaves the state directory unchanged", asyn
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -109,6 +111,7 @@ test("request refreshes persist the per-file scanner index", async () => {
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -154,6 +157,7 @@ test("a poisoned durable alias source defers only itself in the persist scan", a
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -206,6 +210,7 @@ test("project catalog persistence repairs private modes and atomically replaces 
     process.umask(previousUmask);
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -250,6 +255,7 @@ test("a non-ENOENT directory failure leaves the completed catalog index authorit
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -332,6 +338,7 @@ test("project index publication failures preserve the canonical file, clean temp
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -382,6 +389,7 @@ test("an append reparses its file and reuses unchanged persisted summaries", asy
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -421,6 +429,7 @@ test("a same-size transcript rewrite with a newer mtime reparses cwd and project
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -479,6 +488,7 @@ test("larger Codex and Claude rewrites replace cached head metadata", async () =
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -565,6 +575,7 @@ test("Codex and Claude true appends retain head metadata through repeated EIO an
     fs.openSync = originalOpen;
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -632,6 +643,7 @@ test("a one-shot transcript read failure stays incomplete and recovers in memory
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -690,6 +702,7 @@ test("first-ever repeated transcript read failures publish and persist only afte
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -725,6 +738,7 @@ test("a same-size subagent sidecar rewrite with a newer mtime reparses its title
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -783,6 +797,7 @@ test("a one-shot sidecar read failure stays incomplete and recovers in memory an
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -814,6 +829,7 @@ test("a corrupt per-file scanner index falls back to a full parse and repairs it
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -845,6 +861,7 @@ test("a pinned discovery identifies only rows outside the global scheme window",
     expect(scan.pinOverlayPaths).toEqual([pinnedPath]);
     expect(scan.files.filter((entry) => !scan.pinOverlayPaths?.includes(entry.path))).toHaveLength(DEFAULT_SCHEME_CARDS_PER_PROJECT);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -871,6 +888,7 @@ test("project snapshots retain their scan-local conversation catalog after a lat
     expect(first.conversationCatalog.map((entry) => entry.path)).toEqual([firstPath]);
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toEqual([secondPath]);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -910,6 +928,7 @@ test("an older overlapping scan cannot replace a newer catalog publication", asy
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -949,6 +968,7 @@ test("a read-only scan leaves an overlapping durable publication eligible to per
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -973,6 +993,7 @@ test("discovery orders publication from scan start across overlapping filesystem
 
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toEqual([freshPath]);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1018,6 +1039,7 @@ test("project catalog carries the canonical root for projects outside the capped
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1085,6 +1107,7 @@ test("archived migration predecessors cannot outvote the current project root", 
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1132,6 +1155,7 @@ test("persisted scheme metadata excludes unbounded first-prompt text", async () 
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1184,6 +1208,7 @@ test("a legacy cached Claude subagent is migrated into the conversation catalog"
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1214,6 +1239,7 @@ test("project catalog omits task-only residue from a clean state", async () => {
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1257,6 +1283,7 @@ test("a Claude transcript appearing in a previously sessionless project director
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1303,7 +1330,8 @@ test("first-ever EIO and EACCES task twin lookups publish only after recovery", 
       fs.promises.access = originalAccess;
       if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
       else process.env.LLV_STATE_DIR = previousStateDir;
-      await rm(base, { recursive: true, force: true });
+      closeAgentRegistryForTests();
+    await rm(base, { recursive: true, force: true });
     }
   }
 });
@@ -1338,6 +1366,7 @@ test("a first-ever ENOTDIR task twin lookup stays incomplete and publishes no du
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1366,6 +1395,7 @@ test("project and conversation catalogs retain a project whose only transcript i
     });
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toContain(subagent);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1440,6 +1470,7 @@ test("discoverFiles preserves scanner filters, mtime ordering, and the per-proje
     expect(entries.every((entry) => !entry.path.endsWith("scratchpad.txt"))).toBe(true);
     expect(entries.every((entry) => !entry.path.endsWith("mirrored.output"))).toBe(true);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1485,6 +1516,7 @@ test("discoverFiles applies the card cap independently to each visible project",
     expect(entries).toHaveLength(DEFAULT_SCHEME_CARDS_PER_PROJECT * 2);
     expect(visibleQuietPaths).toEqual(quietPaths.slice(-DEFAULT_SCHEME_CARDS_PER_PROJECT).reverse());
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1511,6 +1543,7 @@ test("discoverFiles merges multiple Codex session roots without duplicate paths"
 
     expect(entries.map((entry) => entry.path)).toEqual([secondFile, firstFile]);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1563,6 +1596,7 @@ test("discoverFiles counts a dual-root Codex rollout once and prefers the accoun
       smt: 10,
     });
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1601,6 +1635,7 @@ test("discoverFiles keeps native Codex spawn parents outside the recent cap", as
     expect(entries[0]?.path).toBe(childPath);
     expect(entries.some((entry) => entry.path === parentPath)).toBe(true);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1649,6 +1684,7 @@ test("discoverFilesWithProjectCatalog keeps quiet projects in the recent cap", a
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1699,6 +1735,7 @@ test("registry launch cwd governs scheme caps and the uncapped project catalog",
     setAgentRegistryForTests(null);
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1755,6 +1792,7 @@ test("discoverFilesWithProjectCatalog keeps a selected project inside the scheme
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1821,6 +1859,7 @@ test("discoverFilesWithProjectCatalog refreshes cached projects when flow state 
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -1945,6 +1984,7 @@ test("current-production catalog records converge two legacy buckets for one rep
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -2035,6 +2075,7 @@ test("an ambiguous legacy project key defers catalog and board migration", async
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -2090,6 +2131,7 @@ test("demoted archived predecessors rank below live transcripts for the recency 
     const selected = await discoverFilesWithProjectCatalog(roots, project, { demote: new Set([archivedPath]) });
     expect(selected.files.some((entry) => entry.path === archivedPath)).toBe(false);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -2141,6 +2183,7 @@ test("a live conversation keeps its card past the per-project card cap", async (
     expect(quiet.map((entry) => entry.path)).not.toContain(hostedPath);
     expect(quiet.map((entry) => entry.path)).toContain(appendingPath);
   } finally {
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -2185,6 +2228,7 @@ test("a transcript reached through a symlinked account home has one identity in 
     else process.env.LLV_STATE_DIR = previousStateDir;
     if (previousClaudeHome === undefined) delete process.env.LLV_CLAUDE_HOME;
     else process.env.LLV_CLAUDE_HOME = previousClaudeHome;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -2272,6 +2316,7 @@ test("an OpenClaw agent tree yields one card per transcript and none for its sid
     else process.env.LLV_STATE_DIR = previousStateDir;
     if (previousOpenclawStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
     else process.env.OPENCLAW_STATE_DIR = previousOpenclawStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -2290,6 +2335,7 @@ test("openclawSessionRoots returns one root per agent id under the configured st
   } finally {
     if (previousOpenclawStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
     else process.env.OPENCLAW_STATE_DIR = previousOpenclawStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 });

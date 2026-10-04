@@ -12,11 +12,13 @@ import { conversationMessageSenders, messageSenders } from "@/lib/team";
 import type { MessageSender } from "@/lib/team/contract";
 import { pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
+import { offeredMemoryForTranscript } from "@/lib/memory/offers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export interface MessageProvenanceResponse {
+  memoryOffers?: Record<string, string[]>;
   /** Delivered-message authorship keyed by the transcript row's engine uuid
       (#1117). Only rows with real delivery evidence appear; the feed keeps
       today's rendering for everything else. */
@@ -64,7 +66,7 @@ export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | 
     ...Object.values(submissions),
   ];
   return NextResponse.json(
-    { messages, occurrences, submissions, senders: { ...queuedSenders(path), ...messageSenders(ids, conversationScope(path)) } },
+    { messages, occurrences, submissions, memoryOffers: offeredMemoryForTranscript(path), senders: { ...queuedSenders(path), ...messageSenders(ids, conversationScope(path)) } },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

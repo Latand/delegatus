@@ -117,6 +117,7 @@ function task(id: string, status: TaskStatus, text: string, files: readonly File
     assignments: files.map((file) => ({ path: file.path, conversationId: file.conversationId, panePid: null, state: "handoff", error: null, at: "2026-09-14T10:00:00.000Z" })),
     createdAt: "2026-09-14T10:00:00.000Z",
     updatedAt: "2026-09-14T10:00:00.000Z",
+    ...(status === "done" ? { doneAt: new Date(NOW * 1_000).toISOString() } : {}),
     revision: REV(1),
   } as BoardTask;
 }
@@ -521,7 +522,7 @@ test("closed never-started launch is dismissible through the task reader's norma
   await tick();
   const reader = readerIn(view.host);
   expect(reader).toBeTruthy();
-  expect(reader?.textContent).toContain("never started");
+  expect(reader?.textContent).toContain("Launch failed");
   expect(Boolean(reader?.querySelector("[data-launch-retry]"))).toBe(false);
   expect(reader?.querySelector("textarea")).toBeNull();
   click(reader?.querySelector("[data-launch-dismiss]"));

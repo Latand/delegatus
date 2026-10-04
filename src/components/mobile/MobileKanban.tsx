@@ -264,9 +264,11 @@ function usePress(onLongPress: (() => void) | null, lift: Lift | null) {
   };
 }
 
-function Pressable({ onLongPress, lift, children }: { onLongPress: (() => void) | null; lift: Lift | null; children: ReactNode }) {
+/* `waits` marks the card the «Needs you» filter keeps lit (globals.css): the
+   outer shell carries it, so the whole card dims as one layer. */
+function Pressable({ onLongPress, lift, waits, children }: { onLongPress: (() => void) | null; lift: Lift | null; waits: boolean; children: ReactNode }) {
   const press = usePress(onLongPress, lift);
-  return <div className="select-none [-webkit-touch-callout:none]" {...press}>{children}</div>;
+  return <div className="select-none [-webkit-touch-callout:none]" data-phone-card-shell="" data-attention={waits ? "needs" : undefined} {...press}>{children}</div>;
 }
 
 /** The four columns a lifted card can be let go over. The lift draws and
@@ -576,7 +578,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   );
   return (
     <>
-    <Pressable onLongPress={onLongPress} lift={lift}>
+    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0}>
       {aside ? (
         <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
           {face}
@@ -605,7 +607,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         </div>
       ) : face}
     </Pressable>
-    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1"><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
+    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
 }
