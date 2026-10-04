@@ -1793,7 +1793,12 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
     const receipt = JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8"));
     expect(receipt).toMatchObject({ requestId: apply.current!.requestId, state: completesTrial ? "done" : "rolled-back" });
     const terminal = readFileSync(path.join(directory, "apply.json"), "utf8");
+    const receiptBytes = readFileSync(`${before.requestFile}.result.json`, "utf8");
+    if (terminalBeforeBoot) writeDrain(path.join(directory, "auto-drain.json"), { id: "subsequent-owner", target: "c".repeat(40),
+      since: new Date().toISOString(), until: Date.now() + 600000, persistent: true });
     await service.snapshot(); expect(readFileSync(path.join(directory, "apply.json"), "utf8")).toBe(terminal);
+    expect(readFileSync(`${before.requestFile}.result.json`, "utf8")).toBe(receiptBytes);
+    if (terminalBeforeBoot) expect(activeDrain(path.join(directory, "auto-drain.json"))?.id).toBe("subsequent-owner");
   } finally { service.stop(); }
 }, 60_000);
 
@@ -1972,7 +1977,14 @@ test.each(["gate-expired", "new-work", "launcher-changed"] as const)("resident r
   if (change === "launcher-changed") { const r = readRecord(f.state); r.launcher.startIdentity = "foreign-custody"; writeFileSync(recordFile(f.state), JSON.stringify(r)); }
   const finalGate = readFileSync(gateFile, "utf8"), finalOwner = readFileSync(recordFile(f.state), "utf8");
   writeFileSync(released, "");
-  await until(() => { try { return JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8")).state === "rejected"; } catch { return false; } });
+  await until(() => {
+    const r = readRecord(f.state);
+    try { if (JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8")).state === "rejected") return true; } catch { /* no refusal yet */ }
+    return r.web.pid !== before.web.pid || r.runtimeHost.pid !== before.runtimeHost.pid;
+  });
+  let refusal;
+  try { refusal = JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8")); } catch { /* a stale dispatch produces no refusal */ }
+  expect(refusal?.state).toBe("rejected");
   expect(readFileSync(path.join(dir, "apply.json"), "utf8")).toBe(originalApply);
   expect(readFileSync(before.requestFile, "utf8")).toBe(originalRequest);
   expect(readFileSync(gateFile, "utf8")).toBe(finalGate); expect(readFileSync(recordFile(f.state), "utf8")).toBe(finalOwner);
