@@ -1361,7 +1361,7 @@ async function main() {
       record.set(key, { requestId });
       if (role === "web") await restartWeb();
       else await restartHost();
-    }, { admitAuto: async ({ requestId, autoGateId }) => {
+    }, { isStopping: () => relaunch.isStopping(), admitAuto: async ({ requestId, autoGateId }) => {
       try {
         const url = new URL(`http://127.0.0.1:${options.port}/api/self-update/launcher-admission`);
         url.searchParams.set("requestId", requestId);

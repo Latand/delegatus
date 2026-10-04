@@ -223,11 +223,11 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
  * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }) => Promise<void>} handle
  * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean> }} options
  */
-export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false } = {}) {
+export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false, isStopping = () => false } = {}) {
   let busy = false;
   const gateFile = join(dirname(requestFile), "auto-admission.json");
   const poll = async () => {
-    if (busy || !existsSync(requestFile)) return;
+    if (busy || isStopping() || !existsSync(requestFile)) return;
     let request = null;
     try {
       request = JSON.parse(readFileSync(requestFile, "utf8"));
@@ -252,10 +252,12 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
         try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* no valid admission */ }
         if (typeof request.autoGateId !== "string" || gate?.id !== request.autoGateId || typeof gate.until !== "number" || gate.until <= Date.now()
           || !await admitAuto(request)) {
+          if (isStopping()) return;
           rejected("Final automatic admission was refused or expired");
           return;
         }
       }
+      if (isStopping()) return;
       admitted = true;
       // Do not remove a newer request that arrived while admission was read.
       try {
@@ -264,15 +266,15 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
       if (request.role !== "relaunch") rmSync(requestFile, { force: true });
       await handle(request);
     } catch (error) {
-      if (!admitted) rejected("Final automatic admission could not be verified");
+      if (!isStopping() && !admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (request.autoGateId || request.role === "relaunch") {
+      if (!isStopping() && (request.autoGateId || request.role === "relaunch")) {
         try {
           if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
         } catch { /* already consumed */ }
       }
-      if (request.autoGateId) {
+      if (!isStopping() && request.autoGateId) {
         try {
           if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
         } catch { /* already removed */ }

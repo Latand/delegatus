@@ -1674,13 +1674,22 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   return env;
 }
 
-test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIGINT"] as const).flatMap(signal => (["pending", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
+test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIGINT"] as const).flatMap(signal => (["pending", "admitting", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
   const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
   const { idleUpdate } = await import("../src/lib/selfUpdate/types");
   const fixture = install();
+  const admissionMarker = path.join(fixture.root, "admission-entered");
+  if (boundary === "admitting") {
+    const next = path.join(fixture.checkout, "node_modules", ".bin", "next");
+    writeFileSync(next, readFileSync(next, "utf8").replace("fetch(request) {", "async fetch(request) {")
+      .replace('if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });',
+        `if (pathname === "/api/self-update/launcher-admission") { (await import("node:fs")).writeFileSync(${JSON.stringify(admissionMarker)}, ""); await Bun.sleep(2000); return Response.json({ admitted: true }); }`));
+    git(fixture.checkout, "add", "-f", "."); git(fixture.checkout, "commit", "-m", "bounded admission fixture");
+    fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  }
   if (boundary === "starting") {
     const next = path.join(fixture.checkout, "node_modules", ".bin", "next");
     writeFileSync(next, readFileSync(next, "utf8").replace("const stop = () => {", "const stop = async () => { await Bun.sleep(2000);"));
@@ -1694,12 +1703,21 @@ test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIG
   const entry = path.join(candidate.dir, "bin", "cli.mjs");
   writeFileSync(entry, `if (process.argv.includes("--version")) { (await import("node:fs")).writeFileSync(${JSON.stringify(marker)}, String(process.pid)); await Bun.sleep(2000); }\n` + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
   const directory = path.dirname(before.requestFile); const apply = new ApplyController(directory);
-  apply.begin(before as never, candidate.sha, "operator");
+  const { beginRestartGate, restartGateFile } = await import("../src/lib/selfUpdate/restartGate");
+  const { writeDrain } = await import("../src/lib/selfUpdate/drain");
+  const gateId = boundary === "admitting" ? beginRestartGate(restartGateFile(before.requestFile))! : undefined;
+  apply.begin(before as never, candidate.sha, gateId ? "auto" : "operator", undefined, { autoGateId: gateId });
+  if (gateId) writeDrain(path.join(directory, "auto-drain.json"), { id: apply.current!.requestId, target: candidate.sha,
+    since: apply.current!.startedAt, until: Date.now() + 600_000, persistent: true });
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
   if (boundary === "pending") process.kill(before.launcher.pid, "SIGSTOP");
-  apply.send(before as never);
+  apply.send(before as never, gateId);
   const trialFile = path.join(path.dirname(before.requestFile), path.basename(before.requestFile).replace(/^request/, "trial"));
-  if (boundary !== "pending") {
+  if (boundary === "admitting") {
+    await until(() => existsSync(admissionMarker));
+    expect(JSON.parse(readFileSync(before.requestFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, role: "relaunch", autoGateId: gateId });
+    expect(existsSync(trialFile)).toBe(false);
+  } else if (boundary !== "pending") {
     await until(() => existsSync(trialFile) && (boundary === "starting"
       ? JSON.parse(readFileSync(trialFile, "utf8")).state === "starting"
       : boundary === "preflight" || existsSync(marker) && !existsSync(before.requestFile)));
