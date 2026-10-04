@@ -203,6 +203,14 @@
   --color-diff-del: #cf222e;
   --color-diff-del-soft: #ffebe9;
   --color-diff-del-strong: #ffd1cf;
+
+  /* ── «Needs you» filter (docs/design/needs-me-filter.md) ───────────────────
+     What a card that does not wait on the operator recedes to while the filter
+     is on. The opacity is the lowest that keeps text-primary at 4.5:1 over the
+     canvas (4.58:1 light, 5.04:1 dark); the saturation drains the warning,
+     colour-label and model hues so the lit cards are the only coloured ones. */
+  --needs-dim-opacity: 0.6;
+  --needs-dim-saturate: 0.35;
 }
 
 /* Default light scheme so `light-dark()` (model-tint foregrounds, utils.ts)
@@ -298,6 +306,7 @@
     --color-diff-del: #f85149;
     --color-diff-del-soft: #2d1416;
     --color-diff-del-strong: #5c2626;
+    --needs-dim-opacity: 0.55;
   }
 }
 
@@ -382,4 +391,5 @@
   --color-diff-del: #f85149;
   --color-diff-del-soft: #2d1416;
   --color-diff-del-strong: #5c2626;
+  --needs-dim-opacity: 0.55;
 }

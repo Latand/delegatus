@@ -4,6 +4,10 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "memory.label": "Shared memory for this project",
+  "memory.explanation": "Jev selects relevant memory for each of your messages and shares it with the agent; redacted context is sent to Jev.",
+  "memory.spend": "Shared Jev budget: ${spent} of ${cap} this month.",
+  "memory.offered": "Memory offered: {names}",
   "stateWrites.title": "Disk full: state writes are failing",
   "stateWrites.free": "Free space: {free}.",
   "stateWrites.unknown": "unknown",
@@ -2929,7 +2933,9 @@ export const en = {
   "attention.empty": "Nothing is waiting for you.",
   "attention.reportQuestion": "Question",
   "attention.filterOn": "Show only those waiting on you (F)",
-  "attention.filterOff": "Show all nodes (F)",
+  "attention.filterOff": "Show all cards (F)",
+  "attention.filterOnTouch": "Show only those waiting on you",
+  "attention.filterOffTouch": "Show all cards",
   /* The one decision line every attention surface shares (#1167): the toast
      title, the island popover row and the orchestrator dock badge's tooltip.
      Lower-case to sit beside `rateLimit.badgeUntil`, which names the same class
@@ -3313,6 +3319,7 @@ export const en = {
      Keys are append-only per lane, prefixed by surface. */
   "mobile2.bar.back": "Back",
   "mobile2.bar.switchProject": "Switch project",
+  "mobile2.bar.filterOn": "showing only those waiting on you",
   "mobile2.bar.attention": { one: "{count} needs you", other: "{count} need you" },
   "mobile2.bar.search": "Find your messages",
   "mobile2.bar.more": "More actions",

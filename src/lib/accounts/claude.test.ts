@@ -1,3 +1,7 @@
+import { clearAccountTestState } from "@/lib/accounts/accountsStoreFixture";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
+import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
+import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,7 +15,7 @@ process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
 const mod = await import("./claude");
 const { AccountArchiveUnavailableError, AccountRemovalBlockedError, retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("./removal");
-const { agentRegistry } = await import("@/lib/agent/registry");
+const { agentRegistry, normalizeRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { resetAccountCollectionsForTests } = await import("./accountsStore");
 const { persistedAccountRegistry, persistedAccountState, seedAccountRegistry } = await import("./accountsStoreFixture");
@@ -33,12 +37,16 @@ function denyNextStateWrite(): () => void {
 }
 
 beforeEach(() => {
-  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
   fs.rmSync(process.env.LLV_CLAUDE_HOME!, { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "accounts"), { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "shared"), { recursive: true, force: true });
 });
 afterAll(() => {
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = OLD_STATE;
   if (OLD_HOME === undefined) delete process.env.LLV_CLAUDE_HOME; else process.env.LLV_CLAUDE_HOME = OLD_HOME;
   fs.rmSync(SANDBOX, { recursive: true, force: true });
@@ -618,9 +626,10 @@ function strandOnAccount(fixture: ReturnType<typeof usedClaudeHome>) {
   });
   const delivery = store.holdDelivery(fixture.conversation.id, "owed on the removed account");
   store.setEngineRouting("claude", fixture.account.id);
-  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
-  raw.conversations[fixture.conversation.id].pinnedAccountId = fixture.account.id;
-  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const raw = store.snapshot();
+  raw.conversations[fixture.conversation.id]!.pinnedAccountId = fixture.account.id;
+  const persisted = new SqliteAgentRegistryStore(defaultRegistrySqliteFilename(store.filename), { initialSnapshot: raw, normalize: normalizeRegistry });
+  try { expect(persisted.replace(raw, persisted.snapshot().revision).replaced).toBe(true); } finally { persisted.close(); }
   return delivery;
 }
 

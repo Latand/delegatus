@@ -1,0 +1,34 @@
+{
+  "mode": "managed hooks under isolated subscription homes, Unicode context boundary probe",
+  "claude": {
+    "host": "stream",
+    "hookFired": true,
+    "contextReachedTurn": true,
+    "exactDeliveryIdentity": true,
+    "status": "completed",
+    "contextCharacters": 9584,
+    "activeTurnFollowup": {
+      "receipt": "queued-next-turn",
+      "nativeHookCalls": 2,
+      "bothExactDeliveryIdentities": true,
+      "bothContextsReachedTurn": true,
+      "status": "completed"
+    }
+  },
+  "codex": {
+    "host": "app-server",
+    "trusted": true,
+    "enabled": true,
+    "hookFired": true,
+    "contextReachedTurn": true,
+    "status": "completed",
+    "contextCharacters": 9584,
+    "additionalContextLimitTokens": 40000,
+    "activeTurnFollowup": {
+      "receipt": "steered",
+      "nativeHookCalls": 2,
+      "bothContextsReachedTurn": true,
+      "status": "completed"
+    }
+  }
+}

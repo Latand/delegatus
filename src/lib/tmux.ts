@@ -1,3 +1,4 @@
+import { memoryIndex } from "@/lib/memory/service";
 import { unsupportedApiCredentialNames, withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -1375,6 +1376,10 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   const fencedPrompt = fenceViewerSpawnPrompt(spec.engine, text);
   if (fencedPrompt) {
     try {
+      try {
+        memoryIndex().recordTerminalDelivery(`spawn:${receipt.launchId}`, receipt.conversationId, fencedPrompt,
+          receipt.delegationDepth === 0 ? "operator" : "agent", spec.transcript ?? receipt.artifactPath);
+      } catch { /* Optional memory cannot prevent the launch prompt. */ }
       await sendText(target, fencedPrompt);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
