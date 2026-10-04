@@ -1676,7 +1676,7 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   return env;
 }
 
-test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["pending", "admitting", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
+test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["begin", "ready", "pointer", "switching", "pending", "admitting", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
@@ -1716,11 +1716,21 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["p
   apply.begin(before as never, candidate.sha, gateId ? "auto" : "operator", undefined, { autoGateId: gateId });
   if (gateId) writeDrain(path.join(directory, "auto-drain.json"), { id: apply.current!.requestId, target: candidate.sha,
     since: apply.current!.startedAt, until: Date.now() + 600_000, persistent: true });
-  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  const unpublished = ["begin", "ready", "pointer", "switching"].includes(boundary);
+  if (boundary !== "begin" && boundary !== "ready") writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  if (boundary === "ready") apply.patch({ state: "ready" });
+  if (boundary === "switching") {
+    // The exact durable send checkpoint before publishLauncherRequest.
+    writeDrain(path.join(directory, "auto-drain.json"), { id: apply.current!.requestId, target: candidate.sha,
+      since: apply.current!.startedAt, until: Date.now() + 600_000, persistent: true });
+    apply.patch({ state: "switching", switchedAt: new Date().toISOString() });
+  }
   if (boundary === "pending") process.kill(before.launcher.pid, "SIGSTOP");
-  apply.send(before as never, gateId);
+  if (!unpublished) apply.send(before as never, gateId);
   const trialFile = path.join(path.dirname(before.requestFile), path.basename(before.requestFile).replace(/^request/, "trial"));
-  if (boundary === "admitting") {
+  if (unpublished) {
+    expect(existsSync(before.requestFile)).toBe(false); expect(existsSync(trialFile)).toBe(false);
+  } else if (boundary === "admitting") {
     await until(() => existsSync(admissionMarker));
     expect(JSON.parse(readFileSync(before.requestFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, role: "relaunch", autoGateId: gateId });
     expect(existsSync(trialFile)).toBe(false);
@@ -1746,6 +1756,9 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["p
   const child = spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: "ignore" }); children.add(child);
   const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);
+  expect(after.launcher.requestId).toBe(apply.current!.requestId);
+  expect(after.launcher.revision).toBe((signal === "SIGKILL" && boundary === "starting") ? candidate.sha : fixture.first);
+  expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
   const page = await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(2000) });
   // SIGKILL cannot write the stop marker. A durable starting trial is allowed
   // to finish its accepted target; handled signals retain their rollback rule.
