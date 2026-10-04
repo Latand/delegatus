@@ -676,7 +676,7 @@ async function postTypingPresence(role: string): Promise<void> {
   expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
 }
 
-test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission rechecks %s after its Git observation", async (change) => {
+test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission preserves pending custody or rechecks %s after its Git observation", async (change) => {
   const h = scenario();
   const checkout = join(h.dir, "admission-checkout"); mkdirSync(checkout);
   const git = Bun.which("git")!;
@@ -739,12 +739,13 @@ test.each(["disable", "work-starts", "manual-build", "snapshot-build", "quiet-bu
       expect(await service.setAuto(false)).toMatchObject({ ok: true });
       expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
     } else if (change.endsWith("-build")) {
-      expect(await service.startUpdate("manual-build-during-admission")).toMatchObject({ ok: true });
-      expect((await service.snapshot()).busy).toBe("update");
+      expect(await service.startUpdate("manual-build-during-admission")).toMatchObject({ ok: false, status: 409, code: "busy-restart-web" });
+      expect(existsSync(join(h.dir, "apply.json"))).toBe(false);
     } else h.setStage(true);
     writeFileSync(released, "");
-    expect(await admission).toBe(false);
-    expect(h.pending()).toBeNull();
+    expect(await admission).toBe(change.endsWith("-build"));
+    if (change.endsWith("-build")) expect(h.pending()).toMatchObject({ requestId, role: "web", target: sha });
+    else expect(h.pending()).toBeNull();
   } finally {
     writeFileSync(released, ""); await admission;
     await service.setAuto(false);
