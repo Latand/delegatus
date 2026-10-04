@@ -71,26 +71,37 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       // A retry of this native id keeps the same receipt; repeated words on a
       // later id do not consume it again.
       const terminalOrigin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine);
-      // Delivery can proceed after both optional receipt stores fail. The
-      // registry reservation predates transport and survives reload; without
-      // its matching receipt, native authorship remains unproven. Explicit
-      // structured operator metadata above needs no such inference.
-      const contentDigest = structuredContent(prompt, []).contentDigest;
-      const missingMachineReceipt = Object.values(snapshot.heldDeliveries).some(delivery =>
-        delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
-        && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
-        && !index.hasTerminalDelivery(delivery.command.operationId));
-      const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
-      const relayDigest = relay ? structuredContent(relay[1], []).contentDigest : null;
-      // A relay reservation belongs to its child conversation, while its
-      // terminal receipt belongs to the root. Every matching source delivery
-      // must have evidence; a prior same-text relay cannot cover a lost one.
-      const missingRelayReceipt = relay && (!index.hasTerminalPrompt(conversationId, prompt)
-        || Object.values(snapshot.heldDeliveries).some(delivery =>
-          (delivery.contentDigest === relayDigest || delivery.payloadKind !== "text")
-          && !index.hasTerminalDelivery(delivery.command.operationId)));
-      const missingLaunchReceipt = (receipt.delegationDepth ?? 1) > 0 && !index.hasTerminalDelivery(`spawn:${receipt.launchId}`);
-      if (missingMachineReceipt || missingLaunchReceipt || missingRelayReceipt) return "";
+      if (!index.nativeOperatorOwned(conversationId, requestId, prompt)) {
+        // Delivery can proceed after both optional receipt stores fail. The
+        // registry reservation predates transport and survives reload; without
+        // its matching receipt, native authorship remains unproven. Explicit
+        // structured operator metadata above needs no such inference.
+        const owners = Object.values(snapshot.deliveryOperationOwners);
+        const ownerCounts = new Map<string, number>();
+        for (const owner of owners) ownerCounts.set(owner.conversationId, (ownerCounts.get(owner.conversationId) ?? 0) + 1);
+        const evidence = new Map(owners.filter(owner => owner.terminalDisposition !== "lost").map(owner => [owner.command.operationId, { conversationId: owner.conversationId, command: owner.command, contentDigest: owner.contentDigest, payloadKind: "unknown" }]));
+        for (const held of Object.values(snapshot.heldDeliveries)) if (snapshot.deliveryOperationOwners[held.command.operationId]?.terminalDisposition !== "lost") evidence.set(held.command.operationId, held);
+        // At the owner's retention bound, absence no longer proves that this
+        // native input lacks a machine sender. Compaction markers survive it.
+        const incompleteHistory = !!snapshot.deliveryEvidenceCompactions[conversationId] || (ownerCounts.get(conversationId) ?? 0) >= 200;
+        const contentDigest = structuredContent(prompt, []).contentDigest;
+        const missingMachineReceipt = [...evidence.values()].some(delivery =>
+          delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
+          && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
+          && !index.hasTerminalDelivery(delivery.command.operationId));
+        const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
+        const relayDigest = relay ? structuredContent(relay[1], []).contentDigest : null;
+        // A relay reservation belongs to its child conversation, while its
+        // terminal receipt belongs to the root. Every matching source delivery
+        // must have evidence; a prior same-text relay cannot cover a lost one.
+        const missingRelayReceipt = relay && (Object.keys(snapshot.deliveryEvidenceCompactions).length > 0
+          || [...ownerCounts.values()].some(count => count >= 200) || !index.hasTerminalPrompt(conversationId, prompt)
+          || [...evidence.values()].some(delivery =>
+            (delivery.contentDigest === relayDigest || delivery.payloadKind !== "text")
+            && !index.hasTerminalDelivery(delivery.command.operationId)));
+        const missingLaunchReceipt = (receipt.delegationDepth ?? 1) > 0 && !index.hasTerminalDelivery(`spawn:${receipt.launchId}`);
+        if (incompleteHistory || missingMachineReceipt || missingLaunchReceipt || missingRelayReceipt) return "";
+      }
       origin = terminalOrigin ?? "operator";
       const initialOperator = receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt;
       if (origin !== "operator" || (transcript ? !transcript.includes(input.session_id) : !initialOperator)) return "";

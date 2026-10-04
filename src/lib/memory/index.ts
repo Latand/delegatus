@@ -359,6 +359,11 @@ export class MemoryIndex {
     }
   }
 
+  nativeOperatorOwned(conversation: string, request: string, prompt: string): boolean {
+    return this.hookDatabase(db => !!db.query("SELECT 1 FROM memory_native_turns WHERE conversation = ? AND request = ? AND digest = ?")
+      .get(conversation, request, messageTextDigest(prompt)));
+  }
+
   hasTerminalDelivery(id: string): boolean {
     return this.hookDatabase(db => {
       this.replayTerminalDeliveries(db);
@@ -486,7 +491,7 @@ export class MemoryIndex {
   }
 
   bindNativeTurn(conversation: string, request: string, occurrence: string) {
-    return this.hookDatabase(db => db.query("UPDATE OR IGNORE memory_native_turns SET occurrence = ? WHERE conversation = ? AND request = ? AND occurrence IS NULL")
+    return this.hookDatabase(db => db.query("UPDATE OR IGNORE memory_native_turns SET occurrence = ? WHERE conversation = ? AND request = ?")
       .run(occurrence, conversation, request).changes > 0);
   }
 

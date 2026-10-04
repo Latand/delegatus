@@ -349,6 +349,7 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
     : { type: "response_item", timestamp: ts, payload: { type: "message", turn_id: id, role: "user", content: [{ type: "input_text", text: wire }] } });
   // Both hooks ran before their journal rows; the machine row lands first.
   if (queued === "different") fs.appendFileSync(transcript, userLine("synthetic-machine", "2026-10-02T12:00:00.000Z") + "\n");
+  expect(offeredMemoryForTranscript(transcript)).toEqual({}); // Poll before the operator native id journals.
   const offeredLine = userLine("synthetic-typed", "2026-10-02T12:00:01.000Z"), repeatedLine = userLine("synthetic-repeat", "2026-10-02T12:00:03.000Z");
   fs.appendFileSync(transcript, offeredLine + "\n" + repeatedLine + "\n");
   memoryIndex().close(); // Reload every persisted join, as the conversation does.
@@ -364,7 +365,7 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
 });
 
 
-for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const historical of [false, true]) test(`${engine} native tmux ${mode} ${historical ? "repeated" : "first"} lost receipt abstains across reload using independent registry evidence`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const historical of [false, true]) for (const retained of [0, 100, 201]) test(`${engine} native tmux ${mode} ${historical ? "repeated" : "first"} ${retained} later deliveries lost receipt abstains across reload using independent registry evidence`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
   process.env.OPENROUTER_API_KEY = "fixture";
@@ -425,6 +426,17 @@ const send = () => deliverConversationMessage({ path: mode === "relay" ? child :
   finally { fs.writeFileSync = originalWrite; lock?.exec("ROLLBACK"); lock?.close(); }
   memoryIndex().close();
   expect(result.ok).toBe(true);
+  if (retained) {
+    const original = Object.values(registry.readOnlySnapshot().heldDeliveries).findLast(delivery => !memoryIndex().hasTerminalDelivery(delivery.command.operationId))!;
+    expect(original).toBeDefined();
+    await Bun.sleep(3);
+    for (let n = 0; n < retained; n++) {
+      const later = registry.holdDelivery(original.conversationId, `Different later input ${n}`, `synthetic-later-${n}`, "text", [], messageTextDigest(`Different later input ${n}`), { origin: { kind: "agent" } });
+      registry.recordDeliveryOutcome(later.id, "delivered");
+    }
+    expect(registry.readOnlySnapshot().heldDeliveries[original.id]).toBeUndefined();
+    expect(Boolean(registry.readOnlySnapshot().deliveryOperationOwners[original.command.operationId])).toBe(retained === 100);
+  }
   setAgentRegistryForTests(new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }));
   const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
     ...(engine === "claude" ? { source: "user" } : {}),
