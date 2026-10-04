@@ -333,7 +333,7 @@ test("a previously indexed source that becomes oversized stops returning stale c
   } finally { index.close(); }
 });
 
-test("an unobserved terminal delivery cannot suppress a later identical typed occurrence once its transcript row exists", () => {
+test("an unobserved terminal delivery retains unknown authorship until its native hook establishes ownership", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-cursor-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -346,6 +346,8 @@ test("an unobserved terminal delivery cannot suppress a later identical typed oc
     index.close(); // Pending authorship survives an unrelated journal and reload.
     expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-other", "Different typed input", transcript, "claude")).toBeNull();
     fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Repeat synthetic input" } }) + "\n");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-earlier", "Repeat synthetic input", transcript, "claude")).toBe("agent");
     expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBeNull();
   } finally {
     index.close();

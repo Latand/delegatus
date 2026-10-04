@@ -245,7 +245,7 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
 });
 
-for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) for (const queued of ["different", "identical"] as const) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} ${queued} queued input deliveries abstain while identical typed operator occurrences receive memory`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) for (const queued of ["different", "identical", "unowned"] as const) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} ${queued} queued input preserves delivery authorship`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
   process.env.OPENROUTER_API_KEY = "fixture";
@@ -295,8 +295,8 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   if (queued === "identical") memoryIndex().recordNativeTurn(receipt.conversationId, "native:synthetic-earlier", transcript, fs.statSync(transcript).size, wire);
   // Another submission queued before actuation can journal after this receipt.
   fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
-    ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: queued === "identical" ? wire : "Earlier queued input" } }
-    : { type: "response_item", payload: { type: "message", turn_id: "synthetic-earlier", role: "user", content: [{ type: "input_text", text: queued === "identical" ? wire : "Earlier queued input" }] } }) + "\n");
+    ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: queued !== "different" ? wire : "Earlier queued input" } }
+    : { type: "response_item", payload: { type: "message", turn_id: "synthetic-earlier", role: "user", content: [{ type: "input_text", text: queued !== "different" ? wire : "Earlier queued input" }] } }) + "\n");
   if (queued === "identical") fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
     ? { type: "user", uuid: "synthetic-machine", message: { role: "user", content: wire } }
     : { type: "response_item", payload: { type: "message", turn_id: "synthetic-machine", role: "user", content: [{ type: "input_text", text: wire }] } }) + "\n");
@@ -312,6 +312,16 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   expect(await offerForHook(request, input)).toBe("");
   expect(calls).toBe(0);
   expect(memoryIndex().turnOffers(receipt.conversationId)).toEqual([]);
+  if (queued === "unowned") {
+    // Optional earlier hooks can fail. Neither guessed journal ownership nor
+    // a retry after reload may admit memory to the pending machine delivery.
+    memoryIndex().close();
+    expect(await offerForHook(request, input)).toBe("");
+    expect(calls).toBe(0);
+    expect(await offerForHook(request, { ...input, prompt: "Check widget parser", prompt_id: "synthetic-distinct", turn_id: "synthetic-distinct" })).toContain("Delegatus shared memory");
+    expect(calls).toBe(1);
+    return;
+  }
   expect(await offerForHook(request, { ...input, prompt: wire, prompt_id: "synthetic-typed", turn_id: "synthetic-typed" })).toContain("Delegatus shared memory");
   expect(calls).toBe(1);
   const userLine = (id: string, ts: string) => JSON.stringify(engine === "claude"

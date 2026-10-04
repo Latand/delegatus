@@ -425,10 +425,11 @@ export class MemoryIndex {
             // Keep the receipt pending until native ownership disambiguates it.
             if (!joined && journaled && nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt), new Set([...seen, journaled.key]))) return "unknown";
             if (journaled && journaled.key !== cursor?.key) {
-              // Retire only the matching delivery occurrence. Unrelated queued
-              // records can precede actuation and carry no receipt evidence.
-              db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(journaled.key, delivery.id);
-              continue;
+              // A digest-only join cannot prove that the pending receipt owns
+              // an earlier row, especially when the current hook has not yet
+              // journaled. Preserve the receipt and abstain until ownership is
+              // established, including when an earlier optional hook failed.
+              return "unknown";
             }
           }
           db.query("UPDATE memory_terminal_deliveries SET request = ? WHERE id = ? AND request IS NULL").run(request, delivery.id);
