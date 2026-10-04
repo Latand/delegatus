@@ -60,8 +60,9 @@ test("request publication failure restores the previous pointer before Retry cap
   const old = JSON.stringify({ sha: "b".repeat(40) }) + "\n"; writeFileSync(r.releasePointer, old);
   c.begin(r, "a".repeat(40), "operator");
   writeFileSync(r.releasePointer, JSON.stringify({ sha: "a".repeat(40) }));
-  // Fail the real filesystem write independently of temporary-name policy.
-  r.requestFile = join(dir, "request-" + "x".repeat(256) + ".json");
+  // A valid request basename leaves insufficient filesystem name space for
+  // the atomic publication file. The failure occurs at the actual write.
+  r.requestFile = join(dir, "request-" + "x".repeat(210) + ".json");
   expect(() => c.send(r)).toThrow();
   expect(c.current?.state).toBe("failed");
   expect(readFileSync(r.releasePointer, "utf8")).toBe(old);
