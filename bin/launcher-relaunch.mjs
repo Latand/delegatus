@@ -287,7 +287,9 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       const completed = receipt?.requestId === apply.requestId && receipt.target === apply.target && receipt.state === "done"
         && receipt.launcherPid === apply.launcherPid && receipt.launcherIdentity === apply.launcherIdentity
         && receipt.revision === apply.target && release.sha === apply.target;
-      directTrial = true; pendingRecovery = !completed;
+      const externalReady = apply.externalRestart && apply.state === "ready" && release.sha === apply.target
+        && entry === join(release.dir, "bin", "cli.mjs");
+      directTrial = true; pendingRecovery = !completed && !externalReady;
     }
   }
   return {

@@ -455,6 +455,7 @@ their original owner; recovery does not replace them with a new cohort.
 | Ready before pointer | I ready; pointer A or absent | verified A; original I fails with rollback receipt |
 | Pointer before ready | I building; pointer B | restore and verify launcher/web/host A; original I fails |
 | Ready after pointer | I ready; pointer B | restore and verify A before settlement |
+| External ready prerequisite at target entry | I ready external; pointer B; original owner retained | derive original trial and verify B; import/health refusal restores verified A |
 | Switching before publication | I switching; hold present; pointer B; request and trial absent | reconstruct recovery from I; restore and verify A; original I fails |
 | Request before trial | I switching + H + Q; pointer B | matching Q belongs to I; restore and verify A |
 | Preflight trial before consume | I switching + H + Q + T preflight | original trial owns rollback; verify A |
