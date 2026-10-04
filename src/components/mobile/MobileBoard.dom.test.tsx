@@ -100,6 +100,7 @@ const OVERRIDES: Record<string, unknown> = {
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     requestLog.push(`${init?.method ?? "GET"} ${url}`);
     if (url === "/api/attention/dismissals" && init?.method === "POST") {

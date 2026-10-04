@@ -35,6 +35,7 @@ import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
+import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
 import { TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
@@ -3047,6 +3048,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Create a durable board task.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
     "Write `text` in the operator's interface language (operatorLocale in get_orchestrator); `details` stays in whatever language serves the agent. A `text` in another language is stored with a warning.",
@@ -3057,6 +3060,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has. `text` and `refine.text` are written in the operator's interface language; another language is stored with a warning.",
     "To change one line of `details`, send `replaceLine`, `removeLine` or `appendLine` instead of the whole field; the answer carries detailsLength and the revision, never the field.",
@@ -3086,14 +3091,14 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A fixable defect is fail, however partial your confidence in the call is; needs_decision is for what only the operator can unblock.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
     "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
-    "Provenance is collected by the server, never taken from you: the worktree HEAD, the branch's pull request and the stage's declared outputs are read at the moment of the call.",
+    "Provenance is collected by the server, never taken from you: the answer records pending provenance, then bounded asynchronous checks observe the worktree HEAD, branch pull request and declared outputs. Read get_pipeline with stageId for the settled observation.",
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
-  search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
+  search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. A unit ending in ~ matched loosely, by a compound term's parts near each other or by an identifier prefix: its fragment decides whether the hit is on topic. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
   search_memory: "Search the local read-only index of Claude and Codex memories, global instructions and single-fact skills. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
@@ -3115,6 +3120,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
+    'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
     "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff.",
     `Targets are typed and discriminated by \`kind\`, one shape per kind: ${FOCUS_TARGET_SHAPES.map((shape) => `${shape.kind} — ${shape.example}`).join("; ")}.`,
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
@@ -3372,6 +3378,21 @@ function boundedNumericInput(toolName: McpToolName, fieldPath: string): z.ZodTyp
   );
 }
 
+const taskHoldInputSchema = z.object({
+  kind: z.string().describe("Why work is waiting: operator, task, PR, issue, worker, resource, limit, postponed, external, or unstated. Unknown kinds normalize to unstated."),
+  ref: z.union([z.string(), z.number().int().positive()]).optional().describe("Task id, PR or issue number, or external URL when the kind uses a reference."),
+  note: z.string().optional().describe("One short sentence saying what ends the wait; whitespace is normalized and text clamps to 200 characters. Omitted when no reason is known."),
+  until: z.string().optional().describe("ISO date for limit or postponed waits."),
+}).describe("Structured reason a task or checklist step is waiting. Provenance and since are assigned by the server.");
+
+const taskStepsInputSchema = z.array(z.object({
+  id: z.string().min(1).max(40),
+  text: z.string().trim().min(1).max(120),
+  state: z.enum(["done", "open", "dropped"]),
+  ref: z.union([z.string(), z.number()]).optional(),
+  hold: taskHoldInputSchema.nullable().optional().describe("Why this open step is not moving; null clears its reason."),
+})).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
+
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3430,6 +3451,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().min(1),
     text: z.string().min(1).describe("The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
+    hold: taskHoldInputSchema.optional(),
+    steps: taskStepsInputSchema.optional(),
     details: z.string().optional()
       .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
@@ -3461,6 +3484,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedProject: z.string().min(1).optional().describe("Required for pos or placement updates: copy the current task project exactly."),
     expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
     text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
+    hold: taskHoldInputSchema.nullable().optional(),
+    steps: taskStepsInputSchema.nullable().optional(),
     details: z.string().nullable().optional()
       .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending. To change one line, send replaceLine, removeLine or appendLine instead."),
     replaceLine: z.object({
@@ -3527,7 +3552,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
-    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator resumes a needs_review pipeline, whose spent review budget left an unreviewed head, by adding addRounds review rounds; the review stage then runs on the current head. Requires addRounds and expectedRevision from get_pipeline. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator adds an explicit bounded addRounds grant to the same lane. A needs_review lane reviews its unreviewed head; a needs_decision lane parked by a failed terminal budget re-check sends its retained findings to fix first, then runs a fresh reviewer on the new head for the granted rounds. Failed heads are never accepted by this action. Requires addRounds and expectedRevision from get_pipeline. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
     stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
     stage: pipelineStageSchema.optional().describe("add-stage: the complete stage definition. Keeps next and onFail as supplied unless after explicitly selects a pass edge to insert into."),
     after: z.string().min(1).optional().describe("add-stage only: splice into this stage's pass edge. That stage points to the new stage, which inherits its former next; every other edge stays unchanged. Independent of index."),
@@ -3549,7 +3574,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     "prompt": z.string().optional().describe("override-stage: replacement prompt."),
     launchId: z.string().min(1).optional().describe("retry-stage only, optional, and only for an attempt whose launch failed: the launchId get_pipeline with stageId answers for it, sent with stageId. The engine then retries only a failed or conflicted launch receipt, so omit it for an agent that started and then failed or parked. A launch that is no longer the current attempt's is refused."),
     answer: z.string().min(1).max(12_000).optional(),
-    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: review rounds to add to the spent fail edge. Each fail but the last loops to the fix stage; the last hands its findings to one fix, then parks in needs_review again if that fix writes a new head."),
+    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: explicit additional review rounds, 1..MAX_FAIL_EDGE_ROUNDS. For a failed terminal budget re-check, each granted round fixes retained findings then runs a fresh review; the last failed review parks in needs_decision and requires another grant. A needs_review lane reviews its current head first; stop-after-fix hands the last failed review to one fix and parks a new unreviewed head in needs_review."),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow, or 3 when none is recorded. More than 3 requires an explicit value."),
     implementerStageId: z.string().min(1).optional().describe("preview/convert-legacy-review only: the run stage whose role the fix stage copies, when more than one run passes into the review."),
     expectedRevision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
@@ -3558,7 +3583,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedOwner: z.string().optional(),
     expectedEpoch: z.number().int().positive().optional(),
     reason: z.string().optional(),
-    acceptedSha: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+    acceptedSha: z.string().regex(/^[0-9a-f]{40}$/i).optional().describe("publish: exact SHA to publish. A parked passed stage in committing can accept a moved head only when its worktree is clean, HEAD equals this SHA, its previously passed commit is an ancestor and all added work is verified clean integration of origin's configured main branch. Additional lane work or merge resolutions require a fresh review. Preserves pass and reviewed provenance, updates lastPassedCommit and advances automatically after publication. Omit to retry its existing accepted commit, including a settled failed publication; no takeover is needed. Deferred skip-stage, review retry-stage and takeover are refused when the serving controller cannot handle them."),
     link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
     kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
@@ -3850,6 +3875,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   request_attention: z.object({
     clientRequestId: clientRequestIdSchema,
+    waitFor: z.enum(["arrived", "accepted"]).optional().describe("Default arrived waits for durable browser arrival. accepted returns after the durable handoff is recorded, with arrival pending."),
     target: focusTargetSchema,
     reason: z.string().min(1).describe("One operator-safe sentence saying why it is worth looking at. Never the target's contents."),
     intent: z.enum(["show", "open"]).optional().describe("show frames and highlights; open also opens the target's own surface. Default show."),
@@ -4202,5 +4228,15 @@ export async function startViewerMcpServer(): Promise<void> {
   const service = await createProductionViewerMcpService(hostHealthProbe);
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();
+  // The SDK does not close its transport on EOF. A dead client (including a
+  // killed launcher) must not leave domain timers or in-flight reads resident.
+  // This entry point owns a dedicated stdio process, never the Viewer server.
+  process.stdin.once("end", () => {
+    setTimeout(() => process.exit(0), 1_000);
+    void server.close().then(
+      () => process.exit(0),
+      (error: unknown) => { console.error("MCP shutdown failed", error); process.exit(1); },
+    );
+  });
   await server.connect(transport);
 }

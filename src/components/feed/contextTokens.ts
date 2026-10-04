@@ -150,6 +150,11 @@ export type ContextLedger = {
   forget(id: string): string[];
   /** `partial` when the window starts past the beginning of the transcript. */
   reset(partial: boolean): void;
+  /** Names everything a later line can still read from before this one, or
+      null while a round waits on a later response: its calls, their recorded
+      sizes, or the nested rows of a code-mode exec. Two ledgers that report
+      the same signature settle every later round identically. */
+  signature(): string | null;
 };
 
 const SIZE_LIMIT = 256;
@@ -260,6 +265,11 @@ export function createContextLedger(
       represented.delete(id);
       sizes.delete(id);
       return nested;
+    },
+    signature() {
+      if (pending.length || sizes.size || represented.size || round?.members.length) return null;
+      const held = round ? `${round.before}/${round.output}/${round.contaminated ? 1 : 0}/${round.partial ? 1 : 0}` : "-";
+      return `${fresh ? 1 : 0}|${currentId ?? ""}|${lastTotal ?? ""}|${held}|${pendingContaminated ? 1 : 0}${pendingHosted ? 1 : 0}`;
     },
     reset(partial) {
       sizes.clear();

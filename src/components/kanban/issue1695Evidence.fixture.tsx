@@ -1,3 +1,4 @@
+import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
 import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -21,6 +22,7 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { readTaskHold, storedTaskHold } from "@/lib/tasks/hold";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
@@ -85,7 +87,10 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
+/* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
+   titles and descriptions over the four columns, a lane with a running stage on every second one. */
+const DRAG_BOARD = SCENARIO === "drag-board";
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -96,8 +101,30 @@ const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
 const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
+const FEED_CONTINUITY = SCENARIO === "feed-continuity";
+const FEED_FAILURES = SCENARIO === "feed-failures";
+/* `&reload=1`: a window opened fresh on a long conversation. The host still
+   keeps the replies of the turns it ran, and this window watched none arrive. */
+const FEED_RELOAD = FEED_CONTINUITY && new URLSearchParams(location.search).get("reload") === "1";
+const reloadReply = (index: number) => L(`Earlier reply ${index + 1}, kept by the host.`, `Раніша відповідь ${index + 1}, яку зберіг хост.`);
+let feedContinuityStep = 0;
+const continuousAnswer = L("The answer stays here while the transcript catches up.", "Відповідь залишається тут, поки запис розмови наздоганяє її.");
+if (FEED_FAILURES) {
+  const parse = JSON.parse;
+  JSON.parse = function (text, reviver) {
+    const value = parse(text, reviver);
+    if (value?.fixtureToolArgs) Object.defineProperty(value, "cmd", {
+      enumerable: false,
+      get() { throw new Error("Fixture record processing failure"); },
+    });
+    return value;
+  };
+}
+const FEED_RECOVERY = SCENARIO === "feed-recovery";
+let feedRecoveryEcho = false;
+const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE;
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -203,6 +230,12 @@ const REPORT_TELEGRAM: { chat: string; name: string; changedAt: string; changedB
 const REPORT_DESTINATION = TELEGRAM_BOT === "chosen"
   ? { chat: "team-reports", name: "Atlas", source: "chosen" }
   : TELEGRAM_BOT === "refused" ? { chat: "design-lounge", name: "Atlas", source: "chosen" } : null;
+/* The «Needs you» filter (docs/design/needs-me-filter.md): one board holding a
+   conversation that asks, a lane parked on a decision, a card whose only
+   reason was dismissed, and cards that wait on no one. `&nothing=1` answers the
+   same cards with nothing waiting, where the funnel is not offered. */
+const NEEDS_FILTER = SCENARIO === "needs-filter";
+const NEEDS_NOTHING = new URLSearchParams(location.search).get("nothing") === "1";
 const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet" || ORCH_FIRST_OVERVIEW;
 const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
@@ -258,6 +291,11 @@ const GHOSTS = SCENARIO === "ghost-tasks";
    Beside them, a card with launches of its own that did not start: three rows
    from before launches reserved a conversation, and one whose receipt failed. */
 const UNSTARTED = SCENARIO === "unstarted-regression";
+/* The wall of «conversation outside this board» rows (#2459): a finished task
+   whose lanes left nine past attempts and whose orchestrator and helper agents
+   linked two dozen more conversations by transcript path, none loaded here; and
+   a finished task holding only such conversations. */
+const WALL = SCENARIO === "elsewhere-wall";
 /* Board order: working cards first, then recently worked, then idle. */
 const BOARD_ORDER = SCENARIO === "board-order";
 /* Task priority: an Inbox of high, normal and low tasks read in its order,
@@ -337,6 +375,7 @@ const searchRev = add(conversation("search-rev", "Review the warm-up gate", { mt
 const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s after the swap", { mtime: now - 90 * MIN }));
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
+if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
 let snapshotReads = 0;
 function structuredSnapshot() {
@@ -345,7 +384,19 @@ function structuredSnapshot() {
     schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
     sessions: [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      turn: FEED_RELOAD ? "idle" : FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
+      ...(FEED_RELOAD ? { liveTurn: { turnId: "reload-turn", text: "", items: Array.from({ length: 12 }, (_, index) => ({
+        itemId: `reload-reply-${index}`, text: reloadReply(index), phase: "awaiting-echo" as const,
+        startedAt: iso(7_200 - index * 60), completedAt: iso(7_200 - index * 60),
+      })) } } : FEED_CONTINUITY ? { liveTurn: feedContinuityStep === 2 ? null : {
+        turnId: "continuity-turn", text: continuousAnswer, items: [{ itemId: feedContinuityStep ? "continuity-answer" : null,
+          text: continuousAnswer, phase: feedContinuityStep ? "awaiting-echo" : "streaming",
+          startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null },
+          ...(feedContinuityStep ? Array.from({ length: 9 }, (_, index) => ({
+            itemId: `continuity-tool-${index}`, text: "", phase: "awaiting-echo" as const, startedAt: iso(20 - index), completedAt: iso(20 - index),
+            tool: { engine: "claude" as const, name: "Bash", args: { command: "pwd" }, status: "ok" as const },
+          })) : [])],
+      } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
     }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
@@ -1201,6 +1252,23 @@ const unstartedPipelines: Pipeline[] = UNSTARTED ? [
   ownLane("s5", L("Retire flows, slice 5: freeze flows", "Прибрати флоу, зріз 5: заморозити флоу"), "t-lanes-flows", "closed", flowsRows, 2),
 ] : [];
 
+const wallRows = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({
+  path: `/elsewhere/${prefix}-${index + 1}.jsonl`, conversationId: `conversation_${prefix}-${index + 1}`, panePid: null, state: "linked", error: null, at: iso((3 * 60 + (count - index) * 12) * MIN),
+}));
+const wallPipelines: Pipeline[] = WALL ? (() => {
+  const run = (stageId: string, count: number, offset: number, via: string | null) => ({
+    stageId,
+    attempts: Array.from({ length: count }, (_, index) => attempt(index + 1, "passed", null, {
+      startedAt: iso((offset + index * 30) * MIN), completedAt: iso((offset + index * 30 - 20) * MIN), verdict: { status: "pass", findings: [] },
+      ...(via ? { activatedBy: { stageId: via, attempt: index + 1, edge: "pass" } } : {}),
+    })),
+  });
+  return [pipeline("p-wall", L("The privacy gate admits the sanctioned relay address", "Шлюз приватності пропускає дозволену адресу ретранслятора"), "t-wall", "completed",
+    [stage("build", "builder", "verify"), stage("verify", "verifier", "fix"), stage("fix", "builder", null)],
+    [run("build", 3, 600, null), run("verify", 3, 580, "build"), run("fix", 3, 560, "verify")],
+    null, { closedAt: iso(150 * MIN) })];
+})() : [];
+
 const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   const done = (at: number) => ({ startedAt: iso(at * MIN), completedAt: iso((at - 6) * MIN) });
   const passVia = (stageId: string) => ({ activatedBy: { stageId, attempt: 1, edge: "pass" } });
@@ -1242,6 +1310,7 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
 })() : [];
 
 const pipelines: Pipeline[] = [
+  ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
   ...flatPipelines,
@@ -1528,6 +1597,14 @@ const tasks: BoardTask[] = [
       assignments: [{ path: "/elsewhere/upload-retries.jsonl", conversationId: "conversation_upload-retries", panePid: null, state: "linked", error: null, at: iso(26 * 60 * MIN) }],
     } as Partial<BoardTask>),
   ] : []),
+  ...(WALL ? [
+    task("t-wall", "done", L("The privacy gate admits the sanctioned relay address", "Шлюз приватності пропускає дозволену адресу ретранслятора"), L("A narrow allowlist of public addresses, masked before the known-value match.", "Вузький список дозволених публічних адрес, що маскуються перед перевіркою відомих значень."), 150 * MIN, [], {
+      assignments: wallRows("wall", 24) as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+    task("t-wall-only", "done", L("Retire the old relay catalog entries", "Прибрати старі записи каталогу ретрансляторів"), "", 200 * MIN, [], {
+      assignments: wallRows("only", 12) as unknown as BoardTask["assignments"],
+    } as Partial<BoardTask>),
+  ] : []),
   ...(UNSTARTED ? [
     task("t-lanes-sqlite", "inbox", L("Viewer state in SQLite: the remaining slices and dropping legacy JSON", "Стан Viewer у SQLite: решта зрізів і видалення legacy JSON"), L("Tasks, the agent registry, the board and accounts moved. Left: the remaining collections, one slice per lane.", "Переїхали задачі, реєстр агентів, дошка й акаунти. Лишилось: решта колекцій, по зрізу на лейн."), 2 * 24 * 60 * MIN, [], {
       assignments: sqliteRows as unknown as BoardTask["assignments"],
@@ -1563,6 +1640,39 @@ const tasks: BoardTask[] = [
   ] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+
+// Structured task motion, over the same real Viewer and existing fixture driver.
+if (SCENARIO === "task-motion") {
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("motion-inbox", "inbox", L("Plan the next audit", "Запланувати наступний аудит"), "", 30 * MIN),
+    task("motion-working", "assigned", L("Finish the running work", "Завершити поточну роботу"), "", 5 * MIN, [exportImpl]),
+    task("motion-stopped", "assigned", L("Finish the remaining work", "Завершити решту роботи"), "", 10 * MIN, [exportExplore]),
+    task("motion-worker", "blocked", L("Wait for a free worker", "Дочекатися вільного агента"), "", 60 * MIN, [], { hold: { kind: "worker", note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(60 * MIN), by: "agent" } }),
+    task("motion-pr", "blocked", L("Wait for the release PR", "Дочекатися PR релізу"), "", 45 * MIN, [], { hold: { kind: "pr", ref: "2190", note: L("After merge", "Після злиття"), since: iso(45 * MIN), by: "agent" } }),
+    task("motion-issue", "blocked", L("Wait for the issue", "Дочекатися issue"), "", 40 * MIN, [], { hold: { kind: "issue", ref: "2044", note: L("After closure", "Після закриття"), since: iso(40 * MIN), by: "agent" } }),
+    task("motion-taskref", "blocked", L("Wait for the linked task", "Дочекатися повʼязаної задачі"), "", 35 * MIN, [], { hold: { kind: "task", ref: "motion-bare", note: L("After the audit review", "Після перевірки аудиту"), since: iso(35 * MIN), by: "agent" } }),
+    task("motion-checklist", "blocked", L("Complete the audit causes", "Усунути причини аудиту"), "", 70 * MIN, [], { steps: [
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: L(`Fixed cause ${index + 1}`, `Усунена причина ${index + 1}`), state: "done" as const })),
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, ...(index === 0 ? { ref: "p-motion-checklist" } : {}), hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
+    ] }),
+    task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { steps: [{ id: "choose-release", text: L("Choose release", "Оберіть реліз"), state: "open", ref: "p-motion-operator", hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }] }),
+    task("motion-long", "blocked", L("Migrate the legacy billing integration safely", "Безпечно перенести інтеграцію старих платежів"), "", 25 * MIN, [], { hold: { kind: "external", note: L("Waiting for the external audit team to finish its review of the migration plan and confirm that every legacy billing record has been reconciled before the cutover can proceed without risking customer invoices or payment history", "Очікуємо, поки зовнішня аудиторська команда завершить перевірку плану міграції та підтвердить звірку всіх старих платіжних записів, перш ніж продовжити перенесення без ризику для рахунків клієнтів та історії платежів").slice(0, 200), since: iso(25 * MIN), by: "agent" } }),
+    task("motion-bare", "blocked", L("Review older work", "Переглянути давнішу роботу"), "", 120 * MIN),
+    task("motion-due", "blocked", L("Run the postponed check", "Виконати відкладену перевірку"), "", 120 * MIN, [], { hold: { kind: "postponed", note: L("After green checks", "Після успішних перевірок"), since: iso(120 * MIN), until: iso(60 * MIN), by: "operator" } }),
+    task("motion-done", "done", L("Completed review", "Завершене ревʼю"), "", 10 * MIN, [], { doneAt: iso(10 * MIN) }),
+    task("motion-hidden", "blocked", L("Hidden older work", "Прихована давніша робота"), "", 120 * MIN, [], { groupHidden: { at: iso(60 * MIN), by: "operator", admitted: [] } }),
+  );
+  pipelines.push(pipeline("p-motion-checklist", L("Run one checklist cause", "Виконати одну причину аудиту"), "motion-checklist", "running",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "running", null)] }],
+    { stageId: "implement", state: "running", input: null, activatedBy: null }));
+  pipelines.push(pipeline("p-motion-operator", L("Wait for release choice", "Дочекатися вибору релізу"), "motion-operator", "paused",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "passed", null)] }],
+    { stageId: "implement", state: "committing", input: null, activatedBy: null },
+    { pausedAt: iso(10 * MIN), pausedState: "running" }));
+}
 
 /* `&empty=<status>` empties one column: its tasks move to Done, so the
    column's strip can be read beside the others (an empty column folds). */
@@ -1713,6 +1823,27 @@ if (BALANCE) {
     tasks.push(task(`t-bal-long-${index}`, "inbox", `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`, "", (index + 2) * 60 * MIN));
   }
 }
+if (DRAG_BOARD) {
+  const columns: TaskStatus[] = ["inbox", "assigned", "assigned", "blocked", "done"];
+  for (let index = 0; index < 48; index += 1) {
+    const id = `t-drag-${index}`;
+    const status = columns[index % columns.length]!;
+    const title = `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`;
+    const members = status === "assigned" || index % 3 === 0
+      ? [add(conversation(`drag-${index}-impl`, `Implementer: ${title.slice(0, 60)}`, index % 2 === 0 ? working({ model: "opus" }) : {})), add(conversation(`drag-${index}-rev`, `Reviewer: ${title.slice(0, 60)}`, { engine: "codex", model: "gpt-5.6" }))]
+      : [];
+    tasks.push(task(id, status, title, "Rows from the late feed are written after the ledger closes, so the export sees a shorter table than the bank file. Compare both before the cut-off and name the first row that differs.", (index + 1) * 7 * MIN, members));
+    if (index % 2 === 0 && members[0]) {
+      pipelines.push(pipeline(`p-drag-${index}`, title, id, "running",
+        [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
+        [
+          { stageId: "build", attempts: [attempt(1, "passed", members[0], { startedAt: iso(80 * MIN) })] },
+          { stageId: "review", attempts: [attempt(1, "running", members[1] ?? null, { startedAt: iso(20 * MIN) })] },
+        ],
+        { stageId: "review", state: "running", input: null, activatedBy: null }));
+    }
+  }
+}
 if (OVERVIEW_SCOPE) {
   tasks.push(
     task("t-ledger", "assigned", "Reconcile the ledger export against the bank file", "Two of the quarter's statements disagree by one day.", 3 * MIN, [ledgerBuild!], { project: LEDGER }),
@@ -1765,6 +1896,22 @@ function transcriptOf(pathname: string): string {
   if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
+  if (FEED_RELOAD && file === searchVer2) return `${[
+    asked(600, L("Please check the result.", "Перевір результат, будь ласка.")),
+    said(590, L("The result holds: every check passed.", "Результат тримається: усі перевірки пройшли.")),
+    asked(300, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка.")),
+    said(290, L("The next step is done.", "Наступний крок виконано.")),
+  ].join("\n")}\n`;
+  if (FEED_CONTINUITY && file === searchVer2) return `${[
+    asked(120, L("Please check the result.", "Перевір результат, будь ласка.")),
+    ...(feedContinuityStep >= 1 ? [asked(30, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка."))] : []),
+    ...(feedContinuityStep >= 3 ? [line(60, { type: "assistant", uuid: "continuity-answer", message: { content: [{ type: "text", text: continuousAnswer }] } })] : []),
+  ].join("\n")}\n`;
+  if (FEED_FAILURES && file === searchVer2) return `${[
+    line(60, { type: "event_msg", payload: { type: "task_complete", error: { message: "fixture provider failure", codex_error_info: "unauthorized" } } }),
+    line(30, { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "fixture-failed-tool", arguments: JSON.stringify({ fixtureToolArgs: true, cmd: "pwd" }) } }),
+  ].join("\n")}\n`;
+  if (FEED_RECOVERY && file === searchVer2) return `${[said(120, L("Ready for the next request.", "Готовий до наступного запиту.")), ...(feedRecoveryEcho ? [asked(0, delayedLaunchText)] : [])].join("\n")}\n`;
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
@@ -1861,7 +2008,37 @@ let board = {
   },
 } as unknown as BoardProjectStateV1;
 
+if (FEED_RECOVERY) searchVer2.generation = 1;
+
 const evidence = {
+  advanceFeedContinuity() { feedContinuityStep += 1; return getRuntimeBus().refresh(); },
+  /* Replies the runtime store holds for the reloaded conversation, read after a fresh snapshot. */
+  async feedReloadSnapshotReplies() {
+    await getRuntimeBus().refresh();
+    return getRuntimeBus().getState().store.sessions[searchVer2.conversationId!]?.liveTurn?.items?.length ?? 0;
+  },
+  failFeedDelivery() {
+    const id = "fixture-failed-delivery";
+    enqueueOutbox(searchVer2.conversationId!, { id, text: L("Send this follow-up.", "Надішли це уточнення."), images: 0, at: Date.now() });
+    updateOutbox(searchVer2.conversationId!, id, { state: "failed", error: "Fixture delivery refused", settledAt: Date.now() });
+  },
+  seedDelayedLaunch() {
+    const card = searchVer2.conversationId!;
+    const at = Date.now();
+    const seed = { id: "delayed-launch", text: delayedLaunchText, images: 0, at,
+      owner: { conversationId: card, generation: 1 } };
+    seedLaunchOutbox(card, seed);
+    updateOutbox(card, seed.id, { state: "delivered", settledAt: at });
+    for (let i = 0; i < OUTBOX_LIMIT; i++) {
+      const id = `settled-filler-${i}`;
+      enqueueOutbox(card, { id, text: `Settled filler ${i}`, images: 0, at: at + i + 1 });
+      updateOutbox(card, id, { state: "delivered", settledAt: at, responseStartedAt: at });
+    }
+    seedLaunchOutbox(card, seed);
+    return readOutbox(card).find(entry => entry.id === seed.id)?.state;
+  },
+  publishDelayedLaunch() { feedRecoveryEcho = true; },
+  delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
@@ -2187,7 +2364,7 @@ function fixtureWorkLinks(): FilesWorkLinks {
     completeSince: iso(24 * 60 * MIN),
     pr: (number) => prs.find((entry) => entry.number === number),
     byHead: (head) => prs.filter((entry) => entry.headRefName === head),
-    isIssue: () => false,
+    isIssue: (number) => number === 2044,
   };
   const cache: ForgeCacheView = { repository: (name) => (name === repository ? view : null) };
   const delivered = (lane: Pipeline) => ({
@@ -2203,12 +2380,48 @@ function fixtureWorkLinks(): FilesWorkLinks {
   }
   for (const entry of tasks) {
     const own = entry.id === "t-longtitle" ? { workLinks: [{ repository, number: 2210, kind: "pr" as const, addedAt: iso(MIN), addedBy: "operator" as const }] } : {};
-    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache);
-    if (resolved.links.length) out.tasks[entry.id] = resolved;
+    const numberedHold = (entry.hold?.kind === "pr" || entry.hold?.kind === "issue") && /^\d+$/.test(entry.hold.ref ?? "");
+    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache, numberedHold ? repository : null);
+    if (resolved.links.length || (numberedHold && resolved.repository)) out.tasks[entry.id] = resolved;
   }
   return out;
 }
-const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
+const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
+
+/* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
+   that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`
+   a lane whose decision the operator already dismissed (it no longer waits),
+   and `t-nf-run` and `t-nf-idle` wait on no one. `t-nf-wall` is finished and
+   holds only conversations from outside this board, folded into one line
+   (#2459), in a column that starts narrow. */
+const needsFiles: FileEntry[] = [];
+const needsAdd = (file: FileEntry) => { needsFiles.push(file); return file; };
+const nfAsk = needsAdd(conversation("nf-ask", "Which export presets should ship first?", NEEDS_NOTHING ? { mtime: now - 20 * MIN } : {
+  mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
+}));
+const nfLaneBuild = needsAdd(conversation("nf-lane-build", "Reconciling the ledger export", working({ plan: { current: "Reconciling the ledger export" } })));
+const nfClearedBuild = needsAdd(conversation("nf-cleared-build", "Rotating the search alias", { mtime: now - 40 * MIN }));
+const nfRun = needsAdd(conversation("nf-run", "Writing the migration notes", working({ plan: { current: "Writing the migration notes" } })));
+const nfIdle = needsAdd(conversation("nf-idle", "Listing every export toggle", { mtime: now - 2 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
+const needsLane = (id: string, title: string, taskId: string, member: FileEntry, over: Record<string, unknown> = {}) => pipeline(id, title, taskId, "needs_decision",
+  [stage("implement", "builder", "review"), stage("review", "reviewer", null)],
+  [{ stageId: "implement", attempts: [attempt(1, "failed", member, { startedAt: iso(50 * MIN), completedAt: iso(30 * MIN), verdict: { status: "fail", findings: ["The export drops the last row."] } })] }],
+  { stageId: "implement", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(120 * MIN), ...over });
+const needsPipelines: Pipeline[] = NEEDS_NOTHING ? [] : [
+  needsLane("p-nf-lane", "Reconcile the ledger export", "t-nf-lane", nfLaneBuild),
+  needsLane("p-nf-cleared", "Rotate the search alias", "t-nf-cleared", nfClearedBuild, { dismissedAt: iso(5 * MIN), dismissedBy: { kind: "operator", surface: "desktop" } }),
+];
+const needsTasks: BoardTask[] = [
+  task("t-nf-ask", "assigned", L("Choose the export presets", "Обрати набір пресетів експорту"), L("Three presets and one advanced drawer.", "Три пресети і одна розширена шухляда."), 9 * MIN, [nfAsk]),
+  task("t-nf-lane", "assigned", L("Reconcile the ledger export", "Звірити експорт книги"), L("The export drops its last row.", "Експорт губить останній рядок."), 30 * MIN, [nfLaneBuild]),
+  task("t-nf-cleared", "assigned", L("Rotate the search alias", "Перемкнути псевдонім пошуку"), L("Waits for the warm-up query to return.", "Чекає, поки повернеться прогрівальний запит."), 40 * MIN, [nfClearedBuild]),
+  task("t-nf-run", "assigned", L("Write the migration notes", "Написати нотатки про міграцію"), L("A draft for the release page.", "Чернетка для сторінки релізу."), 5 * MIN, [nfRun]),
+  task("t-nf-idle", "assigned", L("List every export toggle", "Перелічити всі перемикачі експорту"), L("One row per toggle, with its default.", "Один рядок на перемикач, зі значенням за замовчуванням."), 2 * 60 * MIN, [nfIdle]),
+  task("t-nf-wall", "done", L("Retire the old export presets", "Прибрати старі пресети експорту"), "", 200 * MIN, [], {
+    assignments: wallRows("nf", 12) as unknown as BoardTask["assignments"],
+  } as Partial<BoardTask>),
+];
 
 /* The launch the page runs on a clock (`?scenario=launch-cls`). POST /api/spawn answers the receipt after the
    latency a real launch has; /api/files then shows the `spawn:` projection, and from the adoption on the
@@ -2386,6 +2599,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      : NEEDS_FILTER
+      ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
@@ -2531,7 +2746,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body.expectedRevision !== undefined && body.expectedRevision !== current.revision) return json({ error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH", field: "expectedRevision" }, 409);
     /* The route's rules for the fields the board writes (#1695 K4a). */
     const next = { ...current } as BoardTask & Record<string, unknown>;
-    if (body.status) next.status = body.status as TaskStatus;
+    if (body.status) { next.status = body.status as TaskStatus; if (next.status !== "blocked") delete next.hold; }
+    if (Object.hasOwn(body, "hold")) {
+      next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
+      if (next.hold) next.status = "blocked";
+    }
+    if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];
     if (typeof body.text === "string") {
       next.text = body.text;
@@ -2770,7 +2990,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if (FIRST_MESSAGE && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }

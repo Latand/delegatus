@@ -1483,7 +1483,7 @@ export function buildSchemeLayout(
     /* Lift the top edge to enclose the hovering compact header; bottom stays put,
        so the y shrinks up and h grows by the same amount (issue #136). */
     const framed = { x: rect.x, y: rect.y - GROUP_STRIP_HEADROOM, w: rect.w, h: rect.h + GROUP_STRIP_HEADROOM };
-    groupHalos.push({ ...spec, ...framed, label: groupLabel(spec) });
+    groupHalos.push({ ...spec, members, ...framed, label: groupLabel(spec) });
   }
 
   return {

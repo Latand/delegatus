@@ -155,9 +155,9 @@ test("a journal that answers queued and refuses the fence yields one terminal an
      anything, so the operation the journal still shows open cannot arrive late
      and make this answer a lie. */
   expect(sendReceiptFor(registry.readOnlySnapshot(), operationId)?.state).toBe("failed");
-  /* The journal was read once — by the settlement — and never re-asked for an
-     answer that could contradict the one already written. */
-  expect(reads).toEqual([operationId]);
+  /* Settlement rechecks after the refused transition to catch a racing
+     delivery, then the HTTP path keeps the terminal answer already fenced. */
+  expect(reads).toEqual([operationId, operationId]);
 });
 
 test("an unreadable settlement is not answered as an open send", async () => {

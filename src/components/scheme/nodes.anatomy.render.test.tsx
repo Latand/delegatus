@@ -56,7 +56,7 @@ function node(entry: FileEntry): SchemeNode {
 }
 
 const lite = (entry: FileEntry) =>
-  renderToStaticMarkup(<LiteNodeShell node={node(entry)} ringed={false} dimmed={false} flow={null} />);
+  renderToStaticMarkup(<LiteNodeShell node={node(entry)} ringed={false} flow={null} />);
 
 test("lite card: the three rows hold their order on quiet and mixed cards", () => {
   for (const html of [lite(file()), lite(file(MIXED_OVERRIDES))]) {
@@ -94,7 +94,7 @@ test("collapsed stack row: status leads the identity line; a live switch shows o
     w: 260,
     h: 120,
   };
-  const html = renderToStaticMarkup(<MiniStackShell stack={stack} dimmed={false} onSelect={() => {}} />);
+  const html = renderToStaticMarkup(<MiniStackShell stack={stack} onSelect={() => {}} />);
   const identity = html.indexOf('data-card-row="identity"');
   const ops = html.indexOf('data-card-row="ops"');
   const status = html.indexOf("data-card-status");
@@ -106,7 +106,7 @@ test("collapsed stack row: status leads the identity line; a live switch shows o
   expect(html.indexOf('data-card-switch="switching"')).toBeGreaterThan(ops);
   /* The settled account never repeats on every quiet branch. */
   const quiet = renderToStaticMarkup(
-    <MiniStackShell stack={{ ...stack, items: [{ file: file(), branches: 0 }] }} dimmed={false} onSelect={() => {}} />,
+    <MiniStackShell stack={{ ...stack, items: [{ file: file(), branches: 0 }] }} onSelect={() => {}} />,
   );
   expect(quiet).not.toContain("data-card-switch");
 });

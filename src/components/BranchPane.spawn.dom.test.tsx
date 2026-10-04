@@ -11,6 +11,8 @@ process.env.LLV_STATE_DIR = sandbox;
 const dom = new Window({ width: 1280, height: 800 });
 Object.assign(globalThis, {
   window: dom, document: dom.document, navigator: dom.navigator,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   HTMLElement: dom.HTMLElement, Node: dom.Node, Event: dom.Event,
   localStorage: dom.localStorage, sessionStorage: dom.sessionStorage,
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
@@ -46,7 +48,7 @@ test("a never-started launch offers dismissal and no resume control (#1972)", ()
   let dismissed = 0;
   try {
     flushSync(() => root.render(<BranchPane file={file} tasks={[]} isRoot onClose={() => { dismissed++; }} />));
-    expect(host.textContent).toContain("never started");
+    expect(host.textContent).toContain("Launch failed");
     expect(host.querySelector("[data-card-status=running]")).toBeNull();
     expect(host.querySelector("[data-agent-control-strip]")).toBeNull();
     expect(host.querySelector("textarea")).toBeNull();

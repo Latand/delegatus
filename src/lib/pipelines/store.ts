@@ -234,6 +234,12 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
+    (attempt.publicationIntegration === undefined || (
+      attempt.publicationIntegration !== null && typeof attempt.publicationIntegration === "object"
+      && !Array.isArray(attempt.publicationIntegration)
+      && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
+        && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
+    )) &&
     isReviewFlowSync(attempt.reviewFlowSync) &&
     isNullableString(attempt.startedAt) &&
     isNullableString(attempt.completedAt) &&
@@ -281,6 +287,7 @@ function isSpawnActivation(value: unknown): boolean {
     && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
     && typeof activation.startedAt === "string" && typeof activation.fence === "string"
     && (activation.replay === undefined || typeof activation.replay === "boolean")
+    && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
     && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
     && (activation.closeRequested === undefined || typeof activation.closeRequested === "boolean")
     && (!owner || (Number.isSafeInteger(owner.pid) && Number(owner.pid) > 0
@@ -317,7 +324,9 @@ function isStageProvenance(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const provenance = value as Record<string, unknown>;
   const pullRequest = provenance.pullRequest as Record<string, unknown> | null;
-  return isNullableString(provenance.head)
+  return (provenance.state === undefined || ["pending", "complete", "unknown"].includes(String(provenance.state)))
+    && (provenance.pullRequestState === undefined || ["pending", "observed", "absent", "unknown"].includes(String(provenance.pullRequestState)))
+    && isNullableString(provenance.head)
     && typeof provenance.branch === "string"
     && (provenance.uncommitted === null
       || (Array.isArray(provenance.uncommitted) && provenance.uncommitted.every((path) => typeof path === "string")))
@@ -326,7 +335,7 @@ function isStageProvenance(value: unknown): boolean {
     && Array.isArray(provenance.outputs)
     && provenance.outputs.every((output) => Boolean(output && typeof output === "object" && !Array.isArray(output)
       && typeof (output as { path: unknown }).path === "string"
-      && typeof (output as { present: unknown }).present === "boolean"));
+      && ((output as { present: unknown }).present === null || typeof (output as { present: unknown }).present === "boolean")));
 }
 
 /** A stage attempt's own completion report (graph slice 2). */
@@ -340,6 +349,7 @@ function isStageReport(value: unknown): boolean {
     && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
     && isNullableString(report.summary)
     && isStageProvenance(report.provenance)
+    && (report.provenanceFence === undefined || (typeof report.provenanceFence === "string" && /^[0-9a-f]{64}$/.test(report.provenanceFence)))
     && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;
 }
 
@@ -354,6 +364,8 @@ function isStageReportEntry(value: unknown): boolean {
     && ["pass", "fail", "needs_decision"].includes(String(entry.status))
     && Number.isSafeInteger(entry.findings) && (entry.findings as number) >= 0
     && (entry.replaces === null || (Number.isSafeInteger(entry.replaces) && (entry.replaces as number) >= 1))
+    && (entry.provenanceState === undefined || ["pending", "complete", "unknown"].includes(String(entry.provenanceState)))
+    && (entry.provenanceAt === undefined || typeof entry.provenanceAt === "string")
     && isNullableString(entry.summary);
 }
 
@@ -607,6 +619,7 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   const operation = delivery.operation;
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
+    && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
@@ -614,7 +627,8 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
 function isReviewPending(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pending = value as Record<string, unknown>;
-  return typeof pending.stageId === "string" && pending.stageId.length > 0
+  return (pending.terminalRecheck === undefined || pending.terminalRecheck === true)
+    && typeof pending.stageId === "string" && pending.stageId.length > 0
     && Number.isSafeInteger(pending.attempt) && (pending.attempt as number) >= 0
     && typeof pending.fixStageId === "string" && pending.fixStageId.length > 0
     && Number.isSafeInteger(pending.fixAttempt) && (pending.fixAttempt as number) > 0
@@ -631,6 +645,7 @@ function isReviewGrant(value: unknown): boolean {
   return typeof grant.clientRequestId === "string" && grant.clientRequestId.length > 0 && grant.clientRequestId.length <= 200
     && typeof grant.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(grant.expectedRevision)
     && typeof grant.stageId === "string" && grant.stageId.length > 0
+    && (grant.terminalAttempt === undefined || Number.isSafeInteger(grant.terminalAttempt) && (grant.terminalAttempt as number) > 0)
     && Number.isSafeInteger(grant.rounds) && (grant.rounds as number) >= 1 && (grant.rounds as number) <= MAX_FAIL_EDGE_ROUNDS
     && isNullableString(grant.reviewedHead)
     && typeof grant.currentHead === "string"
@@ -772,6 +787,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
+    (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
     isNullableString(pipeline.stateDetail) &&
     isNullableString(pipeline.srcPath) &&
     isNullableString(pipeline.srcConversationId) &&
@@ -796,6 +812,25 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
+    (pipeline.publicationAdmission === undefined || (Boolean(pipeline.publicationAdmission && typeof pipeline.publicationAdmission === "object")
+      && typeof pipeline.publicationAdmission.id === "string" && /^[0-9a-f]{40}$/i.test(pipeline.publicationAdmission.sha)
+      && /^[0-9a-f]{64}$/.test(pipeline.publicationAdmission.fence) && ["pending", "settled"].includes(pipeline.publicationAdmission.state)
+      && (pipeline.publicationAdmission.error === undefined || typeof pipeline.publicationAdmission.error === "string"))) &&
+    (pipeline.remoteAction === undefined || (Boolean(pipeline.remoteAction && typeof pipeline.remoteAction === "object")
+      && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover", "skip-stage"].includes(pipeline.remoteAction.action)
+      && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
+      && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
+      && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
+      && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
+      && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
+      && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)
+        && typeof pipeline.remoteAction.retryReceipt.launchId === "string"
+        && ["failed", "conflicted", "completed"].includes(pipeline.remoteAction.retryReceipt.state)
+        && (pipeline.remoteAction.retryReceipt.claimId === undefined || typeof pipeline.remoteAction.retryReceipt.claimId === "string")))
+      && (pipeline.remoteAction.action !== "takeover" || (Boolean(pipeline.remoteAction.takeover)
+        && typeof pipeline.remoteAction.takeover?.expectedOwner === "string"
+        && Number.isSafeInteger(pipeline.remoteAction.takeover?.expectedEpoch) && pipeline.remoteAction.takeover!.expectedEpoch > 0
+        && typeof pipeline.remoteAction.takeover?.reason === "string" && pipeline.remoteAction.takeover.reason.length > 0)))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
@@ -936,7 +971,7 @@ export function loadPipelines(): Pipeline[] {
     collections in one SQLite snapshot without projection caches or lenient
     archive decoding. Before cutover, validate the legacy sources in memory;
     this evidence read never migrates or rewrites an unreadable source. */
-export function loadPipelinesForStartup(): Pipeline[] {
+function readCompletePipelineRecords(): unknown[] {
   const collections = readStateCollectionsRows(stateDatabaseFile(), ["pipelines", "pipelines_archive"]);
   const active = collections.get("pipelines");
   const archived = collections.get("pipelines_archive");
@@ -949,7 +984,22 @@ export function loadPipelinesForStartup(): Pipeline[] {
   if (new Set(records.map(registryRecordKey)).size !== records.length) {
     throw new PipelineStoreError("pipeline startup records have contradictory identities");
   }
-  return records.flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
+  return records;
+}
+
+export function loadPipelinesForStartup(): Pipeline[] {
+  return readCompletePipelineRecords().flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
+}
+
+/** Retirement needs positive evidence about every owner. An opaque or malformed
+    row may hold live work; projection/startup's rejected-row isolation cannot
+    establish that a host is unused. Never cache or migrate this evidence. */
+export function loadPipelinesForRetirement(): Pipeline[] {
+  return readCompletePipelineRecords().map((record) => {
+    const decoded = decodePipeline(record);
+    if (!decoded) throw new PipelineStoreError("pipeline retirement ownership is unknown");
+    return decoded;
+  });
 }
 
 function parsePipelinesFile(filename: string, strictPresence = false): unknown[] {
@@ -1025,6 +1075,12 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
       : undefined,
     restored: undefined,
     stages: pipeline.stages.map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
+    stageReports: pipeline.stageReports?.map((entry) => ({
+      ...entry,
+      ...(entry.provenanceAt === undefined ? {} : {
+        provenanceAt: typeof entry.provenanceAt === "string" ? entry.provenanceAt : entry.at,
+      }),
+    })),
     cursor: pipeline.cursor
       ? { ...pipeline.cursor, input: pipeline.cursor.input ?? null, activatedBy: pipeline.cursor.activatedBy ?? null }
       : null,
@@ -1411,10 +1467,11 @@ export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): 
   return `Viewer publication denied: target owner is ${owner?.id ?? delivery?.ownerId ?? "unclaimed"} at epoch ${owner?.delivery?.epoch ?? delivery?.epoch ?? 0}; this lane must request explicit takeover`;
 }
 
-export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
+export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null, admitted?: (pipeline: Pipeline) => boolean): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
   return withDeliveryMutationAsync((tx) => {
     const pipeline = tx.get(id);
     if (!pipeline?.delivery) return { error: "pipeline has no delivery target", status: 409 };
+    if (admitted && !admitted(pipeline)) return { error: "takeover admission superseded", status: 409 };
     const target = pipeline.delivery.target;
     const owner = tx.pipelineLookup({ ...target, active: true });
     const previous = owner ?? tx.pipelineLookup(target);
@@ -1436,6 +1493,17 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
+    const action = pipeline.remoteAction;
+    if (action?.state === "pending" && action.action === "takeover"
+      && action.takeover?.expectedOwner === expectedOwner && action.takeover.expectedEpoch === expectedEpoch
+      && action.takeover.reason === reason
+      && (action.actor?.kind === "agent" ? action.actor.conversationId : null) === conversationId) {
+      // Ownership and its admitted outcome are one durable mutation. There
+      // is no restart window in which the new epoch still has an old fence.
+      pipeline.remoteAction = { ...action, state: "settled", settledAt: new Date().toISOString() };
+      if (pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
+      deliveryJournal(pipeline, "recovery", "takeover remote verification settled", conversationId);
+    }
     tx.put(pipeline);
     return { pipeline };
   });

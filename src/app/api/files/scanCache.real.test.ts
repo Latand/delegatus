@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +26,7 @@ fs.mkdirSync(sessions, { recursive: true });
 
 const { listFilesWithProjectCatalog } = await import("@/lib/scanner");
 const { ROOTS } = await import("@/lib/scanner/roots");
-const { cachedFileScan, currentFileScan, persistedFileScanSnapshot, resetFilesRouteCacheForTests } = await import("@/lib/scanner/scanCache");
+const { cachedFileScan, currentFileScan, persistedFileScanSnapshot, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } = await import("@/lib/scanner/scanCache");
 const { linkEntries } = await import("@/lib/scanner/links");
 const { activityVerdict, transcriptTurnResult } = await import("@/lib/scanner/activity");
 const { entryEffort } = await import("@/lib/scanner/effort");
@@ -35,8 +35,10 @@ const { planFor, goalFor } = await import("@/lib/scanner/plan");
 const { ctxFor } = await import("@/lib/scanner/context");
 const { lastTurnFor } = await import("@/lib/scanner/turnDuration");
 const { pendingQuestionFor } = await import("@/lib/scanner/questions");
-const { AgentRegistry } = await import("@/lib/agent/registry");
+const { AgentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { reconcileMigrationInventory } = await import("@/lib/accounts/migration/coordinator");
+
+afterEach(() => setFileCatalogMembershipProbeForTests(null));
 
 function writeSession(filename: string, cwd: string): string {
   const pathname = path.join(sessions, filename);
@@ -63,6 +65,7 @@ afterAll(() => {
   else process.env.LLV_CLAUDE_HOME = previousClaudeHome;
   if (previousTmpdir === undefined) delete process.env.TMPDIR;
   else process.env.TMPDIR = previousTmpdir;
+  closeAgentRegistryForTests();
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -104,6 +107,7 @@ test("real cached scans repair private state modes under umask 000", async () =>
     process.umask(previousUmask);
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(privateStateDir, { recursive: true, force: true });
   }
 });
@@ -189,6 +193,7 @@ test("a persisted completed generation avoids cold tail rereads for unchanged tr
     fs.rmSync(transcript, { force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
   }
 }, 20_000);
@@ -274,6 +279,7 @@ test("a restart warm-start never rereads a complete multi-megabyte transcript bo
     fs.rmSync(transcript, { force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     const cacheStore = globalThis as typeof globalThis & { __llvCaches?: Record<string, Map<string, unknown>> };
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.delete(transcript);
@@ -342,7 +348,7 @@ test("a persisted completed generation primes permanent lineage facts", async ()
     fs.mkdirSync(testStateDir, { recursive: true });
     fs.writeFileSync(path.join(testStateDir, "files-scan-snapshot.json"), JSON.stringify({
       version: 1,
-      schemaVersion: 11,
+      schemaVersion: 12,
       snapshot: {
         complete: true,
         files: [sourceEntry, taskEntry, predecessorEntry, successorEntry],
@@ -376,6 +382,7 @@ test("a persisted completed generation primes permanent lineage facts", async ()
     for (const pathname of [source, task, predecessor, successor]) fs.rmSync(pathname, { force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
   }
@@ -522,6 +529,7 @@ test("persisted Claude question state hydrates without transcript reads and stay
     fs.rmSync(projectDir, { recursive: true, force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
   }
 }, 30_000);
@@ -629,6 +637,7 @@ test("a persisted Claude result rebuilds recovery evidence, and every rebuilt Cl
     fs.rmSync(projectDir, { recursive: true, force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
   }
 }, 30_000);
@@ -675,7 +684,7 @@ test("a cold restart after upgrade rejects pre-#406 persisted lastTurn boundarie
       schemaVersion?: number;
       snapshot: { files: FileEntry[] };
     };
-    expect(persisted.schemaVersion).toBe(11);
+    expect(persisted.schemaVersion).toBe(12);
     delete persisted.schemaVersion;
     const persistedEntry = persisted.snapshot.files.find((entry) => entry.path === transcript)!;
     persistedEntry.lastTurn = { startedAt: echoStartedAt, endedAt };
@@ -693,17 +702,20 @@ test("a cold restart after upgrade rejects pre-#406 persisted lastTurn boundarie
     /* The recovery scan re-stamps the snapshot with the current schema, so
        the next restart warm-starts on the repaired boundary. */
     const restamped = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as { schemaVersion?: number };
-    expect(restamped.schemaVersion).toBe(11);
+    expect(restamped.schemaVersion).toBe(12);
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
     resetFilesRouteCacheForTests();
     const warm = await cachedFileScan(undefined, undefined, 0);
-    expect(warm.cacheStatus).toBe("hit");
+    // Restarted snapshots remain servable while filesystem membership is
+    // revalidated in the background.
+    expect(warm.cacheStatus).toBe("stale");
     expect(warm.snapshot.files.find((entry) => entry.path === transcript)?.lastTurn)
       .toEqual({ startedAt: promptStartedAt, endedAt });
   } finally {
     fs.rmSync(projectDir, { recursive: true, force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
   }
@@ -737,6 +749,7 @@ test("a same-size rewrite after restart invalidates persisted tail derivations",
     fs.rmSync(transcript, { force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
   }
 }, 20_000);
@@ -808,6 +821,7 @@ test("an incomplete tail generation stays unpersisted and rereads the same ident
     fs.rmSync(transcript, { force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     const cacheStore = globalThis as typeof globalThis & { __llvCaches?: Record<string, Map<string, unknown>> };
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.delete(transcript);
@@ -901,6 +915,7 @@ test("a head-model EIO preserves the last complete snapshot until same-identity 
     fs.rmSync(nullTranscript, { force: true });
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     const cacheStore = globalThis as typeof globalThis & { __llvCaches?: Record<string, Map<string, unknown>> };
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) {
@@ -1045,7 +1060,8 @@ test("65- and 505-file scans share bounded prefixes with migration reconciliatio
       expect(rawHeadBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
 
       fs.rmSync(fixtureDir, { recursive: true, force: true });
-      fs.rmSync(testStateDir, { recursive: true, force: true });
+    closeAgentRegistryForTests();
+    fs.rmSync(testStateDir, { recursive: true, force: true });
       for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
       resetFilesRouteCacheForTests();
     }
@@ -1094,6 +1110,7 @@ test("a transient real scanner failure preserves the completed route snapshot un
 });
 
 test("task twin EIO preserves canonical files generation and durable snapshots until recovery", async () => {
+  setFileCatalogMembershipProbeForTests(async () => null);
   const previousTestStateDir = process.env.LLV_STATE_DIR;
   const testStateDir = path.join(sandbox, "task-twin-generation-state");
   const taskRoot = ROOTS["claude-tasks"];
@@ -1142,15 +1159,18 @@ test("task twin EIO preserves canonical files generation and durable snapshots u
     expect(recovered.generation).toBeGreaterThanOrEqual(stale.targetGeneration);
     expect(recovered.snapshot.files.map((entry) => entry.path)).toContain(taskPath);
   } finally {
+    setFileCatalogMembershipProbeForTests(null);
     fs.promises.access = originalAccess;
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     fs.rmSync(taskFixtureRoot, { recursive: true, force: true });
   }
 });
 
 test("transcript metadata EIO after rewrite retains canonical snapshots until convergence", async () => {
+  setFileCatalogMembershipProbeForTests(async () => null);
   resetFilesRouteCacheForTests();
   const transcript = path.join(sessions, "metadata-rewrite.jsonl");
   const alpha = `${JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/alpha" } })}\n`;
@@ -1202,9 +1222,11 @@ test("transcript metadata EIO after rewrite retains canonical snapshots until co
   expect(recovered.snapshot.files.find((entry) => entry.path === transcript)?.cwd).toBe("/repo/bravo");
   expect(fs.readFileSync(snapshotPath)).not.toEqual(canonicalSnapshot);
   expect(fs.readFileSync(indexPath)).not.toEqual(canonicalIndex);
+  setFileCatalogMembershipProbeForTests(null);
 });
 
 test("sidecar metadata EIO after rewrite retains canonical snapshots until convergence", async () => {
+  setFileCatalogMembershipProbeForTests(async () => null);
   resetFilesRouteCacheForTests();
   const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "sidecar", "session", "subagents", "agent-x.jsonl");
   const sidecar = transcript.slice(0, -".jsonl".length) + ".meta.json";
@@ -1256,6 +1278,7 @@ test("sidecar metadata EIO after rewrite retains canonical snapshots until conve
   expect(recovered.snapshot.files.find((entry) => entry.path === transcript)?.title).toBe("Agent bravo");
   expect(fs.readFileSync(snapshotPath)).not.toEqual(canonicalSnapshot);
   expect(fs.readFileSync(indexPath)).not.toEqual(canonicalIndex);
+  setFileCatalogMembershipProbeForTests(null);
 });
 
 test("a confirmed ENOENT deletion remains a complete inventory change", async () => {
@@ -1353,6 +1376,7 @@ test("a restart served from the persisted scan cache adopts a Codex fork without
     process.env.LLV_STATE_DIR = previousTestStateDir;
     resetFilesRouteCacheForTests();
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
   }
 }, 30_000);
@@ -1404,7 +1428,7 @@ test("a persisted snapshot keeps its OpenClaw entries and primes their turn evid
     fs.mkdirSync(testStateDir, { recursive: true });
     fs.writeFileSync(path.join(testStateDir, "files-scan-snapshot.json"), JSON.stringify({
       version: 1,
-      schemaVersion: 11,
+      schemaVersion: 12,
       snapshot: { complete: true, files: [entry], projectCatalog: [] },
     }));
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
@@ -1423,6 +1447,7 @@ test("a persisted snapshot keeps its OpenClaw entries and primes their turn evid
     else process.env.LLV_STATE_DIR = stateDirBefore;
     resetFilesRouteCacheForTests();
     for (const cache of Object.values(cacheStore.__llvCaches ?? {})) cache.clear();
+    closeAgentRegistryForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
   }
 }, 30_000);

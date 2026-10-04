@@ -28,7 +28,7 @@ export interface StepPorts {
   exists(path: string): boolean;
   buildIdReadable(dir: string): boolean;
   /** Makes a ready build the installed release. */
-  publish(release: Release): void;
+  publish(release: Release): void | Promise<void>;
   now(): number;
   abort?(): void;
   childAlive?(): boolean;
@@ -251,7 +251,7 @@ export class UpdateRunner {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
         if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
-        this.ports.publish({ sha: target, dir: release });
+        await this.ports.publish({ sha: target, dir: release });
         push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
       }
@@ -265,7 +265,7 @@ export class UpdateRunner {
     this runner started and nothing else. */
 export interface RealPorts extends StepPorts { abort(): void }
 
-export function realPorts(publish: (release: Release) => void): RealPorts {
+export function realPorts(publish: (release: Release) => void | Promise<void>): RealPorts {
   let current: RecordedPid | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority }) {

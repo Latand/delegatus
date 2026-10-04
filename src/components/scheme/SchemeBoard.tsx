@@ -129,8 +129,6 @@ interface Props {
   focus: string | null;
   /** Path to ring without moving the camera, used by the mobile full-map overlay. */
   ring?: string | null;
-  /** «Show only needs me» filter: non-null dims every shell without a queue member. */
-  attentionPaths?: ReadonlySet<string> | null;
   /** Engine-native subagent tray surface (issue #142): trays keyed by durable
       parent id + folded-child exclusion + durable-intent callbacks. */
   trayApi?: SubagentTrayApi;
@@ -240,7 +238,6 @@ export function SchemeBoard({
   isolatedManualPaths = EMPTY_PATHS,
   focus,
   ring,
-  attentionPaths,
   trayApi,
   onSelect,
   onNodePick,
@@ -1531,7 +1528,6 @@ export function SchemeBoard({
           multi={multi}
           session={session}
           focus={visualFocus}
-          attentionPaths={attentionPaths ?? null}
           flowsByImpl={flowsByImpl}
           flows={flows}
           pipelines={pipelines}

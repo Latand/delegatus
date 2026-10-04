@@ -19,13 +19,16 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
+import { realExec } from "@/lib/workflows/provision";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
+const { saveFlows } = await import("@/lib/flows/store");
 const { isRecoverableLegacyRelayFailurePause, MAX_FLOW_NOTE_LENGTH } = await import("@/lib/flows/commands");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
@@ -35,19 +38,39 @@ const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = awa
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
 const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
-const { saveTasks } = await import("@/lib/tasks/store");
+const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 const { interruptionObligationDirectory, interruptionObligationStore } = await import("@/lib/runtime/interruptionObligations");
 type PipelinePorts = import("./engine").PipelinePorts;
 type Pipeline = import("./types").Pipeline;
 type PipelineStageStopResult = import("./engine").PipelineStageStopResult;
 type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
+type HostState = import("@/lib/runtime/engineHost").HostState;
 
 /* tickPipelines self-schedules a follow-up tick when a pass leaves a pending
    cursor; keep that wake-up away from the real default ports in this suite. */
 registerPipelineTick(async () => {});
 
 afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+
+/** These state-machine assertions wait for remote settlement. Immediate
+    acceptance and concurrent reads are covered by remoteActions.test.ts. */
+const patchPipeline: typeof rawPatchPipeline = async (id, request, ports = defaultPipelinePorts(), actor) => {
+  const accepted = await rawPatchPipeline(id, request, ports, actor);
+  if (accepted.error || !accepted.pipeline) return accepted;
+  if (accepted.pipeline.remoteAction?.state === "pending") await engineModule.settlePendingRemoteActions(ports);
+  let current = loadPipelines().find((pipeline) => pipeline.id === id) ?? accepted.pipeline;
+  if (current.remoteAction?.state === "settled" && current.remoteAction.error
+    && (request.action === "retry-stage" || request.action === "takeover" || request.action === "skip-stage")) return { error: current.remoteAction.error, status: 409 };
+  if ((request.action === "publish" || request.action === "retry-stage") && current.delivery?.operation?.state === "pending") {
+    const { publishPipelineBranch } = await import("./git");
+    const result = await publishPipelineBranch(current, ports.exec, { acceptedSha: current.delivery.operation.sha });
+    if (!result.ok) return { error: result.error, status: 409 };
+    if (result.remote === "unreachable") return { error: result.detail, status: 409 };
+    current = loadPipelines().find((pipeline) => pipeline.id === id) ?? current;
+  }
+  return { ...accepted, pipeline: current };
+};
 
 /** Lifecycle assertions read the durable result after the controller drains. */
 async function closeAndDrain(id: string, req: Parameters<typeof patchPipeline>[1], ports: PipelinePorts) {
@@ -478,7 +501,10 @@ function harness() {
   let residentHosts = false;
   let monotonic: () => number = () => Date.now();
   const ports: PipelinePorts = {
-    exec: (rawCommand, rawArgs) => {
+    exec: (rawCommand, rawArgs, cwd, env, options) => {
+      // Artifact safety reads inspect the actual fixture index, including
+      // plain launch directories that have no Git metadata.
+      if (options?.stdoutEncoding === "latin1") return realExec(rawCommand, rawArgs, cwd, env, options);
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
@@ -639,23 +665,23 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   fs.mkdirSync(repo);
-  git(root, "init", "--bare", "--initial-branch=main", origin);
-  git(repo, "init", "--initial-branch=main");
-  git(repo, "config", "user.name", "Fixture");
-  git(repo, "config", "user.email", "noreply@example.com");
-  git(repo, "config", "commit.gpgSign", "false");
+  (await git(root, "init", "--bare", "--initial-branch=main", origin));
+  (await git(repo, "init", "--initial-branch=main"));
+  (await git(repo, "config", "user.name", "Fixture"));
+  (await git(repo, "config", "user.email", "noreply@example.com"));
+  (await git(repo, "config", "commit.gpgSign", "false"));
   fs.writeFileSync(path.join(repo, ".gitignore"), "sentinel.tmp\n");
-  git(repo, "add", ".gitignore");
-  git(repo, "commit", "-m", "base");
-  git(repo, "remote", "add", "origin", origin);
-  git(repo, "push", "origin", "main");
-  const base = git(repo, "rev-parse", "HEAD");
+  (await git(repo, "add", ".gitignore"));
+  (await git(repo, "commit", "-m", "base"));
+  (await git(repo, "remote", "add", "origin", origin));
+  (await git(repo, "push", "origin", "main"));
+  const base = (await git(repo, "rev-parse", "HEAD"));
   const h = harness();
   h.ports.exec = realExec;
   h.ports.provisionExec = realProvisionExec;
@@ -668,6 +694,104 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   return { root, origin, repo, base, h, git, id: created.pipeline.id, worktree: created.pipeline.worktreeDir };
 }
 
+test("a fixer head probe stays outside the controller lease and a pause fences its review admission", async () => {
+  const fixture = await realWorktreeLane("fixer-head-pause", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let work: Promise<unknown> | undefined;
+  try {
+    const { h, git, worktree } = fixture;
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "fix handed findings");
+    h.setConversationActive(false);
+    h.messages.set("/codex/stage-1.jsonl", { text: 'Checked.\n```json\n{"status":"fail","findings":["P2 — discovery in fix.txt:1"]}\n```', ts: Date.now() + 100_000_000 });
+    let entered!: () => void;
+    const checking = new Promise<void>((resolve) => { entered = resolve; });
+    let intercepted = false;
+    work = tickPipelines([entry("/codex/stage-1.jsonl")], { ...h.ports, exec: async (...args) => {
+      if (!intercepted && args[0] === "git" && args[1][0] === "status") {
+        intercepted = true; entered(); await held;
+      }
+      return await h.ports.exec(...args);
+    } });
+    await checking;
+    expect(loadPipelines()[0]!.state).toBe("running");
+    const paused = await Promise.race([patchPipeline(fixture.id, { action: "pause" }, h.ports), Bun.sleep(150).then(() => null)]);
+    expect(paused).not.toBeNull();
+    release(); await work;
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("paused");
+    expect(lane.lastPassedCommit).toBe(fixture.base);
+    expect(lane.runs[0]!.attempts[0]!.acceptedForReview).not.toBe(true);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    release(); await work;
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a fixer self-fail persists its branch adoption before returning to the pipeline branch", async () => {
+  const fixture = await realWorktreeLane("fixer-self-fail-adoption", [
+    { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  try {
+    const { h, git, id, worktree, origin } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const source = "fix/self-fail-adoption";
+    fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
+    (await git(worktree, "add", "fix.txt"));
+    (await git(worktree, "commit", "-m", "fix handed findings"));
+    const head = (await git(worktree, "rev-parse", "HEAD"));
+    const exec = h.ports.exec;
+    let adoptionObserved = false;
+    let checkedCleanWorktree = false;
+    let checkedLaneBranch = false;
+    let switched = false;
+    h.ports.exec = async (command, args, ...rest) => {
+      if (command === "git" && args[0] === "switch" && args.at(-1) === lane.branch) {
+        const stored = loadPipelines().find((item) => item.id === id)!;
+        expect(stored.runs[0]!.attempts[0]!).toMatchObject({
+          state: "committing",
+          acceptedForReview: true,
+          verdict: { status: "fail" },
+          branchAdoption: { branch: source, head, target: lane.branch },
+        });
+        expect(stored.lastPassedCommit).toBe(lane.lastPassedCommit);
+        adoptionObserved = true;
+      }
+      const result = await exec(command, args, ...rest);
+      if (command === "git" && !switched) {
+        if (args[0] === "status" && args[1] === "--porcelain") checkedCleanWorktree = true;
+        else if (checkedCleanWorktree && args[0] === "branch" && args[1] === "--show-current") checkedLaneBranch = true;
+        else if (checkedLaneBranch && args[0] === "rev-parse" && args[1] === "HEAD") {
+          // The agent changes checkout after the fixer's clean-head observation.
+          (await git(worktree, "switch", "-c", source));
+          switched = true;
+        }
+      }
+      return result;
+    };
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "Handed findings fixed; checks passed.")], h.ports);
+    await tickPipelines([], h.ports);
+    const current = loadPipelines().find((item) => item.id === id)!;
+    expect(adoptionObserved).toBe(true);
+    expect(current.cursor?.stageId).toBe("review");
+    expect(current.lastPassedCommit).toBe(head);
+    expect((await git(worktree, "branch", "--show-current"))).toBe(lane.branch);
+    expect((await git(origin, "rev-parse", `refs/heads/${lane.branch}`))).toBe(head);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test.each(["Another issue noticed", "Users cannot save", "rejected publication", "historical red tests"])("a fixer self-fail with a committed head goes to review with its findings as notes: %s", async (finding) => {
   const fixture = await realWorktreeLane("fixer-self-fail", [
     { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, prompt: "Fix", next: "review" },
@@ -676,9 +800,9 @@ test.each(["Another issue noticed", "Users cannot save", "rejected publication",
   try {
     const { h, git, worktree, origin } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "fix handed findings");
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "fix handed findings");
+    const fixed = await git(worktree, "rev-parse", "HEAD");
     const hook = path.join(origin, "hooks", "pre-receive");
     if (finding === "rejected publication") fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     h.setConversationActive(false);
@@ -700,7 +824,7 @@ test.each(["Another issue noticed", "Users cannot save", "rejected publication",
     expect(current.runs[0]!.attempts[0]!.verdict?.status).toBe("fail");
     expect(current.cursor?.input).toContain("Fixer notes for the reviewer");
     expect(current.cursor?.input).toContain(`${finding} in fix.txt:1`);
-    expect(git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
+    expect(await git(origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(fixed);
     await tickPipelines([], h.ports);
     expect(h.spawnInputs.at(-1)?.prompt).toContain(`${finding} in fix.txt:1`);
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
@@ -727,8 +851,8 @@ test.each([
   try {
     if (commit) {
       fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "partial fix\n");
-      fixture.git(fixture.worktree, "add", "fix.txt");
-      fixture.git(fixture.worktree, "commit", "-m", "partial fix");
+      await fixture.git(fixture.worktree, "add", "fix.txt");
+      await fixture.git(fixture.worktree, "commit", "-m", "partial fix");
     }
     fixture.h.setConversationActive(false);
     const shortSummary = "Committed partial fixes; remaining discovery listed";
@@ -739,7 +863,7 @@ test.each([
       lane.runs[0]!.attempts[0]!.report = {
         seq: 1, at: fixture.h.ports.now(), actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
         verdict: { status: "fail", ...blockFields, findings: [`P2 — ${label} in fix.txt:1`] }, summary: shortSummary,
-        provenance: { head: fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
+        provenance: { head: await fixture.git(fixture.worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] }, calls: 1,
       };
       savePipelines([lane]);
     }
@@ -778,10 +902,10 @@ test.each([
     const { h, git, worktree } = fixture;
     if (commit) {
       fs.writeFileSync(path.join(worktree, "fix.txt"), "fixed\n");
-      git(worktree, "add", "fix.txt");
-      git(worktree, "commit", "-m", "fix handed findings");
+      await git(worktree, "add", "fix.txt");
+      await git(worktree, "commit", "-m", "fix handed findings");
     }
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    const fixed = await git(worktree, "rev-parse", "HEAD");
     const blockedReason = "Required check service is unavailable";
     const verdict = { status: "fail" as const, findings,
       ...(blocked !== undefined ? { blocked } : {}), ...(blocked ? { blockedReason } : {}) };
@@ -865,7 +989,7 @@ test("a read-only successor settles and advances when its handoff is in a clean 
     expect(path.isAbsolute(handoff!)).toBe(true);
     expect(fs.readFileSync(handoff!, "utf8")).toBe(design);
     expect(sourceIgnore).not.toContain(".artifacts/pipeline-stage-inputs");
-    expect(git(worktree, "status", "--porcelain")).toBe("");
+    expect((await git(worktree, "status", "--porcelain"))).toBe("");
 
     expect(await engineModule.reportStageCompletion({ verdict: "pass" },
       { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, h.ports))
@@ -876,9 +1000,106 @@ test("a read-only successor settles and advances when its handoff is in a clean 
     expect(loadPipelines().find((pipeline) => pipeline.id === id)?.state).toBe("running");
     expect(h.spawnInputs).toHaveLength(3);
     expect(h.spawnInputs[2]!.prompt).toContain("Build");
-    expect(git(worktree, "status", "--porcelain")).toBe("");
+    expect((await git(worktree, "status", "--porcelain"))).toBe("");
   } finally {
     if (fs.existsSync(fixture.root)) fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["before intent", "after intent"])("a paused lane fences async branch adoption (%s)", async (boundary) => {
+  const fixture = await realWorktreeLane("stage-adoption-pause", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ]);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let work: Promise<unknown> | undefined;
+  try {
+    const { git, h, id, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const source = "fix/async-adoption";
+    await git(worktree, "switch", "-c", source);
+    fs.writeFileSync(path.join(worktree, "build.txt"), "preserved stage work\n");
+    await git(worktree, "add", "build.txt");
+    await git(worktree, "commit", "-m", "stage work");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    const exec = h.ports.exec;
+    let entered!: () => void;
+    const checking = new Promise<void>((resolve) => { entered = resolve; });
+    let intercepted = false;
+    h.ports.exec = async (command, args, ...rest) => {
+      const pauseAt = args[0] === "merge-base" && args.includes("--is-ancestor")
+        && (boundary === "after intent"
+          ? Boolean(loadPipelines().find((item) => item.id === id)?.runs[0]?.attempts[0]?.branchAdoption)
+          : args.includes(head));
+      if (!intercepted && command === "git" && pauseAt) {
+        intercepted = true;
+        entered();
+        await held;
+      }
+      return await exec(command, args, ...rest);
+    };
+    h.setConversationActive(false);
+    work = tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await checking;
+    const current = loadPipelines().find((item) => item.id === id)!;
+    if (boundary === "after intent") expect(current.runs[0]!.attempts[0]!.branchAdoption).toMatchObject({ branch: source, head });
+    const paused = await Promise.race([patchPipeline(id, { action: "pause" }, h.ports), Bun.sleep(150).then(() => null)]);
+    expect(paused).not.toBeNull();
+    expect(paused?.error).toBeUndefined();
+    release();
+    await work;
+    const settled = loadPipelines().find((item) => item.id === id)!;
+    expect(settled.state).toBe("paused");
+    expect(settled.lastPassedCommit).toBe(fixture.base);
+    expect(settled.cursor?.stageId).toBe("build");
+    expect(await git(worktree, "branch", "--show-current")).toBe(source);
+    expect(await git(worktree, "rev-parse", `refs/heads/${lane.branch}`)).toBe(fixture.base);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    release();
+    await work;
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["source", "destination"])("async branch adoption rechecks a newly acquired %s claim before committing", async (claimed) => {
+  const fixture = await realWorktreeLane(`stage-adoption-claim-${claimed}`, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null },
+  ]);
+  try {
+    const { git, h, id, worktree } = fixture;
+    const lane = loadPipelines().find((item) => item.id === id)!;
+    const source = "fix/claimed-stage";
+    await git(worktree, "switch", "-c", source);
+    fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "preserve stage work\n");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    const others = [lane];
+    const exec = h.ports.exec;
+    let acquired = false;
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+    const result = await commitAndAdoptStageBranch(lane, "build", async (command, args, ...rest) => {
+      const result = await exec(command, args, ...rest);
+      if (!acquired && command === "git" && args[0] === "symbolic-ref") {
+        const owner = structuredClone(lane);
+        owner.id = "new-owner";
+        owner.branch = "pipeline/new-owner";
+        owner.delivery = { ...lane.delivery!, active: true, ownerId: owner.id,
+          target: { ...lane.delivery!.target, branch: `refs/heads/${claimed === "source" ? source : lane.branch}` } };
+        others.push(owner);
+        acquired = true;
+      }
+      return result;
+    }, () => others, undefined, () => {}, { branch: source, head, error: null });
+    expect(acquired).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(await git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(head);
+    expect(await git(worktree, "rev-parse", `refs/heads/${lane.branch}`)).toBe(fixture.base);
+    expect(await git(worktree, "status", "--porcelain")).toContain("uncommitted.txt");
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
@@ -891,14 +1112,14 @@ test("a stage's fresh pushed branch and PR are adopted before the next stage", a
     const { git, h, id, origin, worktree } = fixture;
     const lane = loadPipelines().find((item) => item.id === id)!;
     const stageBranch = "fix/stage-created";
-    git(worktree, "switch", "-c", stageBranch);
+    (await git(worktree, "switch", "-c", stageBranch));
     fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
-    git(worktree, "add", "build.txt");
-    git(worktree, "commit", "-m", "stage work");
-    git(worktree, "push", "origin", stageBranch);
-    const head = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "build.txt"));
+    (await git(worktree, "commit", "-m", "stage work"));
+    (await git(worktree, "push", "origin", stageBranch));
+    const head = (await git(worktree, "rev-parse", "HEAD"));
     const exec = h.ports.exec;
-    h.ports.exec = (command, args, ...rest) => command === "timeout" && args.includes("gh")
+    h.ports.exec = (command, args, ...rest) => command === "gh"
       ? { code: 0, stdout: JSON.stringify([{ url: "https://forge.example/repo/pull/7", number: 7, state: "OPEN" }]), stderr: "" }
       : exec(command, args, ...rest);
     h.setConversationActive(false);
@@ -909,9 +1130,9 @@ test("a stage's fresh pushed branch and PR are adopted before the next stage", a
     expect(adopted.state).toBe("running");
     expect(adopted.cursor?.stageId).toBe("review");
     expect(adopted.lastPassedCommit).toBe(head);
-    expect(git(worktree, "branch", "--show-current")).toBe(lane.branch);
-    expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(head);
-    expect(git(origin, "rev-parse", `refs/heads/${stageBranch}`)).toBe(head);
+    expect((await git(worktree, "branch", "--show-current"))).toBe(lane.branch);
+    expect((await git(origin, "rev-parse", `refs/heads/${lane.branch}`))).toBe(head);
+    expect((await git(origin, "rev-parse", `refs/heads/${stageBranch}`))).toBe(head);
     expect(adopted.runs[0]!.attempts[0]!.report?.provenance).toMatchObject({ head, branch: stageBranch, pullRequest: { number: 7 } });
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);
@@ -930,12 +1151,12 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
       const { git, h, id, repo, worktree } = fixture;
       const lane = loadPipelines().find((item) => item.id === id)!;
       const branch = shape === "protected" ? "master" : "fix/other-stage";
-      if (shape === "unrelated") git(worktree, "switch", "--orphan", branch);
-      else git(worktree, "switch", "-c", branch);
+      if (shape === "unrelated") (await git(worktree, "switch", "--orphan", branch));
+      else (await git(worktree, "switch", "-c", branch));
       fs.writeFileSync(path.join(worktree, "build.txt"), "keep stage work\n");
-      git(worktree, "add", "build.txt");
-      git(worktree, "commit", "-m", "stage work");
-      const tip = git(worktree, "rev-parse", "HEAD");
+      (await git(worktree, "add", "build.txt"));
+      (await git(worktree, "commit", "-m", "stage work"));
+      const tip = (await git(worktree, "rev-parse", "HEAD"));
       if (shape.startsWith("forge-protected")) {
         const forgeUrl = "https://github.com/fixture/repo.git";
         const exec = h.ports.exec;
@@ -971,7 +1192,7 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
         }
         if (shape === "owned-destination") {
           const destination = "delivery/shared";
-          git(worktree, "branch", "-m", lane.branch, destination);
+          (await git(worktree, "branch", "-m", lane.branch, destination));
           lane.delivery!.target.branch = `refs/heads/${destination}`;
           lane.delivery!.active = false;
           lane.delivery!.publish = "disabled";
@@ -984,8 +1205,8 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
       expect(parked.state).toBe("needs_decision");
       expect(parked.cursor?.stageId).toBe("build");
       expect(parked.lastPassedCommit).toBe(lane.lastPassedCommit);
-      expect(git(repo, "rev-parse", shape === "owned-destination" ? "refs/heads/delivery/shared" : `refs/heads/${lane.branch}`)).toBe(lane.lastPassedCommit);
-      expect(git(worktree, "rev-parse", `refs/heads/${branch}`)).toBe(tip);
+      expect((await git(repo, "rev-parse", shape === "owned-destination" ? "refs/heads/delivery/shared" : `refs/heads/${lane.branch}`))).toBe(lane.lastPassedCommit);
+      expect((await git(worktree, "rev-parse", `refs/heads/${branch}`))).toBe(tip);
       if (shape === "unrelated") expect(parked.stateDetail).toContain("does not descend");
       if (shape === "owned" || shape === "owned-checkout") expect(parked.stateDetail).toContain("another pipeline owns");
       if (shape === "owned-destination") expect(parked.stateDetail).toContain("adoption destination");
@@ -1007,15 +1228,15 @@ for (const interruptedAfterMerge of [false, true]) {
       const { git, h, id, origin, worktree } = fixture;
       const lane = loadPipelines().find((item) => item.id === id)!;
       const source = "fix/interrupted-stage";
-      git(worktree, "switch", "-c", source);
+      (await git(worktree, "switch", "-c", source));
       fs.writeFileSync(path.join(worktree, "build.txt"), "recover stage work\n");
-      git(worktree, "add", "build.txt");
-      git(worktree, "commit", "-m", "stage work");
-      const head = git(worktree, "rev-parse", "HEAD");
+      (await git(worktree, "add", "build.txt"));
+      (await git(worktree, "commit", "-m", "stage work"));
+      const head = (await git(worktree, "rev-parse", "HEAD"));
       const exec = h.ports.exec;
-      h.ports.exec = (command, args, ...rest) => {
+      h.ports.exec = async (command, args, ...rest) => {
         if (command === "git" && args[0] === "merge" && args.includes("--ff-only")) {
-          if (interruptedAfterMerge) exec(command, args, ...rest);
+          if (interruptedAfterMerge) await exec(command, args, ...rest);
           throw new Error("fixture controller interruption");
         }
         return exec(command, args, ...rest);
@@ -1024,15 +1245,15 @@ for (const interruptedAfterMerge of [false, true]) {
       const interrupted = loadPipelines().find((item) => item.id === id)!;
       expect(interrupted.lastPassedCommit).toBe(lane.lastPassedCommit);
       expect(interrupted.runs[0]!.attempts[0]!.branchAdoption).toEqual({ branch: source, head, target: lane.branch });
-      expect(git(worktree, "branch", "--show-current")).toBe(lane.branch);
+      expect((await git(worktree, "branch", "--show-current"))).toBe(lane.branch);
       h.ports.exec = exec;
       await tickPipelines([], h.ports);
       const recovered = loadPipelines().find((item) => item.id === id)!;
       expect(recovered.state).toBe("running");
       expect(recovered.cursor?.stageId).toBe("review");
       expect(recovered.lastPassedCommit).toBe(head);
-      expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(head);
-      expect(git(worktree, "show", "HEAD:build.txt")).toBe("recover stage work");
+      expect((await git(origin, "rev-parse", `refs/heads/${lane.branch}`))).toBe(head);
+      expect((await git(worktree, "show", "HEAD:build.txt"))).toBe("recover stage work");
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -1048,21 +1269,21 @@ test("a stage branch is adopted onto an owned delivery branch when the lane ref 
     const { git, h, id, origin, worktree } = fixture;
     const lane = loadPipelines().find((item) => item.id === id)!;
     const delivery = "fix/existing-pr";
-    git(worktree, "branch", "-m", delivery);
+    (await git(worktree, "branch", "-m", delivery));
     lane.delivery!.target.branch = `refs/heads/${delivery}`;
     savePipelines([lane]);
-    git(worktree, "switch", "-c", "fix/new-stage");
+    (await git(worktree, "switch", "-c", "fix/new-stage"));
     fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
-    git(worktree, "add", "build.txt");
-    git(worktree, "commit", "-m", "stage work");
-    const head = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "build.txt"));
+    (await git(worktree, "commit", "-m", "stage work"));
+    const head = (await git(worktree, "rev-parse", "HEAD"));
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     const adopted = loadPipelines().find((item) => item.id === id)!;
     expect(adopted.state).toBe("running");
     expect(adopted.cursor?.stageId).toBe("review");
     expect(adopted.lastPassedCommit).toBe(head);
-    expect(git(worktree, "branch", "--show-current")).toBe(delivery);
-    expect(git(origin, "rev-parse", `refs/heads/${delivery}`)).toBe(head);
+    expect((await git(worktree, "branch", "--show-current"))).toBe(delivery);
+    expect((await git(origin, "rev-parse", `refs/heads/${delivery}`))).toBe(head);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1078,15 +1299,15 @@ test(`linked-worktree pipeline ownership refuses a foreign stage branch before c
     const { git, h, id, root, worktree } = fixture;
     const lane = loadPipelines().find((item) => item.id === id)!;
     const source = "fix/other-lane-owned";
-    git(worktree, "switch", "-c", source);
+    (await git(worktree, "switch", "-c", source));
     fs.writeFileSync(path.join(worktree, "uncommitted.txt"), "keep this work\n");
-    const sourceTip = git(worktree, "rev-parse", `refs/heads/${source}`);
-    const laneTip = git(worktree, "rev-parse", `refs/heads/${lane.branch}`);
+    const sourceTip = (await git(worktree, "rev-parse", `refs/heads/${source}`));
+    const laneTip = (await git(worktree, "rev-parse", `refs/heads/${lane.branch}`));
     const seed = path.join(root, "owner-seed");
-    git(worktree, "worktree", "add", "-b", "owner-seed", seed, lane.branch);
+    (await git(worktree, "worktree", "add", "-b", "owner-seed", seed, lane.branch));
     const linked = path.join(root, "linked");
-    git(seed, "worktree", "add", "-b", "other-lane-current", linked);
-    if (removeOwnerSeed) git(worktree, "worktree", "remove", seed);
+    (await git(seed, "worktree", "add", "-b", "other-lane-current", linked));
+    if (removeOwnerSeed) (await git(worktree, "worktree", "remove", seed));
     const other = structuredClone(lane);
     other.id = "other-pipeline";
     other.repoDir = removeOwnerSeed ? seed : linked;
@@ -1094,12 +1315,12 @@ test(`linked-worktree pipeline ownership refuses a foreign stage branch before c
     other.branch = source;
     const { commitAndAdoptStageBranch } = await import("./stageBranch");
 
-    const result = commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, other], undefined, () => {}, null);
+    const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, other], undefined, () => {}, null);
 
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
-    expect(git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(sourceTip);
-    expect(git(worktree, "rev-parse", `refs/heads/${lane.branch}`)).toBe(laneTip);
-    expect(git(worktree, "status", "--porcelain")).toContain("uncommitted.txt");
+    expect((await git(worktree, "rev-parse", `refs/heads/${source}`))).toBe(sourceTip);
+    expect((await git(worktree, "rev-parse", `refs/heads/${lane.branch}`))).toBe(laneTip);
+    expect((await git(worktree, "status", "--porcelain"))).toContain("uncommitted.txt");
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1113,7 +1334,7 @@ test("a busy-to-terminal stage retries settlement after collecting fresh branch 
   ], "remote-branch");
   try {
     const { git, h, id, worktree } = fixture;
-    git(worktree, "switch", "-c", "fix/busy-stage");
+    (await git(worktree, "switch", "-c", "fix/busy-stage"));
     expect(await engineModule.reportStageCompletion({ verdict: "pass" },
       { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
     const finished = h.finish("/codex/stage-1.jsonl", "pass");
@@ -1132,7 +1353,7 @@ test("a busy-to-terminal stage retries settlement after collecting fresh branch 
     const deferred = loadPipelines().find((item) => item.id === id)!;
     expect(deferred).toMatchObject({ state: "running", cursor: { stageId: "build", state: "committing" } });
     expect(deferred.runs[0]!.attempts[0]!.state).toBe("committing");
-    const stageTip = git(worktree, "rev-parse", "refs/heads/fix/busy-stage");
+    const stageTip = (await git(worktree, "rev-parse", "refs/heads/fix/busy-stage"));
     h.ports.conversationAgentActive = async () => false;
     await tickPipelines([], h.ports);
     const adopted = loadPipelines().find((item) => item.id === id)!;
@@ -1150,11 +1371,11 @@ test("a stage branch is adopted from durable terminal evidence before the scanne
   ], "remote-branch");
   try {
     const { git, h, id, worktree } = fixture;
-    git(worktree, "switch", "-c", "fix/durable-stage");
+    (await git(worktree, "switch", "-c", "fix/durable-stage"));
     fs.writeFileSync(path.join(worktree, "build.txt"), "durable stage work\n");
-    git(worktree, "add", "build.txt");
-    git(worktree, "commit", "-m", "stage work");
-    const head = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "build.txt"));
+    (await git(worktree, "commit", "-m", "stage work"));
+    const head = (await git(worktree, "rev-parse", "HEAD"));
     finishReported(h, "/codex/stage-1.jsonl", "pass", "Built");
     await tickPipelines([], h.ports);
     expect(loadPipelines().find((item) => item.id === id)).toMatchObject({ state: "running", lastPassedCommit: head, cursor: { stageId: "review" } });
@@ -1177,19 +1398,19 @@ for (const interruption of [null, "before-ref", "after-ref"] as const) {
       const lane = loadPipelines().find((item) => item.id === id)!;
       await tickPipelines([], h.ports);
       const source = "fix/divergent-stage";
-      git(worktree, "switch", "-c", source, base);
+      (await git(worktree, "switch", "-c", source, base));
       fs.writeFileSync(path.join(worktree, "accepted.txt"), "accepted work\n");
-      git(worktree, "add", "accepted.txt");
-      git(worktree, "commit", "-m", "retain accepted work with fresh history");
+      (await git(worktree, "add", "accepted.txt"));
+      (await git(worktree, "commit", "-m", "retain accepted work with fresh history"));
       fs.writeFileSync(path.join(worktree, "build.txt"), "stage work\n");
-      git(worktree, "add", "build.txt");
-      git(worktree, "commit", "-m", "stage work");
-      git(worktree, "push", "origin", source);
-      const head = git(worktree, "rev-parse", "HEAD");
+      (await git(worktree, "add", "build.txt"));
+      (await git(worktree, "commit", "-m", "stage work"));
+      (await git(worktree, "push", "origin", source));
+      const head = (await git(worktree, "rev-parse", "HEAD"));
       const exec = h.ports.exec;
-      if (interruption) h.ports.exec = (command, args, ...rest) => {
+      if (interruption) h.ports.exec = async (command, args, ...rest) => {
         if (command === "git" && args[0] === "update-ref" && args.includes("pipeline: reconcile rebased stage")) {
-          if (interruption === "after-ref") exec(command, args, ...rest);
+          if (interruption === "after-ref") await exec(command, args, ...rest);
           throw new Error("fixture reconciliation interruption");
         }
         return exec(command, args, ...rest);
@@ -1204,12 +1425,12 @@ for (const interruption of [null, "before-ref", "after-ref"] as const) {
       const adopted = loadPipelines().find((item) => item.id === id)!;
       expect(adopted.state).toBe("running");
       expect(adopted.cursor?.stageId).toBe("review");
-      expect(git(worktree, "rev-parse", "HEAD")).toBe(adopted.lastPassedCommit);
-      expect(git(worktree, "merge-base", lane.lastPassedCommit, adopted.lastPassedCommit)).toBe(lane.lastPassedCommit);
-      expect(git(worktree, "merge-base", head, adopted.lastPassedCommit)).toBe(head);
-      expect(git(worktree, "rev-parse", `refs/heads/${source}`)).toBe(head);
-      expect(git(origin, "rev-parse", `refs/heads/${source}`)).toBe(head);
-      expect(git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(adopted.lastPassedCommit);
+      expect((await git(worktree, "rev-parse", "HEAD"))).toBe(adopted.lastPassedCommit);
+      expect((await git(worktree, "merge-base", lane.lastPassedCommit, adopted.lastPassedCommit))).toBe(lane.lastPassedCommit);
+      expect((await git(worktree, "merge-base", head, adopted.lastPassedCommit))).toBe(head);
+      expect((await git(worktree, "rev-parse", `refs/heads/${source}`))).toBe(head);
+      expect((await git(origin, "rev-parse", `refs/heads/${source}`))).toBe(head);
+      expect((await git(origin, "rev-parse", `refs/heads/${lane.branch}`))).toBe(adopted.lastPassedCommit);
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -1230,22 +1451,22 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
     const branch = loadPipelines().find((item) => item.id === id)!.branch;
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(accepted);
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
     fs.writeFileSync(path.join(repo, "asset.bin"), crypto.randomBytes(1_200_000));
-    git(repo, "add", "main.txt");
-    git(repo, "add", "asset.bin");
-    git(repo, "commit", "-m", "advance main");
-    git(repo, "push", "origin", "main");
-    git(worktree, "rebase", "origin/main");
+    (await git(repo, "add", "main.txt"));
+    (await git(repo, "add", "asset.bin"));
+    (await git(repo, "commit", "-m", "advance main"));
+    (await git(repo, "push", "origin", "main"));
+    (await git(worktree, "rebase", "origin/main"));
     fs.appendFileSync(path.join(worktree, ".gitignore"), "builder-rule\n");
     fs.appendFileSync(path.join(worktree, "brief.md"), "builder elaboration\n");
     fs.writeFileSync(path.join(worktree, "build.txt"), "builder content\n");
-    git(worktree, "add", ".gitignore", "brief.md", "build.txt");
-    git(worktree, "commit", "-m", "build after rebase");
-    const rebased = git(worktree, "rev-parse", "HEAD");
-    const tree = git(worktree, "rev-parse", "HEAD^{tree}");
+    (await git(worktree, "add", ".gitignore", "brief.md", "build.txt"));
+    (await git(worktree, "commit", "-m", "build after rebase"));
+    const rebased = (await git(worktree, "rev-parse", "HEAD"));
+    const tree = (await git(worktree, "rev-parse", "HEAD^{tree}"));
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -1253,9 +1474,9 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     expect(current.state).toBe("running");
     expect(current.cursor?.stageId).toBe("review");
     const reconciled = current.lastPassedCommit;
-    expect(git(worktree, "rev-parse", `${reconciled}^{tree}`)).toBe(tree);
-    expect(git(worktree, "rev-list", "--parents", "-n", "1", reconciled)).toBe(`${reconciled} ${rebased} ${accepted}`);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(reconciled);
+    expect((await git(worktree, "rev-parse", `${reconciled}^{tree}`))).toBe(tree);
+    expect((await git(worktree, "rev-list", "--parents", "-n", "1", reconciled))).toBe(`${reconciled} ${rebased} ${accepted}`);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(reconciled);
     expect(current.publishedCommit).toBe(reconciled);
     for (let n = 0; n < 4 && h.spawnInputs.length < 3; n += 1) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(3);
@@ -1275,8 +1496,8 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
   try {
     const { h, git, worktree, base } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "committed partial fix");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "committed partial fix");
     const lane = loadPipelines()[0]!;
     if (settlement === "reported plus fenced completion") {
       lane.runs[0]!.attempts[0]!.report = {
@@ -1285,7 +1506,7 @@ test.each(["fenced verdict", "reported plus fenced completion"])("a fixer preser
         actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
         verdict: { status: "fail", blocked: true, blockedReason: "Required integration checks are unavailable", findings: ["P2 — unresolved integration failure"] },
         summary: "Blocked: required integration tests failed on base and still fail on head. TypeScript passed on head.",
-        provenance: { head: git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
+        provenance: { head: await git(worktree, "rev-parse", "HEAD"), branch: lane.branch, uncommitted: [], pullRequest: null, outputs: [] },
         calls: 1,
       };
       savePipelines([lane]);
@@ -1319,8 +1540,8 @@ test("a fenced fixer verdict keeps a blocker after the bounded relay output", as
   try {
     const { h, git, worktree, base } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "fix committed\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "committed partial fix");
+    await git(worktree, "add", "fix.txt");
+    await git(worktree, "commit", "-m", "committed partial fix");
     const summary = `${"Verification details recorded. ".repeat(1200)}Blocked: cannot run required integration checks.`;
     h.setConversationActive(false);
     h.messages.set("/codex/stage-1.jsonl", {
@@ -1349,20 +1570,20 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     const { git, h, id, repo, origin, worktree } = fixture;
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "dropped.md"), "accepted content\n");
-    git(worktree, "add", "dropped.md");
-    git(worktree, "commit", "-m", "accepted requirement");
-    const dropped = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "dropped.md"));
+    (await git(worktree, "commit", "-m", "accepted requirement"));
+    const dropped = (await git(worktree, "rev-parse", "HEAD"));
     fs.writeFileSync(path.join(worktree, "kept.md"), "kept content\n");
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     const accepted = loadPipelines().find((item) => item.id === id)!.lastPassedCommit;
     const branch = loadPipelines().find((item) => item.id === id)!.branch;
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(repo, "main.txt"), "new main\n");
-    git(repo, "add", "main.txt");
-    git(repo, "commit", "-m", "advance main");
-    git(repo, "push", "origin", "main");
-    git(worktree, "rebase", "--onto", "origin/main", dropped);
-    const rewritten = git(worktree, "rev-parse", "HEAD");
+    (await git(repo, "add", "main.txt"));
+    (await git(repo, "commit", "-m", "advance main"));
+    (await git(repo, "push", "origin", "main"));
+    (await git(worktree, "rebase", "--onto", "origin/main", dropped));
+    const rewritten = (await git(worktree, "rev-parse", "HEAD"));
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -1372,8 +1593,8 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     expect(parked.stateDetail).toContain(dropped);
     expect(parked.stateDetail).not.toContain(`dropped accepted commits: ${accepted}`);
     expect(parked.lastPassedCommit).toBe(accepted);
-    expect(git(worktree, "rev-parse", "HEAD")).toBe(rewritten);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(accepted);
+    expect((await git(worktree, "rev-parse", "HEAD"))).toBe(rewritten);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(accepted);
     expect(h.spawnInputs).toHaveLength(2);
   } finally {
     savePipelines([]);
@@ -1393,8 +1614,8 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    const built = git(worktree, "rev-parse", "HEAD");
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(built);
+    const built = (await git(worktree, "rev-parse", "HEAD"));
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(built);
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail")], h.ports);
@@ -1404,7 +1625,7 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     const offline = `${origin}.offline`;
     fs.renameSync(origin, offline);
     await tickPipelines([h.finish("/codex/stage-3.jsonl", "pass")], h.ports);
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    const fixed = (await git(worktree, "rev-parse", "HEAD"));
     expect(fixed).not.toBe(built);
     expect(loadPipelines().find((item) => item.id === id)).toMatchObject({
       state: "running", cursor: { stageId: "review-fix", state: "committing" }, lastPassedCommit: fixed,
@@ -1412,13 +1633,13 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     expect(h.spawnInputs).toHaveLength(3);
     fs.renameSync(offline, origin);
     await tickPipelines([], h.ports);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(fixed);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(fixed);
     for (let n = 0; n < 4 && h.spawnInputs.length < 4; n += 1) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(4);
     await tickPipelines([h.finish("/codex/stage-4.jsonl", "pass")], h.ports);
     const completed = loadPipelines().find((item) => item.id === id)!;
     expect(completed).toMatchObject({ state: "completed", lastPassedCommit: fixed, publishedCommit: fixed });
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(completed.lastPassedCommit);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(completed.lastPassedCommit);
   } finally {
     savePipelines([]);
     if (fs.existsSync(`${fixture.origin}.offline`)) fs.renameSync(`${fixture.origin}.offline`, fixture.origin);
@@ -1437,7 +1658,7 @@ test("an owner keeps a terminal read-only declared output local after publishing
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    const built = git(origin, "rev-parse", `refs/heads/${branch}`);
+    const built = (await git(origin, "rev-parse", `refs/heads/${branch}`));
     for (let n = 0; n < 4 && h.spawnInputs.length < 2; n += 1) await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(worktree, "review.md"), "approved\n");
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
@@ -1445,7 +1666,7 @@ test("an owner keeps a terminal read-only declared output local after publishing
     expect(completed.state).toBe("completed");
     expect(completed.lastPassedCommit).not.toBe(built);
     expect(completed.publishedCommit).toBe(built);
-    expect(git(origin, "rev-parse", `refs/heads/${branch}`)).toBe(built);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(built);
     expect(completed.runs[1]!.attempts[0]!.outputBaseHead).toBe(built);
   } finally {
     savePipelines([]);
@@ -1462,9 +1683,9 @@ test("skip carries a committed fix into review and completion without touching i
     const { h, git, worktree, id, base } = fixture;
     fs.writeFileSync(path.join(worktree, "fix.txt"), "accepted fix\n");
     fs.writeFileSync(path.join(worktree, "sentinel.tmp"), "untouched\n");
-    git(worktree, "add", "fix.txt");
-    git(worktree, "commit", "-m", "fix B");
-    const fixed = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "fix.txt"));
+    (await git(worktree, "commit", "-m", "fix B"));
+    const fixed = (await git(worktree, "rev-parse", "HEAD"));
     expect(fixed).not.toBe(base);
     h.setConversationActive(false);
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision")], h.ports);
@@ -1475,7 +1696,7 @@ test("skip carries a committed fix into review and completion without touching i
     });
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);
-    expect(git(worktree, "rev-parse", "HEAD")).toBe(fixed);
+    expect((await git(worktree, "rev-parse", "HEAD"))).toBe(fixed);
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
     expect(loadPipelines().find((item) => item.id === id)!).toMatchObject({ state: "completed", lastPassedCommit: fixed, cursor: null });
     expect(fs.readFileSync(path.join(worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
@@ -1492,9 +1713,9 @@ test("remote skip publishes the accepted head before its reviewer can start", as
   ], "remote-branch");
   try {
     fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
-    fixture.git(fixture.worktree, "add", "fix.txt");
-    fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
-    const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    (await fixture.git(fixture.worktree, "add", "fix.txt"));
+    (await fixture.git(fixture.worktree, "commit", "-m", "accepted fix"));
+    const accepted = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
     fixture.h.setConversationActive(false);
     await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "needs_decision")], fixture.h.ports);
     expect((await patchPipeline(fixture.id, { action: "skip-stage" }, fixture.h.ports)).error).toBeUndefined();
@@ -1502,8 +1723,9 @@ test("remote skip publishes the accepted head before its reviewer can start", as
     expect(waiting).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "fix", state: "committing" } });
     expect(waiting.runs[0]!.attempts[0]!.state).toBe("skipped");
     expect(fixture.h.spawnInputs).toHaveLength(1);
-    expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+    expect(waiting.delivery!.operation!.state).toBe("pending");
     await tickPipelines([], fixture.h.ports);
+    expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
     expect(loadPipelines().find((item) => item.id === fixture.id)!.cursor?.stageId).toBe("review");
     await tickPipelines([], fixture.h.ports);
     expect(fixture.h.spawnInputs).toHaveLength(2);
@@ -1523,8 +1745,8 @@ for (const completion of ["pass", "skip"] as const) {
     try {
       fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
       if (completion === "skip") {
-        fixture.git(fixture.worktree, "add", "fix.txt");
-        fixture.git(fixture.worktree, "commit", "-m", "accepted fix");
+        (await fixture.git(fixture.worktree, "add", "fix.txt"));
+        (await fixture.git(fixture.worktree, "commit", "-m", "accepted fix"));
       }
       fixture.h.setConversationActive(false);
       fs.renameSync(fixture.origin, offline);
@@ -1534,7 +1756,7 @@ for (const completion of ["pass", "skip"] as const) {
       }
       await tickPipelines([], fixture.h.ports);
       const waiting = loadPipelines().find((item) => item.id === fixture.id)!;
-      const accepted = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+      const accepted = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
       expect(waiting.lastPassedCommit).toBe(accepted);
       expect(waiting.publishedCommit).toBeNull();
       expect(waiting.cursor).toMatchObject({ stageId: "fix", state: "committing" });
@@ -1542,7 +1764,7 @@ for (const completion of ["pass", "skip"] as const) {
       fs.renameSync(offline, fixture.origin);
       await tickPipelines([], fixture.h.ports);
       await tickPipelines([], fixture.h.ports);
-      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`)).toBe(accepted);
+      expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
       expect(fixture.h.spawnInputs).toHaveLength(2);
     } finally {
       savePipelines([]);
@@ -1564,7 +1786,7 @@ test("ordinary retry leaves dirty work for the next attempt", async () => {
     expect(fs.readFileSync(path.join(fixture.worktree, "draft.txt"), "utf8")).toBe("unfinished\n");
     await tickPipelines([], fixture.h.ports);
     expect(fixture.h.spawnInputs).toHaveLength(2);
-    expect(fixture.git(fixture.worktree, "rev-parse", "HEAD")).toBe(fixture.base);
+    expect((await fixture.git(fixture.worktree, "rev-parse", "HEAD"))).toBe(fixture.base);
   } finally {
     savePipelines([]);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -1584,7 +1806,7 @@ test("a read-only architect pass commits its declared fix output through settlem
     const current = loadPipelines().find((item) => item.id === fixture.id)!;
     expect(current.state).toBe("completed");
     expect(current.lastPassedCommit).not.toBe(fixture.base);
-    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("reports/fix.md");
+    expect((await fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("reports/fix.md");
     expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
   } finally {
     savePipelines([]);
@@ -1606,9 +1828,9 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
     };
     savePipelines([admitted]);
     fs.writeFileSync(path.join(worktree, "build.txt"), "accepted build\n");
-    git(worktree, "add", "build.txt");
-    git(worktree, "commit", "-m", "accepted build");
-    const prHead = git(worktree, "rev-parse", "HEAD");
+    (await git(worktree, "add", "build.txt"));
+    (await git(worktree, "commit", "-m", "accepted build"));
+    const prHead = (await git(worktree, "rev-parse", "HEAD"));
     h.setConversationActive(false);
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
     await tickPipelines([], h.ports);
@@ -1678,12 +1900,12 @@ test("a skipped legacy architect publishes its declared output to the review flo
     expect((await patchPipeline(id, { action: "skip-stage" }, h.ports)).error).toBeUndefined();
     await tickPipelines([], h.ports);
     const skipped = loadPipelines().find((item) => item.id === id)!;
-    const accepted = git(worktree, "rev-parse", "HEAD");
+    const accepted = (await git(worktree, "rev-parse", "HEAD"));
     expect(accepted).not.toBe(fixture.base);
     expect(skipped).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "review" } });
     expect(skipped.runs[0]!.attempts[0]!.state).toBe("skipped");
-    expect(git(worktree, "show", "--name-only", "--format=", "HEAD")).toBe("fix.txt");
-    expect(git(origin, "rev-parse", `refs/heads/${skipped.branch}`)).toBe(accepted);
+    expect((await git(worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("fix.txt");
+    expect((await git(origin, "rev-parse", `refs/heads/${skipped.branch}`))).toBe(accepted);
     await tickPipelines([], h.ports);
     const review = loadPipelines().find((item) => item.id === id)!;
     expect(review.state).toBe("running");
@@ -1709,7 +1931,7 @@ test(`a legacy architect repair commits its declared output before ${publication
     fixture.h.setConversationActive(false);
     await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "pass")], fixture.h.ports);
     await tickPipelines([], fixture.h.ports);
-    const first = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    const first = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
     const flow = fixture.h.flows.get("flow-1")!;
     expect(flow).toBeDefined();
     const transcript = path.join(fixture.root, "architect-repair.jsonl");
@@ -1721,6 +1943,10 @@ test(`a legacy architect repair commits its declared output before ${publication
     const roles = { implementer: { engine: "codex" as const, model: null, effort: "high" }, reviewer: { engine: "codex" as const, model: null, effort: "high" } };
     const firstRound = { ...newRound({ ...flow, roles, rounds: [] }, "marker", null), n: 1, startedAt: "2026-07-22T00:00:00Z", relayedAt: "2026-07-22T00:01:00Z" };
     Object.assign(flow, {
+      template: "implement-review-loop",
+      project: loadPipelines().find((item) => item.id === fixture.id)!.project,
+      baseMode: "head",
+      pausedState: null, stateDetail: null,
       cwd: fixture.worktree,
       implementerPath: transcript,
       requireRemoteHead: publication === "remote-branch",
@@ -1729,6 +1955,7 @@ test(`a legacy architect repair commits its declared output before ${publication
       createdAt: "2026-07-21T00:00:00Z",
       rounds: [firstRound],
     });
+    saveFlows([flow]);
     fs.writeFileSync(path.join(fixture.worktree, "report.md"), "repaired report\n");
     fs.writeFileSync(path.join(fixture.worktree, "sentinel.tmp"), "keep me\n");
     const record = entry(transcript);
@@ -1736,21 +1963,23 @@ test(`a legacy architect repair commits its declared output before ${publication
     record.mtime = Date.now() / 1_000;
     if (publication === "remote-branch") fs.renameSync(fixture.origin, offline);
     expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
-    const repaired = fixture.git(fixture.worktree, "rev-parse", "HEAD");
+    const repaired = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
     expect(repaired).not.toBe(first);
     if (publication === "remote-branch") {
       expect(flow.state).toBe("fixing");
       expect(flow.rounds).toHaveLength(1);
       fs.renameSync(offline, fixture.origin);
+      saveFlows([flow]);
       expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
-      expect(fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`)).toBe(repaired);
+      expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`))).toBe(repaired);
     }
     expect(flow.state).toBe("spawning");
     expect(flow.rounds[1]!.reviewHeadSha).toBe(repaired);
     expect(loadPipelines().find((item) => item.id === fixture.id)!.lastPassedCommit).toBe(repaired);
-    expect(fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD")).toBe("report.md");
+    expect((await fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("report.md");
     expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("keep me\n");
   } finally {
+    saveFlows([]);
     savePipelines([]);
     if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
     fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -1765,24 +1994,24 @@ test("a new owner reviews the commit published after the producer turn ends", as
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   try {
     fs.mkdirSync(repo);
-    git(root, "init", "--bare", "--initial-branch=main", origin);
-    git(repo, "init", "--initial-branch=main");
-    git(repo, "config", "user.name", "Fixture");
-    git(repo, "config", "user.email", "noreply@example.com");
-    git(repo, "config", "commit.gpgSign", "false");
+    (await git(root, "init", "--bare", "--initial-branch=main", origin));
+    (await git(repo, "init", "--initial-branch=main"));
+    (await git(repo, "config", "user.name", "Fixture"));
+    (await git(repo, "config", "user.email", "noreply@example.com"));
+    (await git(repo, "config", "commit.gpgSign", "false"));
     fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
-    git(repo, "add", "base.txt");
-    git(repo, "commit", "-m", "base");
-    git(repo, "remote", "add", "origin", origin);
-    git(repo, "push", "origin", "main");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "base.txt"));
+    (await git(repo, "commit", "-m", "base"));
+    (await git(repo, "remote", "add", "origin", origin));
+    (await git(repo, "push", "origin", "main"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
 
     const h = harness();
     h.ports.exec = realExec;
@@ -1799,8 +2028,8 @@ test("a new owner reviews the commit published after the producer turn ends", as
     const id = created.pipeline.id;
     await tickPipelines([], h.ports);
     const lane = loadPipelines().find((item) => item.id === id)!;
-    expect(git(lane.worktreeDir, "branch", "--show-current")).toBe("feature/shared");
-    expect(realExec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${lane.branch}`], repo).code).not.toBe(0);
+    expect((await git(lane.worktreeDir, "branch", "--show-current"))).toBe("feature/shared");
+    expect((await realExec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${lane.branch}`], repo)).code).not.toBe(0);
     await tickPipelines([], h.ports);
     fs.writeFileSync(path.join(lane.worktreeDir, "work.txt"), "producer work\n");
     const ready = h.finish("/codex/stage-1.jsonl", "pass");
@@ -1813,11 +2042,11 @@ test("a new owner reviews the commit published after the producer turn ends", as
     ready.activity = "idle";
     h.setConversationActive(false);
     await tickPipelines([ready], h.ports);
-    const committed = git(lane.worktreeDir, "rev-parse", "HEAD");
+    const committed = (await git(lane.worktreeDir, "rev-parse", "HEAD"));
     expect(committed).not.toBe(base);
     expect(h.spawnInputs).toHaveLength(1);
     for (let n = 0; n < 5 && h.spawnInputs.length === 1; n += 1) await tickPipelines([], h.ports);
-    expect(git(origin, "rev-parse", "refs/heads/feature/shared")).toBe(committed);
+    expect((await git(origin, "rev-parse", "refs/heads/feature/shared"))).toBe(committed);
     expect(loadPipelines().find((item) => item.id === id)!.lastPassedCommit).toBe(committed);
     expect(h.spawnInputs).toHaveLength(2);
     await tickPipelines([], h.ports);
@@ -1836,28 +2065,28 @@ for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "l
     const origin = path.join(root, "origin.git");
     const { realExec } = await import("@/lib/workflows/provision");
     const { realProvisionExec } = await import("./git");
-    const git = (cwd: string, ...args: string[]) => {
-      const result = realExec("git", args, cwd);
+    const git = async (cwd: string, ...args: string[]) => {
+      const result = (await realExec("git", args, cwd));
       if (result.code !== 0) throw new Error(result.stderr || result.stdout);
       return result.stdout.trim();
     };
     try {
       fs.mkdirSync(repo);
-      git(repo, "init", "--initial-branch=main");
-      git(repo, "config", "user.name", "Fixture");
-      git(repo, "config", "user.email", "noreply");
-      git(repo, "config", "commit.gpgSign", "false");
-      git(repo, "commit", "--allow-empty", "-m", "pinned base");
-      const base = git(repo, "rev-parse", "HEAD");
-      git(root, "init", "--bare", "--initial-branch=main", origin);
-      git(repo, "remote", "add", "origin", origin);
-      git(repo, "push", "origin", "main");
-      git(repo, "checkout", "-b", "feature/provision");
-      git(repo, "commit", "--allow-empty", "-m", "published head");
-      git(repo, "push", "origin", "feature/provision");
-      const published = git(repo, "rev-parse", "HEAD");
-      git(repo, "commit", "--allow-empty", "-m", "unpublished leftover");
-      const leftover = git(repo, "rev-parse", "HEAD");
+      (await git(repo, "init", "--initial-branch=main"));
+      (await git(repo, "config", "user.name", "Fixture"));
+      (await git(repo, "config", "user.email", "noreply"));
+      (await git(repo, "config", "commit.gpgSign", "false"));
+      (await git(repo, "commit", "--allow-empty", "-m", "pinned base"));
+      const base = (await git(repo, "rev-parse", "HEAD"));
+      (await git(root, "init", "--bare", "--initial-branch=main", origin));
+      (await git(repo, "remote", "add", "origin", origin));
+      (await git(repo, "push", "origin", "main"));
+      (await git(repo, "checkout", "-b", "feature/provision"));
+      (await git(repo, "commit", "--allow-empty", "-m", "published head"));
+      (await git(repo, "push", "origin", "feature/provision"));
+      const published = (await git(repo, "rev-parse", "HEAD"));
+      (await git(repo, "commit", "--allow-empty", "-m", "unpublished leftover"));
+      const leftover = (await git(repo, "rev-parse", "HEAD"));
       const h = harness();
       h.ports.exec = realExec;
       h.ports.provisionExec = realProvisionExec;
@@ -1896,10 +2125,10 @@ for (const pin of ["automatic", "explicit", "legacy-draft", "legacy-unknown", "l
       await tickPipelines([], h.ports);
       const lane = loadPipelines().find((item) => item.id === created.pipeline!.id)!;
       expect(lane.state).toBe("running");
-      expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(pinned ? base : published);
-      expect(git(repo, "rev-parse", "HEAD")).toBe(leftover);
-      const backup = git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished");
-      expect(git(repo, "rev-parse", backup)).toBe(leftover);
+      expect((await git(lane.worktreeDir, "rev-parse", "HEAD"))).toBe(pinned ? base : published);
+      expect((await git(repo, "rev-parse", "HEAD"))).toBe(leftover);
+      const backup = (await git(repo, "for-each-ref", "--format=%(refname)", "refs/backup/provision-unpublished"));
+      expect((await git(repo, "rev-parse", backup))).toBe(leftover);
       expect(lane.stateDetail).toContain(backup);
       expect(lane.delivery!.journal.some((entry) => entry.reason.includes(backup) && entry.reason.includes("1 unpublished commit"))).toBe(true);
       expect(loadPipelines().find((item) => item.id === lane.id)!.baseRefPinned ?? false).toBe(pinned);
@@ -2078,17 +2307,17 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     expect(expected).toContain("Role prompt scaffold:");
     expect(expected).toContain("Report this stage's completion with the Delegatus MCP tool stage_report");
     expect(expected).toContain(previous);
-    expect(git(worktree, "status", "--porcelain")).toBe("");
+    expect((await git(worktree, "status", "--porcelain"))).toBe("");
     fs.writeFileSync(path.join(worktree, "result.txt"), "worker result\n");
-    git(worktree, "add", "-A");
-    expect(git(worktree, "diff", "--cached", "--name-only")).toBe("result.txt");
+    (await git(worktree, "add", "-A"));
+    expect((await git(worktree, "diff", "--cached", "--name-only"))).toBe("result.txt");
     expect(await engineModule.reportStageCompletion({ verdict: "pass" },
       { kind: "agent", role: "builder", conversationId: "conversation_stage_2" }, h.ports))
       .toMatchObject({ report: { verdict: { status: "pass" } } });
     await tickPipelines([finishReported(h, "/codex/stage-2.jsonl", "pass", "Built")], h.ports);
     expect(loadPipelines().find((item) => item.id === id)?.state).toBe("completed");
-    expect(git(worktree, "ls-files", "--", ".artifacts/pipeline-stage-inputs")).toBe("");
-    expect(git(worktree, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("result.txt");
+    expect((await git(worktree, "ls-files", "--", ".artifacts/pipeline-stage-inputs"))).toBe("");
+    expect((await git(worktree, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))).toBe("result.txt");
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -3524,23 +3753,23 @@ test("lanes in linked checkouts serialize Git writes through their common direct
   const origin = path.join(root, "origin.git");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr);
     return result.stdout.trim();
   };
   try {
-    git(root, "init", "--bare", "--initial-branch=main", origin);
-    git(root, "clone", origin, source);
-    git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
-    git(source, "push", "origin", "main");
-    git(source, "worktree", "add", "-b", "linked", linked);
+    (await git(root, "init", "--bare", "--initial-branch=main", origin));
+    (await git(root, "clone", origin, source));
+    (await git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base"));
+    (await git(source, "push", "origin", "main"));
+    (await git(source, "worktree", "add", "-b", "linked", linked));
     // Advance the remote from an independent clone, leaving both local refs stale.
     const publisher = path.join(root, "publisher");
-    git(root, "clone", origin, publisher);
-    git(publisher, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance");
-    git(publisher, "push", "origin", "main");
-    const expected = git(publisher, "rev-parse", "HEAD");
+    (await git(root, "clone", origin, publisher));
+    (await git(publisher, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "advance"));
+    (await git(publisher, "push", "origin", "main"));
+    const expected = (await git(publisher, "rev-parse", "HEAD"));
     const hook = path.join(source, ".git", "hooks", "reference-transaction");
     fs.writeFileSync(hook, '#!/bin/sh\nif [ "$1" = prepared ]; then sleep 0.1; fi\n', { mode: 0o755 });
     for (const repoDir of [source, linked]) {
@@ -3558,7 +3787,7 @@ test("lanes in linked checkouts serialize Git writes through their common direct
     expect(peakWriters).toBe(1);
     for (const pipeline of loadPipelines()) {
       expect(pipeline).toMatchObject({ state: "running", baseRef: expected, lastPassedCommit: expected });
-      expect(git(pipeline.worktreeDir, "rev-parse", "HEAD")).toBe(expected);
+      expect((await git(pipeline.worktreeDir, "rev-parse", "HEAD"))).toBe(expected);
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 10_000);
@@ -3582,7 +3811,7 @@ for (const disposition of ["close", "remove"] as const) {
         result = await child;
         return result;
       }
-      return h.ports.exec(command, args, cwd);
+      return (await h.ports.exec(command, args, cwd));
     };
     const tick = tickPipelines([], h.ports);
     try {
@@ -3596,7 +3825,7 @@ for (const disposition of ["close", "remove"] as const) {
       }
       await tick;
       // Killed, not waited out: the five-second fetch ended on SIGKILL.
-      expect(result?.stderr).toBe("pipeline provisioning cancelled");
+      expect(result?.stderr).toBe("command cancelled");
       expect(result?.signal).toBe("SIGKILL");
       expect(fetches).toBe(1);
       expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
@@ -3619,7 +3848,7 @@ test("a completed provision loses its fence when ownership changes before the ap
   let checked!: () => void;
   const completed = new Promise<void>((resolve) => { checked = resolve; });
   h.ports.provisionExec = async (command, args, cwd) => {
-    const result = h.ports.exec(command, args, cwd);
+    const result = (await h.ports.exec(command, args, cwd));
     if (args[0] === "rev-parse" && args[1] === "HEAD") checked();
     return result;
   };
@@ -3789,16 +4018,16 @@ async function realProvisioningRepo(name: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-${name}-`));
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
-  const git = (cwd: string, ...args: string[]) => {
-    const result = realExec("git", args, cwd);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = (await realExec("git", args, cwd));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   fs.mkdirSync(repo);
-  git(repo, "init", "--initial-branch=main");
-  git(repo, "config", "user.name", "Fixture");
-  git(repo, "config", "user.email", "noreply@example.com");
-  git(repo, "config", "commit.gpgSign", "false");
+  (await git(repo, "init", "--initial-branch=main"));
+  (await git(repo, "config", "user.name", "Fixture"));
+  (await git(repo, "config", "user.email", "noreply@example.com"));
+  (await git(repo, "config", "commit.gpgSign", "false"));
   return { root, repo, git, realExec };
 }
 
@@ -3807,9 +4036,9 @@ test("a ref lock another Git process holds is retried, and the lane provisions o
   const { root, repo, git, realExec } = await realProvisioningRepo("ref-lock");
   try {
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
     const h = harness();
     const { scheduled, advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3834,7 +4063,7 @@ test("a ref lock another Git process holds is retried, and the lane provisions o
     advance(5_000);
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
-    expect(git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(base);
+    expect((await git(lane.worktreeDir, "rev-parse", "HEAD"))).toBe(base);
     expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 10_000);
@@ -3844,9 +4073,9 @@ test("a failed attempt that already created the branch and worktree is adopted b
   const { root, repo, git, realExec } = await realProvisioningRepo("adopt-created");
   try {
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
     const h = harness();
     const { advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3867,7 +4096,7 @@ test("a failed attempt that already created the branch and worktree is adopted b
       advance(60_000);
     }
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base });
-    expect(git(created.pipeline!.worktreeDir, "rev-parse", "HEAD")).toBe(base);
+    expect((await git(created.pipeline!.worktreeDir, "rev-parse", "HEAD"))).toBe(base);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 10_000);
 
@@ -3878,12 +4107,12 @@ test("a checkout killed at its bound is finished by the retry instead of parking
   try {
     fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
     /* A checkout that cannot finish inside its bound: the host under load. */
-    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
-    git(repo, "config", "filter.slow.required", "true");
+    (await git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
+    (await git(repo, "config", "filter.slow.required", "true"));
     const h = harness();
     const { scheduled, advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3901,19 +4130,19 @@ test("a checkout killed at its bound is finished by the retry instead of parking
     expect(waiting.state).toBe("provisioning");
     expect(waiting.stateDetail).toContain("checkout interrupted or timed out");
     expect(scheduled).toEqual([5_000]);
-    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).toContain("locked initializing");
     fs.writeFileSync(path.join(lane.worktreeDir, "keep.txt"), "untracked work survives\n");
 
     // The load passes; the retry finishes the checkout the killed one began.
-    git(repo, "config", "filter.slow.smudge", "cat");
-    git(repo, "config", "filter.slow.clean", "cat");
+    (await git(repo, "config", "filter.slow.smudge", "cat"));
+    (await git(repo, "config", "filter.slow.clean", "cat"));
     advance(5_000);
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
     expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
     expect(fs.readFileSync(path.join(lane.worktreeDir, "keep.txt"), "utf8")).toBe("untracked work survives\n");
-    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("locked");
-    expect(git(lane.worktreeDir, "status", "--porcelain", "--untracked-files=no")).toBe("");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).not.toContain("locked");
+    expect((await git(lane.worktreeDir, "status", "--porcelain", "--untracked-files=no"))).toBe("");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 
@@ -3924,11 +4153,11 @@ test("interrupted checkout recovery preserves an untracked directory that blocks
   try {
     fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
-    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
-    git(repo, "config", "filter.slow.required", "true");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
+    (await git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
+    (await git(repo, "config", "filter.slow.required", "true"));
     const h = harness();
     const { scheduled, advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3944,15 +4173,15 @@ test("interrupted checkout recovery preserves an untracked directory that blocks
     fs.rmSync(collision, { recursive: true, force: true });
     fs.mkdirSync(collision);
     fs.writeFileSync(path.join(collision, "operator-note.txt"), "keep this operator file\n");
-    git(repo, "config", "filter.slow.smudge", "cat");
-    git(repo, "config", "filter.slow.clean", "cat");
+    (await git(repo, "config", "filter.slow.smudge", "cat"));
+    (await git(repo, "config", "filter.slow.clean", "cat"));
 
     advance(5_000);
     await tickPipelines([], h.ports);
 
     expect(JSON.stringify(loadPipelines()[0])).toContain("untracked content blocking tracked paths");
     expect(fs.readFileSync(path.join(collision, "operator-note.txt"), "utf8")).toBe("keep this operator file\n");
-    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).toContain("locked initializing");
     expect(scheduled).toEqual([5_000]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
@@ -3965,11 +4194,11 @@ test("interrupted checkout recovery parks before overwriting a tracked edit", as
     fs.writeFileSync(path.join(repo, ".gitattributes"), "tracked.txt filter=slow\n");
     fs.writeFileSync(path.join(repo, "a.txt"), "original operator file\n");
     fs.writeFileSync(path.join(repo, "tracked.txt"), "complete file\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-m", "base");
-    const base = git(repo, "rev-parse", "HEAD");
-    git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`);
-    git(repo, "config", "filter.slow.required", "true");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    const base = (await git(repo, "rev-parse", "HEAD"));
+    (await git(repo, "config", "filter.slow.smudge", `printf ready > '${marker}'; sleep 120; cat`));
+    (await git(repo, "config", "filter.slow.required", "true"));
     const h = harness();
     const { advance } = provisionRetryClock(h);
     const { realProvisionExec } = await import("./git");
@@ -3983,15 +4212,15 @@ test("interrupted checkout recovery parks before overwriting a tracked edit", as
     expect(fs.existsSync(marker)).toBe(true);
     const edited = path.join(lane.worktreeDir, "a.txt");
     fs.writeFileSync(edited, "operator edit to preserve\n");
-    git(repo, "config", "filter.slow.smudge", "cat");
-    git(repo, "config", "filter.slow.clean", "cat");
+    (await git(repo, "config", "filter.slow.smudge", "cat"));
+    (await git(repo, "config", "filter.slow.clean", "cat"));
 
     advance(5_000);
     await tickPipelines([], h.ports);
 
     expect(JSON.stringify(loadPipelines()[0])).toContain("modified tracked path");
     expect(fs.readFileSync(edited, "utf8")).toBe("operator edit to preserve\n");
-    expect(git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+    expect((await git(repo, "worktree", "list", "--porcelain"))).toContain("locked initializing");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 
@@ -4465,7 +4694,7 @@ test("spawn reservations persist before actuation and concurrent creation waits 
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBe("launch-durable");
 });
 
-test.each([false, true])("activation drain measures lease hold and unrelated commands (enabled: %s)", async (enabled) => {
+test.each([false, true])("activation drain yields the lease regardless of the legacy flag (%s)", async (enabled) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -4512,13 +4741,11 @@ test.each([false, true])("activation drain measures lease hold and unrelated com
   try {
     await Bun.sleep(100);
     const making = createPipelineFromRequest({ task: "Unrelated draft", repoDir: "/repo", autoStart: false, stages: [...RUN_STAGES] }, h.ports);
-    if (enabled) expect((await making).pipeline).toBeDefined();
-    else await expect(making).rejects.toThrow("pipeline state is busy");
+    expect((await making).pipeline).toBeDefined();
     const retrying = patchPipeline(retry.id, { action: "retry-stage" }, h.ports);
-    if (enabled) expect((await retrying).error).toBeUndefined();
-    else await expect(retrying).rejects.toThrow("pipeline state is busy");
+    expect((await retrying).error).toBeUndefined();
     const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
-    try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: enabled ? 0 : 1 }); }
+    try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
     finally { db.close(); }
   } finally {
     console.log(`spawn workload pending for ${(performance.now() - start).toFixed(1)}ms`);
@@ -5626,6 +5853,9 @@ test("an exhausted false park ingests its live host's late verdict without a dup
     message: { text: PASS_TEXT, ts: 5_000_000 },
   });
 
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  // Settlement releases the lease before the next scheduled activation.
   await tickPipelines([], h.ports);
 
   const recovered = loadPipelines()[0]!;
@@ -9937,12 +10167,12 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(roundCount).toBe(1);
 
     fs.mkdirSync(repo);
-    git("init", "-q");
+    (await git("init", "-q"));
     fs.writeFileSync(path.join(repo, "work.txt"), "before\n");
-    git("add", "work.txt");
-    git("-c", "user.name=Test", "-c", "user.email=fixture", "commit", "-qm", "baseline");
+    (await git("add", "work.txt"));
+    (await git("-c", "user.name=Test", "-c", "user.email=fixture", "commit", "-qm", "baseline"));
     fs.writeFileSync(path.join(repo, "work.txt"), "unfinished Claude edit\n");
-    const dirtyDiff = git("diff", "--", "work.txt");
+    const dirtyDiff = (await git("diff", "--", "work.txt"));
     expect(dirtyDiff).toContain("unfinished Claude edit");
     const successorPath = "/codex/stage-3-successor.jsonl";
     const sourceId = "019f423a-d6e9-\x34903-b597-3e676b6ff3d4";
@@ -9999,7 +10229,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(continuations).toHaveLength(1);
     expect(switching.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(1);
     expect(edgeRoundsUsed(switching, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
-    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+    expect((await git("diff", "--", "work.txt"))).toBe(dirtyDiff);
 
     h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
     await tickPipelines([], h.ports);
@@ -10025,7 +10255,7 @@ test("a Claude session limit preserves dirty work, stage identity and review rou
     expect(continuations.every((item) => item.conversationId === limited.conversationId
       && item.clientMessageId === continuations[0]!.clientMessageId)).toBe(true);
     expect(edgeRoundsUsed(resumed, { from: "build", to: "review", kind: "pass" })).toBe(roundCount);
-    expect(git("diff", "--", "work.txt")).toBe(dirtyDiff);
+    expect((await git("diff", "--", "work.txt"))).toBe(dirtyDiff);
     // Settlement may unstage only the private artifact path; recovery must
     // never reset or clean the worker's dirty files (also checked in real Git).
     expect(h.calls.filter((call) => /\b(?:reset|clean)\b/.test(call))
@@ -12252,6 +12482,7 @@ test("a terminal spent gate re-checks the last fix and completes only on pass (#
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
   await buildRound(h, "initial build");
   await critiqueRound(h, "fail", "finding");
   await buildRound(h, "last fix");
@@ -12287,13 +12518,83 @@ test.each([
   /* The failed final re-check parks without another fix. */
   expect(pipeline.state).toBe("needs_decision");
   expect(pipeline.cursor?.stageId).toBe("critique");
-  expect(pipeline.reviewPending).toBeUndefined();
+  expect(pipeline.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
   expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
   /* The unreviewed findings stay on the record, and the record names the heads. */
   expect(critiques[reviews - 1]).toMatchObject({ budgetSpent: true, reviewedHead: newHead ? REVIEW_HEADS[reviews - 1] : REVIEW_HEADS[0], verdict: { status: "fail", findings: [`P2 evidence gap ${reviews}`] } });
   const currentHead = newHead ? REVIEW_HEADS[reviews]! : REVIEW_HEADS[0]!;
   expect(pipeline.lastPassedCommit).toBe(currentHead);
   expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
+});
+
+test.each([{ rounds: 1, decision: false }, { rounds: 2, decision: false }, { rounds: 2, decision: true }])("terminal budget re-check continuation grants exactly $rounds fresh reviews on the same lane (decision: $decision)", async ({ rounds, decision }) => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 2 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  const lane = loadPipelines()[0]!;
+  saveTasks([{ id: "budget-note-task", project: lane.project, text: "Continue reviewed change", status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt }]);
+  expect((await patchPipeline(lane.id, { action: "link-task", taskId: "budget-note-task" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await buildRound(h, "first head");
+  await critiqueRound(h, "fail", "first finding");
+  await buildRound(h, "second head");
+  await critiqueRound(h, "fail", "second finding");
+  await buildRound(h, "last budget fix");
+  if (decision) {
+    await tickPipelines([], h.ports);
+    const review = loadPipelines()[0]!.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+    h.messages.set(review.agentPath!, { text: 'Remaining finding\n\n```json\n{"status":"needs_decision","findings":["P1 remaining finding"]}\n```', ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry(review.agentPath!)], h.ports);
+  } else {
+    await critiqueRound(h, "fail", "remaining finding");
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const revision = pipelineRevision(parked);
+  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, attempt: 3, findings: 1, currentHead: REVIEW_HEADS[2] });
+  expect(parked.stateDetail).toContain("continue-review");
+  expect(loadTasks()[0]!.note?.text).toContain("continue-review");
+  expect(loadTasks()[0]!.note?.text).toContain("addRounds");
+  const grantRequest = { action: "continue-review" as const, clientRequestId: "actor-grant", addRounds: rounds, expectedRevision: revision };
+  expect((await patchPipeline(parked.id, grantRequest, h.ports, { kind: "agent", role: "orchestrator", conversationId: "conversation_other" })).status).toBe(403);
+  expect((await acceptHead(parked, "reject-failed-head")).status).toBe(409);
+  expect((await continueReview(parked, "bad-rounds", 0)).status).toBe(400);
+  expect((await continueReview(parked, "stale-grant", rounds, "a".repeat(64))).status).toBe(409);
+  expect((await continueReview(parked, "terminal-grant", rounds, revision)).error).toBeUndefined();
+  let current = loadPipelines()[0]!;
+  expect(current.id).toBe(parked.id);
+  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 3, edge: "fail" } });
+  expect(current.cursor!.input).toContain("P1 remaining finding");
+  expect(current.reviewGrants).toHaveLength(1);
+  expect(current.reviewGrants![0]).toMatchObject({ rounds, expectedRevision: revision });
+  expect((await continueReview(parked, "terminal-grant", rounds, revision)).replayed).toBe(true);
+  expect((await continueReview(parked, "competing-grant", rounds, revision)).status).toBe(409);
+  for (let n = 0; n < rounds; n++) {
+    await buildRound(h, `continued fix ${n}`);
+    current = loadPipelines()[0]!;
+    expect(current.cursor!.stageId).toBe("critique");
+
+    expect(current.lastPassedCommit).toBe(REVIEW_HEADS[3 + n]);
+    await critiqueRound(h, "fail", `retained finding ${n}`);
+    expect(h.spawnInputs.at(-1)!.role.roleId).toBe("reviewer");
+    expect(h.spawnInputs.at(-1)!.cwd).toBe(current.worktreeDir!);
+    expect(h.spawnInputs.at(-1)!.prompt).toContain(`continued fix ${n}`);
+  }
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
+  const reviews = current.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(3 + rounds);
+  expect(new Set(reviews.map((attempt) => attempt.conversationId)).size).toBe(3 + rounds);
+  expect(reviews.every((attempt) => attempt.state === "failed" || decision && attempt.state === "needs_decision")).toBe(true);
+  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[2 + rounds]);
+  // A later explicit grant still requires a fix and an independent passing review.
+  expect((await continueReview(current, "final-grant", 1)).error).toBeUndefined();
+  await buildRound(h, "final fix");
+  await critiqueRound(h, "pass", "fresh approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
 });
 
 test("under the default a last fix with a new head takes the reviewer's pass edge, and the next stage reads the unreviewed findings (#2187)", async () => {
@@ -12978,9 +13279,38 @@ async function interruptedPublication() {
   savePipelines([pipeline]);
   box.setRemoteReadFails(false);
   const { publishPipelineBranch } = await import("./git");
-  await publishPipelineBranch(pipeline, () => { throw new Error("publisher interrupted after reservation"); }, { acceptedSha: box.passedSha });
+  await publishPipelineBranch(pipeline, async (command, args, cwd, env, options) => {
+    if (args[0] === "push") throw new Error("publisher interrupted during the remote write");
+    return await h.ports.exec(command, args, cwd, env, options);
+  }, { acceptedSha: box.passedSha });
   return { h, box, pipeline: loadPipelines()[0]! };
 }
+
+test.each(["paused", "closed"] as const)("a quiescent accepted publication settles while its lane is %s without reopening or republishing", async (state) => {
+  const { h, box, pipeline } = await interruptedPublication();
+  const operationId = pipeline.delivery!.operation!.id;
+  box.setRemote(box.passedSha);
+  pipeline.state = state;
+  pipeline.pausedState = state === "paused" ? "running" : null;
+  if (state === "closed") { pipeline.closedAt = "2026-10-02T00:00:00.000Z"; pipeline.cursor = null; }
+  savePipelines([pipeline]);
+  const pushesBefore = box.order.filter((item) => item.startsWith("push:")).length;
+
+  const descriptor = fs.openSync(pipeline.delivery!.operation!.executor!.lock, "a");
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state, delivery: { operation: { id: operationId, state: "running" } } });
+  } finally { fs.closeSync(descriptor); }
+
+  await tickPipelines([], h.ports);
+
+  const settled = loadPipelines()[0]!;
+  expect(settled).toMatchObject({ state, delivery: { operation: { id: operationId, state: "settled", result: { ok: true, sha: box.passedSha } } }, publishedCommit: box.passedSha });
+  expect(box.order.filter((item) => item.startsWith("push:"))).toHaveLength(pushesBefore);
+  if (state === "paused") expect(settled.cursor).toMatchObject({ stageId: "build", state: "committing" });
+  else expect(settled.cursor).toBeNull();
+});
 
 test("a same-owner publication waits through another tick, then advances once settled (#1939)", async () => {
   const { h, box, pipeline } = await interruptedPublication();
@@ -13054,13 +13384,13 @@ test("a restarted engine reconciles an interrupted reservation from the remote w
   box.setRemote(box.passedSha);
   const reservation = crashed.id;
   const exec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => {
+  h.ports.exec = async (command, args, cwd) => {
     if (args.includes("ls-remote")) {
       const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
       try { expect(db.query("SELECT count(*) AS n FROM state_leases WHERE collection='pipelines'").get()).toEqual({ n: 0 }); }
       finally { db.close(); }
     }
-    return exec(command, args, cwd);
+    return (await exec(command, args, cwd));
   };
   await tickPipelines([], { ...h.ports });
   const recovered = loadPipelines()[0]!;
@@ -13308,6 +13638,7 @@ test.each(["retry-stage", "publish"] as const)("publication recovery keeps the a
   const moved = "8".repeat(40);
   box.setLocalHead(moved);
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
+  await tickPipelines([], h.ports);
   const waiting = loadPipelines()[0]!;
   expect(waiting.state).toBe("needs_decision");
   expect(waiting.stateDetail).toContain(`the worktree moved to ${moved}`);
@@ -13358,10 +13689,11 @@ test.each([
 
   const exec = h.ports.exec;
   if (cause === "moved") box.setLocalHead("8".repeat(40));
-  else h.ports.exec = (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
+  else h.ports.exec = async (command, args, cwd) => args[0] === "rev-parse" && args[1] === "HEAD"
     ? { code: 128, stdout: "", stderr: "HEAD temporarily unavailable" }
-    : exec(command, args, cwd);
+    : (await exec(command, args, cwd));
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
   const legacy = loadPipelines()[0]!;
   expect(legacy.stateDetail).toStartWith(cause === "moved"
     ? "the worktree moved to " : "the accepted head cannot be verified before completion:");
@@ -13392,9 +13724,9 @@ test("a pass whose commit failed still retries stage work before publishing", as
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const exec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => args[0] === "commit"
+  h.ports.exec = async (command, args, cwd) => args[0] === "commit"
     ? { code: 1, stdout: "", stderr: "commit temporarily unavailable" }
-    : exec(command, args, cwd);
+    : (await exec(command, args, cwd));
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: ORIGIN_MAIN_SHA,
@@ -16260,7 +16592,7 @@ test("close drain keeps a slow embedded flow and worktree inspection outside the
   const started = new Promise<void>((resolve) => { entered = resolve; });
   h.ports.closeFlow = async () => { expectPipelineLeaseAbsent(); entered(); await gate; return { stoppedReviewer: { round: 1 } } as never; };
   const exec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => { expectPipelineLeaseAbsent(); return exec(command, args, cwd); };
+  h.ports.exec = async (command, args, cwd) => { expectPipelineLeaseAbsent(); return (await exec(command, args, cwd)); };
   const accepted = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
   expect(accepted.close?.status).toBe("pending");
   const draining = engineModule.drainStageActivations(h.ports);
@@ -16886,6 +17218,1262 @@ test("an omitted pipeline review budget runs three reviews and a final re-check"
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });
 
+
+/* Restart recovery retains the on-disk attempt and its partial work. */
+test.each([
+  { engine: "codex", interruption: "idle" }, { engine: "claude", interruption: "idle" },
+  { engine: "codex", interruption: "dead" }, { engine: "claude", interruption: "dead" },
+  { engine: "codex", interruption: "stalled" }, { engine: "claude", interruption: "stalled" },
+] as const)("restart creates one fresh $engine attempt after $interruption, then parks another interruption", async ({ engine, interruption }) => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine, model: engine === "claude" ? "fable" : "gpt-5.6-sol", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const before = loadPipelines()[0]!;
+  const attempt = before.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([before]);
+  const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
+  let oldConversationMessages = 0;
+  const restarted = { ...h.ports,
+    restartRecoveryBootId: () => "boot-after-crash",
+    restartRecoveryBootStartedAt: () => Date.parse(h.ports.now()) + 1,
+    conversationTurnInterrupted: async () => interruption,
+    resumeSeveredTurn: async () => { oldConversationMessages += 1; return true; },
+  };
+  // An idle host is read as interrupted only once its transcript has been silent for the whole bound.
+  if (interruption === "idle") h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(oldConversationMessages).toBe(0);
+  expect(h.calls).toContain(`stop-host:build:${attempt.n}:${attempt.conversationId}`);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  const recoveryBootId = "boot-after-crash:unknown";
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", restartRecovery: { bootId: recoveryBootId, replacementAttempt: 2 } });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "pending", restartContext: { previousAttempt: 1, transcriptPath: attempt.agentPath }, restartRecovery: { bootId: recoveryBootId, replacedAttempt: 1 } });
+  await tickPipelines([], restarted);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.cwd).toBe(loadPipelines()[0]!.worktreeDir);
+  expect(h.spawnInputs[1]!.prompt).toContain("Build");
+  expect(h.spawnInputs[1]!.prompt).toContain("interrupted by a Delegatus restart");
+  expect(h.spawnInputs[1]!.prompt).toContain(attempt.agentPath!);
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted });
+  expect(oldConversationMessages).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  const afterReplacement = loadPipelines()[0]!;
+  const replacement = afterReplacement.runs[0]!.attempts[1]!;
+  replacement.paneId = null;
+  savePipelines([afterReplacement]);
+  h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  if (interruption === "idle") h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(replacement.agentPath!)], restarted);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+  expect(loadPipelines()[0]!.stateDetail).toContain("automatic restart attempt");
+});
+
+test.each(["idle-to-working", "busy-to-terminal"] as const)("restart recovery drops stale evidence for %s before dispatch", async (race) => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "codex", model: "gpt-5.6-sol", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const firstRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: firstRecordAt });
+  let releaseEpoch!: () => void;
+  let markEpochRead!: () => void;
+  const epochGate = new Promise<void>((resolve) => { releaseEpoch = resolve; });
+  const epochRead = new Promise<void>((resolve) => { markEpochRead = resolve; });
+  let interruptReads = 0;
+  let sends = 0;
+  const raced: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "race-boot",
+    conversationTurnInterrupted: async () => {
+      interruptReads += 1;
+      return race === "idle-to-working" && interruptReads > 1 ? null : "idle";
+    },
+    runtimeHostEpoch: async () => { markEpochRead(); await epochGate; return 7; },
+    resumeSeveredTurn: async () => { sends += 1; return true; },
+  };
+  const ticking = tickPipelines([entry(attempt.agentPath!)], raced);
+  await epochRead;
+  if (race === "idle-to-working") {
+    h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: firstRecordAt + 1 });
+  } else {
+    h.finish(attempt.agentPath!, "pass", "Work finished");
+    const terminal = h.messages.get(attempt.agentPath!)!;
+    h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: terminal, lastRecordAt: terminal.ts });
+  }
+  releaseEpoch();
+  await ticking;
+
+  expect(sends).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+  if (race === "busy-to-terminal") expect(loadPipelines()[0]!.state).toBe("completed");
+  else expect(loadPipelines()[0]!.state).toBe("running");
+});
+
+
+test("restart retry-stage accepts only a confirmed stalled running attempt under expectedAttempt", async () => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  const restarted = { ...h.ports, spawnReceipt: () => ({ state: "completed", conversationId: attempt.conversationId, transcript: attempt.agentPath, paneId: null }) as ReturnType<PipelinePorts["spawnReceipt"]>, conversationTurnInterrupted: async () => "stalled" as const };
+  const request = { action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n } as const;
+  expect((await patchPipeline(lane.id, { ...request, expectedAttempt: attempt.n + 1 }, restarted)).code).toBe("STAGE_CHANGED");
+  expect((await patchPipeline(lane.id, request, { ...restarted, conversationTurnInterrupted: async () => null })).error).toBeDefined();
+  expect((await patchPipeline(lane.id, { action: "retry-stage" }, restarted)).error).toBeDefined();
+  expect((await patchPipeline(lane.id, request, restarted)).error).toBeUndefined();
+  expect(h.calls.some((call) => call.startsWith("stop-host:"))).toBe(true);
+  expect((await patchPipeline(lane.id, request, restarted)).error).toBeDefined();
+  await tickPipelines([], restarted);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.n).toBe(attempt.n + 1);
+});
+
+test.each(["terminal", "progress"] as const)("running retry-stage preserves %s evidence written during host stop", async (race) => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  const initialRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: initialRecordAt });
+  const stopping: PipelinePorts = { ...h.ports,
+    conversationTurnInterrupted: async () => "stalled",
+    stopInterruptedStageAgent: async () => {
+      if (race === "terminal") {
+        h.finish(attempt.agentPath!, "pass", "Finished as stop was confirmed");
+        const message = h.messages.get(attempt.agentPath!)!;
+        h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message, lastRecordAt: message.ts });
+      } else {
+        h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: initialRecordAt + 1 });
+      }
+      return { outcome: "stopped" };
+    },
+  };
+
+  const result = await patchPipeline(lane.id, {
+    action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n,
+  }, stopping);
+  const after = loadPipelines()[0]!;
+  expect(after.runs[0]!.attempts).toHaveLength(1);
+  expect(after.runs[0]!.attempts[0]!.n).toBe(attempt.n);
+  if (race === "terminal") {
+    expect(result.error).toBeUndefined();
+    expect(after.runs[0]!.attempts[0]!.verdict).toEqual({ status: "pass" });
+    expect(["passed", "committing"]).toContain(after.runs[0]!.attempts[0]!.state);
+  } else {
+    expect(result.status).toBe(409);
+    expect(result.error).toContain("made progress while its host was stopping");
+    expect(after.state).toBe("running");
+    expect(after.runs[0]!.attempts[0]!.state).toBe("running");
+  }
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+
+test("restart recovery reads restored idle and dead turns from the runtime snapshot", async () => {
+  await withRuntimeSnapshot((requestNumber) => ({ runtime: { hostEpoch: 7 }, sessions: [
+    { conversationId: "idle-stage", host: "alive", turn: requestNumber === 0 ? "idle" : "running", attentionIds: [] },
+    { conversationId: "dead-stage", host: "dead", turn: "running", attentionIds: [] },
+    { conversationId: "permission-stage", host: "alive", turn: "idle", attentionIds: ["permission"] },
+  ] }), async () => {
+    const ports = defaultPipelinePorts();
+    expect(await ports.conversationTurnInterrupted!("idle-stage")).toBe("idle");
+    expect(await ports.conversationTurnInterrupted!("dead-stage")).toBe("dead");
+    expect(await ports.conversationTurnInterrupted!("permission-stage")).toBeNull();
+    expect(await ports.conversationTurnInterrupted!("unknown-stage")).toBeNull();
+    // A fresh reader now sees another turn. The old ports retain their idle
+    // evidence, which is why restart delivery must carry the queue policy.
+    expect(await defaultPipelinePorts().conversationAgentActive("idle-stage")).toBe(true);
+    expect(await ports.conversationTurnInterrupted!("idle-stage")).toBe("idle");
+  });
+});
+
+
+test("restart recovery preserves working turns and pending deliveries and parks unconfirmed host termination", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let sends = 0;
+  const restarted: PipelinePorts = { ...h.ports,
+    spawnReceipt: () => ({ state: "completed", conversationId: attempt.conversationId, transcript: attempt.agentPath, paneId: null }) as ReturnType<PipelinePorts["spawnReceipt"]>,
+    restartRecoveryBootId: () => "next-boot",
+    conversationTurnInterrupted: async () => "stalled",
+    resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted, conversationTurnInterrupted: async () => null });
+  expect(sends).toBe(0);
+  await tickPipelines([entry(attempt.agentPath!)], { ...restarted, conversationDeliveryOutstanding: () => true });
+  expect(sends).toBe(0);
+  h.setStageHost(attempt.conversationId!, { outcome: "unconfirmed", operationId: null, detail: "termination is not confirmed" });
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(0);
+  expect(loadPipelines()[0]!.stateDetail).toContain("confirm termination");
+  // The unresolved host cannot be replaced by manual retry either.
+  expect((await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, restarted)).error).toBeDefined();
+});
+
+
+test("restart leaves a recorded stage report authoritative until its verdict is written", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  attempt.hostEpoch = 1;
+  savePipelines([lane]);
+  const report = await engineModule.reportStageCompletion({ verdict: "pass", findings: [], summary: "Work finished" },
+    { kind: "agent", role: "builder", conversationId: attempt.conversationId }, h.ports);
+  expect(report.error).toBeUndefined();
+  const lastRecordAt = Date.parse(h.ports.now()) - 4 * 60_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
+  let sends = 0;
+  const restarted: PipelinePorts = { ...h.ports, restartRecoveryBootId: () => "report-boot",
+    runtimeHostEpoch: async () => 2,
+    conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  h.advanceWallClock(4 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  const finalEntry = h.finish(attempt.agentPath!, "pass");
+  const message = h.messages.get(attempt.agentPath!)!;
+  h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message, lastRecordAt: message.ts });
+  await tickPipelines([finalEntry], restarted);
+  expect(loadPipelines()[0]!.state).toBe("completed");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+});
+
+
+test("terminal stage evidence arriving during the final restart stop settles without a replacement", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `restart-stop-registry-${crypto.randomUUID()}.json`));
+  const transcriptPath = path.join(process.env.LLV_STATE_DIR!, `restart-stop-${crypto.randomUUID()}.jsonl`);
+  fs.writeFileSync(transcriptPath, "{}\n");
+  const conversation = registry.ensureConversation("codex", transcriptPath, "test-account");
+  attempt.conversationId = conversation.id;
+  attempt.agentPath = transcriptPath;
+  savePipelines([lane]);
+  setAgentRegistryForTests(registry);
+  const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
+  h.durableTurns.set(transcriptPath, { turn: "busy", message: null, lastRecordAt });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  let stopCompleted = false;
+  try {
+    await withRuntimeSnapshot((requestNumber) => {
+      stopCompleted = true;
+      fs.appendFileSync(transcriptPath, "terminal record arrived during the host snapshot\n");
+      h.finish(transcriptPath, "pass", "Completed during stop");
+      const message = h.messages.get(transcriptPath)!;
+      h.durableTurns.set(transcriptPath, { turn: "terminal", message, lastRecordAt: message.ts });
+      expect(requestNumber).toBe(0);
+      return { runtime: { hostEpoch: 7 }, sessions: [
+        { conversationId: conversation.id, host: "dead", turn: "running", attentionIds: [] },
+      ] };
+    }, async () => {
+      const production = defaultPipelinePorts();
+      const stopping: PipelinePorts = { ...h.ports,
+        conversationTurnInterrupted: async () => "idle",
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      };
+      await tickPipelines([entry(transcriptPath)], stopping);
+      await tickPipelines([], stopping);
+      expect(stopCompleted).toBe(true);
+      expect(loadPipelines()[0]!.state).toBe("completed");
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+    });
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+
+test("restart retry rejects an incomplete receipt identity before stopping or parking its attempt", async () => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  const callsBefore = h.calls.length;
+  const result = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: attempt.n, stageId: "plan" },
+    { ...h.ports, conversationTurnInterrupted: async () => "stalled" });
+  expect(result.status).toBe(400);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.calls.slice(callsBefore).some((call) => call.startsWith("stop-host:"))).toBe(false);
+});
+
+test("running restart retry preserves an owed deploy continuation before it enters delivery", async () => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  const callsBefore = h.calls.length;
+  const result = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n }, {
+    ...h.ports, conversationTurnInterrupted: async () => "idle",
+    conversationInterruption: () => ({ state: "owed", recordedAt: h.ports.now(), resolvedAt: null }),
+  });
+  expect(result.status).toBe(409);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.calls.slice(callsBefore).some((call) => call.startsWith("stop-host:"))).toBe(false);
+});
+
+test.each(["pending", "deploy"] as const)("restart-parked retry preserves its %s delivery obligation before host effects", async (held) => {
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([stored]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  h.setStageHost(attempt.conversationId!, { outcome: "unconfirmed", operationId: null, detail: "termination is not confirmed" });
+  const restarted: PipelinePorts = { ...h.ports, conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => false };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const callsBefore = h.calls.length;
+  const result = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: stored.cursor!.stageId, expectedAttempt: attempt.n }, {
+    ...restarted,
+    conversationDeliveryOutstanding: () => held === "pending",
+    conversationInterruption: () => held === "deploy" ? { state: "owed", recordedAt: h.ports.now(), resolvedAt: null } : null,
+  });
+  expect(result.status).toBe(409);
+  expect(h.calls.slice(callsBefore).some((call) => call.startsWith("stop-host:"))).toBe(false);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+
+test.each([true, false])("restart recovery does not message the old conversation for a severed turn: %s", async (sameBoot) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  attempt.hostEpoch = 1;
+  const at = h.ports.now();
+  const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
+  attempt.severedTurn = { epoch: 2, sightedAt: at, silentSince: lastRecordAt, resumedAt: at, clientMessageId: "existing-continuation" };
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt });
+  let sends = 0;
+  const restarted: PipelinePorts = { ...h.ports, runtimeHostEpoch: async () => 2,
+    restartRecoveryBootStartedAt: () => Date.parse(at) + (sameBoot ? -1000 : 1000),
+    conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(0);
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.length).toBe(sameBoot ? 1 : 2);
+  expect(sends).toBe(0);
+});
+
+
+test.each([true, false])("restart replaces a delivered deploy-cut stage without messaging its old conversation: %s", async (sameBoot) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const deliveredAt = h.ports.now();
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let sends = 0;
+  const restarted = { ...h.ports, restartRecoveryBootId: () => "deploy-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(deliveredAt) + (sameBoot ? -1000 : 1000),
+    conversationInterruption: () => ({ state: "delivered" as const, recordedAt: deliveredAt, resolvedAt: deliveredAt }),
+    conversationTurnInterrupted: async () => "idle" as const,
+    resumeSeveredTurn: async () => { sends += 1; return true; } };
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(sends).toBe(0);
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], restarted);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.length).toBe(2);
+  expect(sends).toBe(0);
+});
+
+test("restart leaves a worker adopted after dead evidence running", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const id = attempt.conversationId!;
+  let killedAdopted = false;
+  let sent = 0;
+  await withRuntimeSnapshot((number) => ({ runtime: { hostEpoch: 7 }, sessions: [
+    { conversationId: id, host: number === 0 ? "dead" : "alive", turn: "running", attentionIds: [] },
+  ] }), async () => {
+    const production = defaultPipelinePorts();
+    const resumed = { ...h.ports, conversationTurnInterrupted: production.conversationTurnInterrupted,
+      durableTurnEvidence: async () => {
+        expect(await defaultPipelinePorts().conversationAgentActive(id)).toBe(true);
+        return { turn: "busy" as const, message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 };
+      },
+      stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      stopStageAgent: async () => { killedAdopted = true; return { outcome: "stopped" as const }; },
+      resumeSeveredTurn: async () => { sent += 1; return true; },
+    };
+    await tickPipelines([entry(attempt.agentPath!)], resumed);
+  });
+  expect(killedAdopted).toBe(false);
+  expect(sent).toBe(0);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+});
+
+/* A stage whose agent keeps working after its turn ended.
+
+   The host goes idle when the turn ends, and a Claude CLI then continues by
+   itself on a background-command notification, so "host idle, transcript busy"
+   is what an agent at work looks like as well as what a cut turn looks like. */
+test("an idle host whose transcript is still growing is left alone, and one silent for the whole bound is recovered", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const idle: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle",
+  };
+  const stops = () => h.calls.filter((call) => call.startsWith("stop-host:")).length;
+  const record = () => h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+
+  // The continuation writes a record every few minutes for well over the bound: never interrupted.
+  for (let step = 0; step < 8; step += 1) {
+    record();
+    h.advanceWallClock(3 * 60_000);
+    await tickPipelines([entry(attempt.agentPath!)], idle);
+  }
+  // One long step just inside the bound is still growing (the harness clock also moves on every read).
+  record();
+  h.advanceWallClock(IDLE_TURN_QUIET_MS - 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  expect(stops()).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+
+  // An undated open transcript proves no silence either.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  expect(stops()).toBe(0);
+
+  // A really interrupted turn: the same record is still the newest once the whole bound has passed.
+  record();
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  expect(stops()).toBe(1);
+  const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]).toMatchObject({ state: "failed", restartRecovery: { replacementAttempt: 2 } });
+});
+
+test.each([
+  { interruption: "dead", error: "stage host was lost while its turn was open", detail: "lost its host while its turn was open", parked: "lost its host too" },
+  { interruption: "idle", error: "stopped by Delegatus after its turn went silent", detail: "was stopped by Delegatus after its turn went silent", parked: "went silent too" },
+  { interruption: "stalled", error: "stopped by Delegatus after its turn went silent", detail: "was stopped by Delegatus after its turn went silent", parked: "went silent too" },
+] as const)("a replaced attempt names its cause when no restart happened: $interruption", async ({ interruption, error, detail, parked }) => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  // This process booted before the attempt started and no host generation changed: nothing restarted.
+  const sameBoot: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => interruption,
+  };
+  // A host found dead has nothing to stop; a silent one is alive until this stop ends it.
+  if (interruption !== "dead") h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot);
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: `${error}; replaced by a fresh stage attempt` });
+  expect(replaced.stateDetail).toBe(`stage attempt 1 ${detail}; fresh attempt 2 is starting`);
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: interruption === "dead" ? "host-lost" : "engine-stop" });
+  await tickPipelines([], sameBoot);
+  expect(h.spawnInputs[1]!.prompt).toContain(`stage attempt 1 ${detail}.`);
+  expect(`${replaced.runs[0]!.attempts[0]!.error} ${replaced.stateDetail} ${h.spawnInputs[1]!.prompt}`).not.toContain("restart");
+
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot);
+  const again = loadPipelines()[0]!;
+  const replacement = again.runs[0]!.attempts[1]!;
+  replacement.paneId = null;
+  savePipelines([again]);
+  h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(replacement.agentPath!)], sameBoot);
+  const parkedLane = loadPipelines()[0]!;
+  expect(parkedLane.state).toBe("needs_decision");
+  expect(parkedLane.stateDetail).toBe(`the automatic replacement attempt ${parked}; retry-stage to start another attempt`);
+  expect(parkedLane.stateDetail).not.toContain("boot");
+});
+
+test("a replacement recorded before causes were told apart is described without naming a restart", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports, conversationTurnInterrupted: async () => "dead" });
+  const replaced = loadPipelines()[0]!;
+  // What an older release stored: the context without a cause.
+  delete replaced.runs[0]!.attempts[1]!.restartContext!.cause;
+  savePipelines([replaced]);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("stage attempt 1 was interrupted. Continue the same stage input");
+});
+
+/** A Claude stage whose host is a real row in a private registry: a launch
+    receipt, a live process the test owns, and the product's own persistence
+    binding writing that row. */
+async function idleStageHostFixture(h: ReturnType<typeof harness>) {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { bindClaudeHostPersistence } = await import("@/lib/runtime/registry");
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "idle-stage-host-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = crypto.randomUUID();
+  const transcriptPath = path.join(directory, `${sessionId}.jsonl`);
+  fs.writeFileSync(transcriptPath, "{}\n");
+  // The host process: a child this test started and ends by the pid recorded here.
+  const child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+  child.unref();
+  const identity = captureProcessIdentity(child.pid!);
+  const key = { engine: "claude" as const, sessionId };
+  const claimOwner = "structured-host:fixture";
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: directory, transport: "structured", accountId: "account-a" });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key, artifactPath: transcriptPath, cwd: directory, accountId: "account-a", status: "idle", host: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: identity, eventCursor: 172,
+      protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner, pendingAction: null,
+  });
+  if (settled.kind !== "settled") throw new Error("structured conversation was unavailable");
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  attempt.conversationId = begun.receipt.conversationId;
+  attempt.agentPath = transcriptPath;
+  attempt.launchId = begun.receipt.launchId;
+  savePipelines([lane]);
+  setAgentRegistryForTests(registry);
+
+  let state: HostState = { status: "idle", sessionKey: sessionId, endpoint: "stdio:fixture", pid: identity.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 172, protocolVersion: "1", activeTurnRef: null,
+    pendingAttention: [], activeFlags: [], account: null };
+  const listeners = new Set<(next: HostState) => void>();
+  const host = {
+    releaseCalls: 0,
+    setWriterFence(): void {},
+    health: async () => structuredClone(state),
+    onStateChange(listener: (next: HostState) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    async release(): Promise<void> { host.releaseCalls += 1; },
+    emit(overrides: Partial<HostState>): void {
+      state = { ...state, ...overrides };
+      for (const listener of listeners) listener(structuredClone(state));
+    },
+  };
+  /* Process evidence for a stop that proceeds. The signal is recorded and
+     never sent, so the only process this fixture ever signals is its own child
+     in `end`. */
+  const signals: string[] = [];
+  let ended = false;
+  const termination = {
+    protectedPids: () => new Set<number>(),
+    ppidMap: () => new Map<number, number>([[identity.pid, 1]]),
+    processGroupId: () => null,
+    pidAlive: (pid: number) => pid === identity.pid && !ended,
+    processIdentity: (pid: number) => pid === identity.pid && !ended ? identity.startIdentity : null,
+    bootEpoch: () => identity.bootEpoch ?? null,
+    signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); ended = true; },
+    terminateOwnedHost: async () => false,
+    sleep: async () => {},
+  };
+  const row = () => registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+  const journal = () => {
+    const filename = path.join(directory, "host-termination-journal.ndjson");
+    return fs.existsSync(filename)
+      ? fs.readFileSync(filename, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { event: string; source: string; key: string })
+      : [];
+  };
+  const target = { stageId: "build", attempt: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId,
+    agentPath: transcriptPath, paneId: null };
+  const snapshot = () => ({ runtime: { hostEpoch: 7 }, sessions: [
+    { conversationId: begun.receipt.conversationId, host: "alive", turn: "idle", attentionIds: [] },
+  ] });
+  return {
+    registry, key, claimOwner, transcriptPath, attempt, host, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
+    bind: (cursorDebounceMs: number) => bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs }),
+    end: () => {
+      setAgentRegistryForTests(null);
+      try { process.kill(child.pid!, "SIGKILL"); } catch { /* already gone */ }
+    },
+  };
+}
+
+test("a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  /* Time is faked where the chain depends on it: the binding's deferred write
+     is captured with its delay instead of being armed, and run by hand once the
+     recovery tick is over. */
+  const realSetTimeout = globalThis.setTimeout;
+  const deferred: Array<{ run: () => void; delayMs: number }> = [];
+  try {
+    const stop = await f.bind(30_000);
+    const bound = structuredClone(f.row());
+    // The turn ended: the host is idle and names no turn. The CLI then continues
+    // by itself on a background-command notification: the transcript opens a
+    // turn and grows, and the host reports cursor-only steps with no turn id.
+    const continuedAt = Date.parse(h.ports.now());
+    fs.appendFileSync(f.transcriptPath, "background command notification\n");
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: continuedAt });
+    globalThis.setTimeout = ((run: () => void, delayMs: number) => {
+      deferred.push({ run, delayMs });
+      return { unref() {} };
+    }) as unknown as typeof setTimeout;
+    try {
+      f.host.emit({ eventCursor: 173 });
+      f.host.emit({ eventCursor: 174 });
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(deferred.map((timer) => timer.delayMs)).toEqual([30_000]);
+    expect(f.row().structuredHost!.eventCursor).toBe(172);
+
+    // The recovery tick, two seconds into the continuation, on the product's own classifier and stop.
+    h.advanceWallClock(2_000);
+    await Bun.sleep(5);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: f.termination });
+      expect(await production.conversationTurnInterrupted!(f.attempt.conversationId!)).toBe("idle");
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(f.row().structuredTerminationSurvivors ?? []).toEqual([]);
+    expect(f.row()).toEqual(bound);
+    expect(f.journal()).toEqual([]);
+    expect(f.signals).toEqual([]);
+
+    // Thirty seconds after the first cursor-only step the deferred write fires.
+    deferred[0]!.run();
+    expect(f.host.releaseCalls).toBe(0);
+    expect(f.row()).toMatchObject({ status: "idle", claimOwner: f.claimOwner, structuredHost: { eventCursor: 174 } });
+    const after = loadPipelines()[0]!;
+    expect(after.state).toBe("running");
+    expect(after.runs[0]!.attempts).toHaveLength(1);
+    expect(after.runs[0]!.attempts[0]).toMatchObject({ state: "running" });
+    expect(after.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+
+    // The stage then finishes on the host it kept.
+    const finished = h.finish(f.transcriptPath, "pass", "Done after the push");
+    const message = h.messages.get(f.transcriptPath)!;
+    h.durableTurns.set(f.transcriptPath, { turn: "terminal", message, lastRecordAt: message.ts });
+    await tickPipelines([finished], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
+    stop();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    f.end();
+  }
+});
+
+test("an automatic stop withdrawn after it captured the tree leaves the registry row as it was", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    const before = structuredClone(f.row());
+    // The agent writes to its transcript between the capture and the first authority check.
+    const capture = f.registry.captureStructuredTerminationSurvivors.bind(f.registry);
+    let captured: unknown = null;
+    f.registry.captureStructuredTerminationSurvivors = (...args) => {
+      const receipt = capture(...args);
+      captured = structuredClone(f.row().structuredTerminationSurvivors);
+      fs.appendFileSync(f.transcriptPath, "the agent resumed work\n");
+      return receipt;
+    };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: f.termination });
+      expect(await production.stopInterruptedStageAgent!(f.target, { allowIdle: true })).toBeNull();
+    });
+    expect(captured).toHaveLength(1);
+    expect(f.signals).toEqual([]);
+    expect(f.row()).toEqual(before);
+    expect(f.journal().map((line) => `${line.event}:${line.source}`)).toEqual([
+      "captured:pipeline-stage-stop build:1", "withdrawn:pipeline-stage-stop build:1",
+    ]);
+    // The row is free again: the host's own next write lands.
+    expect(f.registry.setStructuredHostClaimed(f.key, { ...before.structuredHost!, eventCursor: 173 }, "idle", f.claimOwner, 1))
+      .toMatchObject({ structuredHost: { eventCursor: 173 } });
+  } finally {
+    f.end();
+  }
+});
+
+test("a really interrupted idle turn is stopped by the product's own stop and replaced, and says who stopped it", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: f.termination });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    // The stop read through its own capture, went on to signal, and retired the row.
+    expect(f.signals).toEqual([`SIGTERM:${f.hostPid}`]);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured"]);
+    expect(f.row().structuredHost?.process ?? null).toBeNull();
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
+    expect(attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "engine-stop" });
+  } finally {
+    f.end();
+  }
+});
+
+/** The runtime's own release as the delivery controller performs it: the
+    host's process ends, the host reports `unhosted` through its persistence
+    binding, and the row is asked to retire with no confirmed identities. */
+function runtimeReleaseOf(f: Awaited<ReturnType<typeof idleStageHostFixture>>, onReleased: () => void = () => {}) {
+  const retired: boolean[] = [];
+  return {
+    retired,
+    terminateOwnedHost: async (key: Parameters<typeof f.registry.terminateStructuredHost>[0], expected: Parameters<typeof f.registry.terminateStructuredHost>[1]) => {
+      // The fixture's own child, by the pid it recorded; its process probes then answer "gone".
+      process.kill(f.hostPid, "SIGKILL");
+      f.termination.signal(f.hostPid, "SIGKILL");
+      onReleased();
+      f.host.emit({ status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
+      retired.push(f.registry.terminateStructuredHost(key, expected));
+      return true;
+    },
+  };
+}
+
+test("an automatic stop whose first step is the runtime's own release still retires the row and replaces the attempt", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    const release = runtimeReleaseOf(f);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination, terminateOwnedHost: release.terminateOwnedHost } });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    // The runtime's own retirement was refused by the captured tree, and the host's terminal write moved the row.
+    expect(release.retired).toEqual([false]);
+    // The stop did not read its own consequences as somebody else's change: the ladder retired the row.
+    const row = f.row();
+    expect(row.status).toBe("dead");
+    expect(row.claimOwner).toBeNull();
+    expect(row.structuredHost?.process ?? null).toBeNull();
+    expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured"]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
+  } finally {
+    f.end();
+  }
+});
+
+test("a descendant that outlives the runtime's release is still signalled, and the attempt is replaced", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    /* A descendant that left the host's process group. It is a number only: no
+       such process is consulted, and every signal here is recorded, never sent. */
+    const CHILD = 4_190_001;
+    let rootGone = false;
+    let childGone = false;
+    const signals: string[] = [];
+    const release = runtimeReleaseOf(f, () => { rootGone = true; });
+    const termination = { ...f.termination,
+      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [CHILD, f.hostPid]]),
+      pidAlive: (pid: number) => (pid === CHILD && !childGone) || (pid === f.hostPid && !rootGone),
+      processIdentity: (pid: number) => pid === CHILD ? (childGone ? null : "child:start") : f.termination.processIdentity(pid),
+      signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); if (pid === CHILD) childGone = true; },
+      terminateOwnedHost: release.terminateOwnedHost };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(signals).toEqual([`SIGTERM:${CHILD}`]);
+    const row = f.row();
+    expect(row.status).toBe("dead");
+    expect(row.structuredHost?.process ?? null).toBeNull();
+    expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
+  } finally {
+    f.end();
+  }
+});
+
+test("a stop still withdraws when the host resumes before the runtime released anything", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    const before = structuredClone(f.row());
+    let asked = 0;
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination,
+        // The runtime holds nothing of this host, and the agent writes while it is asked.
+        terminateOwnedHost: async () => { asked += 1; fs.appendFileSync(f.transcriptPath, "the agent resumed work\n"); return false; } } });
+      expect(await production.stopInterruptedStageAgent!(f.target, { allowIdle: true })).toBeNull();
+    });
+    expect(asked).toBe(1);
+    expect(f.signals).toEqual([]);
+    expect(f.row()).toEqual(before);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured", "withdrawn"]);
+  } finally {
+    f.end();
+  }
+});
+
+const SILENT_RUN = [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }];
+
+/** A structured stage that started before the service restarted one minute
+    into it, and then worked on for half an hour under the new process. */
+async function attemptThatWorkedOnAfterRestart(h: ReturnType<typeof harness>) {
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const bootAt = Date.parse(attempt.startedAt!) + 60_000;
+  h.advanceWallClock(30 * 60_000);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  return { attempt, ports: (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => bootAt,
+    conversationTurnInterrupted: async () => interruption }) };
+}
+
+test("an attempt that worked on after a restart and is stopped for silence later is not called a restart", async () => {
+  const h = harness();
+  const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], ports("idle"));
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 was stopped by Delegatus after its turn went silent; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("was stopped by Delegatus after its turn went silent");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+});
+
+test("an attempt that worked on after a restart and whose host is found gone later is not called a restart", async () => {
+  const h = harness();
+  const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
+  await tickPipelines([entry(attempt.agentPath!)], ports("dead"));
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("lost its host while its turn was open");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+});
+
+test("an attempt whose transcript did not grow after the restart is still called a restart", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  // The newest record is from before the boot, one minute into the attempt.
+  const bootAt = Date.parse(attempt.startedAt!) + 60_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: bootAt - 1 });
+  h.advanceWallClock(30 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "boot-2", restartRecoveryBootStartedAt: () => bootAt, conversationTurnInterrupted: async () => "dead" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
+});
+
+test("retry-stage leaves an idle host whose transcript is still growing, and stops it once the transcript has been silent for the bound", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  const idle: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" };
+  const stops = () => h.calls.filter((call) => call.startsWith("stop-host:"));
+  // The continuation wrote a record two seconds ago.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(2_000);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  const young = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
+  expect(young).toMatchObject({ status: 409, error: "the running attempt is not confirmed stalled or has a pending delivery" });
+  expect(stops()).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  // The same record, a minute short of the bound and then past it.
+  h.advanceWallClock(IDLE_TURN_QUIET_MS - 62_000);
+  expect(await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle)).toMatchObject({ status: 409 });
+  expect(stops()).toEqual([]);
+  h.advanceWallClock(60_000);
+  await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
+  expect(stops()).toEqual([`stop-host:build:1:${attempt.conversationId}`]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "confirmed stalled attempt was stopped for retry" });
+});
+
+test("a recovery that parks names a restart only when the service restarted", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.setStageHost(attempt.conversationId!, { outcome: "unresolved", error: "1 process outlived the kill", survivors: [] });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  // The same boot the attempt started under: Delegatus's own stop of a silent host stayed unresolved.
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" });
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe("interrupted-turn recovery could not confirm termination of the interrupted stage host");
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(parked.stateDetail);
+  /* The reservation refusal needs a stage whose run record is missing, which no
+     tick reaches for the attempt it is replacing; its words are read here. */
+  for (const step of ["termination", "reservation"] as const) {
+    expect(interruptedTurnRecoveryParkDetail(step, false)).not.toContain("restart");
+    expect(interruptedTurnRecoveryParkDetail(step, true)).toStartWith("restart recovery could not ");
+  }
+  expect(interruptedTurnRecoveryParkDetail("reservation", false)).toBe("interrupted-turn recovery could not reserve a fresh stage attempt");
+});
+
+test("the same unresolved stop after a real restart keeps naming the restart", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.setStageHost(attempt.conversationId!, { outcome: "unresolved", error: "1 process outlived the kill", survivors: [] });
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) + 60_000,
+    conversationTurnInterrupted: async () => "dead" });
+  expect(loadPipelines()[0]!.stateDetail).toBe("restart recovery could not confirm termination of the interrupted stage host");
+});
+
+/* A Claude CLI appends undated bookkeeping (last-prompt, cost-state) as it
+   exits, and an undated newest record is dated by the file's mtime: every stop
+   that ends a live Claude host moves the transcript's newest record under a
+   turn that stays open. */
+test("a host Delegatus stopped is recorded as stopped by Delegatus although its exit moved the transcript", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    let exitRecordAt = 0;
+    const release = runtimeReleaseOf(f, () => {
+      exitRecordAt = Date.parse(h.ports.now());
+      h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: exitRecordAt });
+    });
+    const sameBoot = { restartRecoveryBootId: () => "same-boot", restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000 };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination, terminateOwnedHost: release.terminateOwnedHost } });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports, ...sameBoot,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(exitRecordAt).toBeGreaterThan(0);
+    // The session is unhosted from here on, which is what the next tick reads.
+    await tickPipelines([entry(f.transcriptPath)], { ...h.ports, ...sameBoot, conversationTurnInterrupted: async () => "dead" });
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed",
+      error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt",
+      restartRecovery: { stopped: { kind: "idle", restarted: false, lastRecordAt: exitRecordAt }, replacementAttempt: 2 } });
+    expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "engine-stop" });
+    expect(h.spawnInputs.at(-1)!.prompt).toContain("stage attempt 1 was stopped by Delegatus after its turn went silent.");
+    expect(`${lane.runs[0]!.attempts[0]!.error} ${h.spawnInputs.at(-1)!.prompt}`).not.toContain("lost");
+  } finally {
+    f.end();
+  }
+});
+
+/** A structured stage whose stop ends a live host, and whose host writes one
+    more record as it exits. */
+async function stageWhoseStopMovesTheTranscript(h: ReturnType<typeof harness>, exit: (agentPath: string) => StageTurnEvidence) {
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const stops: string[] = [];
+  const stopStageAgent: PipelinePorts["stopStageAgent"] = async (target) => {
+    stops.push(`${target.stageId}:${target.attempt}`);
+    if (stops.length > 1) return { outcome: "not-running" };
+    h.durableTurns.set(attempt.agentPath!, exit(attempt.agentPath!));
+    return { outcome: "stopped" };
+  };
+  return { attempt, stops, stopStageAgent };
+}
+
+test("an idle host cut by a restart is still called a restart after the stop's own exit record", async () => {
+  const h = harness();
+  const { attempt, stops, stopStageAgent } = await stageWhoseStopMovesTheTranscript(h,
+    () => ({ turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) }));
+  // The service booted one second into the attempt and the transcript has not grown since.
+  const bootAt = Date.parse(attempt.startedAt!) + 1_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: bootAt - 500 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  const restarted = (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "boot-2", restartRecoveryBootStartedAt: () => bootAt, conversationTurnInterrupted: async () => interruption });
+  await tickPipelines([entry(attempt.agentPath!)], restarted("idle"));
+  await tickPipelines([entry(attempt.agentPath!)], restarted("dead"));
+  expect(stops).toEqual(["build:1"]);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
+});
+
+test("a stop of ours whose replacement waited for a later tick still names the stop, even across a service restart", async () => {
+  const h = harness();
+  let exitRecordAt = 0;
+  // The exit leaves evidence this tick cannot replace on; the host is gone all the same.
+  const { attempt, stops, stopStageAgent } = await stageWhoseStopMovesTheTranscript(h, () => {
+    exitRecordAt = Date.parse(h.ports.now());
+    return { turn: "busy", message: null, lastRecordAt: exitRecordAt, launchOnly: true };
+  });
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" });
+  const held = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(held).toHaveLength(1);
+  expect(held[0]).toMatchObject({ state: "running", restartRecovery: { stopped: { kind: "idle", restarted: false, lastRecordAt: exitRecordAt } } });
+
+  // The service restarts before the next tick; nothing was written after the host was gone.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: exitRecordAt });
+  h.advanceWallClock(60_000);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => Date.parse(h.ports.now()) - 1_000,
+    conversationTurnInterrupted: async () => "dead" });
+  expect(stops).toEqual(["build:1", "build:1"]);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
+});
+
+test("a host that worked on after an earlier stop of ours and is then found dead is a lost host", async () => {
+  const h = harness();
+  let exitRecordAt = 0;
+  const { attempt, stopStageAgent } = await stageWhoseStopMovesTheTranscript(h, () => {
+    exitRecordAt = Date.parse(h.ports.now());
+    return { turn: "busy", message: null, lastRecordAt: exitRecordAt, launchOnly: true };
+  });
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  const sameBoot = (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => interruption });
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot("idle"));
+  // The conversation was hosted again and wrote more before that host died by itself.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: exitRecordAt + 5 * 60_000 });
+  h.advanceWallClock(6 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot("dead"));
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
+  expect(lane.runs[0]!.attempts[0]!.restartRecovery!.stopped).toBeUndefined();
+});
+
+test("a withdrawn automatic stop leaves no recovery reservation on the attempt, whatever the transcript did meanwhile", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle",
+    // The agent resumed while the stop was looking, so the stop withdrew.
+    stopInterruptedStageAgent: async () => {
+      h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+      return null;
+    } });
+  const after = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(after).toHaveLength(1);
+  expect(after[0]).toMatchObject({ state: "running" });
+  expect(after[0]!.restartRecovery).toBeUndefined();
+});
+
+/* The park text of a second interruption describes the replacement's own
+   interruption, and says "too" or "again" only when the attempt it replaced is
+   recorded with the same cause. */
+test.each([
+  { first: "dead", second: "idle", cause: "host-lost", parked: "the automatic replacement attempt went silent; retry-stage to start another attempt" },
+  { first: "idle", second: "dead", cause: "engine-stop", parked: "the automatic replacement attempt lost its host; retry-stage to start another attempt" },
+] as const)("a replacement interrupted differently from the attempt it replaced claims nothing about that attempt: $first then $second", async ({ first, second, cause, parked }) => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  const sameBoot = (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => interruption });
+  if (first !== "dead") h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot(first));
+  await tickPipelines([], sameBoot(first));
+  const replaced = loadPipelines()[0]!;
+  const replacement = replaced.runs[0]!.attempts[1]!;
+  expect(replacement.restartContext).toMatchObject({ previousAttempt: 1, cause });
+  replacement.paneId = null;
+  savePipelines([replaced]);
+  h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(replacement.agentPath!)], sameBoot(second));
+  const parkedLane = loadPipelines()[0]!;
+  expect(parkedLane.state).toBe("needs_decision");
+  expect(parkedLane.stateDetail).toBe(parked);
+  expect(parkedLane.stateDetail).not.toContain("too");
+  expect(parkedLane.stateDetail).not.toContain("again");
+  expect(parkedLane.stateDetail).not.toContain("restart");
+});
+
 test("an OOM death retries once after headroom recovers in the same worktree, then parks", async () => {
   const h = harness();
   await runningStructuredStage(h);
@@ -17127,15 +18715,15 @@ test.each(["session", "weekly"] as const)("native Claude %s reset waits without 
     expect(result.status).toBe(0);
     return result.stdout;
   };
-  git("init", "-b", "main");
+  (await git("init", "-b", "main"));
   fs.writeFileSync(path.join(root, "tracked.txt"), "base\n");
-  git("add", "tracked.txt");
-  git("-c", "user.name=Recovery Fixture", "-c", "user.email=noreply", "commit", "-m", "fixture");
+  (await git("add", "tracked.txt"));
+  (await git("-c", "user.name=Recovery Fixture", "-c", "user.email=noreply", "commit", "-m", "fixture"));
   fs.writeFileSync(path.join(root, "tracked.txt"), "staged work\n");
-  git("add", "tracked.txt");
+  (await git("add", "tracked.txt"));
   fs.writeFileSync(path.join(root, "tracked.txt"), "unstaged work\n");
   fs.writeFileSync(path.join(root, "untracked.txt"), "untracked work\n");
-  const head = git("rev-parse", "HEAD");
+  const head = (await git("rev-parse", "HEAD"));
   const index = fs.readFileSync(path.join(root, ".git", "index"));
   savePipelines([lane]);
   const baseExec = f.h.ports.exec;
@@ -17160,7 +18748,7 @@ test.each(["session", "weekly"] as const)("native Claude %s reset waits without 
     expect(fs.readFileSync(path.join(root, "tracked.txt"), "utf8")).toBe("unstaged work\n");
     expect(fs.readFileSync(path.join(root, "untracked.txt"), "utf8")).toBe("untracked work\n");
     expect(fs.readFileSync(path.join(root, ".git", "index"))).toEqual(index);
-    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect((await git("rev-parse", "HEAD"))).toBe(head);
   } finally { fs.rmSync(container, { recursive: true, force: true }); }
 });
 
@@ -17930,4 +19518,753 @@ test.each([false, true])("refused provider continuations keep their delivery key
   expect(loadPipelines()[0]!.stateDetail).toContain("continuation refused");
   expectProviderParkAt(loadPipelines()[0]!, f.h.ports.now());
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.tries).toBe(0);
+});
+
+
+test.each(["codex", "claude"] as const)("memory kill owns one fresh %s attempt when restart and provider recovery overlap", async (engine) => {
+  for (const providerFirst of [false, true]) {
+    const h = harness();
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    attempt.hostEpoch = 1;
+    attempt.effectiveRole.engine = engine;
+    attempt.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+    lane.stages[0]!.effectiveRole = { ...attempt.effectiveRole };
+    savePipelines([lane]);
+    h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null,
+      lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+    if (providerFirst) {
+      await tickPipelines([], h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.condition.kind).toBe("host_death");
+    }
+    const at = h.ports.now();
+    const restarted: PipelinePorts = { ...h.ports,
+      conversationOutOfMemory: async (id) => id === attempt.conversationId
+        ? { at, limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true, process: null } : null,
+      memoryHeadroom: () => ({ availableBytes: 20 * 2 ** 30, requiredBytes: 15 * 2 ** 30 }),
+      restartRecoveryBootId: () => "memory-loss-boot",
+      runtimeHostEpoch: async () => 2,
+      conversationTurnInterrupted: async (id) => id === attempt.conversationId ? "dead" : null,
+    };
+    await tickPipelines([entry(attempt.agentPath!)], restarted);
+    const recovered = loadPipelines()[0]!;
+    expect(recovered.runs[0]!.attempts).toHaveLength(2);
+    expect(recovered.runs[0]!.attempts[0]).toMatchObject({ state: "failed", outOfMemory: { at, limit: "agent" } });
+    expect(recovered.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+    expect(recovered.runs[0]!.attempts[0]!.providerRecoveries?.some(item => item.action === "relaunch") ?? false).toBe(false);
+    expect(recovered.runs[0]!.attempts[1]!.memoryWait).toBeDefined();
+    await tickPipelines([], restarted);
+    expect(h.spawnInputs).toHaveLength(1);
+    h.advanceWallClock(60_001);
+    h.setConversationActive(true);
+    await tickPipelines([], restarted);
+    await tickPipelines([], restarted);
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+    expect(h.calls.filter(call => call.startsWith("stop-host:"))).toHaveLength(1);
+    expect(loadPipelines()[0]!.worktreeDir).toBe(lane.worktreeDir);
+  }
+});
+
+test.each(["nonfatal", "older"] as const)("a %s memory notice leaves restart recovery authoritative", async (notice) => {
+  const h = harness();
+  await runningStructuredStage(h);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null,
+    lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  await tickPipelines([], { ...h.ports,
+    conversationTurnInterrupted: async () => "dead",
+    conversationOutOfMemory: async () => ({ at: notice === "older"
+      ? new Date(Date.parse(attempt.startedAt!) - 1).toISOString() : h.ports.now(),
+      limitBytes: 15 * 2 ** 30, limit: "agent", fatal: notice !== "nonfatal", process: null }),
+  });
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.outOfMemory).toBeUndefined();
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery!.replacementAttempt).toBe(2);
+});
+
+// Both recovery controllers can observe the same open turn after a restart.
+test.each(["codex", "claude"] as const)("restart and provider recovery reserve one fresh %s attempt for the same host loss", async (engine) => {
+  for (const providerFirst of [false, true]) {
+    const h = harness();
+    await runningStructuredStage(h);
+    h.setConversationActive(false);
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    attempt.hostEpoch = 1;
+    attempt.effectiveRole.engine = engine;
+    attempt.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+    lane.stages[0]!.effectiveRole = { ...attempt.effectiveRole };
+    savePipelines([lane]);
+    h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null,
+      lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+    h.advanceWallClock(3 * 60_000);
+    if (providerFirst) {
+      await tickPipelines([], h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.condition.kind).toBe("host_death");
+    }
+    const restarted: PipelinePorts = { ...h.ports,
+      restartRecoveryBootId: () => "shared-loss-boot",
+      runtimeHostEpoch: async () => 2,
+      conversationTurnInterrupted: async () => "dead",
+    };
+    await tickPipelines([], restarted);
+    if (providerFirst) {
+      // A reserved provider retry retains its existing backoff and ownership.
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.severedTurn).toBeUndefined();
+      h.advanceWallClock(30_000);
+      await tickPipelines([], restarted);
+    }
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+    const old = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(Boolean(old.restartRecovery?.replacementAttempt)).toBe(!providerFirst);
+    expect(old.providerRecoveries?.some(item => item.action === "relaunch") ?? false).toBe(providerFirst);
+    await tickPipelines([], restarted);
+    await tickPipelines([], restarted);
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+    expect(h.calls.filter(call => call.startsWith("stop-host:"))).toHaveLength(1);
+  }
+});
+
+
+test("restart recovers a newer interrupted turn after a provider continuation even with an open scan projection", async () => {
+  const f = await providerRecoveryHarness("codex", "stream_disconnected", "stream disconnected");
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  f.h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: f.now() + 1 });
+  f.advance(IDLE_TURN_QUIET_MS + 1);
+  f.h.setConversationActive(null);
+  const restarted: PipelinePorts = { ...f.h.ports,
+    restartRecoveryBootId: () => "new-turn-boot",
+    conversationTurnInterrupted: async () => "idle",
+  };
+  const open = { ...entry(attempt.agentPath!), activity: "live" as const, activityReason: "jsonl_turn_open" as const };
+  await tickPipelines([open], restarted);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery!.replacementAttempt).toBe(2);
+  await tickPipelines([open], restarted);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.sends).toHaveLength(1);
+});
+
+test.each(["codex", "claude"] as const)("a persisted provider cut recovers once behind a restored idle open scan (%s)", async (engine) => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const h = harness();
+  await runningStructuredStage(h);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  const timestamp = new Date(Date.parse(attempt.startedAt!) + 1).toISOString();
+  const transcript = stageTranscript(`provider-idle-${engine}`, engine === "codex" ? [
+    { type: "event_msg", timestamp, payload: { type: "task_started", turn_id: "open-before-crash" } },
+    { type: "response_item", timestamp, payload: { type: "function_call", name: "exec_command", call_id: "unfinished", arguments: "{}" } },
+  ] : [
+    { type: "user", timestamp, message: { role: "user", content: "run this stage" } },
+    { type: "assistant", timestamp, message: { role: "assistant", stop_reason: null,
+      content: [{ type: "tool_use", id: "unfinished", name: "Bash", input: { command: "build" } }] } },
+  ]);
+  expect(await durableStageTurnEvidence(engine, transcript)).toMatchObject({ turn: "busy", message: null });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `provider-idle-${engine}-registry.json`));
+  const launchProfile = emptyLaunchProfile({ cwd: "/repo", project: "viewer" });
+  registry.reconcileConversations([{ engine, path: transcript, accountId: "account-a", launchProfile,
+    turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: timestamp }]);
+  const conversation = registry.conversationForPath(transcript)!;
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine, sessionId: generation.id }, artifactPath: transcript, cwd: "/repo",
+    accountId: "account-a", launchProfile, status: "idle", host: null,
+    structuredHost: { kind: engine === "codex" ? "codex-app-server" : "claude-broker", endpoint: "stdio:fixture",
+      process: null, eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1,
+      activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: "fixture", pendingAction: null });
+  attempt.agentPath = transcript;
+  attempt.conversationId = conversation.id;
+  attempt.sessionId = generation.id;
+  attempt.hostEpoch = 1;
+  attempt.effectiveRole.engine = engine;
+  attempt.effectiveRole.model = engine === "claude" ? "fable" : "gpt-5.6-sol";
+  lane.stages[0]!.effectiveRole = { ...attempt.effectiveRole };
+  savePipelines([lane]);
+  const originalPaths = h.ports.pathForConversation;
+  h.ports.pathForConversation = (id) => id === conversation.id ? transcript : originalPaths(id);
+  const originalAllowed = h.ports.sourcePathAllowed;
+  h.ports.sourcePathAllowed = (file) => file === transcript || originalAllowed(file);
+  h.ports.durableTurnEvidence = async (kind, file) => file === transcript
+    ? await durableStageTurnEvidence(kind, file) : h.durableTurns.get(file) ?? null;
+  h.setConversationActive(false);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.condition.kind).toBe("host_death");
+  h.advanceWallClock(60_000);
+  const open = { ...entry(transcript), activity: "live" as const, activityReason: "jsonl_turn_open" as const };
+  // Reload the registry as startup does, retaining the persisted cut in the pipeline store.
+  setAgentRegistryForTests(new AgentRegistry(registry.filename));
+  try {
+    await withRuntimeSnapshot(() => ({ runtime: { hostEpoch: 2 }, sessions: [
+      { conversationId: conversation.id, host: "alive", turn: "idle", attentionIds: [] },
+    ] }), async () => {
+      for (let tick = 0; tick < 5; tick += 1) {
+        const production = defaultPipelinePorts();
+        expect(await production.conversationTurnInterrupted!(conversation.id)).toBe("idle");
+        expect(await production.conversationAgentActive(conversation.id)).toBeNull();
+        const recovered: PipelinePorts = { ...h.ports,
+          conversationAgentActive: production.conversationAgentActive,
+          conversationTurnInterrupted: production.conversationTurnInterrupted,
+          conversationHostUnavailableSince: production.conversationHostUnavailableSince,
+          runtimeHostEpoch: production.runtimeHostEpoch,
+          restartRecoveryBootId: () => "provider-idle-restoration",
+        };
+        await tickPipelines([open], recovered);
+        h.advanceWallClock(5 * 60_000);
+      }
+    });
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]!.providerRecoveries?.filter((item) => item.action === "relaunch")).toHaveLength(1);
+    expect(attempts[0]!.restartRecovery).toBeUndefined();
+    expect(attempts[0]!.severedTurn).toBeUndefined();
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(h.calls.filter((call) => call.startsWith("stop-host:"))).toHaveLength(1);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["codex", "claude"] as const)("an open scan keeps a provider continuation fenced by pending delivery (%s)", async (engine) => {
+  const f = await providerRecoveryHarness(engine, "stream_disconnected", "stream disconnected");
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(1);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  f.h.setConversationActive(null);
+  const recovered: PipelinePorts = { ...f.h.ports,
+    restartRecoveryBootId: () => "pending-provider",
+    conversationTurnInterrupted: async () => "idle",
+    conversationDeliveryOutstanding: () => true,
+    conversationDeliveryCompleted: () => false,
+  };
+  const open = { ...entry(attempt.agentPath!), activity: "live" as const, activityReason: "jsonl_turn_open" as const };
+  for (let tick = 0; tick < 3; tick += 1) {
+    await tickPipelines([open], recovered);
+    f.advance(60_000);
+  }
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.sends).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.actionAt).toBeDefined();
+});
+
+
+test("resumable review budget notes name the same-lane grant action in both languages", async () => {
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  for (const locale of ["en", "uk"] as const) {
+    const note = parkedTaskNote("private diagnostics", locale, true, { kind: "review-budget" });
+    expect(note).toContain("continue-review");
+    expect(note).toContain("addRounds");
+    expect(note).not.toContain("private diagnostics");
+  }
+});
+
+test("terminal review continuation returns each fix to review even when the fix has a terminal pass edge", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[0] },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1], role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0], id: "fix", next: null },
+  ] as never);
+  const { pipeline: parked } = await driveWithController(h);
+  expect(parked.state).toBe("needs_decision");
+  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
+  const request = { action: "continue-review" as const, clientRequestId: "terminal-fix-grant", addRounds: 2, expectedRevision: pipelineRevision(parked) };
+  expect((await patchPipeline(parked.id, request, h.ports, actor)).error).toBeUndefined();
+  expect((await patchPipeline(parked.id, request, h.ports, actor)).replayed).toBe(true);
+  for (let n = 0; n < 2; n++) {
+    await tickPipelines([], h.ports);
+    const fix = loadPipelines()[0]!.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!;
+    expect(fix.input).toContain(n === 0 ? "P2 evidence gap 2" : "P1 unresolved");
+    h.beforeBuildPass();
+    await tickPipelines([h.finish(fix.agentPath!, "pass", `fix ${n}`)], h.ports);
+    expect(loadPipelines()[0]!.cursor?.stageId).toBe("critique");
+    await critiqueRound(h, "fail", "unresolved");
+  }
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
+});
+
+test.each([1, 2] as const)("terminal review continuation carries its reviewer return and final budget through a nested terminal repair (%i granted rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, id: "critique", role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h, (stageId) => stageId === "critique")).pipeline;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1, currentHead: ORIGIN_MAIN_SHA });
+
+  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
+  const grant = await patchPipeline(parked.id, {
+    action: "continue-review", clientRequestId: `nested-repair-grant-${rounds}`, addRounds: rounds,
+    expectedRevision: pipelineRevision(parked),
+  }, h.ports, actor);
+  expect(grant.error).toBeUndefined();
+
+  const continued = (await driveWithController(h, (stageId, attempt) =>
+    stageId === "critique" || stageId === "fix" && attempt === 2)).pipeline;
+  const fixes = continued.runs.find((run) => run.stageId === "fix")!.attempts;
+  const repairs = continued.runs.find((run) => run.stageId === "repair")!.attempts;
+  const reviews = continued.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(fixes[1]!.state).toBe("failed");
+  expect(repairs[0]!.state).toBe("passed");
+  expect(reviews).toHaveLength(2 + rounds);
+  expect(reviews[2]!.activatedBy?.edge).toBe("pass");
+  expect(reviews.slice(2).every((attempt) => attempt.state === "failed")).toBe(true);
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.lastPassedCommit).toBe(parked.reviewPending!.currentHead);
+  expect(continued.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1, currentHead: ORIGIN_MAIN_SHA });
+  expect(reviews.at(-1)!.activatedBy).toMatchObject({ budgetRecheck: true });
+  expect(continued.reviewGrants).toMatchObject([{ rounds }]);
+});
+
+
+test.each(["retry-stage", "skip-stage"] as const)("a failed terminal budget park refuses %s until a bounded grant", async (action) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  const revision = pipelineRevision(parked);
+  const spawned = h.spawnInputs.length;
+  for (let n = 0; n < 3; n++) {
+    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+    await tickPipelines([], h.ports);
+    expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  }
+  expect(h.spawnInputs).toHaveLength(spawned);
+  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
+  expect((await continueReview(parked, `fenced-${action}`, 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  await buildRound(h, "granted fix");
+  await critiqueRound(h, "pass", "independent approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+test("a budget park with a failed fix publication requires a grant before fix and fresh review", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  const reviews = parked.runs.find(run => run.stageId === "critique")!.attempts.length;
+  const box = publishHarness(h);
+  box.setLocalHead(ORIGIN_MAIN_SHA); box.setDirty(false); box.setPushFails(true);
+  parked.publication = "remote-branch";
+  parked.delivery!.publish = "enabled";
+  parked.publishedCommit = null;
+  savePipelines([parked]);
+  expect((await patchPipeline(parked.id, { action: "publish" }, h.ports)).status).toBe(409);
+  await tickPipelines([], h.ports);
+  const failed = loadPipelines()[0]!;
+  expect(failed).toMatchObject({ state: "needs_decision", publishedCommit: null,
+    reviewPending: parked.reviewPending, delivery: { operation: { state: "settled", result: { ok: false } } } });
+  for (const action of ["retry-stage", "skip-stage"] as const) {
+    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+  }
+  box.setPushFails(false);
+  expect((await continueReview(failed, "unpublished-budget-grant", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "build", input: expect.stringContaining("evidence gap 2") });
+  await buildRound(h, "granted fix after publication failure");
+  await critiqueRound(h, "pass", "fresh independent approval after granted fix");
+  const completed = loadPipelines()[0]!;
+  expect(completed).toMatchObject({ state: "completed", publishedCommit: ORIGIN_MAIN_SHA, reviewGrants: [{ rounds: 1 }] });
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews + 1);
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-2)!.verdict!.status).toBe("fail");
+  expect(box.order).toContain("push-rejected");
+  expect(box.order).toContain(`push:${ORIGIN_MAIN_SHA}`);
+});
+
+test.each([false, true])("board actions admit only a bounded terminal continuation (legacy park: %s)", async (legacy) => {
+  const { pipelineActionOptions, actionObserved } = await import("@/components/kanban/stagesModel");
+  const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  if (legacy) {
+    delete parked.reviewPending;
+    savePipelines([parked]);
+  }
+  const options = pipelineActionOptions(parked);
+  expect(options.find((option) => option.action === "continue-review")?.refusal).toBeNull();
+  for (const action of ["retry-stage", "skip-stage", "accept-head"] as const) {
+    expect(options.find((option) => option.action === action)?.refusal).not.toBeNull();
+  }
+  expect(actionObserved("continue-review", null, parked)).toBe(false);
+  expect(pipelineAnswers(parked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["continue-review"]);
+  expect((await continueReview(parked, `board-grant-${legacy}`, 2)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  await buildRound(h, "first board fix");
+  await critiqueRound(h, "fail", "retained defect");
+  await buildRound(h, "second board fix");
+  await critiqueRound(h, "pass", "fresh independent approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const { pipeline: parked } = await driveWithController(h);
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  expect((await continueReview(parked, "granted-before-block", 2)).error).toBeUndefined();
+  await buildRound(h, "fix before blocked review");
+  await tickPipelines([], h.ports);
+  // Old persisted metadata must not authorize a newer attempt.
+  const newer = loadPipelines()[0]!;
+  newer.reviewPending = parked.reviewPending;
+  savePipelines([newer]);
+  const review = newer.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(review.agentPath!, { text: 'Blocked review\n\n```json\n{"status":"fail","findings":["P1 review blocked"],"blocked":true,"blockedReason":"Review environment unavailable"}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.stateDetail).toBe("Review environment unavailable");
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "continue-review")?.refusal).toBe("no-review");
+  expect((await continueReview(blocked, "stale-budget", 2)).status).toBe(409);
+  expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
+  await patchPipeline(blocked.id, { action: "pause" }, h.ports);
+  const resumed = await patchPipeline(blocked.id, { action: "resume" }, h.ports);
+  expect(resumed.pipeline!.stateDetail).not.toContain("continue-review");
+});
+
+
+test.each([false, true])("consecutive terminal grants each buy two reviews on unchanged heads (nested repairs: %s)", async (nested) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, ...(nested ? { onFail: { to: "repair", maxRounds: 3 } } : {}) },
+    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
+  ] as never);
+  let parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  for (let grant = 0; grant < 2; grant++) {
+    expect((await continueReview(parked, `successive-${grant}`, 2)).error).toBeUndefined();
+    parked = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && (n === 2 || n === 4))).pipeline;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4 + grant * 2);
+    expect(parked.reviewGrants).toHaveLength(grant + 1);
+    expect(parked.reviewPending?.currentHead).toBe(ORIGIN_MAIN_SHA);
+  }
+});
+
+
+test.each([{ rounds: 1, nested: false }, { rounds: 2, nested: false }, { rounds: 1, nested: true }, { rounds: 2, nested: true }])("a terminal continuation retains validation through all $rounds reviews (nested repair: $nested)", async ({ rounds, nested }) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: "validate", ...(nested ? { onFail: { to: "repair", maxRounds: 1 } } : {}) },
+    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
+    { ...BUILD_ONLY[0]!, id: "validate", next: "critique" },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  const validations = parked.runs.find((run) => run.stageId === "validate")?.attempts.length ?? 0;
+  expect((await continueReview(parked, "validation-grant", rounds)).error).toBeUndefined();
+  const continued = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && n === 2)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds);
+  const review = continued.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(review.activatedBy?.stageId).toBe("validate");
+  expect(review.activatedBy?.budgetRecheck).toBe(true);
+  expect((await continueReview(continued, "validation-resume", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("fix");
+  expect(loadPipelines()[0]!.cursor?.input).toContain(review.verdict!.findings![0]!);
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds + 1);
+});
+
+test.each([1, 2] as const)("a final granted fix repaired inside its budget remains resumable (%i rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 2 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "before-final-repair", rounds)).error).toBeUndefined();
+  const repaired = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && n === rounds + 1)).pipeline;
+  const repair = repaired.runs.find(run => run.stageId === "repair")!.attempts[0]!;
+  expect(repair.state).toBe("passed");
+  expect(repair.activatedBy?.budgetSpent).toBeUndefined();
+  expect(repaired.reviewPending).toMatchObject({ terminalRecheck: true, fixStageId: "repair", fixAttempt: repair.n, currentHead: ORIGIN_MAIN_SHA });
+  const lastReview = repaired.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(lastReview.activatedBy).toMatchObject({ stageId: "repair", attempt: repair.n, budgetRecheck: true });
+  expect((await continueReview(repaired, "after-final-repair", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "fix", input: expect.stringContaining("P2 evidence gap") });
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(3 + rounds);
+  expect(completed.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!.input).toContain(lastReview.verdict!.findings![0]!);
+});
+
+
+test.each([
+  { failure: "host", retryRound: 0 }, { failure: "spawn", retryRound: 0 },
+  { failure: "host", retryRound: 2 }, { failure: "spawn", retryRound: 2 },
+] as const)("reviewer $failure retries spend no extra granted round (round $retryRound)", async ({ failure, retryRound }) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, `retry-${failure}-grant`, 3)).error).toBeUndefined();
+  for (let round = 0; round < retryRound; round++) {
+    await buildRound(h, `granted fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
+  }
+  await buildRound(h, "fix before reviewer retry");
+  const spawn = h.ports.spawnAgent;
+  if (failure === "spawn") {
+    h.ports.spawnAgent = async () => { throw new Error("runtime host request timed out"); };
+    h.ports.sleep = async () => {};
+  } else {
+    h.ports.spawnAgent = async (input, reserve) => ({ ...await spawn(input, reserve), paneId: null });
+  }
+  await tickPipelines([], h.ports);
+  const interruptedLane = loadPipelines()[0]!;
+  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(interrupted.verdict).toBeNull();
+  expect(interrupted.activatedBy?.budgetRecheck === true).toBe(retryRound === 2);
+  if (failure === "host") {
+    h.durableTurns.set(interrupted.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(interrupted.startedAt!) + 1 });
+    h.ports.conversationTurnInterrupted = async () => "stalled";
+    h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
+  } else {
+    expect(interruptedLane.state).toBe("needs_decision");
+  }
+  expect((await patchPipeline(parked.id, { action: "retry-stage", expectedStageId: "critique", expectedAttempt: interrupted.n }, h.ports)).error).toBeUndefined();
+  h.ports.spawnAgent = spawn;
+  delete h.ports.conversationTurnInterrupted;
+  await critiqueRound(h, "fail", "first completed granted review");
+  const retried = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(retried.activatedBy).toEqual(interrupted.activatedBy);
+  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
+  for (let round = retryRound + 1; round < 3; round++) {
+    await buildRound(h, `granted fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
+    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
+  }
+  const final = loadPipelines()[0]!;
+  const reviews = final.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(6);
+  expect(reviews.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
+  expect(final.reviewPending?.terminalRecheck).toBe(true);
+});
+
+
+test("a terminal budget decision with findings requires a grant rather than a decision answer", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await critiqueRound(h, "fail", "initial finding");
+  await buildRound(h, "last budget fix");
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(review.agentPath!, { text: 'Review still has findings\n\n```json\n{"status":"needs_decision","findings":["P1 retained defect"]}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  const revision = pipelineRevision(parked);
+  const result = await patchPipeline(parked.id, {
+    action: "resolve-decision", clientRequestId: "budget-decision-answer", answer: "Review this head again",
+    expectedRevision: revision, expectedStageId: "critique", expectedAttempt: review.n,
+  }, h.ports, { kind: "operator" });
+  expect(result).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  expect(loadPipelines()[0]!.decisionAnswers).toBeUndefined();
+  expect((await continueReview(parked, "budget-decision-grant", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P1 retained defect");
+  await buildRound(h, "granted defect fix");
+  await critiqueRound(h, "pass", "fresh review passes");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+
+test.each([false, true])("a blocked terminal reviewer retries its unspent activation (granted: %s)", async (granted) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  if (granted) {
+    const parked = (await driveWithController(h)).pipeline;
+    expect((await continueReview(parked, "blocked-final-grant", 1)).error).toBeUndefined();
+    await buildRound(h, "granted fix");
+  } else {
+    await tickPipelines([], h.ports);
+    await buildRound(h, "initial build");
+    await critiqueRound(h, "fail", "initial finding");
+    await buildRound(h, "last budget fix");
+  }
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(review.activatedBy?.budgetRecheck).toBe(true);
+  h.messages.set(review.agentPath!, { text: 'Review unavailable\n\n```json\n{"status":"fail","blocked":true,"blockedReason":"Review environment unavailable","findings":["P1 review blocked"]}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.reviewPending).toBeUndefined();
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+  const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "retry-stage")?.refusal).toBeNull();
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "skip-stage")?.refusal).not.toBeNull();
+  expect(pipelineAnswers(blocked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["retry-stage"]);
+  expect((await patchPipeline(blocked.id, { action: "skip-stage" }, h.ports)).status).toBe(409);
+  expect((await patchPipeline(blocked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await critiqueRound(h, "pass", "environment restored; independent review passes");
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.activatedBy).toEqual(review.activatedBy);
+});
+
+
+test.each(["tick", "direct"] as const)("an older failed terminal park regains same-lane continuation metadata (%s)", async (recovery) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const legacy = (await driveWithController(h)).pipeline;
+  delete legacy.reviewPending;
+  legacy.stateDetail = "budget spent: 1 findings left (critique): retained finding";
+  savePipelines([legacy]);
+  if (recovery === "tick") {
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique", fixStageId: "build" });
+    expect(loadPipelines()[0]!.stateDetail).toContain("continue-review");
+  }
+  const parked = loadPipelines()[0]!;
+  expect((await continueReview(parked, `legacy-${recovery}-grant`, 2)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.id).toBe(legacy.id);
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  const continued = (await driveWithController(h)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
+});
+
+
+test.each([1, 2] as const)("an inner terminal grant retains the outer review obligation (%i outer rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "outer-grant", rounds)).error).toBeUndefined();
+  const innerPark = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && (n === 2 || n === 3))).pipeline;
+  expect(innerPark.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "fix", fixStageId: "repair" });
+  expect((await continueReview(innerPark, "inner-grant", 1)).error).toBeUndefined();
+  const returned = (await driveWithController(h)).pipeline;
+  expect(returned.state).toBe("needs_decision");
+  expect(returned.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique" });
+  const reviews = returned.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(2 + rounds);
+  expect(reviews[2]!.activatedBy).toMatchObject({ stageId: "fix", attempt: 4, edge: "pass" });
+  expect(returned.reviewGrants).toMatchObject([{ stageId: "critique", rounds }, { stageId: "fix", rounds: 1 }]);
+  expect((await continueReview(returned, "outer-final-grant", 1)).error).toBeUndefined();
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.verdict?.status).toBe("pass");
+});
+
+
+test.each([0, 2] as const)("automatic reviewer host retries preserve a three-round grant (round %i)", async (retryRound) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "automatic-retry-grant", 3)).error).toBeUndefined();
+  for (let round = 0; round < retryRound; round++) {
+    await buildRound(h, `fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed review ${round + 1}`);
+  }
+  await buildRound(h, "fix before automatic host retries");
+  await tickPipelines([], h.ports);
+  const activation = loadPipelines()[0]!.cursor!.activatedBy;
+  for (let lost = 0; lost < 3; lost++) {
+    structuredLatest(1);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    if (lost < 2) await tickPipelines([], h.ports);
+  }
+  const interruptedLane = loadPipelines()[0]!;
+  expect(interruptedLane.state).toBe("needs_decision");
+  expect(interruptedLane.cursor).toMatchObject({ stageId: "critique", activatedBy: activation });
+  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(interrupted.verdict).toBeNull();
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(null);
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await critiqueRound(h, "fail", "review completes after host recovery");
+  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
+  for (let round = retryRound + 1; round < 3; round++) {
+    await buildRound(h, `fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed review ${round + 1}`);
+    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
+  }
+  const final = loadPipelines()[0]!;
+  expect(final.runs.find(run => run.stageId === "critique")!.attempts.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
+  expect(final.reviewPending?.terminalRecheck).toBe(true);
+});
+
+
+test("transport traversals before a terminal park cannot shorten a later grant", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await tickPipelines([], h.ports);
+  for (let lost = 0; lost < 3; lost++) {
+    structuredLatest(1);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    if (lost < 2) await tickPipelines([], h.ports);
+  }
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(null);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  expect(failEdgeRoundsUsed(parked, parked.stages[1]!)).toBe(2);
+  const completedBefore = parked.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict).length;
+  expect((await continueReview(parked, "after-transport-grant", 3)).error).toBeUndefined();
+  const continued = (await driveWithController(h)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
 });

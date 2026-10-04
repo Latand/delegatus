@@ -22,12 +22,14 @@ test("commit plan checks staged whitespace/privacy/lint and leaves types and tes
   expect(steps.map(step => step.name)).toEqual(["staged whitespace", "privacy", "eslint"]);
   expect(steps[1]!.command).toContain("--require-known-values");
   expect(steps[1]!.command.slice(-2)).toEqual(["--paths", "src/example.ts"]);
+  expect(steps[2]!.command).toEqual(["bun", "scripts/eslint-changes.ts", "--base", "base", "./src/example.ts"]);
+  expect(steps[2]!.capped).toBeTrue();
 });
 test("push checks commits, types and all sibling test variants, excluding browsers and deleted files", () => {
   const steps = plan("pre-push", ["src/example.ts", "src/deleted.test.ts"], context());
   expect(steps.find(step => step.name === "privacy")!.command).toContain("--check-commits");
   const tests = steps.find(step => step.name === "touched tests")!;
-  expect(tests.command).toEqual(["bun", "test", "./src/example.test.ts", "./src/example.integration.test.ts"]);
+  expect(tests.command).toEqual(["bun", "scripts/local-gate-tests.ts", "--base", "base", "./src/example.test.ts", "./src/example.integration.test.ts"]);
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
 });
@@ -100,18 +102,23 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect(() => pinnedBunVersion("npm install -g bun@1.4.0\nnpm install -g bun@1.3.3")).toThrow();
 });
 
-function hookFixture() {
+function hookFixture(realLint = false) {
   const dir = mkdtempSync(path.join(tmpdir(), "hooks-e2e-")); roots.push(dir);
   for (const leaf of [".githooks", "scripts", "shims", ".github/workflows"]) mkdirSync(path.join(dir, leaf), { recursive: true });
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), path.join(dir, ".githooks", hook));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), path.join(dir, "scripts/local-gate.ts"));
+  if (realLint) {
+    symlinkSync(path.join(root, "scripts/eslint-changes.ts"), path.join(dir, "scripts/eslint-changes.ts"));
+    symlinkSync(path.join(root, "eslint.config.mjs"), path.join(dir, "eslint.config.mjs"));
+    symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
+  }
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
   writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
   for (const name of ["bun", "bunx"]) {
     const shim = path.join(dir, "shims", name);
-    writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
+    writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts || ( "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ) ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
   }
   const env = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), HOOK_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, stdio: "pipe" });
@@ -120,17 +127,42 @@ function hookFixture() {
   writeFileSync(path.join(dir, "example.test.ts"), "// hook fixture\n"); git("add", "."); git("commit", "-m", "base");
   git("update-ref", "refs/remotes/origin/main", "HEAD"); git("config", "core.hooksPath", ".githooks");
   const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string });
-  return { dir, env, git, calls };
+  return { dir, env: { ...env, HOOK_REAL_LINT: realLint ? "1" : "0" }, git, calls };
 }
+for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows KanbanBoard baseline errors and rejects one added error by file/line`, () => {
+  const f = hookFixture(true);
+  const file = "src/components/kanban/KanbanBoard.tsx";
+  mkdirSync(path.dirname(path.join(f.dir, file)), { recursive: true });
+  const source = readFileSync(path.join(root, file), "utf8");
+  writeFileSync(path.join(f.dir, file), source);
+  f.git("add", file);
+  execFileSync("git", ["-c", "core.hooksPath=/dev/null", "commit", "-m", "Kanban baseline"], { cwd: f.dir, env: f.env });
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  writeFileSync(path.join(f.dir, file), `// Harmless line shift\n${source}`);
+  f.git("add", file);
+  const run = () => spawnSync("bash", [`.githooks/${mode}`], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  const accepted = run();
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toContain("0 errors introduced by this change");
+  expect(accepted.stdout).toMatch(/[1-9]\d* errors already on the base in the changed files \(not blocking\)/);
+  writeFileSync(path.join(f.dir, file), `// Harmless line shift\n${source}\nexport const addedLintError: any = 1;\n`);
+  f.git("add", file);
+  const refused = run();
+  expect(refused.status).not.toBe(0);
+  expect(refused.stdout).toContain("1 errors introduced by this change");
+  expect(refused.stderr).toMatch(/src\/components\/kanban\/KanbanBoard\.tsx:\d+:\d+ @typescript-eslint\/no-explicit-any/);
+  writeFileSync(path.join(f.dir, file), `// Harmless line shift\n${source}`);
+  f.git("add", file);
+}, 120000);
 test("real pre-commit hook checks staged source, stops failures, and supports the escape hatch", () => {
   const f = hookFixture(); writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n"); f.git("add", "example.ts");
-  const failed = spawnSync("git", ["commit", "-m", "blocked"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "eslint" }, encoding: "utf8" });
+  const failed = spawnSync("git", ["commit", "-m", "blocked"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "scripts/eslint-changes.ts" }, encoding: "utf8" });
   expect(failed.status).not.toBe(0);
   expect(f.calls().some(call => call.args.includes("--paths") && call.args.includes("example.ts") && call.known?.endsWith("privacy-known-value-fingerprints.json"))).toBeTrue();
   expect(f.calls().some(call => call.args.includes("--check-commits"))).toBeFalse();
   f.git("commit", "-m", "accepted");
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 3;\n"); f.git("add", "example.ts");
-  const skip = spawnSync("git", ["commit", "-m", "escape"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "eslint", LLV_SKIP_HOOKS: "1" } });
+  const skip = spawnSync("git", ["commit", "-m", "escape"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "scripts/eslint-changes.ts", LLV_SKIP_HOOKS: "1" } });
   expect(skip.status).toBe(0);
 });
 test("linked-worktree pre-commit clears Git selectors and preserves the complete shared config", () => {
@@ -161,8 +193,8 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   f.git("remote", "add", "origin", remote);
   const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(result.status).toBe(0);
-  const tests = f.calls().find(call => call.args[0] === "test")!;
-  expect(tests.args).toEqual(["test", "./example.test.ts"]);
+  const tests = f.calls().find(call => call.args[0] === "scripts/local-gate-tests.ts")!;
+  expect(tests.args).toEqual(["scripts/local-gate-tests.ts", "--base", f.git("rev-parse", "HEAD^").toString().trim(), "./example.test.ts"]);
   expect(tests.gitDir).toBeUndefined(); expect(tests.index).toBeUndefined(); expect(tests.workTree).toBeUndefined(); expect(tests.commonDir).toBeUndefined();
   for (const key of ["state", "home", "config", "tmp"] as const) expect(tests[key]).toContain("delegatus-local-gate-");
   expect(existsSync(tests.state!)).toBeFalse();

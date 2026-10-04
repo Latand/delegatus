@@ -11,7 +11,8 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -47,6 +48,72 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("shared memory settings", () => {
+  browserTest("project switch and explanation render in both languages at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/shared-memory"); fs.mkdirSync(out, { recursive: true });
+    let enabled = true;
+    const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+      "/api/memory/settings": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ enabled, capUsd: 1, spentUsd: .002 });
+      },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+    });
+    const browser = await launchChromium();
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        enabled = true;
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const offers = page.locator("[data-memory-offer]"); await offers.nth(1).waitFor();
+          const offer = offers.first(), shortOffer = offers.nth(1);
+          expect(await shortOffer.evaluate(el => el.tagName)).toBe("P");
+          expect(await shortOffer.locator("summary").count()).toBe(0);
+          /* The folded line keeps the bubble's trailing edge and measure, and on the phone its target is 44 px
+             and clear of the copy control above it. */
+          const edges = await page.evaluate(() => {
+            const box = (el: Element | null) => el?.getBoundingClientRect();
+            const bubble = box(document.querySelector("[data-user-bubble]")), summary = box(document.querySelector("[data-memory-offer] summary"));
+            const actions = box(document.querySelector("[data-mobile-message-actions] button"));
+            return { bubbleRight: bubble!.right, summaryLeft: summary!.left, summaryRight: summary!.right, summaryTop: summary!.top, summaryHeight: summary!.height, actionsBottom: actions?.bottom ?? 0, row: document.querySelector("[data-memory-offer]")!.parentElement!.getBoundingClientRect().width };
+          });
+          expect(Math.abs(edges.summaryRight - edges.bubbleRight)).toBeLessThanOrEqual(1);
+          expect(edges.summaryLeft).toBeGreaterThanOrEqual(edges.summaryRight - edges.row * (width === 390 ? .86 : .75) - 1);
+          if (width === 390) {
+            expect(edges.summaryHeight).toBeGreaterThanOrEqual(44);
+            expect(edges.summaryTop).toBeGreaterThanOrEqual(edges.actionsBottom - 1);
+            const top = await page.evaluate(() => { const r = document.querySelector("[data-memory-offer] summary")!.getBoundingClientRect(); return document.elementFromPoint(r.right - 4, r.top + .5)?.closest("summary") !== null; });
+            expect(top).toBe(true);
+          } else {
+            const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
+            expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
+          await offer.locator("summary").click();
+          /* Opened, the same line carries every title once: nothing is repeated under it. */
+          expect(await offer.locator("p").count()).toBe(0);
+          const opened = await offer.innerText();
+          for (let i = 1; i <= 15; i++) expect(opened.match(new RegExp(`constraint ${i}(?!\\d)`, "g"))).toHaveLength(1);
+          await page.screenshot({ path: path.join(out, `offer-open-${locale}-${width}.png`) });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
+          const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);
+          await control.click(); await page.waitForFunction(() => !(document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked);
+          const geometry = await setting.evaluate(el => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/settings.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
 
 describe("runtime idle performance", () => {
   browserTest("limits keep the phone stream joined without snapshot refetches", async () => {
@@ -577,6 +644,153 @@ browserTest("composer queue: a lost seat read drains once on the phone and survi
   fs.mkdirSync(evidence, { recursive: true });
   fs.writeFileSync(path.join(evidence, "recovery.json"), JSON.stringify(results, null, 2) + "\n");
 }, 90_000);
+
+/*
+ * The microphone hint: on a phone whose browser will ask for the microphone
+ * again although this device already allowed it, the composer carries one row
+ * naming the setting that ends the question.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "microphone hint"
+ *
+ * Chromium stands in for Edge on an iPhone, the operator's browser: the user
+ * agent is Edge's and the Permissions API answers "prompt", which is what a
+ * WebKit view reports when it will ask. Readings go to
+ * `evidence/mic-permission-hint/phone.json`; frames to
+ * `.artifacts/mic-permission-hint/`, which is not committed.
+ */
+const MIC_HINT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/138.0.0.0 Mobile/15E148 Safari/604.1";
+
+browserTest("microphone hint: the record button with and without the hint at 390, en and uk, dark", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/mic-permission-hint");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      const mic = `button[aria-label="${translate(locale, "mic.dictate")}"]`;
+      const surfaces = { hint: "[data-mic-permission-hint]", unit: '[data-testid="composer-input-unit"]', send: "[data-mobile2-send]", mic };
+      /* The visible composer's parts, and what a tap at the middle of each
+         control would land on. */
+      const read = (page: Page) => page.evaluate((selectors) => {
+        const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)].find((element) => element.getClientRects().length > 0) ?? null;
+        const rect = (element: HTMLElement | null) => {
+          if (!element) return null;
+          const r = element.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        };
+        const reachable = (element: HTMLElement | null) => {
+          if (!element) return false;
+          const r = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          return Boolean(hit && (hit === element || element.contains(hit)));
+        };
+        const hint = visible(selectors.hint);
+        const unit = visible(selectors.unit);
+        const send = visible(selectors.send);
+        const micButton = visible(selectors.mic);
+        const textarea = visible("textarea");
+        return {
+          hint: rect(hint), hintText: hint?.textContent ?? null, hintCount: document.querySelectorAll(selectors.hint).length,
+          /* The text itself: the row's own scroll size counts the dismiss
+             button's enlarged touch target. */
+          hintCut: [...(hint?.querySelectorAll("span") ?? [])].some((text) => text.scrollWidth > text.clientWidth || text.scrollHeight > text.clientHeight),
+          /* What a finger reaches: a walk from the button's centre, one pixel
+             at a time, for as long as the point still lands on the button. The
+             accessory region is a scrollport and clips whatever leaves it, so
+             the style's own numbers overstate the target. */
+          dismissTarget: (() => {
+            const button = hint?.querySelector<HTMLElement>("[data-mic-permission-hint-dismiss]");
+            if (!button) return null;
+            const r = button.getBoundingClientRect();
+            const cx = r.x + r.width / 2;
+            const cy = r.y + r.height / 2;
+            const lands = (x: number, y: number) => {
+              const hit = document.elementFromPoint(x, y);
+              return Boolean(hit && (hit === button || button.contains(hit)));
+            };
+            const reach = (dx: number, dy: number) => {
+              let steps = 0;
+              while (steps < 100 && lands(cx + dx * (steps + 1), cy + dy * (steps + 1))) steps += 1;
+              return steps;
+            };
+            if (!lands(cx, cy)) return { width: 0, height: 0 };
+            return { width: reach(-1, 0) + reach(1, 0) + 1, height: reach(0, -1) + reach(0, 1) + 1 };
+          })(),
+          unit: rect(unit), send: rect(send), mic: rect(micButton), textarea: rect(textarea),
+          sendReachable: reachable(send), micReachable: reachable(micButton), textareaReachable: reachable(textarea),
+          overflow: document.documentElement.scrollWidth > window.innerWidth,
+        };
+      }, surfaces);
+      for (const scene of ["plain", "hint"] as const) {
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, colorScheme: "dark", userAgent: MIC_HINT_UA });
+        try {
+          await context.addInitScript(({ lang, granted }) => {
+            localStorage.setItem("llv_lang", lang);
+            if (granted) localStorage.setItem("llv_mic_granted", "1");
+            Object.defineProperty(navigator, "permissions", { configurable: true, value: { query: async () => ({ state: "prompt" }) } });
+          }, { lang: locale, granted: scene === "hint" });
+          const page = await context.newPage();
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${base}/?runtime=structured#c=conversation_running`);
+          await page.waitForSelector("textarea", { timeout: 15_000 });
+          if (scene === "hint") await page.waitForSelector(surfaces.hint, { timeout: 5_000 });
+          await pause(page, 600);
+          const reading = await read(page);
+          await page.screenshot({ path: path.join(out, `390-${locale}-${scene}.png`) });
+          const at = `${locale} ${scene}`;
+          if (!reading.unit || !reading.send || !reading.mic || !reading.textarea) { failures.push(`${at}: the composer is not whole`); continue; }
+          if (reading.overflow) failures.push(`${at}: the page overflows sideways`);
+          if (!reading.sendReachable || !reading.micReachable || !reading.textareaReachable) failures.push(`${at}: a composer control is covered`);
+          if (scene === "plain") {
+            if (reading.hintCount !== 0) failures.push(`${at}: a hint with no prior grant`);
+            readings.push({ locale, scene, ...reading });
+            continue;
+          }
+          if (!reading.hint || reading.hintCount !== 1) { failures.push(`${at}: expected one visible hint, found ${reading.hintCount}`); continue; }
+          if (reading.hintText !== translate(locale, "mic.hint.iosOtherBrowser")) failures.push(`${at}: hint text is ${reading.hintText}`);
+          if (reading.hintCut) failures.push(`${at}: the hint's text is cut`);
+          if (!reading.dismissTarget || reading.dismissTarget.width < 44 || reading.dismissTarget.height < 44) failures.push(`${at}: the dismiss target is under 44 px`);
+          if (reading.hint.x < 0 || reading.hint.x + reading.hint.width > viewport.width) failures.push(`${at}: the hint leaves the viewport`);
+          if (reading.hint.y + reading.hint.height > reading.unit.y) failures.push(`${at}: the hint reaches into the input unit`);
+          for (const [name, box] of [["send", reading.send], ["mic", reading.mic], ["textarea", reading.textarea]] as const) {
+            if (overlaps(reading.hint, box)) failures.push(`${at}: the hint covers ${name}`);
+          }
+          /* Shown once per device: being on screen settles it, with no touch. */
+          const reload = async () => {
+            await page.reload();
+            await page.waitForSelector("textarea", { timeout: 15_000 });
+            await pause(page, 1_000);
+            return read(page);
+          };
+          const seen = await page.evaluate(() => localStorage.getItem("llv_mic_hint_seen"));
+          if (seen !== "1") failures.push(`${at}: the shown hint was not kept for the device`);
+          const untouched: number[] = [];
+          for (let load = 0; load < 3; load += 1) untouched.push((await reload()).hintCount);
+          if (untouched.some((count) => count !== 0)) failures.push(`${at}: the hint came back on a reload nobody dismissed it before (${untouched.join(", ")})`);
+          await page.screenshot({ path: path.join(out, `390-${locale}-untouched-reload.png`) });
+          /* A device that has not seen it yet: a touch on the dismiss control
+             removes the row at once, and it stays away after a reload. */
+          await page.evaluate(() => localStorage.removeItem("llv_mic_hint_seen"));
+          if ((await reload()).hintCount !== 1) { failures.push(`${at}: no hint to dismiss`); continue; }
+          await tap(page, cdp, "[data-mic-permission-hint-dismiss]");
+          await page.waitForSelector(surfaces.hint, { state: "detached", timeout: 3_000 });
+          const after = await reload();
+          if (after.hintCount !== 0) failures.push(`${at}: the hint came back after a dismissal and a reload`);
+          await page.screenshot({ path: path.join(out, `390-${locale}-dismissed-reload.png`) });
+          readings.push({ locale, scene, ...reading, shownKept: seen === "1", hintsAfterUntouchedReloads: untouched, hintsAfterDismissedReload: after.hintCount });
+        } finally { await context.close(); }
+      }
+    }
+  } finally { await browser.close(); stop(); }
+  const evidence = path.resolve("evidence/mic-permission-hint");
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ viewport, scheme: "dark", browser: "Edge on iOS (user agent)", readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 180_000);
 
 /*
  * #1795 — the runtime pill's sheet, on the same real Viewer, at the two phone
@@ -1308,12 +1522,11 @@ browserTest("#1865: the phone names a stage and its attempt in the queue row and
  *     hangs past its call into the next one; the desktop keeps its small
  *     22 px controls;
  *   - with the task strip right above the feed, the first visible feed row
- *     starts at or below the strip's bottom edge, and no glyph line and no
- *     control straddles the feed's top edge: following the tail, after the card opens, and at rest
- *     after a drag released it from the tail, with the first lines of a
- *     result taller than the screen under the strip at a sweep of offsets
- *     (every stop comes to rest), and once the conversation is closed to the
- *     board and opened again.
+ *     starts at or below the strip's bottom edge, and while following the tail no glyph line or control straddles its
+ *     top edge, including after the card opens. Released phone rests are
+ *     asserted across long results, drags, control overhangs and remounts.
+ *     The long-history case below separately asserts reader stability through
+ *     prepends and late layout, which never arm gesture-end alignment.
  *
  * Readings go to `evidence/issue-1978/phone.json`; frames to `.artifacts/issue-1978/`.
  */
@@ -1456,7 +1669,7 @@ async function feedAtRest(page: Page): Promise<void> {
   if (still < 4) throw new Error("the feed never came to rest");
 }
 
-browserTest("#1978: a command card's copy controls stay apart and off the text, and the task strip never cuts a line", async () => {
+browserTest("#1978: copy controls stay apart and followed content and released phone rests clear the task strip", async () => {
   fs.mkdirSync(EDGE_OUT, { recursive: true });
   fs.mkdirSync(EDGE_EVIDENCE, { recursive: true });
   const { base: fixtureBase, stop } = await serveFixture();
@@ -1536,6 +1749,20 @@ browserTest("#1978: a command card's copy controls stay apart and off the text, 
             await feedAtRest(page);
             readings[`rest-${distance}`] = await readInk(page);
           }
+          // A phone action's negative margin can leave its control under the
+          // edge after the enclosing message has gone. Exercise that narrow
+          // overhang with a real wheel settle, rather than relying on a drag
+          // landing on its fractional boundary by chance.
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const control = feed.querySelector<HTMLElement>('[aria-label="Copy message (Markdown)"]')!;
+            feed.scrollTop += control.getBoundingClientRect().bottom
+              - (feed.getBoundingClientRect().top + feed.clientTop) - 2.75;
+          });
+          await pause(page, 400);
+          await page.mouse.wheel(0, 2);
+          await feedAtRest(page);
+          readings["rest-control-overhang"] = await readInk(page);
           await page.screenshot({ path: path.join(EDGE_OUT, `${key}-rest.png`) });
           /* Close to the board and come back to the conversation through
              history: the feed comes back where it was left and still rests
@@ -5524,6 +5751,191 @@ describe("fast TTS header", () => {
   }, 120_000);
 });
 
+/*
+ * The phone conversation's chrome (2026-10-02): the pinned message and the
+ * background tasks live behind the header's ⋯ menu, nothing sits under the bar,
+ * the seat's report button is back on the bar, and read-aloud sits beside each
+ * assistant message and nowhere in the header.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone chrome"
+ *
+ * Frames go to `$HOME/Pictures/delegatus-review/phone-chrome/`, readings to
+ * `evidence/phone-chrome/readings.json`.
+ */
+describe("phone chrome", () => {
+  browserTest("pinned message and background tasks in the ⋯ menu, read-aloud beside the message, at 390 in en and uk, light and dark", async () => {
+    const out = path.join(os.homedir(), "Pictures/delegatus-review/phone-chrome");
+    const evidence = path.resolve("evidence/phone-chrome");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const speech = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+    const { base, stop } = await serveFixture({ "/api/tts/backend": speech });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    const scenes = [
+      { name: "tasks3", query: "chrome=3" },
+      { name: "pinned-only", query: "chrome=0" },
+      { name: "tasks8", query: "chrome=8" },
+      { name: "empty", query: "chrome=0&nopin" },
+    ] as const;
+    /** Every visible control inside `root` that a finger has to hit, under 44 px in either direction. */
+    const smallControls = (page: Page, root: string) => page.evaluate((selector) => {
+      const scope = document.querySelector(selector);
+      if (!scope) return ["missing"];
+      return [...scope.querySelectorAll<HTMLElement>("button, a[href], [role=menuitem]")].flatMap((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.width < 43.5 || rect.height < 43.5 ? [`${node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 24)} ${Math.round(rect.width)}x${Math.round(rect.height)}`] : [];
+      });
+    }, root);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const scene of scenes) {
+        const key = `390-${lang}-${scheme}-${scene.name}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        const tasksOn = scene.name === "tasks3" || scene.name === "tasks8";
+        const pinnedOn = scene.name !== "empty";
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?${scene.query}&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-bar] [data-mobile2-open=menu]", { timeout: 20_000 });
+          await page.waitForSelector("[data-mobile-message=agent]", { timeout: 20_000 });
+          await pause(page, 900);
+          /* The bar: its height, its icons, and what sits between it and the feed. */
+          const frame = await page.evaluate(() => {
+            const bar = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+            const feed = document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect();
+            return {
+              barHeight: bar.height, barBottom: bar.bottom, feedTop: feed.top, gap: Math.round(feed.top - bar.bottom),
+              strips: document.querySelectorAll("[data-task-relations], [data-task-relations-slot], [data-flip-key]").length,
+              speechInBar: document.querySelectorAll("[data-mobile2-bar] [data-tts-trigger], [data-mobile2-bar] [data-tts-header]").length,
+              reports: !!document.querySelector('[data-mobile2-bar] [data-mobile2-open=reports]'),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              barBadge: document.querySelectorAll("[data-mobile2-bar] [data-mobile2-menu-badge], [data-mobile2-bar] [data-mobile2-notice-dot]").length,
+            };
+          });
+          if (frame.barHeight !== 52) fail(`the bar is ${frame.barHeight}px high`);
+          /* The pane's own card frame (its border and engine stripe) is the 5 px that is always there; a strip is 44 px or more. */
+          if (frame.gap > 8) fail(`${frame.gap}px sit between the bar and the feed`);
+          if (frame.strips) fail(`${frame.strips} strips remain under the bar`);
+          if (frame.speechInBar) fail("a speech control is on the bar");
+          if (!frame.reports) fail("the seat's report button is not on the bar");
+          if (frame.sideways > 0) fail(`the page scrolls sideways by ${frame.sideways}px`);
+          if (frame.barBadge) fail("the bar carries a badge or dot");
+          const barSmall = await smallControls(page, "[data-mobile2-bar]");
+          if (barSmall.length) fail(`bar controls under 44 px: ${barSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-conversation.png`) });
+          /* Read-aloud: in the message's own action row, at 44 px, with copy beside it. */
+          await page.waitForSelector("[data-mobile-message-actions] [data-tts-trigger]", { timeout: 10_000 });
+          const speak = await page.evaluate(() => {
+            const trigger = [...document.querySelectorAll<HTMLElement>("[data-mobile-message-actions] [data-tts-trigger]")].at(-1)!;
+            const rect = trigger.getBoundingClientRect();
+            const row = trigger.closest("[data-mobile-message-actions]")!;
+            return { width: rect.width, height: rect.height, copy: !!row.querySelector("button[aria-label]:not([data-tts-trigger])"), inMessage: !!trigger.closest("[data-mobile-message]"), header: trigger.hasAttribute("data-tts-header"), label: trigger.getAttribute("aria-label") };
+          });
+          if (speak.width < 44 || speak.height < 44) fail(`the read-aloud control is ${speak.width}x${speak.height}`);
+          if (!speak.copy || !speak.inMessage || speak.header) fail(`the read-aloud control sits wrong: ${JSON.stringify(speak)}`);
+          const messageSmall = await smallControls(page, "[data-mobile-message-actions]");
+          if (messageSmall.length) fail(`message controls under 44 px: ${messageSmall.join(", ")}`);
+          await page.locator("[data-mobile-message-actions]").last().scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-read-aloud.png`) });
+          /* The header menu, open. */
+          await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+          await page.waitForSelector("[data-mobile2-sheet=menu]");
+          await pause(page, 500);
+          const rowState = await page.evaluate(() => ({
+            pinned: !!document.querySelector('[data-mobile2-menu-row=pinned]'),
+            background: document.querySelector('[data-mobile2-menu-row=background]')?.textContent?.trim() ?? null,
+            order: [...document.querySelectorAll("[data-mobile2-menu-row]")].slice(0, 2).map((node) => node.getAttribute("data-mobile2-menu-row")),
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          }));
+          if (rowState.pinned !== pinnedOn) fail(`pinned row ${rowState.pinned}, expected ${pinnedOn}`);
+          const tasksCount = scene.name === "tasks3" ? 3 : scene.name === "tasks8" ? 8 : 0;
+          const tasksLabel = translate(lang, "mobile2.chat.menuBackground", { count: tasksCount });
+          if ((rowState.background !== null) !== tasksOn || (tasksOn && !rowState.background!.includes(tasksLabel))) fail(`tasks row ${JSON.stringify(rowState.background)}, expected ${tasksOn ? tasksLabel : "none"}`);
+          if (rowState.sideways > 0) fail(`menu scrolls sideways by ${rowState.sideways}px`);
+          const menuSmall = await smallControls(page, "[data-mobile2-sheet=menu]");
+          if (menuSmall.length) fail(`menu controls under 44 px: ${menuSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          const sheets: Record<string, unknown> = {};
+          if (pinnedOn && scene.name === "tasks3") {
+            await page.locator("[data-mobile2-menu-row=pinned]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]");
+            await pause(page, 500);
+            const pinned = await page.evaluate(() => ({ text: document.querySelector("[data-mobile2-pinned-item] p")?.textContent ?? "", open: document.querySelector("[data-mobile2-pinned-open]")?.textContent?.trim() ?? "", sideways: document.documentElement.scrollWidth - innerWidth }));
+            if (!pinned.text.includes("Never leave a lane without an owner.")) fail("the pinned sheet does not show the full text");
+            if (!pinned.open.includes(translate(lang, "mobile2.pinned.openCard"))) fail(`the pinned sheet's button reads ${pinned.open}`);
+            if (pinned.sideways > 0) fail(`pinned sheet scrolls sideways by ${pinned.sideways}px`);
+            const small = await smallControls(page, "[data-mobile2-sheet=pinned]");
+            if (small.length) fail(`pinned sheet controls under 44 px: ${small.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-pinned-sheet.png`) });
+            sheets.pinned = pinned;
+            await page.locator("[data-mobile2-sheet=pinned] [data-mobile2-close]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]", { state: "detached" });
+            await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]");
+          }
+          if (tasksOn) {
+            await page.locator("[data-mobile2-menu-row=background]").click();
+            await page.waitForSelector("[data-mobile2-sheet=background]");
+            await pause(page, 500);
+            const list = await page.evaluate(() => ({
+              rows: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task]").length,
+              standingStop: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task-stop]").length,
+              hostWord: (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Stop host") || (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Зупинити хост"),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              sheetSideways: (() => { const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=background] [data-mobile2-sheet-body]"); return body ? body.scrollWidth - body.clientWidth : 0; })(),
+            }));
+            const expected = scene.name === "tasks3" ? 3 : 8;
+            if (list.rows !== expected) fail(`${list.rows} task rows, expected ${expected}`);
+            if (list.standingStop) fail("a Stop control is visible before a task's ⋯ is opened");
+            if (list.hostWord) fail("the tasks sheet says «host»");
+            if (list.sideways > 0 || list.sheetSideways > 0) fail(`tasks sheet scrolls sideways (${list.sideways}/${list.sheetSideways})`);
+            const listSmall = await smallControls(page, "[data-mobile2-sheet=background]");
+            if (listSmall.length) fail(`tasks sheet controls under 44 px: ${listSmall.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-tasks-sheet.png`) });
+            sheets.tasks = list;
+            if (scene.name === "tasks3") {
+              await page.locator("[data-mobile2-task-menu]").first().click();
+              await page.waitForSelector("[data-mobile2-task-actions]");
+              await pause(page, 300);
+              const taskMenu = await page.evaluate(() => ({
+                head: document.querySelector("[data-mobile2-task-actions]")?.firstElementChild?.textContent?.trim() ?? "",
+                items: [...document.querySelectorAll("[data-mobile2-task-actions] [role=menuitem]")].map((node) => node.textContent?.trim()),
+                sideways: document.documentElement.scrollWidth - innerWidth,
+              }));
+              const wanted = [translate(lang, "task.stopTask"), translate(lang, "task.showOutput"), translate(lang, "task.copyCommand")];
+              if (!/^PID \d+$/.test(taskMenu.head)) fail(`the task menu header reads ${taskMenu.head}`);
+              if (JSON.stringify(taskMenu.items) !== JSON.stringify(wanted)) fail(`the task menu holds ${JSON.stringify(taskMenu.items)}`);
+              if (taskMenu.sideways > 0) fail(`task menu scrolls sideways by ${taskMenu.sideways}px`);
+              const small = await smallControls(page, "[data-mobile2-task-actions]");
+              if (small.length) fail(`task menu controls under 44 px: ${small.join(", ")}`);
+              await page.screenshot({ path: path.join(out, `${key}-task-menu.png`) });
+              sheets.taskMenu = taskMenu;
+            }
+          }
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings.push({ key, frame, speak, rowState, sheets, pageErrors });
+        } catch (error) {
+          failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 describe("fast TTS live latency", () => {
   const liveTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_TTS_LIVE_LATENCY === "1" ? test : test.skip;
   liveTest("interleaves ten cold baseline and candidate tap-to-speech measurements", async () => {
@@ -6279,6 +6691,251 @@ describe("state writes disk-full alert", () => {
 });
 
 /*
+ * Whole-card drag on the phone (operator, 2026-10-02): hold 0.35 s and the card
+ * lifts with a dock of the four columns at the bottom; a release over a column
+ * moves it, a release in place opens today's menu, and scrolling and swiping
+ * between columns keep working. The board is the kanban scene with 44 more tasks
+ * (`&cards=44`), measured under CPU throttling x4 from a recorded trace
+ * (`kanban/dragFrameMeter.ts`). `LLV_DRAG_LABEL` names the record written to
+ * `evidence/whole-card-drag/<label>-phone.json`.
+ */
+describe("whole-card drag on the phone", () => {
+  const LABEL = process.env.LLV_DRAG_LABEL ?? "run";
+  const DRAG_OUT = path.resolve(".artifacts/whole-card-drag");
+  const open = async (browser: Awaited<ReturnType<typeof launchChromium>>, base: string, record?: { dir: string }) => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      ...(record ? { recordVideo: { dir: record.dir, size: { width: 390, height: 844 } } } : {}),
+    });
+    await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+    await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+    await pause(page, 800);
+    return { context, page, pageErrors, cdp: await context.newCDPSession(page) };
+  };
+  /** The first task card on screen in Assigned, and a point on it clear of its controls. */
+  const grabPoint = async (page: Page, key?: string): Promise<Point> => {
+    const card = key ? page.locator(`[data-phone-kanban-column="assigned"] [data-phone-card="${key}"]`) : page.locator('[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]').first();
+    await card.scrollIntoViewIfNeeded();
+    await pause(page, 300);
+    const box = (await card.boundingBox())!;
+    return [box.x + box.width / 2, box.y + 18];
+  };
+
+  browserTest("a 3 s drag under 4x CPU throttling holds the display rate on a 48-card board", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
+           the ablation that shows what they cost a drag. */
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        const from = await grabPoint(page);
+        /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
+           the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
+        let tile!: Rect;
+        const lift = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone-lift`, async () => {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 700);
+          tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+          expect(tile, "the dock is drawn after the hold").not.toBeNull();
+          return 0;
+        });
+        const reading = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone`, () =>
+          playPath(cdp, [from, [from[0] + 60, from[1] - 140], [from[0] - 40, from[1] - 260], [tile.x + tile.width / 2, tile.y + tile.height / 2]], 3000, 16, true));
+        expect(await page.locator("[data-phone-lift-ghost]").count(), "the card is lifted").toBe(1);
+        expect(await page.locator('[data-phone-dock-tile="blocked"][data-over]').count(), "the finger is over Blocked").toBe(1);
+        await page.screenshot({ path: path.join(DRAG_OUT, `${LABEL}-phone-mid-drag.png`) });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 600);
+        expect(await page.locator("[data-phone-dock]").count(), "the dock goes with the finger").toBe(0);
+        fs.mkdirSync("evidence/whole-card-drag", { recursive: true });
+        fs.writeFileSync(`evidence/whole-card-drag/${LABEL}-phone.json`, `${JSON.stringify({ board: "phone kanban scene plus 44 tasks with long titles and lanes", viewport: "390x844 touch", cpuThrottling: 4, path: "hold 0.35 s, then 3 s with one move per 16 ms", lift: { ...lift, trace: undefined }, drag: { ...reading, trace: undefined } }, null, 2)}\n`);
+        console.log(JSON.stringify({ lift, drag: reading }));
+        expect(pageErrors).toEqual([]);
+        if (process.env.LLV_DRAG_ANIMATIONS !== "running") {
+          expect(reading.frameMs.p95, "p95 frame time at x4").toBeLessThanOrEqual(16.7 + 0.5);
+          expect(reading.longTasks.count, "tasks over 50 ms at x4").toBe(0);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  /* LLV_DRAG_VIDEO=<dir> records the hold, the lift, the drag and the drop as a video, with a dot where the finger is. */
+  const VIDEO = process.env.LLV_DRAG_VIDEO;
+  (VIDEO ? browserTest : test.skip)("records a phone drag to a video", async () => {
+    fs.mkdirSync(VIDEO!, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+        recordVideo: { dir: VIDEO!, size: { width: 390, height: 844 } },
+      });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+      await context.addInitScript(() => {
+        const dot = document.createElement("div");
+        dot.style.cssText = "position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(220,60,40,.55);border:2px solid #fff;z-index:99999;pointer-events:none;display:none";
+        const place = (event: PointerEvent) => { dot.style.display = "block"; dot.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`; };
+        addEventListener("pointermove", place, true); addEventListener("pointerdown", place, true);
+        addEventListener("pointerup", () => { dot.style.display = "none"; }, true);
+        document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dot));
+      });
+      const page = await context.newPage();
+      await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await pause(page, 1000);
+      const cdp = await context.newCDPSession(page);
+      const from = await grabPoint(page);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+      await pause(page, 900);
+      const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+      const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+      for (const [x, y] of [...along(from, [from[0] + 30, from[1] - 120], 20), ...along([from[0] + 30, from[1] - 120], [from[0] - 20, from[1] - 220], 20), ...along([from[0] - 20, from[1] - 220], target, 30)]) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+        await pause(page, 24);
+      }
+      await pause(page, 600);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await pause(page, 1500);
+      const video = page.video()!;
+      await context.close();
+      await video.saveAs(path.join(VIDEO!, "phone-drag.webm"));
+      await video.delete();
+    } finally { await browser.close(); stop(); }
+  }, 120_000);
+
+  browserTest("with the finger on a dock tile, the ghost is above the dock and the tile's label is uncovered, at 390 and 320", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      for (const width of [390, 320]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 640 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+          await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+          await pause(page, 800);
+          const cdp = await context.newCDPSession(page);
+          const from = await grabPoint(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 520);
+          for (const status of ["blocked", "done", "inbox"]) {
+            const tile = (await rectOf(page, `[data-phone-dock-tile="${status}"]`))!;
+            const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+            for (const [x, y] of along(from, target, 8)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+            await pause(page, 120);
+            const ghost = (await rectOf(page, "[data-phone-lift-ghost]"))!;
+            const dock = (await rectOf(page, "[data-phone-dock]"))!;
+            const label = (await page.evaluate((sel) => {
+              const tileEl = document.querySelector(sel)!;
+              const text = [...tileEl.querySelectorAll("*")].find((node) => node.children.length === 0 && (node.textContent ?? "").trim() !== "") ?? tileEl;
+              const box = text.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height };
+            }, `[data-phone-dock-tile="${status}"]`));
+            expect(ghost.y + ghost.height, `${width}px ${status}: the ghost's bottom edge is above the dock`).toBeLessThanOrEqual(dock.y + 0.5);
+            expect(label.y, `${width}px ${status}: the label is below the ghost`).toBeGreaterThanOrEqual(ghost.y + ghost.height - 0.5);
+            expect(ghost.x, `${width}px: the ghost stays on the screen`).toBeGreaterThanOrEqual(-0.5);
+            expect(ghost.x + ghost.width, `${width}px: the ghost stays on the screen`).toBeLessThanOrEqual(width + 0.5);
+            expect(await page.locator(`[data-phone-dock-tile="${status}"][data-over]`).count(), `${width}px: the finger is over ${status}`).toBe(1);
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  browserTest("a release over a column moves the task, in place opens the menu, elsewhere does nothing; scrolling and the pager still work", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        const card = '[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]';
+        const where = (selector: string) => page.evaluate((sel) => document.querySelector(sel)?.closest("[data-phone-kanban-column]")?.getAttribute("data-phone-kanban-column") ?? null, selector);
+        const first = await page.locator(card).first().getAttribute("data-phone-card");
+        const id = `[data-phone-card="${first}"]`;
+        const from = await grabPoint(page);
+
+        /* Held and released where it was: today's menu, nothing moved. */
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+        await pause(page, 520);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "the menu waits for the release").toBe(0);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await page.locator('[data-mobile2-sheet="card"]').count()).toBe(1);
+        expect(await where(id)).toBe("assigned");
+        await touch(cdp, [[195, 40]]);
+        await pause(page, 500);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a tap outside closes the menu").toBe(0);
+
+        /* Lifted and let go over nothing: back where it was. */
+        const at = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at[0], y: at[1] }] });
+        await pause(page, 520);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: at[0] + 10, y: at[1] - 200 }] });
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 400);
+        expect(await where(id)).toBe("assigned");
+        expect(await page.locator("[data-mobile2-sheet]").count()).toBe(0);
+
+        /* Lifted and let go over Blocked: it moves, with the usual receipt. */
+        const again = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: again[0], y: again[1] }] });
+        await pause(page, 520);
+        const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+        const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+        for (const [x, y] of along(again, target, 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await where(id)).toBe("blocked");
+        expect(await page.locator("[data-mobile2-receipt]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a drop opens no menu").toBe(0);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map((patch) => [patch.id, patch.body.status])).toEqual([[first!.replace("task:", ""), "blocked"]]);
+
+        /* The column scrolls under a finger that moves at once, and no dock appears. */
+        const scroller = '[data-phone-kanban-column="assigned"]';
+        const before = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await touch(cdp, along([195, 600], [198, 300], 14), 16);
+        await pause(page, 500);
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a vertical drag scrolls the column").toBeGreaterThan(before + 40);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(0);
+
+        /* The pager swipes between columns. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        await touch(cdp, along([330, 500], [60, 506], 14), 16);
+        await pause(page, 700);
+        expect(await page.evaluate(() => document.querySelector("[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")), "a swipe left changes the column").toBe("blocked");
+
+        /* A finger held on a card and then moved scrolls nothing: the card is the thing in hand. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        const held = await grabPoint(page);
+        const top = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: held[0], y: held[1] }] });
+        await pause(page, 520);
+        for (const [x, y] of along(held, [held[0], held[1] - 220], 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a lifted card does not scroll the column").toBe(top);
+        expect(await page.locator("[data-phone-lift-ghost]").count()).toBe(1);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+});
+
+/*
  * Launching an agent from the phone's draft screen: the screen is the new
  * agent's conversation from the first frame and stays so while the scan swaps
  * the launch window for the transcript, and one Back leaves it. The running
@@ -6340,4 +6997,691 @@ describe("launching an agent on the phone", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); stop(); }
   }, 90_000);
+});
+
+describe("older history on the phone", () => {
+  /*
+   * A real touch drag toward the start of an 800-line conversation, on a
+   * phone at 4x CPU slowdown. The audit that found the desktop walk slow could
+   * not say anything about the phone, because its synthetic touch gestures did
+   * not move the feed; `Input.dispatchTouchEvent` does, and this case drives
+   * it. The feed pages in earlier history as the reader nears the top, every
+   * row the reader had on screen keeps its DOM node, and the walk ends at the
+   * first line. The readings go to `.artifacts/phone-older-history/walk.json`.
+   */
+  const HISTORY_OUT = path.resolve(".artifacts/phone-older-history");
+
+  browserTest("a touch drag brings the earlier pages in without remounting what the reader has", async () => {
+    fs.mkdirSync(HISTORY_OUT, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(HISTORY_OUT, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=200&window=120&page=100`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+        await pause(page, 600);
+        const marked = await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+          for (const row of rows) row.setAttribute("data-first-window", "1");
+          const state: number[] = [];
+          (window as unknown as { __frames: number[] }).__frames = state;
+          let last = performance.now();
+          const tick = (now: number) => { state.push(now - last); last = now; requestAnimationFrame(tick); };
+          requestAnimationFrame(tick);
+          return rows.length;
+        });
+        const rect = await rectOf(page, "[data-log-feed-scroller]");
+        if (!rect) throw new Error("no feed");
+        const x = rect.x + rect.width / 2;
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const earlier = [...feed.querySelectorAll("button")].some((button) => /earlier|loading/i.test(button.textContent ?? ""));
+          return {
+            top: Math.round(feed.scrollTop),
+            rows: feed.querySelectorAll("[data-feed-key]").length,
+            kept: feed.querySelectorAll("[data-first-window]").length,
+            loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+            atStart: !earlier,
+          };
+        });
+        const first = await read();
+        let gestures = 0;
+        let last = first;
+        const startedAt = Date.now();
+        for (; gestures < 400; gestures += 1) {
+          await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 10));
+          await pause(page, 120);
+          last = await read();
+          if (last.atStart && last.top < 5) break;
+        }
+        const reachedStartMs = Date.now() - startedAt;
+        const frames = await page.evaluate(() => (window as unknown as { __frames: number[] }).__frames.slice(1));
+        const walk = {
+          gestures, reachedStartMs, loads: last.loads, rows: last.rows, kept: last.kept, marked,
+          frames: frames.length, over100: frames.filter((ms) => ms > 100).length, maxFrameMs: Math.round(Math.max(0, ...frames)),
+        };
+        fs.writeFileSync(path.join(HISTORY_OUT, "walk.json"), JSON.stringify(walk, null, 2));
+        await page.screenshot({ path: path.join(HISTORY_OUT, "at-start-390.png") });
+        expect(pageErrors).toEqual([]);
+        /* The drag moved the feed (the audit's gestures did not), earlier
+           pages arrived, the walk ended at the first line, and every row
+           that was on screen at the start is still the same node. */
+        expect(last.top).toBeLessThan(first.top);
+        expect(last.loads).toBeGreaterThanOrEqual(1);
+        expect(last.atStart).toBe(true);
+        expect(last.kept).toBe(marked);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 300_000);
+});
+
+describe("long conversation scroll", () => {
+  /*
+   * A reader partway up a long conversation while an older page arrives. The
+   * scene is the fixture's `?scroll-history` feed: 120 loaded records, 60
+   * prepended while a real wheel and touch gesture are in flight, then late
+   * image and code growth above the reader, a tail append and a toolbar
+   * resize. The message under the reader's eye may move by no more than 3 px
+   * through all of it, at 390 px in both languages and at 1440 px. Readings
+   * and frames go to `.artifacts/scroll-history/`.
+   */
+  browserTest("history and late layout preserve the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const [width, locale] of [[390, "en"], [390, "uk"], [1440, "en"]] as const) for (const compact of [false, true]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 },
+          ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          // Start within the oldest loaded answer, then drive actual upward input.
+          await scroller.evaluate((el) => { el.scrollTop = 300; });
+          await page.waitForTimeout(400);
+          await scroller.hover();
+          await page.mouse.wheel(0, -220);
+          await page.waitForFunction(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending);
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const el = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const row = [...el.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top)!;
+            const state = window as unknown as { scrollTrace: { anchor: string; frames: Array<Record<string, unknown>>; phase: string; running: boolean } };
+            state.scrollTrace = { anchor: row.dataset.feedKey!, frames: [], phase: "idle", running: true };
+            const frame = (time: number) => {
+              if (!state.scrollTrace.running) return;
+              const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
+              state.scrollTrace.frames.push({ time, phase: state.scrollTrace.phase, scrollTop: el.scrollTop,
+                anchorY: row.getBoundingClientRect().top, height: el.scrollHeight, viewport: el.clientHeight,
+                viewportTop: el.getBoundingClientRect().top, visualHeight: visualViewport?.height,
+                overflowAnchor: getComputedStyle(el).overflowAnchor });
+              requestAnimationFrame(frame);
+            };
+            // rAF runs before ResizeObserver in the rendering algorithm. Keep
+            // that raw reading, then record the offset that survives pre-paint
+            // resize restoration (the production observer was registered first).
+            const settled = new ResizeObserver(() => {
+              const latest = state.scrollTrace.frames.at(-1);
+              if (!latest || !state.scrollTrace.running) return;
+              const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
+              latest.preResizeAnchorY ??= latest.anchorY;
+              latest.preResizeScrollTop ??= latest.scrollTop;
+              latest.anchorY = row.getBoundingClientRect().top;
+              latest.scrollTop = el.scrollTop;
+              latest.resizeObserved = true;
+            });
+            settled.observe(el);
+            settled.observe(el.firstElementChild!);
+            requestAnimationFrame(frame);
+          });
+          const phase = async (name: string, action: () => Promise<unknown>) => {
+            await page.evaluate((name) => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = name; }, name);
+            await action();
+            await page.waitForTimeout(650);
+          };
+          await phase("wheel-up", () => page.mouse.wheel(0, -20));
+          if (width === 390) {
+            const cdp = await context.newCDPSession(page);
+            await phase("touch-up", async () => {
+              await touch(cdp, along([190, 260], [190, 295]), 24);
+              await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "touch-rest"; });
+            });
+            await cdp.detach();
+          }
+          await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "steady"; });
+          await page.waitForTimeout(100);
+          const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-before.png`) });
+          await phase("prepend", () => page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend()));
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-prepend.png`) });
+          await phase("live-bottom", () => page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append()));
+          await phase("late-image-above", () => page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
+            const img = document.createElement("img"); img.width = 200; img.height = 180;
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            row.append(img);
+          }));
+          await phase("late-code-markdown-above", () => page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
+            const pre = document.createElement("pre");
+            pre.textContent = "const late = 1;\n".repeat(8);
+            const paragraph = document.createElement("p");
+            paragraph.textContent = "Late markdown wrapping on a phone. ".repeat(12);
+            row.append(pre, paragraph);
+          }));
+          await phase("toolbar-resize", () => page.setViewportSize({ width, height: 780 }));
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-after.png`) });
+          const result = await page.evaluate(() => {
+            const trace = (window as unknown as { scrollTrace: { frames: Array<{phase: string; anchorY: number; scrollTop: number}>; running: boolean } }).scrollTrace;
+            trace.running = false;
+            const baseline = trace.frames.filter((f) => f.phase === "steady").at(-1)!.anchorY;
+            const stationary = trace.frames.filter((f) => ["prepend", "live-bottom", "late-image-above", "late-code-markdown-above", "toolbar-resize"].includes(f.phase));
+            const rest = trace.frames.filter((f) => f.phase === "touch-rest");
+            const restSteps = rest.slice(1).map((f, i) => Math.abs(f.anchorY - rest[i].anchorY));
+            return { frames: trace.frames, baseline, maxDrift: Math.max(...stationary.map((f) => Math.abs(f.anchorY - baseline))),
+              gestureRestMaxStep: Math.max(0, ...restSteps), gestureRestTravel: restSteps.reduce((sum, step) => sum + step, 0),
+              gestureRestMovingFrames: restSteps.filter((step) => step > 0).length };
+          });
+
+          console.log(`scroll-history width=${width} locale=${locale} compact=${compact} maxDrift=${result.maxDrift}`);
+          // Re-follow at the bottom, then prove new tail rows remain visible.
+          await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+          await page.mouse.wheel(0, 100);
+          const back = page.getByRole("button", { name: locale === "uk" ? "Повернутись до живого хвоста" : "Back to the live tail" });
+          if (await back.count()) await back.click();
+          await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+          await page.waitForTimeout(300);
+          const bottomGap = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
+          readings.push({ width, locale, compact, ...result, bottomGap, errors });
+          expect(bottomGap).toBeLessThanOrEqual(50);
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
+    fs.writeFileSync(path.join(out, `${label}.json`), `${JSON.stringify({ readings }, null, 2)}\n`);
+    if (label === "after") for (const reading of readings as Array<{ width: number; maxDrift: number; gestureRestMaxStep: number; gestureRestTravel: number; gestureRestMovingFrames: number }>) {
+      expect(reading.maxDrift).toBeLessThanOrEqual(3);
+      if (reading.width === 390) {
+        // Native smooth scrolling follows the browser's easing curve. Require
+        // the settle to span several frames, rather than a one-frame snap.
+        expect(reading.gestureRestMaxStep).toBeLessThan(reading.gestureRestTravel);
+        expect(reading.gestureRestMovingFrames).toBeGreaterThanOrEqual(3);
+      }
+    }
+  }, 240_000);
+
+  /*
+   * A page that lands while a flick's momentum is still travelling: the
+   * finger is up, so nothing marks the reader as holding the feed, and the
+   * feed's own restore write fires a scrollend of its own. The feed neither
+   * pulls itself back against the reader (a glide aimed at a boundary the
+   * momentum then passes) nor reads the momentum as drift and writes it back.
+   */
+  browserTest("a page landing during momentum leaves the feed to the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const rounds: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (let round = 0; round < 3; round += 1) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${base}/?scroll-history=1`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            feed.scrollTop = 6000;
+            const state = { frames: [] as Array<{ top: number; height: number; time: number }>,
+              writes: [] as Array<{ time: number; delta: number }>, glides: [] as number[] };
+            (window as unknown as { momentum: typeof state }).momentum = state;
+            // Every write the page makes to the feed's offset, and every glide it starts.
+            const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+            Object.defineProperty(Element.prototype, "scrollTop", { ...descriptor, set(this: Element, value: number) {
+              const before = this.scrollTop;
+              descriptor.set!.call(this, value);
+              if (this === feed) state.writes.push({ time: performance.now(), delta: this.scrollTop - before });
+            } });
+            const scrollBy = Element.prototype.scrollBy as (...args: unknown[]) => void;
+            Element.prototype.scrollBy = function (this: Element, ...args: unknown[]) {
+              if (this === feed) state.glides.push(performance.now());
+              return scrollBy.apply(this, args);
+            } as typeof Element.prototype.scrollBy;
+            const frame = (time: number) => {
+              state.frames.push({ top: feed.scrollTop, height: feed.scrollHeight, time });
+              requestAnimationFrame(frame);
+            };
+            requestAnimationFrame(frame);
+          });
+          const rect = await rectOf(page, "[data-log-feed-scroller]");
+          if (!rect) throw new Error("no feed");
+          const x = rect.x + rect.width / 2;
+          let landed = false;
+          for (let gesture = 0; gesture < 60 && !landed; gesture += 1) {
+            await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 20));
+            // Finger up, momentum travelling: this is when the page lands.
+            if (await page.evaluate(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending)) {
+              await page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend());
+              landed = true;
+            } else await page.waitForTimeout(140);
+          }
+          expect(landed).toBe(true);
+          await page.waitForTimeout(1_500);
+          const reading = await page.evaluate(() => {
+            const { frames, writes, glides } = (window as unknown as { momentum: { frames: Array<{ top: number; height: number; time: number }>;
+              writes: Array<{ time: number; delta: number }>; glides: number[] } }).momentum;
+            const arrival = frames.findIndex((f, i) => i > 0 && f.height - frames[i - 1]!.height > 1_000);
+            const speed = (i: number) => Math.abs(frames[i]!.top - frames[i - 1]!.top);
+            // The momentum is over once the offset has stayed put for six frames.
+            let end = arrival + 1;
+            for (let still = 0; end < frames.length && still < 6; end += 1) still = speed(end) < 0.5 ? still + 1 : 0;
+            const travelling = frames.slice(arrival + 1, end);
+            const rises = travelling.map((f, i) => f.top - frames[arrival + i]!.top);
+            const restore = writes.find((w) => w.time >= frames[arrival]!.time - 20);
+            return {
+              arrival, framesInFlight: travelling.length, speedBefore: arrival > 0 ? speed(arrival - 1) : 0,
+              maxRise: Math.max(0, ...rises),
+              // Frames right after the landing in which the feed stood still against a moving flick.
+              stalled: frames.slice(arrival + 1, arrival + 6).filter((f, i) => Math.abs(f.top - frames[arrival + i]!.top) < 0.5).length,
+              laterWrites: writes.filter((w) => w !== restore && w.time >= frames[arrival]!.time - 20 && Math.abs(w.delta) > 3).map((w) => Math.round(w.delta)),
+              glidesInFlight: glides.filter((time) => time >= frames[arrival]!.time && time < frames[Math.min(end, frames.length - 1)]!.time).length,
+            };
+          });
+          rounds.push({ locale, round, ...reading });
+          console.log(`scroll-history momentum locale=${locale} round=${round} ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          // The check means something only if the flick was still carrying the feed when the page landed.
+          expect(reading.framesInFlight).toBeGreaterThanOrEqual(5);
+          expect(reading.speedBefore).toBeGreaterThan(20);
+          expect(reading.maxRise).toBeLessThanOrEqual(3);
+          expect(reading.stalled).toBe(0);
+          expect(reading.laterWrites).toEqual([]);
+          expect(reading.glidesInFlight).toBe(0);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "momentum.json"), `${JSON.stringify({ rounds }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * Late layout above the reader inside the message being read. A long answer
+   * or a long tool run is one row taller than the screen, and the reader rests
+   * deep inside it: an image that decodes above them in the same row leaves
+   * the row's top where it was, so the row alone cannot say the text moved.
+   * The block under the reader is held across the growth. The first-child
+   * image grows the row above the reader; the same image added to the row
+   * above is the control.
+   */
+  browserTest("late content above the reader inside the row being read keeps the text still", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const [width, locale] of [[390, "en"], [390, "uk"], [1440, "en"]] as const) for (const compact of [false, true]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 },
+          ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          // One message taller than the screen: sixteen more paragraphs in its row.
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const rows = [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")];
+            const row = rows[40]!;
+            row.dataset.reading = "1";
+            rows[39]!.dataset.above = "1";
+            for (let n = 0; n < 16; n += 1) {
+              const paragraph = document.createElement("p");
+              paragraph.dataset.late = String(n);
+              paragraph.style.cssText = "margin:0 0 16px";
+              paragraph.textContent = `Paragraph ${n} of a long answer. `.repeat(6);
+              row.append(paragraph);
+            }
+            feed.scrollTop = row.getBoundingClientRect().top - feed.getBoundingClientRect().top + feed.scrollTop - 200;
+          });
+          await page.waitForTimeout(400);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          const box = await rectOf(page, "[data-log-feed-scroller]");
+          if (!box) throw new Error("no feed");
+          // Real input releases the tail and walks into the message: about 685 px in.
+          const depth = () => page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            return feed.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-reading]")!.getBoundingClientRect().top;
+          });
+          const cdp = width === 390 ? await context.newCDPSession(page) : null;
+          if (!cdp) await scroller.hover();
+          for (let step = 0; step < 40 && Math.abs((await depth()) - 685) > 40; step += 1) {
+            const move = Math.max(-300, Math.min(300, 685 - (await depth())));
+            if (cdp) await touch(cdp, along([box.x + box.width / 2, box.y + box.height * 0.6], [box.x + box.width / 2, box.y + box.height * 0.6 - move], 12), 40);
+            else await page.mouse.wheel(0, move);
+            await page.waitForTimeout(700);
+          }
+          const rested = await depth();
+          // The paragraph under the reader's eye, and the first-child image added above it.
+          const under = () => page.evaluate(() => {
+            const top = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.getBoundingClientRect().top;
+            const hit = [...document.querySelectorAll<HTMLElement>("[data-late]")].find((p) => p.getBoundingClientRect().bottom > top + 1)!;
+            return { id: hit.dataset.late!, y: hit.getBoundingClientRect().top - top };
+          });
+          const before = await under();
+          await page.screenshot({ path: path.join(out, `inside-${width}-${locale}-${compact}-before.png`) });
+          const grow = (selector: string) => page.evaluate((selector) => {
+            const img = document.createElement("img");
+            img.width = 200; img.height = 180; img.style.display = "block";
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            document.querySelector<HTMLElement>(selector)!.prepend(img);
+          }, selector);
+          await grow("[data-above]");
+          await page.waitForTimeout(650);
+          const afterNeighbour = await under();
+          await grow("[data-reading]");
+          await page.waitForTimeout(650);
+          const afterInside = await under();
+          await page.screenshot({ path: path.join(out, `inside-${width}-${locale}-${compact}-after.png`) });
+          const reading = { width, locale, compact, rested: Math.round(rested), sameParagraph: before.id === afterInside.id && before.id === afterNeighbour.id,
+            neighbourDrift: Math.abs(afterNeighbour.y - before.y), insideDrift: Math.abs(afterInside.y - before.y) };
+          readings.push(reading);
+          console.log(`scroll-history inside-row ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          expect(reading.rested).toBeGreaterThan(600);
+          expect(reading.sameParagraph).toBe(true);
+          expect(reading.neighbourDrift).toBeLessThanOrEqual(3);
+          expect(reading.insideDrift).toBeLessThanOrEqual(3);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "inside-row.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * The reading that brings a released feed to rest on a line costs the same
+   * on a long history as on a short one. With 1500 rows mounted at 4x CPU, 24
+   * short drags each come to rest; the layout reads made between a scrollend
+   * and the first scroll event after it are the rest reading (its longest
+   * task is timed), and an edge on a row boundary used to walk every mounted
+   * row there.
+   */
+  browserTest("the rest reading does not walk the mounted rows", async () => {
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    const walks: Array<{ rows: number; mounted: number; rests: number[]; restMs: number[]; restBursts: string[]; slowFrames: number }> = [];
+    try {
+      for (const turns of [60, 600]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+          await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=${turns}&window=${turns * 4}&page=100`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+          await pause(page, 600);
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const state = { counting: false, reads: 0, bursts: [] as Array<{ reads: number; start: number; end: number }>, rests: [] as number[], restMs: [] as number[], restBursts: [] as string[], gaps: [] as number[] };
+            (window as unknown as { rest: typeof state }).rest = state;
+            const count = <T extends object>(target: T, name: keyof T) => {
+              const original = target[name] as unknown as (...args: unknown[]) => unknown;
+              (target as Record<keyof T, unknown>)[name] = function (this: unknown, ...args: unknown[]) {
+                if (!state.counting) return original.apply(this, args);
+                const started = performance.now();
+                state.reads += 1;
+                try { return original.apply(this, args); } finally {
+                  const ended = performance.now();
+                  const burst = state.bursts.at(-1);
+                  // Reads of one task follow each other; another task starts a new burst.
+                  if (burst && started - burst.end < 8) { burst.reads += 1; burst.end = ended; } else state.bursts.push({ reads: 1, start: started, end: ended });
+                }
+              };
+            };
+            count(Element.prototype, "getBoundingClientRect");
+            count(Range.prototype, "getClientRects");
+            count(Document.prototype, "elementFromPoint");
+            count(window, "getComputedStyle");
+            // The reading's own span: from its first layout read to its last.
+            const finish = () => {
+              if (!state.counting) return;
+              state.counting = false;
+              state.rests.push(state.reads);
+              state.restMs.push(Math.max(0, ...state.bursts.map((burst) => burst.end - burst.start)));
+              state.restBursts.push(state.bursts.map((burst) => `${burst.reads}r/${Math.round(burst.end - burst.start)}ms`).join(" "));
+            };
+            window.addEventListener("scrollend", (event) => {
+              if (event.target !== feed) return;
+              state.counting = true; state.reads = 0; state.bursts = [];
+              window.setTimeout(finish, 400);
+            }, true);
+            feed.addEventListener("scroll", finish);
+            let last = performance.now();
+            const tick = (now: number) => { state.gaps.push(now - last); last = now; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+          });
+          const rect = await rectOf(page, "[data-log-feed-scroller]");
+          if (!rect) throw new Error("no feed");
+          const x = rect.x + rect.width / 2;
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.scrollTop = 4000; });
+          // The page's own start-up and this jump are not rests: measure from the first touch.
+          await pause(page, 2_000);
+          await page.evaluate(() => { (window as unknown as { rest: { gaps: number[]; rests: number[] } }).rest.gaps.length = 0; (window as unknown as { rest: { rests: number[]; restMs: number[] } }).rest.rests.length = 0; (window as unknown as { rest: { restMs: number[] } }).rest.restMs.length = 0; });
+          for (let drag = 0; drag < 24; drag += 1) {
+            // A short drag: a few lines, no momentum worth the name, then rest.
+            await touch(cdp, along([x, rect.y + rect.height * 0.5], [x, rect.y + rect.height * (drag % 2 ? 0.58 : 0.42) + drag], 8), 40);
+            await pause(page, 900);
+          }
+          const walk = await page.evaluate(() => {
+            const { rests, restMs, gaps } = (window as unknown as { rest: { rests: number[]; restMs: number[]; gaps: number[] } }).rest;
+            return { mounted: document.querySelectorAll("[data-feed-key]").length, rests, restMs: restMs.map((ms) => Math.round(ms * 10) / 10),
+              restBursts: (window as unknown as { rest: { restBursts: string[] } }).rest.restBursts, slowFrames: gaps.slice(1).filter((ms) => ms > 100).length };
+          });
+          walks.push({ rows: turns * 4, ...walk });
+          console.log(`scroll-history rest turns=${turns} mounted=${walk.mounted} rests=${walk.rests.length} maxReads=${Math.max(0, ...walk.rests)} maxRestMs=${Math.max(0, ...walk.restMs)} slowFrames=${walk.slowFrames}`);
+          expect(errors).toEqual([]);
+          expect(walk.rests.length).toBeGreaterThanOrEqual(12);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "rest-reads.json"), `${JSON.stringify({ walks }, null, 2)}\n`);
+    }
+    const [short, long] = walks;
+    expect(long!.mounted).toBeGreaterThan(1_000);
+    // Reads per rest do not grow with the rows mounted.
+    expect(Math.max(...long!.rests)).toBeLessThanOrEqual(Math.max(...short!.rests) + 20);
+    // No rest reading takes over 100 ms at 4x. Its reads are one task; the
+    // frames of the whole walk are recorded for the evidence, not asserted:
+    // a frame of the page's own rendering can be long on a busy machine.
+    expect(Math.max(...long!.restMs)).toBeLessThan(100);
+  }, 300_000);
+
+  /*
+   * Folding a long operator message under the reader. Its «collapse» label is
+   * the deepest block under the top edge while the message is open; folding
+   * leaves the label in the DOM with no box, and a label with no box reads as
+   * a rectangle of zeros, which the feed used to take for the content having
+   * moved by the feed's own offset from the window. The message must stay put
+   * at every depth the label can sit at, and a row appended at the tail
+   * afterwards must not push it either.
+   */
+  browserTest("folding a long message under the reader leaves it where it was", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const depth of [-3, 3, 8, 14]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1&compact=1&long-operator=1`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          const cdp = await context.newCDPSession(page);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          // The twelfth long operator message, opened with a tap on its summary.
+          const mark = () => page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const details = feed.querySelectorAll<HTMLElement>("[data-user-bubble] details")[12]!;
+            details.dataset.probe = "1";
+            details.closest<HTMLElement>("[data-feed-key]")!.dataset.probeRow = "1";
+            feed.scrollTop += details.getBoundingClientRect().top - feed.getBoundingClientRect().top - 300;
+          });
+          await mark();
+          await page.waitForTimeout(400);
+          await tap(page, cdp, "[data-probe] > summary");
+          await page.waitForTimeout(400);
+          const rowTop = () => page.evaluate(() => document.querySelector<HTMLElement>("[data-probe-row]")!.getBoundingClientRect().top
+            - document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.getBoundingClientRect().top);
+          await scroller.evaluate((el, target) => {
+            const row = el.querySelector<HTMLElement>("[data-probe-row]")!;
+            el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - target;
+          }, depth);
+          await page.waitForTimeout(300);
+          // One real wheel step releases the tail, so the feed keeps an anchor of its own.
+          await scroller.hover();
+          await page.mouse.wheel(0, 1);
+          await page.waitForTimeout(900);
+          const before = await rowTop();
+          await page.screenshot({ path: path.join(out, `fold-${locale}-${depth}-before.png`) });
+          await tap(page, cdp, "[data-probe] > summary");
+          await page.waitForTimeout(900);
+          const folded = await rowTop();
+          const closed = await page.evaluate(() => !document.querySelector<HTMLDetailsElement>("[data-probe]")!.open);
+          for (let n = 0; n < 5; n += 1) {
+            await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+            await page.waitForTimeout(150);
+          }
+          await page.waitForTimeout(500);
+          const appended = await rowTop();
+          await page.screenshot({ path: path.join(out, `fold-${locale}-${depth}-after.png`) });
+          const reading = { locale, depth, before: Math.round(before * 100) / 100, folded: Math.round(folded * 100) / 100,
+            appended: Math.round(appended * 100) / 100, closed };
+          readings.push(reading);
+          console.log(`scroll-history fold ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          expect(closed).toBe(true);
+          expect(Math.abs(folded - before)).toBeLessThanOrEqual(3);
+          expect(Math.abs(appended - before)).toBeLessThanOrEqual(3);
+          await cdp.detach();
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "fold.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * The desktop canvas scales a pane with a transform, and a zoom moves the
+   * pane's rectangles without a scroll event. The reader's anchor is kept in
+   * the scroller's own layout pixels, so a zoom between taking it and the next
+   * layout change is not read as the content having moved: after a real wheel
+   * walk off the tail, the pane is scaled to 0.6, 1, 0.8 and 0.5 with a row
+   * appended after each, and neither scrollTop nor the row under the reader
+   * (in layout pixels) may move by more than 3.
+   */
+  browserTest("a zoom of the pane between layout changes does not move the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 844 } });
+      try {
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?scroll-history=1&compact=1`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+        await page.waitForTimeout(500);
+        const scroller = page.locator("[data-log-feed-scroller]");
+        await scroller.hover();
+        for (let step = 0; step < 6; step += 1) {
+          await page.mouse.wheel(0, -260);
+          await page.waitForTimeout(200);
+        }
+        await page.waitForTimeout(900);
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const bounds = feed.getBoundingClientRect();
+          const scale = bounds.height / feed.offsetHeight;
+          const row = [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > bounds.top + 1)!;
+          return { scrollTop: feed.scrollTop, scale, key: row.dataset.feedKey!, rowTop: (row.getBoundingClientRect().top - bounds.top) / scale };
+        });
+        let last = await read();
+        expect(last.scrollTop).toBeGreaterThan(0);
+        await page.screenshot({ path: path.join(out, "zoom-before.png") });
+        for (const zoom of [0.6, 1, 0.8, 0.5]) {
+          await page.evaluate((zoom) => {
+            const root = document.getElementById("root")!;
+            root.style.transformOrigin = "top left";
+            root.style.transform = `scale(${zoom})`;
+          }, zoom);
+          await page.waitForTimeout(200);
+          const zoomed = await read();
+          await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+          await page.waitForTimeout(700);
+          const after = await read();
+          const reading = { zoom, scale: Math.round(after.scale * 100) / 100, scrollTopMoved: Math.round((after.scrollTop - last.scrollTop) * 100) / 100,
+            sameRow: after.key === last.key, rowMoved: Math.round((after.rowTop - last.rowTop) * 100) / 100,
+            zoomItselfMoved: Math.round((zoomed.scrollTop - last.scrollTop) * 100) / 100 };
+          readings.push(reading);
+          console.log(`scroll-history zoom ${JSON.stringify(reading)}`);
+          expect(Math.abs(reading.scrollTopMoved)).toBeLessThanOrEqual(3);
+          expect(reading.sameRow).toBe(true);
+          expect(Math.abs(reading.rowMoved)).toBeLessThanOrEqual(3);
+          last = after;
+        }
+        await page.screenshot({ path: path.join(out, "zoom-after.png") });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "zoom.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 120_000);
 });

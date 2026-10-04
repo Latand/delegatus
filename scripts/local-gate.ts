@@ -15,6 +15,7 @@ export interface Step {
 }
 export interface PlanEnvironment {
   base: string;
+  lintBase?: string;
   existing: ReadonlySet<string>;
   tests: readonly string[];
   skippedMedia: readonly string[];
@@ -52,7 +53,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     steps.unshift({ name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
   }
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
-  if (lintFiles.length) steps.push({ name: "eslint", command: ["bunx", "eslint", "--no-warn-ignored", ...lintFiles], capped: true });
+  if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: true });
   if (mode === "pre-commit") return steps;
   const touched = new Set(files.filter(isTest));
   for (const file of files.filter(lintable)) {
@@ -62,7 +63,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (changedFiles.some(file => file.startsWith(".githooks/") || file === "scripts/gate-slot.sh")) {
     for (const file of env.tests) if (/scripts\/(?:local-gate|gate-slot).*\.test\.ts$/.test(file)) touched.add(file);
   }
-  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "test", ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
+  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
   if (env.linux) {
     steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
     steps.push({ name: "Linux tests", command: ["bun", "test", ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
@@ -226,7 +227,7 @@ function codexFixture(root: string, cache: string, version: string): string {
 function main(mode: Mode): void {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  let base = "HEAD";
+  let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   if (mode === "pre-push") {
     const fetch = spawnSync("git", ["fetch", "origin", "main", "--quiet"], { cwd: root, stdio: "ignore" });
     if (fetch.status !== 0) console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
@@ -243,8 +244,11 @@ function main(mode: Mode): void {
       ...git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
     ].filter(Boolean))];
   const context = discover(root, base, files);
+  // Pre-commit privacy retains its staged-only base. ESLint compares against
+  // origin/main's merge base in both modes, including earlier branch commits.
+  const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
-  const steps = plan(mode, files, context);
+  const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   const runtime = steps.some(step => step.pinned) ? pinnedRuntime(root, cache) : process.execPath;
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-local-gate-"));

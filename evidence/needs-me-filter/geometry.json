@@ -1,0 +1,742 @@
+[
+  {
+    "label": "board-desktop-1440-light-en",
+    "token": 0.6,
+    "labelOff": "Show only those waiting on you (F)",
+    "labelOn": "Show all cards (F)",
+    "pressed": "true",
+    "widthOff": 32,
+    "widthOn": 32,
+    "island": {
+      "right": 1424,
+      "left": 1289.421875,
+      "viewport": 1440
+    },
+    "dimmedContrast": 4.58,
+    "onAttr": true,
+    "offAttr": false,
+    "onAgainAttr": true,
+    "before": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 680.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 288.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 864.03125,
+          "width": 454,
+          "height": 264.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 507.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1140.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "after": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 680.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 288.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 864.03125,
+          "width": 454,
+          "height": 264.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 507.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 1140.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "hovered": {
+      "opacity": 1,
+      "filter": "none",
+      "box": {
+        "left": 337,
+        "top": 507.71875,
+        "width": 454,
+        "height": 160.875
+      }
+    },
+    "off": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 680.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 288.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 864.03125,
+          "width": 454,
+          "height": 264.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 507.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1140.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "pageErrors": []
+  },
+  {
+    "label": "board-desktop-1440-dark-en",
+    "token": 0.55,
+    "labelOff": "Show only those waiting on you (F)",
+    "labelOn": "Show all cards (F)",
+    "pressed": "true",
+    "widthOff": 32,
+    "widthOn": 32,
+    "island": {
+      "right": 1424,
+      "left": 1289.421875,
+      "viewport": 1440
+    },
+    "dimmedContrast": 5.04,
+    "onAttr": true,
+    "offAttr": false,
+    "onAgainAttr": true,
+    "before": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 680.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 288.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 864.03125,
+          "width": 454,
+          "height": 264.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 507.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1140.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "after": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 680.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 288.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 864.03125,
+          "width": 454,
+          "height": 264.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 507.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 1140.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "hovered": {
+      "opacity": 1,
+      "filter": "none",
+      "box": {
+        "left": 337,
+        "top": 507.71875,
+        "width": 454,
+        "height": 160.875
+      }
+    },
+    "off": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 680.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 288.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 864.03125,
+          "width": 454,
+          "height": 264.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 507.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1140.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "pageErrors": []
+  },
+  {
+    "label": "board-desktop-1440-light-uk",
+    "token": 0.6,
+    "labelOff": "Показати лише тих, хто чекає на тебе (F)",
+    "labelOn": "Показати всі картки (F)",
+    "pressed": "true",
+    "widthOff": 32,
+    "widthOn": 32,
+    "island": {
+      "right": 1424,
+      "left": 1281.3125,
+      "viewport": 1440
+    },
+    "dimmedContrast": 4.58,
+    "onAttr": true,
+    "offAttr": false,
+    "onAgainAttr": true,
+    "before": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 708.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 892.03125,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 535.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1220.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "after": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 708.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 892.03125,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 535.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 1220.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "hovered": {
+      "opacity": 1,
+      "filter": "none",
+      "box": {
+        "left": 337,
+        "top": 535.71875,
+        "width": 454,
+        "height": 160.875
+      }
+    },
+    "off": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 708.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 892.03125,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 535.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1220.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "pageErrors": []
+  },
+  {
+    "label": "board-desktop-1440-dark-uk",
+    "token": 0.55,
+    "labelOff": "Показати лише тих, хто чекає на тебе (F)",
+    "labelOn": "Показати всі картки (F)",
+    "pressed": "true",
+    "widthOff": 32,
+    "widthOn": 32,
+    "island": {
+      "right": 1424,
+      "left": 1281.3125,
+      "viewport": 1440
+    },
+    "dimmedContrast": 5.04,
+    "onAttr": true,
+    "offAttr": false,
+    "onAgainAttr": true,
+    "before": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 708.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 892.03125,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 535.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1220.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "after": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 708.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 892.03125,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 535.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "box": {
+          "left": 337,
+          "top": 1220.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "hovered": {
+      "opacity": 1,
+      "filter": "none",
+      "box": {
+        "left": 337,
+        "top": 535.71875,
+        "width": 454,
+        "height": 160.875
+      }
+    },
+    "off": {
+      "t-nf-ask": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 708.59375,
+          "width": 454,
+          "height": 171.4375
+        }
+      },
+      "t-nf-lane": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 207,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-cleared": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 892.03125,
+          "width": 454,
+          "height": 316.71875
+        }
+      },
+      "t-nf-run": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 535.71875,
+          "width": 454,
+          "height": 160.875
+        }
+      },
+      "t-nf-idle": {
+        "opacity": 1,
+        "filter": "none",
+        "box": {
+          "left": 337,
+          "top": 1220.75,
+          "width": 454,
+          "height": 159.4375
+        }
+      }
+    },
+    "pageErrors": []
+  }
+]

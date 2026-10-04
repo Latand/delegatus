@@ -1041,6 +1041,32 @@ test("a lane stopped after its last fix offers Accept as is and Review again; ea
   expect(receiptTexts(host).at(-1)).toBe("Accepted «Restore search results after the index rebuild» as is");
 });
 
+test.each([false, true])("a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)", async (legacy) => {
+  const parked = searchPipeline({ state: "needs_decision" });
+  const review = parked.stages.find((entry) => entry.id === "verify")!;
+  review.next = null;
+  const attempt = parked.runs.find((run) => run.stageId === "verify")!.attempts.at(-1)!;
+  Object.assign(attempt, {
+    state: "failed", completedAt: iso(600),
+    activatedBy: { stageId: "implement", attempt: 2, edge: "pass", budgetRecheck: true },
+    verdict: { status: "fail", findings: ["P1 — retain the failed review finding"] },
+  });
+  if (!legacy) parked.reviewPending = {
+    terminalRecheck: true, stageId: "verify", attempt: 2, fixStageId: "implement", fixAttempt: 2,
+    reviewedHead: parked.lastPassedCommit, currentHead: parked.lastPassedCommit, verdict: "fail", findings: 1, at: iso(600),
+  };
+  const { host, route } = mount(parked);
+  await tick();
+  expect(answer(host, "continue-review")?.textContent).toBe("Review again");
+  for (const refused of ["retry-stage", "skip-stage", "accept-head"]) expect(answer(host, refused)).toBeNull();
+  expect(card(host).querySelector(".stage-findings")?.textContent).toContain("retain the failed review finding");
+  click(answer(host, "continue-review"));
+  await tick(20);
+  expect(route.reads).toEqual(["p-search"]);
+  expect(route.patches).toHaveLength(1);
+  expect(route.patches[0]!.body).toMatchObject({ action: "continue-review", addRounds: 1, expectedRevision: REVISION, clientRequestId: expect.stringMatching(/^board-/) });
+});
+
 test.each(["running", "passed", "failed", "needs_decision"] as const)("desktop stage agent row opens the latest %s attempt and earlier conversations", async (state) => {
   const p = searchPipeline();
   p.state = state === "running" ? "running" : state === "passed" ? "completed" : "needs_decision";

@@ -169,6 +169,20 @@ for (const query of queries) {
   }
 }
 
+// The second pass's costliest shape: an absent compound term whose parts are both common.
+const compound = manifest.probes.commonPair.replace(" ", "_");
+{
+  const runs: number[] = [];
+  let page;
+  for (let run = 0; run < repeat; run++) {
+    const start = performance.now();
+    page = searchTranscripts({ query: compound, order: "relevance", limit: 6 });
+    runs.push(performance.now() - start);
+  }
+  cells.push({ surface: "library", order: "relevance", query: compound, speaker: "all", runs, median: median(runs), total: page!.total });
+  if (median(runs) > 300) throw new Error("Relevance compound-term median exceeds 300 ms");
+}
+
 if (!args.includes("--skip-mcp")) {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
@@ -288,7 +302,8 @@ if (!args.includes("--skip-ui")) {
 
 server.stop(true);
 
-const label = (query: string) => query === manifest.probes.rare ? "rare word" : query === manifest.probes.commonPair ? "two common words" : "one very common word";
+const label = (query: string) => query === manifest.probes.rare ? "rare word" : query === manifest.probes.commonPair ? "two common words"
+  : query === compound ? "compound of two common words" : "one very common word";
 console.log("\n| surface | query | speaker | matches | median ms | runs (ms) |");
 console.log("| --- | --- | --- | --- | --- | --- |");
 for (const cell of cells) {

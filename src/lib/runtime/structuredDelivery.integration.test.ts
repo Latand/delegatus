@@ -9,11 +9,13 @@ import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migrati
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
+import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { resolveSendReceipt, sendReceiptFor } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
@@ -23,7 +25,40 @@ import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-delivery-"));
+const ownedKillChildren = new Set<ReturnType<typeof Bun.spawn>>();
+afterAll(async () => {
+  for (const child of ownedKillChildren) {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+});
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+async function ownedKillProcess() {
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  ownedKillChildren.add(child);
+  const stop = async () => {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    ownedKillChildren.delete(child);
+  };
+  try {
+    await waitForCondition(() => processIdentityStatus(captureProcessIdentity(child.pid)) === "alive");
+    const identity = captureProcessIdentity(child.pid);
+    return {
+      identity,
+      owns: (expected: Readonly<ProcessIdentity>) => sameRecordedProcessIdentity(identity, expected)
+        && processIdentityStatus(identity) === "alive",
+      stop,
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
 
 function journalPort(
   journal: RuntimeJournal,
@@ -1152,6 +1187,7 @@ test("a failed route kick retries queued controls and messages without a host-st
 });
 
 test("a kill cancels an automatic delivery retry and fails the send retryably", async () => {
+  const ownedProcess = await ownedKillProcess();
   const directory = path.join(sandbox, "controller-kill-cancels-auto-retry");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "e40306b9-a4df-\x347b3-bf6e-4570c44259c7";
@@ -1178,7 +1214,7 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "fake:kill-auto-retry-host",
-      process: null,
+      process: ownedProcess.identity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 0,
@@ -1215,8 +1251,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       status: released ? "unhosted" as const : "active" as const,
       sessionKey: sessionId,
       endpoint: "fake:kill-auto-retry-host",
-      pid: 1,
-      processStartIdentity: "fake:1",
+      pid: ownedProcess.identity.pid,
+      processStartIdentity: ownedProcess.identity.startIdentity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       activeTurnRef: released ? null : "turn:kill-auto-retry",
@@ -1225,11 +1261,20 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       account: null,
     }),
     release: async () => {
+      await ownedProcess.stop();
       releaseCount += 1;
       released = true;
     },
+    async releaseIfOwned(expected: Readonly<ProcessIdentity>) {
+      if (!ownedProcess.owns(expected)) return false;
+      await this.release();
+      return true;
+    },
     onStateChange: () => () => {},
-  } satisfies EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  } satisfies EngineHost & {
+    onStateChange(listener: (state: HostState) => void): () => void;
+    releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  };
   const successorLedger = createFakeDeliveryLedger();
   const successor = observableFakeHost(new FakeEngineHost(successorLedger));
   let recoveryCalls = 0;
@@ -1251,8 +1296,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     return { target: null, path: artifactPath, conversationId, spawned: true } as const;
   };
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client, recover });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client, recover });
     const sendOperationId = "operation-send-before-kill";
     journal.executeOperation({
       kind: "send",
@@ -1311,12 +1361,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
 test("a failed kill projection retries through the coalesced drain and terminalizes", async () => {
+  const ownedProcess = await ownedKillProcess();
   const directory = path.join(sandbox, "controller-kill-projection-retry");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "b6b55ea7-4a5e-\x34fe5-894d-2f332a7247c7";
@@ -1343,7 +1394,7 @@ test("a failed kill projection retries through the coalesced drain and terminali
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "fake:kill-retry-host",
-      process: null,
+      process: ownedProcess.identity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 0,
@@ -1374,9 +1425,28 @@ test("a failed kill projection retries through the coalesced drain and terminali
     },
   } satisfies RuntimeHostClient;
   const host = observableFakeHost(new FakeEngineHost());
+  const hostState = await host.health();
+  Object.assign(host, {
+    health: async () => ({
+      ...hostState,
+      pid: ownedProcess.identity.pid,
+      processStartIdentity: ownedProcess.identity.startIdentity,
+    }),
+    release: ownedProcess.stop,
+    async releaseIfOwned(expected: Readonly<ProcessIdentity>) {
+      if (!ownedProcess.owns(expected)) return false;
+      await ownedProcess.stop();
+      return true;
+    },
+  });
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client });
     const operationId = "operation-kill-projection-retry";
     journal.executeOperation({
       kind: "kill",
@@ -1397,8 +1467,8 @@ test("a failed kill projection retries through the coalesced drain and terminali
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 

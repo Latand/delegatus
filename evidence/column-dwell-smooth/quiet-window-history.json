@@ -1,0 +1,374 @@
+{
+  "scope": "Earlier quiet-window candidate, before removal of its additional initial activation RAF. These failures are retained separately from the final-source five-consecutive acceptance series. The strict limits were unchanged.",
+  "helperSHA256": "ad6a2be3e0a9953b712485bfd42e8ed7a70545914f5fed372ee37745335dee7e",
+  "runs": [
+    {
+      "attemptRun": "1-1",
+      "pass": false,
+      "firstMotionDelayFailureMs": 50.6259765625,
+      "loadAverageBefore": [
+        2.78,
+        3.45,
+        7.3
+      ],
+      "activeCPUPercent": {
+        "mean": 16.729,
+        "maximum": 19.149
+      },
+      "completedCaseMaxRAFMs": []
+    },
+    {
+      "attemptRun": "2-1",
+      "pass": true,
+      "firstMotionDelayFailureMs": null,
+      "loadAverageBefore": [
+        3.02,
+        3.46,
+        7.16
+      ],
+      "activeCPUPercent": {
+        "mean": 16.602,
+        "maximum": 17.521
+      },
+      "completedCaseMaxRAFMs": [
+        33.40000000000009,
+        33.40000000000009,
+        0,
+        0
+      ]
+    },
+    {
+      "attemptRun": "2-2",
+      "pass": false,
+      "firstMotionDelayFailureMs": 50.504150390625,
+      "loadAverageBefore": [
+        4.89,
+        3.99,
+        7.14
+      ],
+      "activeCPUPercent": {
+        "mean": 17.83,
+        "maximum": 21.656
+      },
+      "completedCaseMaxRAFMs": [
+        49.90000000000009
+      ]
+    },
+    {
+      "attemptRun": "3-1",
+      "pass": false,
+      "firstMotionDelayFailureMs": 58.486083984375,
+      "loadAverageBefore": [
+        4.16,
+        3.95,
+        6.97
+      ],
+      "activeCPUPercent": {
+        "mean": 20.626,
+        "maximum": 29.638
+      },
+      "completedCaseMaxRAFMs": [
+        50.100000000000364
+      ]
+    },
+    {
+      "attemptRun": "4-1",
+      "pass": false,
+      "firstMotionDelayFailureMs": 50.22705078125,
+      "loadAverageBefore": [
+        4.13,
+        4.04,
+        6.82
+      ],
+      "activeCPUPercent": {
+        "mean": 18.503,
+        "maximum": 22.553
+      },
+      "completedCaseMaxRAFMs": []
+    }
+  ],
+  "beforeWarmSourceRetention": {
+    "helperSHA256": "f97e33d8156c0a3a4d0db3d07f42fcf8c958de9b2bcdd12e936dbf424aa9cbbf",
+    "scope": "Repeated quiet-host activation stalls of 66.6 and 66.7 ms. The retained-source regression demonstrated a duplicate source-card read when a commit preceded promotion completion. The fix retains the initial source batch and removes the two trailing warm-up RAFs; the warm lead, batch size and keyframe count remain unchanged. The interrupted fifth attempt is not represented as a completed series.",
+    "runs": [
+      {
+        "attemptRun": "1-1",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          33.30000000000018,
+          50,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          4.35,
+          4.54,
+          5.36
+        ],
+        "activeCPUPercent": {
+          "mean": 26.358,
+          "maximum": 33.547
+        }
+      },
+      {
+        "attemptRun": "1-2",
+        "pass": false,
+        "timingFailures": [
+          {
+            "locale": "en",
+            "motion": "no-preference",
+            "phase": "activation-through-cleanup",
+            "milliseconds": 50.09999999999991
+          }
+        ],
+        "completedCaseMaxRAFMs": [
+          50.09999999999991,
+          50,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.48,
+          4.81,
+          5.41
+        ],
+        "activeCPUPercent": {
+          "mean": 18.756,
+          "maximum": 24.094
+        }
+      },
+      {
+        "attemptRun": "2-1",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          50,
+          33.30000000000018,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          4.23,
+          4.62,
+          5.31
+        ],
+        "activeCPUPercent": {
+          "mean": 20.108,
+          "maximum": 32.976
+        }
+      },
+      {
+        "attemptRun": "2-2",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          33.30000000000018,
+          33.399999999999636,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          3.84,
+          4.49,
+          5.22
+        ],
+        "activeCPUPercent": {
+          "mean": 19.002,
+          "maximum": 23.932
+        }
+      },
+      {
+        "attemptRun": "2-3",
+        "pass": false,
+        "timingFailures": [
+          {
+            "locale": "uk",
+            "motion": "no-preference",
+            "phase": "activation-through-cleanup",
+            "milliseconds": 66.59999999999991
+          }
+        ],
+        "completedCaseMaxRAFMs": [
+          33.30000000000018,
+          66.59999999999991,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          3.76,
+          4.38,
+          5.15
+        ],
+        "activeCPUPercent": {
+          "mean": 17.823,
+          "maximum": 21.489
+        }
+      },
+      {
+        "attemptRun": "3-1",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          50,
+          50,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.88,
+          4.78,
+          5.23
+        ],
+        "activeCPUPercent": {
+          "mean": 27.374,
+          "maximum": 30.932
+        }
+      },
+      {
+        "attemptRun": "3-2",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          33.40000000000009,
+          50,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.77,
+          5.05,
+          5.31
+        ],
+        "activeCPUPercent": {
+          "mean": 17.429,
+          "maximum": 19.533
+        }
+      },
+      {
+        "attemptRun": "3-3",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          50,
+          33.40000000000009,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.22,
+          5.04,
+          5.29
+        ],
+        "activeCPUPercent": {
+          "mean": 21.679,
+          "maximum": 28.936
+        }
+      },
+      {
+        "attemptRun": "3-4",
+        "pass": false,
+        "timingFailures": [
+          {
+            "locale": "uk",
+            "motion": "no-preference",
+            "phase": "activation-through-cleanup",
+            "milliseconds": 66.70000000000027
+          }
+        ],
+        "completedCaseMaxRAFMs": [
+          50,
+          66.70000000000027,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          6.64,
+          5.41,
+          5.4
+        ],
+        "activeCPUPercent": {
+          "mean": 23.272,
+          "maximum": 26.18
+        }
+      },
+      {
+        "attemptRun": "4-1",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          33.40000000000009,
+          50,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.59,
+          5.43,
+          5.41
+        ],
+        "activeCPUPercent": {
+          "mean": 24.382,
+          "maximum": 27.719
+        }
+      },
+      {
+        "attemptRun": "4-2",
+        "pass": false,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          49.90000000000009
+        ],
+        "loadAverageBefore": [
+          5.22,
+          5.38,
+          5.4
+        ],
+        "activeCPUPercent": {
+          "mean": 26.817,
+          "maximum": 41.151
+        }
+      },
+      {
+        "attemptRun": "5-1",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          33.399999999999636,
+          33.40000000000009,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.76,
+          5.53,
+          5.45
+        ],
+        "activeCPUPercent": {
+          "mean": 21.01,
+          "maximum": 29.915
+        }
+      },
+      {
+        "attemptRun": "5-2",
+        "pass": true,
+        "timingFailures": [],
+        "completedCaseMaxRAFMs": [
+          50,
+          33.399999999999636,
+          0,
+          0
+        ],
+        "loadAverageBefore": [
+          5.06,
+          5.42,
+          5.42
+        ],
+        "activeCPUPercent": {
+          "mean": 20.717,
+          "maximum": 28.358
+        }
+      }
+    ]
+  }
+}

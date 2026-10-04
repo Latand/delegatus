@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { GET as list } from "@/app/api/review-history/route";
 import { GET as detail } from "@/app/api/review-history/[id]/route";
 import { GET as exported } from "@/app/api/review-history/[id]/export/route";
 import { BoardSelection } from "@/lib/mcp/boardSelection";
+import { isOperatorOwnedDirectory } from "@/lib/stateOwnership";
 import { compactFlow } from "./listAnswers";
 import { reviewHistorySelectionSource, MAX_ROW_BYTES } from "./reader";
 import { readArchiveArtifact, MAX_ARTIFACT_BYTES } from "./archiveArtifacts";
@@ -113,7 +115,7 @@ test("missing and pruned artifacts stay explicit, with no fabricated provenance"
   put(settled as unknown as ReturnType<typeof row>);
   const body = await (await detail(request(), context())).json();
   expect(body.artifacts[0].artifacts.findings.status).toBe("available");
-  expect(body.relayOccurrences).toEqual([{ textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, findings)), deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer", clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round) }]);
+  expect(body.relayOccurrences).toEqual([{ textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, findings)), deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer", senderProject: "demo", clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round) }]);
   fs.unlinkSync(flow.rounds[0]!.findingsPath);
   const pruned = await (await detail(request(), context())).json();
   expect(pruned.artifacts[0].artifacts.findings.status).toBe("missing"); expect(pruned.relayOccurrences).toEqual([]);
@@ -191,7 +193,7 @@ test.each([
   expect(body.recorded.reviewHeadSha).toBe(flow.rounds[0]!.reviewHeadSha);
   expect(body.relayOccurrences).toEqual([{
     textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, artifactTexts.findings)),
-    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer",
+    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent", senderRole: "reviewer", senderProject: "demo",
     clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
   }]);
   expect(snapshot()).toBe(before);
@@ -218,7 +220,7 @@ function installExportArtifacts(texts: Record<"findings" | "output" | "stdout" |
   const before = snapshot();
   const occurrences = [{
     textDigest: messageTextDigest(relayPrompt(settled.rounds[0] as unknown as Round, texts.findings)),
-    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent" as const, senderRole: "reviewer" as const,
+    deliveredAt: "2026-08-10T03:00:00Z", origin: "agent" as const, senderRole: "reviewer" as const, senderProject: "demo",
     clientMessageId: relayClientMessageId(settled as unknown as Flow, settled.rounds[0] as unknown as Round),
   }];
   return async () => {
@@ -525,27 +527,45 @@ test("GET refuses unimported JSON and never creates or seeds state", async () =>
 });
 
 test("fresh unowned production process imports GETs without claiming ownership or initializing state", () => {
-  // A nonexistent non-temp config path exercises ownership admission. The
-  // probe never creates it; all actual scratch and the child's home are private.
-  const config = path.join(process.cwd(), "unowned-archive-probe");
+  // Keep this outside every temp root, independent of the checkout location,
+  // while using a writable synthetic path so EACCES cannot impersonate refusal.
+  // This is not an operator state directory and must remain absent throughout.
+  const uid = process.getuid?.();
+  const passwdHome = process.platform === "linux" && uid !== undefined
+    ? fs.readFileSync("/etc/passwd", "utf8").split("\n").map(line => line.split(":"))
+      .find(fields => fields[2] === String(uid))?.[5] ?? os.homedir()
+    : os.homedir();
+  const config = path.join(passwdHome, ".cache", `unowned-archive-probe-${process.pid}`);
   expect(fs.existsSync(config)).toBe(false);
-  const env = { ...process.env, HOME: directory, XDG_CONFIG_HOME: config, NODE_ENV: "production", TMPDIR: directory };
-  for (const key of ["LLV_STATE_DIR", "LLV_STATE_OWNER", "NEXT_PHASE", "NEXT_RUNTIME", "LLV_MODE"]) delete env[key as keyof typeof env];
-  const probe = Bun.spawnSync({ cmd: [process.execPath, "-e", `
-    const { NextRequest } = await import("next/server");
-    const modules = await Promise.all([
-      import("./src/app/api/review-history/route"),
-      import("./src/app/api/review-history/[id]/route"),
-      import("./src/app/api/review-history/[id]/export/route"),
-    ]);
-    const request = new NextRequest("http://localhost/api/review-history?project=demo", { headers: { host: "localhost" } });
-    const results = [];
-    for (const route of modules) results.push((await route.GET(request, {params: Promise.resolve({id: "review-a"})})).status);
-    console.log(JSON.stringify({ results, owner: process.env.LLV_STATE_OWNER ?? null }));
-  `], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
-  expect(probe.exitCode).toBe(0);
-  expect(JSON.parse(probe.stdout.toString())).toEqual({ results: [503, 503, 503], owner: null });
-  expect(fs.existsSync(config)).toBe(false);
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: directory, XDG_CONFIG_HOME: config, NODE_ENV: "production", TMPDIR: directory };
+    for (const key of ["LLV_STATE_DIR", "LLV_STATE_OWNER", "NEXT_PHASE", "NEXT_RUNTIME", "LLV_MODE"]) delete env[key as keyof typeof env];
+    const stateDirectory = path.join(config, "delegatus", "state");
+    expect(isOperatorOwnedDirectory(stateDirectory, env)).toBe(true);
+    expect(fs.existsSync(stateDirectory)).toBe(false);
+    const probe = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      const { UnownedStateAccessError } = await import("./src/lib/stateOwnership");
+      const { archiveDirectory } = await import("./src/lib/reviewHistory/reader");
+      let refusal = false;
+      try { archiveDirectory(); } catch (error) { refusal = error instanceof UnownedStateAccessError; }
+      const { NextRequest } = await import("next/server");
+      const modules = await Promise.all([
+        import("./src/app/api/review-history/route"),
+        import("./src/app/api/review-history/[id]/route"),
+        import("./src/app/api/review-history/[id]/export/route"),
+      ]);
+      const request = new NextRequest("http://localhost/api/review-history?project=demo", { headers: { host: "localhost" } });
+      const results = [];
+      for (const route of modules) results.push((await route.GET(request, {params: Promise.resolve({id: "review-a"})})).status);
+      console.log(JSON.stringify({ refusal, results, owner: process.env.LLV_STATE_OWNER ?? null }));
+    `], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    expect(probe.exitCode).toBe(0);
+    expect(JSON.parse(probe.stdout.toString())).toEqual({ refusal: true, results: [503, 503, 503], owner: null });
+    expect(fs.existsSync(config)).toBe(false);
+    expect(fs.existsSync(stateDirectory)).toBe(false);
+  } finally {
+    fs.rmSync(config, { recursive: true, force: true });
+  }
 });
 
 

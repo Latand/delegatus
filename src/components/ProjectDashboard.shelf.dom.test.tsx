@@ -68,6 +68,7 @@ const OVERRIDES: Record<string, unknown> = {
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     const body = url.startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
@@ -225,6 +226,7 @@ test("the desktop has no + Pipeline of its own, and the phone's New pipeline sub
     /* Pipelines are created by agents through MCP (#1695); their drafts and stages are edited on the Board. */
     mobile = false;
     globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
       const body = String(input).startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
       return new Response(JSON.stringify(body));
     }) as typeof fetch;
@@ -240,6 +242,7 @@ test("the desktop has no + Pipeline of its own, and the phone's New pipeline sub
       mobile = surface === "mobile";
       const posts: Array<Record<string, unknown>> = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
         const url = String(input);
         if (url === "/api/pipelines/preflight") {
           return new Response(JSON.stringify({

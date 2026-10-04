@@ -274,6 +274,7 @@ function isWorkflowShape(value: unknown): value is Workflow {
     typeof wf.repoDir === "string" &&
     typeof wf.worktreeDir === "string" &&
     typeof wf.branch === "string" &&
+    (wf.controlGeneration === undefined || typeof wf.controlGeneration === "string") &&
     Array.isArray(wf.stageRuns) &&
     wf.stageRuns.every((run) => run !== null && typeof run === "object" && !Array.isArray(run)) &&
     typeof wf.stageIndex === "number" &&
