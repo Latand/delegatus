@@ -60,18 +60,12 @@ const ask = () => {
   });
 };
 
-/** Dismissal, by the operator's tap. Kept for the device. */
+/** Dismissal, by the operator's tap: the row leaves at once. The device
+    already knows it was shown. */
 export function dismissMicHint(): void {
-  markMicHintSeen();
   if (platform === null) return;
   platform = null;
   emit();
-}
-
-/** A recording started while the hint was on screen: it has been read, so it
-    stays for this page and does not come back on the next. */
-export function micHintRecordingStarted(): void {
-  if (platform !== null) markMicHintSeen();
 }
 
 /** Test seam: a fresh page load. */
@@ -97,5 +91,10 @@ export function useMicPermissionHint(): { hint: MicHintPlatform | null; dismiss:
     };
   }, [id]);
   const hint = useSyncExternalStore(subscribe, () => (owner === id ? platform : null), () => null);
+  /* Once per device: the first time the row is on screen settles it. It stays
+     for the rest of this page load and the next load raises none. */
+  useEffect(() => {
+    if (hint !== null) markMicHintSeen();
+  }, [hint]);
   return { hint, dismiss: dismissMicHint };
 }

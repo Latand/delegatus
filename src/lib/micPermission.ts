@@ -2,12 +2,15 @@
    owes the operator when the browser forgets a grant between page loads.
 
    A site cannot make a grant permanent: the browser decides, from a setting
-   the operator owns. Safari on iOS keeps a grant for the life of one document
-   while its per-site Microphone setting reads "Ask"; every other browser on
-   iOS is an app around a WebKit view, asks on its own account and has no
-   per-site setting at all; a Home Screen web app on iOS keeps none between
-   launches; Chrome on Android forgets an "Allow this time" answer when the
-   page closes. What a site can do is notice that it is
+   the operator owns. Safari on iOS, while its per-site Microphone setting
+   reads "Ask", keeps a grant in the page's memory only: a reload starts with
+   none, and WebKit clears it about ten minutes after the last capture stopped
+   (`InactiveMediaCaptureStreamRepromptIntervalInMinutes`), so a recording
+   after such a pause is asked about on the same page. Every other browser on
+   iOS is an app around a WebKit view with the same memory, asks on its own
+   account and has no per-site setting at all; a Home Screen web app on iOS
+   keeps none between launches; Chrome on Android forgets an "Allow this
+   time" answer when the page closes. What a site can do is notice that it is
    being asked again on a device where it was already allowed, and name the
    setting that ends the question. */
 
@@ -44,7 +47,7 @@ export interface MicHintInput {
   state: MicPermissionState;
   /** A recording started on this device before, so the question was answered. */
   grantedBefore: boolean;
-  /** The hint was already dismissed, or a recording started under it. */
+  /** The hint was already on screen once on this device. */
   seen: boolean;
 }
 

@@ -678,18 +678,29 @@ browserTest("microphone hint: the record button with and without the hint at 390
           for (const [name, box] of [["send", reading.send], ["mic", reading.mic], ["textarea", reading.textarea]] as const) {
             if (overlaps(reading.hint, box)) failures.push(`${at}: the hint covers ${name}`);
           }
-          /* Dismissed by a touch, it leaves the page and stays away after a reload. */
+          /* Shown once per device: being on screen settles it, with no touch. */
+          const reload = async () => {
+            await page.reload();
+            await page.waitForSelector("textarea", { timeout: 15_000 });
+            await pause(page, 1_000);
+            return read(page);
+          };
+          const seen = await page.evaluate(() => localStorage.getItem("llv_mic_hint_seen"));
+          if (seen !== "1") failures.push(`${at}: the shown hint was not kept for the device`);
+          const untouched: number[] = [];
+          for (let load = 0; load < 3; load += 1) untouched.push((await reload()).hintCount);
+          if (untouched.some((count) => count !== 0)) failures.push(`${at}: the hint came back on a reload nobody dismissed it before (${untouched.join(", ")})`);
+          await page.screenshot({ path: path.join(out, `390-${locale}-untouched-reload.png`) });
+          /* A device that has not seen it yet: a touch on the dismiss control
+             removes the row at once, and it stays away after a reload. */
+          await page.evaluate(() => localStorage.removeItem("llv_mic_hint_seen"));
+          if ((await reload()).hintCount !== 1) { failures.push(`${at}: no hint to dismiss`); continue; }
           await tap(page, cdp, "[data-mic-permission-hint-dismiss]");
           await page.waitForSelector(surfaces.hint, { state: "detached", timeout: 3_000 });
-          const seen = await page.evaluate(() => localStorage.getItem("llv_mic_hint_seen"));
-          if (seen !== "1") failures.push(`${at}: the dismissal was not kept`);
-          await page.reload();
-          await page.waitForSelector("textarea", { timeout: 15_000 });
-          await pause(page, 1_000);
-          const after = await read(page);
-          if (after.hintCount !== 0) failures.push(`${at}: the hint came back after a reload`);
+          const after = await reload();
+          if (after.hintCount !== 0) failures.push(`${at}: the hint came back after a dismissal and a reload`);
           await page.screenshot({ path: path.join(out, `390-${locale}-dismissed-reload.png`) });
-          readings.push({ locale, scene, ...reading, dismissedKept: seen === "1", hintsAfterReload: after.hintCount });
+          readings.push({ locale, scene, ...reading, shownKept: seen === "1", hintsAfterUntouchedReloads: untouched, hintsAfterDismissedReload: after.hintCount });
         } finally { await context.close(); }
       }
     }

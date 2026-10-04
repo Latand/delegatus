@@ -13,7 +13,6 @@ import {
 } from "@/lib/audio";
 import { chime } from "@/lib/chime";
 import { CAP_SECONDS, dictationCues, remaining as remainingSeconds } from "@/lib/dictationTimer";
-import { micHintRecordingStarted } from "@/hooks/useMicPermissionHint";
 import { useLocale } from "@/lib/i18n";
 import { rememberMicGrant } from "@/lib/micPermission";
 import {
@@ -547,7 +546,6 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       ]);
       stream = mediaStream;
       rememberMicGrant();
-      micHintRecordingStarted();
       if (!mountedRef.current || discardRef.current) return;
       setLiveText("");
 

@@ -1433,9 +1433,9 @@ export const en = {
   "keepAwake.unsupported": "This browser has no screen wake lock.",
 
   // MicButton
-  "mic.hint.iosSafari": "Safari asks for the microphone again after every reload. To be asked once: Page Menu button in the address bar → Website Settings → Microphone → Allow.",
-  "mic.hint.iosOtherBrowser": "On iOS this browser asks for the microphone after every reload and has no setting that stops it. Safari has one: open Delegatus in Safari, then Page Menu button → Website Settings → Microphone → Allow.",
-  "mic.hint.iosWebApp": "On iOS a Home Screen app does not keep the microphone grant between launches. Safari does: open Delegatus there, then Page Menu button → Website Settings → Microphone → Allow.",
+  "mic.hint.iosSafari": "Safari asks for the microphone again after a reload or a ten-minute pause. To be asked once: in the address bar, Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
+  "mic.hint.iosOtherBrowser": "On iOS this browser has no setting that stops the microphone question after a reload or a ten-minute pause. Safari has one: open Delegatus in Safari, then Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
+  "mic.hint.iosWebApp": "On iOS a Home Screen app does not keep the microphone grant between launches. Safari does: open Delegatus there, then Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
   "mic.hint.androidChrome": "Chrome asks again after «Allow this time». Choose «Allow while visiting the site» the next time it asks.",
   "mic.hint.other": "This browser asks for the microphone again after a reload. To be asked once, allow the microphone for this site in the browser's site settings.",
   "mic.hint.dismiss": "Hide this hint",
