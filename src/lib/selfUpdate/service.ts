@@ -609,7 +609,7 @@ export class SelfUpdateService {
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
       const admissionRecord = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : admissionDecision.record);
       if ((!this.auto.enabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || !ownsRestartGate(gateFile, gateId) || !this.quietAdmits(admissionProbe)
-        || dispatchActivity !== quietDispatchVersion(quiet, this.deps.now())
+        || dispatchActivity === null || dispatchActivity !== quietDispatchVersion(quiet, this.deps.now())
         || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== dispatchOwner.pid
         || admissionRecord.launcher.startIdentity !== dispatchOwner.startIdentity || admissionRecord.requestFile !== record.requestFile
         || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
@@ -1392,7 +1392,8 @@ export class SelfUpdateService {
     if (!record || binding !== JSON.stringify(this.apply.current) || binding !== JSON.stringify(durable)
       || record.launcher.pid !== this.apply.current?.launcherPid || record.launcher.startIdentity !== this.apply.current?.launcherIdentity
       || !record.launcher.startIdentity || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity)
-      || existsSync(record.requestFile) || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()))
+      || existsSync(record.requestFile) || this.deps.quiet && activity === null
+      || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()))
       throw new StaleApplyDispatch("Stale apply dispatch was refused; accepted custody is retained");
     if (current.record.launcher.relaunch === 1) {
       const occupied = this.reserve(current.record, () => this.apply.send(current.record!), this.apply.current!.requestId);
@@ -1414,7 +1415,7 @@ export class SelfUpdateService {
       try { finalIntent = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
       if (!finalRecord || finalRecord.launcher.pid !== intent.launcherPid || finalRecord.launcher.startIdentity !== intent.launcherIdentity
         || JSON.stringify(finalIntent) !== binding || JSON.stringify(this.apply.current) !== binding
-        || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(current.record.requestFile))
+        || this.deps.quiet && activity === null || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(current.record.requestFile))
         throw new StaleApplyDispatch("Stale credential preflight was refused; accepted custody is retained");
       writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
@@ -1485,6 +1486,7 @@ export class SelfUpdateService {
         try { finalIntent = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
         if (!finalOwner || finalOwner.launcher.pid !== record.launcher.pid || finalOwner.launcher.startIdentity !== record.launcher.startIdentity
           || JSON.stringify(this.apply.current) !== preflightBinding || JSON.stringify(finalIntent) !== preflightBinding
+          || this.deps.quiet && preflightActivity === null
           || preflightActivity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(record.requestFile))
           return refuse(409, "cannot-restart", "Stale launcher preflight was refused; accepted custody is retained");
         if (!loads) {
