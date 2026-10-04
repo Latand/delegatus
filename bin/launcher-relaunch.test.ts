@@ -5,6 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isAlive } from "../src/lib/selfUpdate/pid";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import type { LauncherRecord } from "../src/lib/selfUpdate/launcher";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
@@ -20,17 +21,28 @@ async function stop(child: ReturnType<typeof spawn>) {
   await Promise.race([exited, Bun.sleep(3000)]);
   if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
 }
+async function stopRecorded(record: LauncherRecord) {
+  // Windows termination can end the forwarding bootstrap before its signal
+  // reaches the supervisor. Stop only the processes this fixture recorded.
+  for (const entry of [record.launcher, record.web, record.runtimeHost]) {
+    if (!entry.pid || !entry.startIdentity || !isAlive(entry.pid) || readStartIdentity(entry.pid) !== entry.startIdentity) continue;
+    process.kill(entry.pid, "SIGTERM");
+    const deadline = Date.now() + 3000;
+    while (isAlive(entry.pid) && Date.now() < deadline) await Bun.sleep(25);
+    if (isAlive(entry.pid) && readStartIdentity(entry.pid) === entry.startIdentity) process.kill(entry.pid, "SIGKILL");
+  }
+}
 afterEach(async () => {
   for (const child of children) await stop(child);
   children.clear();
   // Detached supervisors are owned by the bootstrap. Capture their genuine
   // records while observing them and signal only those recorded identities.
   for (const [pid, identity] of owners) {
-    if (readStartIdentity(pid) !== identity) continue;
+    if (!isAlive(pid) || readStartIdentity(pid) !== identity) continue;
     try { process.kill(pid, "SIGTERM"); } catch { continue; }
     const deadline = Date.now() + 3000;
-    while (readStartIdentity(pid) === identity && Date.now() < deadline) await Bun.sleep(25);
-    if (readStartIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } }
+    while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(25);
+    if (isAlive(pid) && readStartIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } }
   }
   owners.clear();
   for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -130,7 +142,7 @@ async function fixture() {
 for (const rollback of [false, true]) test(`Windows request-context terminal entrypoint settles rollback=${rollback}`, async () => {
   const f = await fixture();
   if (rollback) writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("synthetic import failure");\n');
-  await stop(f.old);
+  await stop(f.old); await stopRecorded(f.before);
   const run = f.bootstrap();
   const record = await until(() => {
     const value = f.readRecord();
@@ -169,7 +181,7 @@ test("Windows request-context terminal entrypoint refuses a competing live owner
 
 test("terminal entrypoint refuses an invalid request filename before changing custody", async () => {
   const f = await fixture();
-  await stop(f.old);
+  await stop(f.old); await stopRecorded(f.before);
   const plan = JSON.parse(Buffer.from(f.plan, "base64").toString("utf8"));
   plan.requestFile = path.win32.join(path.win32.dirname(plan.requestFile), "unrelated.json");
   const before = readFileSync(path.join(path.dirname(f.before.requestFile), "apply.json"), "utf8");
