@@ -8,6 +8,16 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- **A task card is dragged by any part of it, and the drag keeps up with the
+  pointer.** On a desktop a press anywhere on the card, the title, the
+  description, a conversation tile or the pipeline block included, starts a drag
+  after 8 px; a press that moves less is the click it always was, and the click
+  after a drag is swallowed. On a phone, hold a task card for 0.35 s and it lifts
+  with a dock of the four columns at the bottom: let go over one to move the task,
+  let go in place for the card menu. The card now follows the pointer by transform
+  alone, and the board's live animations pause while it is held.
+
 ## [1.9.1] — 2026-10-03
 
 ### Added

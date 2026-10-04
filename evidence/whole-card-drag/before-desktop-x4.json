@@ -1,0 +1,43 @@
+{
+  "board": "48 tasks, long titles, pipelines",
+  "viewport": "1440x900",
+  "cpuThrottling": 4,
+  "path": "3 s, one move per 8 ms",
+  "moves": 375,
+  "frames": 12,
+  "frameMs": {
+    "p50": 33.4,
+    "p95": 2266.5,
+    "max": 2266.5
+  },
+  "longTasks": {
+    "count": 2,
+    "longestMs": 54.75
+  },
+  "moveCost": {
+    "events": 150,
+    "totalMs": 1031.81,
+    "maxMs": 23
+  },
+  "layouts": {
+    "count": 303,
+    "totalMs": 1048.74
+  },
+  "recalcs": {
+    "count": 305,
+    "totalMs": 988.8
+  },
+  "inputLagMs": {
+    "p95": 8.1,
+    "max": 16.9
+  },
+  "mutations": 607,
+  "mutationKinds": {
+    "attributes:style on article.card": 592,
+    "attributes:class on section.column": 6,
+    "characterData: on #text.": 2,
+    "childList: on div.kb": 2,
+    "attributes:name on input.": 2,
+    "attributes:class on article.card": 1
+  }
+}
