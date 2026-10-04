@@ -127,6 +127,13 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   let output = ""; child.stdout!.on("data", data => output += data); child.stderr!.on("data", data => output += data);
   let after = await until(() => { const r = f.readRecord(); return r?.launcher.pid !== before.launcher.pid && r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   await gateIntact(port, f.key);
+  // The bootstrap still verifies health after the record becomes healthy.
+  // Let the tracked terminal command finish before teardown can stop its
+  // launcher and leave the bootstrap holding the fixture's Windows cwd.
+  if (action?.id === "restart-terminal") {
+    await until(() => child.exitCode !== null ? true : null);
+    expect(child.exitCode).toBe(rollback ? 1 : 0);
+  }
   if (actionId === "start-launcher" && rollback) {
     // A failed real terminal trial is already rolled back. Cold recovery via
     // start-launcher must still read that exact credential in a clean shell.
