@@ -183,6 +183,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/envAlias.mjs"), path.join(bin, "envAlias.mjs")),
     copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
     copyFile(path.resolve("bin/launcher-relaunch.mjs"), path.join(bin, "launcher-relaunch.mjs")),
+    copyFile(path.resolve("bin/launcher-credentials.mjs"), path.join(bin, "launcher-credentials.mjs")),
     copyFile(path.resolve("bin/launcher-adoption.mjs"), path.join(bin, "launcher-adoption.mjs")),
     copyFile(path.resolve("bin/launcher-lock.mjs"), path.join(bin, "launcher-lock.mjs")),
     copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),

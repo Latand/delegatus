@@ -5623,6 +5623,7 @@ async function lightboxMain(): Promise<void> {
 /* One browser driver owns the Update dialog geometry too. Its API answer is a
    fixture, so no capture can start a real update or restart. */
 async function selfUpdateAutoMain(): Promise<void> {
+  const { translate } = await import("../src/lib/i18n/core");
   const messages = { en: (await import("../src/lib/i18n/en")).en, uk: (await import("../src/lib/i18n/uk")).uk };
   seedHome();
   const evidenceDir = process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR?.trim() || null;
@@ -5851,15 +5852,15 @@ async function selfUpdateAutoMain(): Promise<void> {
         });
         report.frames[`${tag}-needs-you`] = choices;
         const blockers = snapshot.auto!.decision!.blockers!;
-        const copy = messages[lang];
+        const copy = (key: import("../src/lib/i18n/core").MessageKey, params?: Record<string, string | number>) => translate(lang, key, params);
         const required: string[] = [];
         const overridden: string[] = [];
-        if (blockers.memoryMb !== null) required.push(copy["selfUpdate.auto.block.memory"].replace("{mb}", String(Math.floor(blockers.memoryMb))));
-        if (blockers.busy) required.push(copy[blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` : "selfUpdate.auto.block.busy"]);
-        if (blockers.unreadable) required.push(copy["selfUpdate.auto.block.unreadable"].replace("{detail}", blockers.unreadable));
-        if (blockers.operatorActiveAt) overridden.push(copy["selfUpdate.auto.block.operator"]);
-        if (blockers.turns) overridden.push(copy["selfUpdate.auto.block.turns"].replace("{count}", String(blockers.turns)));
-        if (blockers.stages) overridden.push(copy["selfUpdate.auto.block.stages"].replace("{count}", String(blockers.stages)));
+        if (blockers.memoryMb !== null) required.push(copy("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) }));
+        if (blockers.busy) required.push(copy(blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` : "selfUpdate.auto.block.busy"));
+        if (blockers.unreadable) required.push(copy("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable }));
+        if (blockers.operatorActiveAt) overridden.push(copy("selfUpdate.auto.block.operator"));
+        if (blockers.turns) overridden.push(copy("selfUpdate.auto.block.turns", { count: blockers.turns }));
+        if (blockers.stages) overridden.push(copy("selfUpdate.auto.block.stages", { count: blockers.stages }));
         if (choices.overflow > 1 || choices.rows.some(row => row.overflow > 1 || row.clipped) || choices.choices !== 2
           || required.some(text => !choices.prerequisites.includes(text)) || overridden.some(text => !choices.overrides.includes(text))
           || name === "overran" && !choices.text.includes("conversation_long_turn")) report.failures.push(`${tag}: Needs-you blockers or decision are unreadable`);
