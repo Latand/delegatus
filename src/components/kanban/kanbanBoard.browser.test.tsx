@@ -15665,12 +15665,13 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 });
 
 describe("needs-you filter: the board dims every card that does not wait on the operator", () => {
-  /* The `needs-filter` scenario (docs/design/needs-me-filter.md): five cards on
+  /* The `needs-filter` scenario (docs/design/needs-me-filter.md): six cards on
      one board — a conversation that asks, a lane parked on a decision, a lane
      whose decision was dismissed, and two that wait on no one — plus the
-     Overview (`issue1820`, where a conversation asks in another project). At
+     Overview (`issue1820`, where a conversation asks in another project), and
+     a finished card that folds its outside conversations into one line. At
      1440×900 the funnel and the F key; at 390×844 the funnel in the ⚠ sheet's
-     header. Every reading is the production stylesheet's computed style, in
+     header; the last case walks 1440, 1000, 700 and 390 px in en and uk. Every reading is the production stylesheet's computed style, in
      light and dark, en and uk, with the filter off and on. Frames go to
      LLV_NEEDS_FILTER_SHOTS_DIR (default `.artifacts/needs-filter-shots`);
      readings to `evidence/needs-me-filter/geometry.json`.
@@ -15993,6 +15994,186 @@ describe("needs-you filter: the board dims every card that does not wait on the 
       expect(entry.before.filter((shell) => shell.waits).length, `${entry.label} two cards wait`).toBe(2);
     }
   }, 600_000);
+
+  browserTest("1440, 1000, 700 and 390: the filter off and on in en and uk, with a folded card, a widened column and a card being dragged", async () => {
+    /* The board as main draws it now: a finished card folds its outside
+       conversations into one line (#2459), a column the mouse rests in widens
+       after a second (#2453), and a card is dragged by any part of it (#2421).
+       The filter has to hold through each: the folded card recedes with the
+       rest, a widened column keeps its quiet cards dimmed, and a dimmed card
+       being dragged takes the drag's own opacity while its ghost is drawn at
+       full strength. Readings go to `evidence/needs-me-filter/geometry-widths.json`. */
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const FOLDED = "t-nf-wall";
+    const ids = [...LIT, ...DIM, FOLDED];
+    const desktop: Record<string, unknown>[] = [];
+    const phone: Record<string, unknown>[] = [];
+    const overflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    const columns = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((el) => [el.dataset.status!, { wide: el.dataset.wide ?? null, width: Math.round(el.getBoundingClientRect().width) }])));
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const width of [1440, 1000, 700] as const) {
+          const label = `widths-${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
+            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            await clearStage(page);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(600);
+            const read = async () => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const before = await read();
+            const overflowOff = await overflow(page);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+
+            await pressF(page);
+            await page.waitForTimeout(700);
+            const after = await read();
+            const overflowOn = await overflow(page);
+            const funnel = await page.evaluate(() => {
+              const box = document.querySelector("[data-attention-filter]")!.getBoundingClientRect();
+              return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth, pressed: document.querySelector("[data-attention-filter]")!.getAttribute("aria-pressed") };
+            });
+            const folded = await page.locator(card(FOLDED)).evaluate((element) => ({
+              elsewhere: Number(element.querySelector("details.history")?.getAttribute("data-elsewhere-conversations") ?? 0),
+              rows: element.querySelectorAll("[data-elsewhere-row]").length,
+            })).catch(() => null);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+
+            /* The mouse rests in the narrow Done column's head until it widens:
+               every column moves, and no card changes strength for it. */
+            const columnsBefore = await columns(page);
+            let columnsAfter = columnsBefore;
+            let widened: Record<string, unknown> | null = null;
+            const doneHead = page.locator('[data-kanban-board] .column[data-status="done"] #kb-h-done');
+            if (width === 1440 && columnsBefore.done?.wide === "0" && await doneHead.count()) {
+              const head = (await doneHead.boundingBox())!;
+              await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2, { steps: 4 });
+              await page.waitForTimeout(1_900);
+              columnsAfter = await columns(page);
+              widened = await read();
+              await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on-column-widened.png`) });
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(600);
+            }
+
+            /* A dimmed card is picked up by its body and carried: the card left
+               behind takes the drag's opacity, the ghost under the pointer is whole. */
+            let drag: Record<string, unknown> | null = null;
+            if (width === 1440) {
+              const box = (await page.locator(card("t-nf-run")).boundingBox())!;
+              const from = { x: box.x + box.width / 2, y: box.y + Math.min(box.height - 6, 30) };
+              await page.mouse.move(from.x, from.y);
+              await page.mouse.down();
+              await page.mouse.move(from.x + 60, from.y + 24, { steps: 8 });
+              await page.waitForTimeout(500);
+              drag = await page.evaluate(() => {
+                const source = document.querySelector<HTMLElement>("[data-kanban-board] .card.dragging");
+                const ghost = document.querySelector<HTMLElement>(".card.ghost");
+                const look = (el: HTMLElement | null) => el ? { opacity: Number(getComputedStyle(el).opacity), filter: getComputedStyle(el).filter } : null;
+                return { source: look(source), sourceId: source?.dataset.id ?? null, ghost: look(ghost), filterOn: document.querySelector("main")!.hasAttribute("data-needs-only") };
+              });
+              await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on-dragging.png`) });
+              await page.keyboard.press("Escape");
+              await page.mouse.up();
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(700);
+              /* The press left focus on the card's title, and a card the operator
+                 works inside stays lit; once focus leaves, it recedes again. */
+              const held = await page.locator(card("t-nf-run")).evaluate((el) => ({ focusWithin: el.matches(":focus-within"), opacity: Number(getComputedStyle(el).opacity) }));
+              await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+              await page.waitForTimeout(500);
+              drag = { ...drag, held, settled: await cardReading(page, card("t-nf-run")), lit: await cardReading(page, card("t-nf-ask")) };
+            }
+            desktop.push({ label, width, before, after, overflowOff, overflowOn, funnel, folded, columnsBefore, columnsAfter, widened, drag, token: await token(page), pageErrors });
+            expect(pageErrors, `${label} page errors`).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        const label = `widths-390-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width: 390, height: 844 }, "light", lang, "no-preference", true, 2);
+        try {
+          await page.waitForSelector("[data-phone-card-shell]", { timeout: 30_000 });
+          await page.waitForTimeout(800);
+          const shells = () => page.evaluate(() => [...document.querySelectorAll("[data-phone-card-shell]")].map((el) => {
+            const rect = el.getBoundingClientRect();
+            return { waits: el.getAttribute("data-attention") === "needs", opacity: Number(getComputedStyle(el).opacity), left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+          }));
+          const before = await shells();
+          const overflowOff = await overflow(page);
+          await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+          await page.locator("[data-mobile2-attention-count]").first().click();
+          await page.waitForSelector("[data-mobile2-sheet='attention'] [data-attention-filter]", { timeout: 10_000 });
+          await page.waitForTimeout(500);
+          await page.locator("[data-mobile2-sheet='attention'] [data-attention-filter]").click();
+          await page.waitForTimeout(400);
+          await page.locator("[data-mobile2-close]").first().click();
+          await page.waitForTimeout(900);
+          const after = await shells();
+          const overflowOn = await overflow(page);
+          await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+          phone.push({ label, before, after, overflowOff, overflowOn, token: await token(page), pageErrors });
+          expect(pageErrors, `${label} page errors`).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry-widths.json"), `${JSON.stringify({ desktop, phone }, null, 2)}\n`);
+
+    type Card = { opacity: number; filter: string; box: Box } | null;
+    type Look = { opacity: number; filter: string } | null;
+    for (const entry of desktop as Array<{ label: string; width: number; before: Record<string, Card>; after: Record<string, Card>; overflowOff: number; overflowOn: number; funnel: { left: number; right: number; viewport: number; pressed: string }; folded: { elsewhere: number; rows: number } | null; columnsBefore: Record<string, { wide: string | null; width: number }>; columnsAfter: Record<string, { wide: string | null; width: number }>; widened: Record<string, Card> | null; drag: { source: Look; sourceId: string | null; ghost: Look; filterOn: boolean; held: { focusWithin: boolean; opacity: number }; settled: Card; lit: Card } | null; token: number }>) {
+      expect(entry.token, `${entry.label} the token`).toBe(DIM_OPACITY.light);
+      for (const id of LIT) {
+        expect(entry.after[id], `${entry.label} ${id} is on the board`).not.toBeNull();
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} waits, so stays lit`).toBe(1);
+      }
+      for (const id of [...DIM, FOLDED]) {
+        expect(entry.after[id], `${entry.label} ${id} is on the board`).not.toBeNull();
+        expect(entry.before[id]!.opacity, `${entry.label} ${id} full strength with the filter off`).toBe(1);
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} recedes`).toBeCloseTo(DIM_OPACITY.light, 2);
+      }
+      for (const id of [...LIT, ...DIM, FOLDED]) expect(sameBox(entry.before[id]!.box, entry.after[id]!.box), `${entry.label} ${id} keeps its box`).toBe(true);
+      expect(entry.overflowOn, `${entry.label} the filter adds no sideways scroll`).toBe(entry.overflowOff);
+      expect(entry.overflowOn, `${entry.label} the page fits its window`).toBeLessThanOrEqual(0);
+      expect(entry.funnel.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
+      expect(entry.funnel.left, `${entry.label} the funnel starts inside the window`).toBeGreaterThanOrEqual(0);
+      expect(entry.funnel.right, `${entry.label} the funnel ends inside the window`).toBeLessThanOrEqual(entry.funnel.viewport);
+      /* The folded card holds twelve outside conversations and lists none of them. */
+      expect(entry.folded?.elsewhere, `${entry.label} the folded card counts its outside conversations`).toBe(12);
+      expect(entry.folded?.rows, `${entry.label} the folded card lists none`).toBe(0);
+      if (entry.width !== 1440) continue;
+      expect(entry.columnsBefore.done!.wide, `${entry.label} Done starts narrow`).toBe("0");
+      expect(entry.columnsAfter.done!.wide, `${entry.label} Done widens under a resting mouse`).toBe("1");
+      expect(entry.columnsAfter.done!.width, `${entry.label} Done is wider`).toBeGreaterThan(entry.columnsBefore.done!.width);
+      for (const id of LIT) expect(entry.widened![id]!.opacity, `${entry.label} ${id} stays lit beside the widened column`).toBe(1);
+      for (const id of [...DIM, FOLDED]) expect(entry.widened![id]!.opacity, `${entry.label} ${id} stays dimmed in or beside the widened column`).toBeCloseTo(DIM_OPACITY.light, 2);
+      expect(entry.drag!.filterOn, `${entry.label} the filter is on during the drag`).toBe(true);
+      expect(entry.drag!.sourceId, `${entry.label} the dimmed card is the one picked up`).toBe("task:t-nf-run");
+      expect(entry.drag!.source!.opacity, `${entry.label} the card left behind takes the drag's opacity`).toBeCloseTo(0.35, 2);
+      expect(entry.drag!.ghost!.opacity, `${entry.label} the ghost is whole`).toBe(1);
+      expect(entry.drag!.ghost!.filter, `${entry.label} the ghost keeps its colour`).toBe("none");
+      expect(entry.drag!.held.opacity, `${entry.label} the card put back is ${entry.drag!.held.focusWithin ? "lit while it holds focus" : "dimmed"}`).toBeCloseTo(entry.drag!.held.focusWithin ? 1 : DIM_OPACITY.light, 2);
+      expect(entry.drag!.settled!.opacity, `${entry.label} the card dims again once focus leaves it`).toBeCloseTo(DIM_OPACITY.light, 2);
+      expect(entry.drag!.lit!.opacity, `${entry.label} a waiting card is untouched by the drag`).toBe(1);
+    }
+    type Shell = { waits: boolean; opacity: number; left: number; top: number; width: number; height: number };
+    for (const entry of phone as Array<{ label: string; before: Shell[]; after: Shell[]; overflowOff: number; overflowOn: number }>) {
+      expect(entry.after.length, `${entry.label} the same cards`).toBe(entry.before.length);
+      expect(entry.before.filter((shell) => shell.waits).length, `${entry.label} two cards wait`).toBe(2);
+      entry.before.forEach((shell, index) => {
+        const now = entry.after[index]!;
+        expect(shell.opacity, `${entry.label} shell ${index} full strength with the filter off`).toBe(1);
+        expect(now.opacity, `${entry.label} shell ${index} ${shell.waits ? "stays lit" : "recedes"}`).toBeCloseTo(shell.waits ? 1 : DIM_OPACITY.light, 2);
+        for (const key of ["left", "top", "width", "height"] as const) expect(Math.abs(now[key] - shell[key]), `${entry.label} shell ${index} ${key}`).toBeLessThan(0.01);
+      });
+      expect(entry.overflowOn, `${entry.label} the page fits its window`).toBeLessThanOrEqual(0);
+    }
+  }, 900_000);
 });
 
 describe("agent memory isolation", () => {

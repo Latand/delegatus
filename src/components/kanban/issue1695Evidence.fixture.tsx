@@ -2271,10 +2271,12 @@ function fixtureWorkLinks(): FilesWorkLinks {
 }
 const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
 
-/* The «Needs you» filter's board. Five tasks: `t-nf-ask` holds a conversation
+/* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
    that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`
    a lane whose decision the operator already dismissed (it no longer waits),
-   and `t-nf-run` and `t-nf-idle` wait on no one. */
+   and `t-nf-run` and `t-nf-idle` wait on no one. `t-nf-wall` is finished and
+   holds only conversations from outside this board, folded into one line
+   (#2459), in a column that starts narrow. */
 const needsFiles: FileEntry[] = [];
 const needsAdd = (file: FileEntry) => { needsFiles.push(file); return file; };
 const nfAsk = needsAdd(conversation("nf-ask", "Which export presets should ship first?", NEEDS_NOTHING ? { mtime: now - 20 * MIN } : {
@@ -2299,6 +2301,9 @@ const needsTasks: BoardTask[] = [
   task("t-nf-cleared", "assigned", L("Rotate the search alias", "Перемкнути псевдонім пошуку"), L("Waits for the warm-up query to return.", "Чекає, поки повернеться прогрівальний запит."), 40 * MIN, [nfClearedBuild]),
   task("t-nf-run", "assigned", L("Write the migration notes", "Написати нотатки про міграцію"), L("A draft for the release page.", "Чернетка для сторінки релізу."), 5 * MIN, [nfRun]),
   task("t-nf-idle", "assigned", L("List every export toggle", "Перелічити всі перемикачі експорту"), L("One row per toggle, with its default.", "Один рядок на перемикач, зі значенням за замовчуванням."), 2 * 60 * MIN, [nfIdle]),
+  task("t-nf-wall", "done", L("Retire the old export presets", "Прибрати старі пресети експорту"), "", 200 * MIN, [], {
+    assignments: wallRows("nf", 12) as unknown as BoardTask["assignments"],
+  } as Partial<BoardTask>),
 ];
 
 /* The launch the page runs on a clock (`?scenario=launch-cls`). POST /api/spawn answers the receipt after the

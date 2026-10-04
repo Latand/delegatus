@@ -14,14 +14,14 @@
       "parts": [
         {
           "left": 16,
-          "right": 203.171875
+          "right": 197.28125
         },
         {
-          "left": 207.171875,
-          "right": 251.171875
+          "left": 201.28125,
+          "right": 245.28125
         },
         {
-          "left": 255.171875,
+          "left": 249.28125,
           "right": 338
         },
         {
@@ -40,7 +40,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Choose the export presetsa questionopus·"
+        "text": "Choose the export presetsa questionOpus "
       },
       {
         "waits": true,
@@ -81,6 +81,16 @@
         "width": 366,
         "height": 58.75,
         "text": "List every export toggle1 agent·2h"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Retire the old export presets12 agents·3"
       }
     ],
     "after": [
@@ -92,7 +102,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Choose the export presetsa questionopus·"
+        "text": "Choose the export presetsa questionOpus "
       },
       {
         "waits": true,
@@ -133,6 +143,16 @@
         "width": 366,
         "height": 58.75,
         "text": "List every export toggle1 agent·2h"
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Retire the old export presets12 agents·3"
       }
     ],
     "off": [
@@ -144,7 +164,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Choose the export presetsa questionopus·"
+        "text": "Choose the export presetsa questionOpus "
       },
       {
         "waits": true,
@@ -185,6 +205,16 @@
         "width": 366,
         "height": 58.75,
         "text": "List every export toggle1 agent·2h"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Retire the old export presets12 agents·3"
       }
     ],
     "pageErrors": []
@@ -204,14 +234,14 @@
       "parts": [
         {
           "left": 16,
-          "right": 203.171875
+          "right": 197.28125
         },
         {
-          "left": 207.171875,
-          "right": 251.171875
+          "left": 201.28125,
+          "right": 245.28125
         },
         {
-          "left": 255.171875,
+          "left": 249.28125,
           "right": 338
         },
         {
@@ -230,7 +260,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Choose the export presetsa questionopus·"
+        "text": "Choose the export presetsa questionOpus "
       },
       {
         "waits": true,
@@ -271,6 +301,16 @@
         "width": 366,
         "height": 58.75,
         "text": "List every export toggle1 agent·2h"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Retire the old export presets12 agents·3"
       }
     ],
     "after": [
@@ -282,7 +322,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Choose the export presetsa questionopus·"
+        "text": "Choose the export presetsa questionOpus "
       },
       {
         "waits": true,
@@ -323,6 +363,16 @@
         "width": 366,
         "height": 58.75,
         "text": "List every export toggle1 agent·2h"
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Retire the old export presets12 agents·3"
       }
     ],
     "off": [
@@ -334,7 +384,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Choose the export presetsa questionopus·"
+        "text": "Choose the export presetsa questionOpus "
       },
       {
         "waits": true,
@@ -375,6 +425,16 @@
         "width": 366,
         "height": 58.75,
         "text": "List every export toggle1 agent·2h"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Retire the old export presets12 agents·3"
       }
     ],
     "pageErrors": []
@@ -394,14 +454,14 @@
       "parts": [
         {
           "left": 16,
-          "right": 208.859375
+          "right": 204.546875
         },
         {
-          "left": 212.859375,
-          "right": 256.859375
+          "left": 208.546875,
+          "right": 252.546875
         },
         {
-          "left": 260.859375,
+          "left": 256.546875,
           "right": 338
         },
         {
@@ -420,7 +480,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Обрати набір пресетів експортупитанняopu"
+        "text": "Обрати набір пресетів експортупитанняOpu"
       },
       {
         "waits": true,
@@ -429,7 +489,7 @@
         "left": 12,
         "top": 246.5,
         "width": 366,
-        "height": 85.5,
+        "height": 99,
         "text": "Звірити експорт книгипотрібне рішення · "
       },
       {
@@ -437,7 +497,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 340,
+        "top": 353.5,
         "width": 366,
         "height": 58.75,
         "text": "Написати нотатки про міграцію1 працює·1 "
@@ -447,7 +507,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 406.75,
+        "top": 420.25,
         "width": 366,
         "height": 105.25,
         "text": "Перемкнути псевдонім пошукуImplement→Rev"
@@ -457,10 +517,20 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 520,
+        "top": 533.5,
         "width": 366,
         "height": 58.75,
         "text": "Перелічити всі перемикачі експорту1 аген"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Прибрати старі пресети експорту12 агенті"
       }
     ],
     "after": [
@@ -472,7 +542,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Обрати набір пресетів експортупитанняopu"
+        "text": "Обрати набір пресетів експортупитанняOpu"
       },
       {
         "waits": true,
@@ -481,7 +551,7 @@
         "left": 12,
         "top": 246.5,
         "width": 366,
-        "height": 85.5,
+        "height": 99,
         "text": "Звірити експорт книгипотрібне рішення · "
       },
       {
@@ -489,7 +559,7 @@
         "opacity": 0.6,
         "filter": "saturate(0.35)",
         "left": 12,
-        "top": 340,
+        "top": 353.5,
         "width": 366,
         "height": 58.75,
         "text": "Написати нотатки про міграцію1 працює·1 "
@@ -499,7 +569,7 @@
         "opacity": 0.6,
         "filter": "saturate(0.35)",
         "left": 12,
-        "top": 406.75,
+        "top": 420.25,
         "width": 366,
         "height": 105.25,
         "text": "Перемкнути псевдонім пошукуImplement→Rev"
@@ -509,10 +579,20 @@
         "opacity": 0.6,
         "filter": "saturate(0.35)",
         "left": 12,
-        "top": 520,
+        "top": 533.5,
         "width": 366,
         "height": 58.75,
         "text": "Перелічити всі перемикачі експорту1 аген"
+      },
+      {
+        "waits": false,
+        "opacity": 0.6,
+        "filter": "saturate(0.35)",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Прибрати старі пресети експорту12 агенті"
       }
     ],
     "off": [
@@ -524,7 +604,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Обрати набір пресетів експортупитанняopu"
+        "text": "Обрати набір пресетів експортупитанняOpu"
       },
       {
         "waits": true,
@@ -533,7 +613,7 @@
         "left": 12,
         "top": 246.5,
         "width": 366,
-        "height": 85.5,
+        "height": 99,
         "text": "Звірити експорт книгипотрібне рішення · "
       },
       {
@@ -541,7 +621,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 340,
+        "top": 353.5,
         "width": 366,
         "height": 58.75,
         "text": "Написати нотатки про міграцію1 працює·1 "
@@ -551,7 +631,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 406.75,
+        "top": 420.25,
         "width": 366,
         "height": 105.25,
         "text": "Перемкнути псевдонім пошукуImplement→Rev"
@@ -561,10 +641,20 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 520,
+        "top": 533.5,
         "width": 366,
         "height": 58.75,
         "text": "Перелічити всі перемикачі експорту1 аген"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Прибрати старі пресети експорту12 агенті"
       }
     ],
     "pageErrors": []
@@ -584,14 +674,14 @@
       "parts": [
         {
           "left": 16,
-          "right": 208.859375
+          "right": 204.546875
         },
         {
-          "left": 212.859375,
-          "right": 256.859375
+          "left": 208.546875,
+          "right": 252.546875
         },
         {
-          "left": 260.859375,
+          "left": 256.546875,
           "right": 338
         },
         {
@@ -610,7 +700,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Обрати набір пресетів експортупитанняopu"
+        "text": "Обрати набір пресетів експортупитанняOpu"
       },
       {
         "waits": true,
@@ -619,7 +709,7 @@
         "left": 12,
         "top": 246.5,
         "width": 366,
-        "height": 85.5,
+        "height": 99,
         "text": "Звірити експорт книгипотрібне рішення · "
       },
       {
@@ -627,7 +717,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 340,
+        "top": 353.5,
         "width": 366,
         "height": 58.75,
         "text": "Написати нотатки про міграцію1 працює·1 "
@@ -637,7 +727,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 406.75,
+        "top": 420.25,
         "width": 366,
         "height": 105.25,
         "text": "Перемкнути псевдонім пошукуImplement→Rev"
@@ -647,10 +737,20 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 520,
+        "top": 533.5,
         "width": 366,
         "height": 58.75,
         "text": "Перелічити всі перемикачі експорту1 аген"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Прибрати старі пресети експорту12 агенті"
       }
     ],
     "after": [
@@ -662,7 +762,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Обрати набір пресетів експортупитанняopu"
+        "text": "Обрати набір пресетів експортупитанняOpu"
       },
       {
         "waits": true,
@@ -671,7 +771,7 @@
         "left": 12,
         "top": 246.5,
         "width": 366,
-        "height": 85.5,
+        "height": 99,
         "text": "Звірити експорт книгипотрібне рішення · "
       },
       {
@@ -679,7 +779,7 @@
         "opacity": 0.55,
         "filter": "saturate(0.35)",
         "left": 12,
-        "top": 340,
+        "top": 353.5,
         "width": 366,
         "height": 58.75,
         "text": "Написати нотатки про міграцію1 працює·1 "
@@ -689,7 +789,7 @@
         "opacity": 0.55,
         "filter": "saturate(0.35)",
         "left": 12,
-        "top": 406.75,
+        "top": 420.25,
         "width": 366,
         "height": 105.25,
         "text": "Перемкнути псевдонім пошукуImplement→Rev"
@@ -699,10 +799,20 @@
         "opacity": 0.55,
         "filter": "saturate(0.35)",
         "left": 12,
-        "top": 520,
+        "top": 533.5,
         "width": 366,
         "height": 58.75,
         "text": "Перелічити всі перемикачі експорту1 аген"
+      },
+      {
+        "waits": false,
+        "opacity": 0.55,
+        "filter": "saturate(0.35)",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Прибрати старі пресети експорту12 агенті"
       }
     ],
     "off": [
@@ -714,7 +824,7 @@
         "top": 175,
         "width": 366,
         "height": 63.5,
-        "text": "Обрати набір пресетів експортупитанняopu"
+        "text": "Обрати набір пресетів експортупитанняOpu"
       },
       {
         "waits": true,
@@ -723,7 +833,7 @@
         "left": 12,
         "top": 246.5,
         "width": 366,
-        "height": 85.5,
+        "height": 99,
         "text": "Звірити експорт книгипотрібне рішення · "
       },
       {
@@ -731,7 +841,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 340,
+        "top": 353.5,
         "width": 366,
         "height": 58.75,
         "text": "Написати нотатки про міграцію1 працює·1 "
@@ -741,7 +851,7 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 406.75,
+        "top": 420.25,
         "width": 366,
         "height": 105.25,
         "text": "Перемкнути псевдонім пошукуImplement→Rev"
@@ -751,10 +861,20 @@
         "opacity": 1,
         "filter": "none",
         "left": 12,
-        "top": 520,
+        "top": 533.5,
         "width": 366,
         "height": 58.75,
         "text": "Перелічити всі перемикачі експорту1 аген"
+      },
+      {
+        "waits": false,
+        "opacity": 1,
+        "filter": "none",
+        "left": 792,
+        "top": 175,
+        "width": 366,
+        "height": 58.75,
+        "text": "Прибрати старі пресети експорту12 агенті"
       }
     ],
     "pageErrors": []
