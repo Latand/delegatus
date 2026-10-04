@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import type { ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -18,6 +19,7 @@ import { resetTaskIconLoaderForTests } from "@/components/tasks/taskIconLoader";
 import { attentionKey } from "./phoneKanbanModel";
 import { resetPhoneKanbanPlaces } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS } from "./swipeIntent";
+import { CARD_LIFT_MS } from "./phoneCardLift";
 
 /*
  * The phone's status columns (#2072 slice 4), mounted over the real band
@@ -90,11 +92,12 @@ const asking = (index: number) => file(index, {
 } as Partial<FileEntry>);
 
 function task(id: string, status: TaskStatus, paths: readonly string[] = [], text = `Task ${id}`): BoardTask {
+  /* Done fixtures stay inside retention relative to the same clock as the board. */
+  const at = new Date((NOW - 600) * 1_000).toISOString();
   return {
     id, project: "fixture", text, status, placement: "unplaced", revision: `r-${id}-1`,
-    assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" })),
-    createdAt: "2026-09-14T10:00:00.000Z", updatedAt: "2026-09-14T10:00:00.000Z",
-    // Done fixtures represent a current admission, within board retention.
+    assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at })),
+    createdAt: at, updatedAt: at,
     ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}),
   } as BoardTask;
 }
@@ -120,7 +123,7 @@ function Receipt() {
 
 interface Opened { tasks: string[]; conversations: string[]; pipelines: string[]; shown: string[][] }
 
-function mount(input: { files: FileEntry[]; tasks: BoardTask[]; project?: string; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav; onNewTask?: () => void; onTellOrchestrator?: () => void }) {
+function mount(input: { files: FileEntry[]; tasks: BoardTask[]; project?: string; pipelines?: Pipeline[]; attention?: string[]; ports?: TaskMutationPorts; onHiddenCount?: (count: number) => void; nav?: MobileNav; onNewTask?: () => void; onTellOrchestrator?: () => void; rowActions?: ComponentProps<typeof MobileKanban>["rowActions"] }) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -151,6 +154,7 @@ function mount(input: { files: FileEntry[]; tasks: BoardTask[]; project?: string
         onHiddenCount={input.onHiddenCount}
         onNewTask={input.onNewTask}
         onTellOrchestrator={input.onTellOrchestrator}
+        rowActions={input.rowActions}
       />
       <Receipt />
     </MobileNavContext.Provider>,
@@ -534,6 +538,220 @@ test("the Inbox tab lists high first and low last, marks those two in the card a
   expect(mark("high")?.previousElementSibling?.hasAttribute("data-phone-card-title")).toBe(true);
   expect(q(host, '[data-phone-card="task:high"]')!.getAttribute("aria-label")).toContain(en("kanban.priorityMark.high"));
   expect(q(host, '[data-phone-card="task:normal-new"]')!.getAttribute("aria-label")).not.toContain("priority");
+});
+
+/* ── Hold to lift, drag to a column (the whole-card drag, operator 2026-10-02) ─
+   A held finger (0.35 s) lifts a task card and shows the four columns in a dock
+   at the bottom; released over one it moves the task, released where it was it
+   opens the card's menu, released anywhere else nothing happens. A finger that
+   moves before the lift is the column scrolling or the pager swiping. */
+
+const finger = (type: string, x: number, y: number, extra: Record<string, unknown> = {}) =>
+  new dom.PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: "touch", clientX: x, clientY: y, button: 0, ...extra }) as unknown as Event;
+const fireOn = (target: Element | Document, event: Event) => flushSync(() => { target.dispatchEvent(event); });
+const body = () => dom.document.body as unknown as HTMLElement;
+const dock = () => q(body(), "[data-phone-dock]");
+const ghostOf = () => q(body(), "[data-phone-lift-ghost]");
+/** happy-dom lays nothing out: the dock's four tiles sit side by side across the bottom of a 390 px screen. */
+function laidOutDock() {
+  const order = ["inbox", "assigned", "blocked", "done"];
+  const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: () => DOMRect };
+  const original = prototype.getBoundingClientRect;
+  prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const status = this.getAttribute?.("data-phone-dock-tile");
+    const left = status ? order.indexOf(status) * 97 : 0;
+    const top = status ? 760 : this.hasAttribute?.("data-phone-dock") ? 744 : 0;
+    return { x: left, y: top, left, top, right: left + 90, bottom: top + (status ? 80 : 90), width: 90, height: status ? 80 : 90, toJSON() {} } as DOMRect;
+  };
+  return () => { prototype.getBoundingClientRect = original; };
+}
+const tileCenter = (status: string): [number, number] => [["inbox", "assigned", "blocked", "done"].indexOf(status) * 97 + 45, 800];
+const hold = async (card: HTMLElement) => {
+  fireOn(card, finger("pointerdown", 40, 40));
+  await sleep(CARD_LIFT_MS + 40);
+};
+
+test("a hold of 0.35 s lifts the card and shows the four columns; nothing opens until the finger lets go", async () => {
+  const { files, tasks } = board();
+  const { host, nav, opened } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  fireOn(card, finger("pointerdown", 40, 40));
+  await sleep(CARD_LIFT_MS - 120);
+  expect(dock()).toBeNull();
+  await sleep(160);
+  expect(dock()).not.toBeNull();
+  expect(qa(dock()!, "[data-phone-dock-tile]").map((tile) => tile.getAttribute("data-phone-dock-tile"))).toEqual(["inbox", "assigned", "blocked", "done"]);
+  expect(dock()!.textContent).toContain(en("mobile2.kanban.dockHint"));
+  /* The column the card is in is marked as the place it already is. */
+  expect(q(dock()!, '[data-phone-dock-tile="assigned"]')!.hasAttribute("data-here")).toBe(true);
+  expect(q(dock()!, '[data-phone-dock-tile="assigned"]')!.textContent).toContain(en("mobile2.kanban.dockHere"));
+  expect(ghostOf()).not.toBeNull();
+  /* An opaque ghost: a see-through one lets the card under it write across its rows. */
+  expect(ghostOf()!.style.opacity).toBe("");
+  expect(nav.getState().sheet).toBeNull();
+  expect(opened.tasks).toEqual([]);
+  fireOn(card, finger("pointerup", 40, 40));
+});
+
+test("released in place, a lifted card opens today's menu, and its click opens nothing", async () => {
+  const { files, tasks } = board();
+  const { host, nav, opened } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  await hold(card);
+  fireOn(card, finger("pointermove", 43, 42));
+  fireOn(card, finger("pointerup", 43, 42));
+  fireOn(card, new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+  expect(nav.getState().sheet).toBe("card");
+  expect(opened.tasks).toEqual([]);
+  expect(dock()).toBeNull();
+  expect(ghostOf()).toBeNull();
+});
+
+test("released over a column, a lifted card moves there with the usual receipt; the dock and the ghost go", async () => {
+  const { files, tasks } = board();
+  const patches: Array<{ id: string; status?: string }> = [];
+  const ports: TaskMutationPorts = {
+    patch: async (id, patch) => { patches.push({ id, status: (patch as { status?: string }).status }); return { ok: true, task: task(id, (patch as { status: TaskStatus }).status, [], "Task a2") } as PatchResult; },
+    read: async () => null, changed: () => {},
+  };
+  const { host } = mount({ files, tasks, ports });
+  const restore = laidOutDock();
+  try {
+    const card = q(host, '[data-phone-card="task:a2"]')!;
+    await hold(card);
+    fireOn(card, finger("pointermove", ...tileCenter("blocked")));
+    await sleep(30);
+    expect(q(dock()!, '[data-phone-dock-tile="blocked"]')!.hasAttribute("data-over")).toBe(true);
+    expect(q(dock()!, '[data-phone-dock-tile="inbox"]')!.hasAttribute("data-over")).toBe(false);
+    fireOn(card, finger("pointerup", ...tileCenter("blocked")));
+    expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
+    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Blocked" }));
+    await sleep(20);
+    expect(patches).toEqual([{ id: "a2", status: "blocked" }]);
+    expect(dock()).toBeNull();
+    expect(ghostOf()).toBeNull();
+  } finally { restore(); }
+});
+
+test("the ghost keeps clear of the dock: a finger on a tile never has the card over its label", async () => {
+  const { files, tasks } = board();
+  const { host } = mount({ files, tasks });
+  const restore = laidOutDock();
+  try {
+    const card = q(host, '[data-phone-card="task:a2"]')!;
+    await hold(card);
+    fireOn(card, finger("pointermove", ...tileCenter("blocked")));
+    await sleep(30);
+    const [, y] = /translate3d\(([-\d.]+)px, ([-\d.]+)px/.exec(ghostOf()!.style.transform)!.slice(1).map(Number);
+    /* The card is 90 px tall in this layout, the dock's top edge is at 744. */
+    expect(y! + 90 * 1.02, "the ghost's bottom edge is above the dock").toBeLessThanOrEqual(744);
+    fireOn(card, finger("pointerup", ...tileCenter("blocked")));
+  } finally { restore(); }
+});
+
+test("released over the column it is in, or over nothing, a lifted card goes back and nothing opens or moves", async () => {
+  const { files, tasks } = board();
+  const { host, nav } = mount({ files, tasks });
+  const restore = laidOutDock();
+  try {
+    const card = q(host, '[data-phone-card="task:a2"]')!;
+    await hold(card);
+    fireOn(card, finger("pointermove", ...tileCenter("assigned")));
+    await sleep(30);
+    fireOn(card, finger("pointerup", ...tileCenter("assigned")));
+    expect(cardsIn(host, "assigned")).toContain("task:a2");
+    expect(nav.getState().sheet).toBeNull();
+    expect(dock()).toBeNull();
+
+    await hold(card);
+    fireOn(card, finger("pointermove", 200, 300));
+    await sleep(30);
+    fireOn(card, finger("pointerup", 200, 300));
+    expect(cardsIn(host, "assigned")).toContain("task:a2");
+    expect(nav.getState().sheet).toBeNull();
+    expect(dock()).toBeNull();
+    expect(ghostOf()).toBeNull();
+  } finally { restore(); }
+});
+
+test("a finger that moves before the lift is a scroll: no lift, no menu, no move", async () => {
+  const { files, tasks } = board();
+  const { host, nav } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  fireOn(card, finger("pointerdown", 40, 40));
+  await sleep(150);
+  fireOn(card, finger("pointermove", 40, 60));
+  await sleep(CARD_LIFT_MS);
+  expect(dock()).toBeNull();
+  expect(ghostOf()).toBeNull();
+  fireOn(card, finger("pointerup", 40, 60));
+  expect(nav.getState().sheet).toBeNull();
+});
+
+test("a tap shorter than the hold still opens the task", async () => {
+  const { files, tasks } = board();
+  const { host, opened } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  fireOn(card, finger("pointerdown", 40, 40));
+  await sleep(80);
+  fireOn(card, finger("pointerup", 40, 40));
+  click(card);
+  expect(opened.tasks).toEqual(["a2"]);
+  await sleep(CARD_LIFT_MS);
+  expect(dock()).toBeNull();
+});
+
+test("the page may scroll under a finger until the card is lifted, and not after", async () => {
+  const { files, tasks } = board();
+  const { host } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  const touchmove = () => { const event = new dom.Event("touchmove", { bubbles: true, cancelable: true }) as unknown as Event; card.dispatchEvent(event); return event.defaultPrevented; };
+  fireOn(card, finger("pointerdown", 40, 40));
+  expect(touchmove()).toBe(false);
+  await sleep(CARD_LIFT_MS + 40);
+  expect(touchmove()).toBe(true);
+  fireOn(card, finger("pointerup", 40, 40));
+  expect(touchmove()).toBe(false);
+});
+
+test("the browser's own long-press menu event does not open the sheet under a lifted card", async () => {
+  const { files, tasks } = board();
+  const { host, nav } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  await hold(card);
+  fireOn(card, new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as Event);
+  expect(nav.getState().sheet).toBeNull();
+  fireOn(card, finger("pointermove", 200, 300));
+  fireOn(card, finger("pointerup", 200, 300));
+  expect(nav.getState().sheet).toBeNull();
+});
+
+test("the lifted card follows the finger by transform alone, one write a frame", async () => {
+  const { files, tasks } = board();
+  const { host } = mount({ files, tasks });
+  const card = q(host, '[data-phone-card="task:a2"]')!;
+  await hold(card);
+  const ghost = ghostOf()!;
+  const left = ghost.style.left;
+  fireOn(card, finger("pointermove", 100, 200));
+  await sleep(30);
+  expect(ghost.style.transform).toContain("translate3d(60px, 160px, 0)");
+  expect(ghost.style.left).toBe(left);
+  fireOn(card, finger("pointercancel", 100, 200));
+  expect(dock()).toBeNull();
+  expect(ghostOf()).toBeNull();
+});
+
+test("a conversation row no task owns keeps today's hold: its sheet, with no dock", async () => {
+  const { files, tasks } = board();
+  const { host, nav } = mount({ files, tasks, rowActions: () => [{ key: "x", name: "Open", hint: "", icon: null, tone: "neutral", run: () => {} }] as never });
+  const loose = q(host, `[data-phone-card="lineage:${files[4]!.conversationId}"]`);
+  expect(loose).not.toBeNull();
+  fireOn(loose!, finger("pointerdown", 40, 40));
+  await sleep(LONG_PRESS_MS + 60);
+  expect(dock()).toBeNull();
+  fireOn(loose!, finger("pointerup", 40, 40));
+  expect(nav.getState().sheet).toBe("card");
 });
 
 test("phone cards show a passive status note below the title", () => {

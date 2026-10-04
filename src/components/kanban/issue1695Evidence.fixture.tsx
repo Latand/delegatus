@@ -85,7 +85,10 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED;
+/* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
+   titles and descriptions over the four columns, a lane with a running stage on every second one. */
+const DRAG_BOARD = SCENARIO === "drag-board";
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -1742,6 +1745,27 @@ if (BALANCE) {
   /* A shelf with many cards, each with a title long enough to wrap. */
   for (let index = 0; index < 8; index += 1) {
     tasks.push(task(`t-bal-long-${index}`, "inbox", `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`, "", (index + 2) * 60 * MIN));
+  }
+}
+if (DRAG_BOARD) {
+  const columns: TaskStatus[] = ["inbox", "assigned", "assigned", "blocked", "done"];
+  for (let index = 0; index < 48; index += 1) {
+    const id = `t-drag-${index}`;
+    const status = columns[index % columns.length]!;
+    const title = `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`;
+    const members = status === "assigned" || index % 3 === 0
+      ? [add(conversation(`drag-${index}-impl`, `Implementer: ${title.slice(0, 60)}`, index % 2 === 0 ? working({ model: "opus" }) : {})), add(conversation(`drag-${index}-rev`, `Reviewer: ${title.slice(0, 60)}`, { engine: "codex", model: "gpt-5.6" }))]
+      : [];
+    tasks.push(task(id, status, title, "Rows from the late feed are written after the ledger closes, so the export sees a shorter table than the bank file. Compare both before the cut-off and name the first row that differs.", (index + 1) * 7 * MIN, members));
+    if (index % 2 === 0 && members[0]) {
+      pipelines.push(pipeline(`p-drag-${index}`, title, id, "running",
+        [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
+        [
+          { stageId: "build", attempts: [attempt(1, "passed", members[0], { startedAt: iso(80 * MIN) })] },
+          { stageId: "review", attempts: [attempt(1, "running", members[1] ?? null, { startedAt: iso(20 * MIN) })] },
+        ],
+        { stageId: "review", state: "running", input: null, activatedBy: null }));
+    }
   }
 }
 if (OVERVIEW_SCOPE) {

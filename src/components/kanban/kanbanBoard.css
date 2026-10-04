@@ -312,7 +312,29 @@
 .kb .card:hover { border-color: var(--border-strong); }
 .kb .card:focus-visible { outline: 2px solid var(--color-accent); }
 .kb .card.dragging { opacity: 0.35; }
-.kb .card.ghost { position: fixed; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); transform: rotate(1.5deg); opacity: 0.95; content-visibility: visible; }
+.kb .card.ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); content-visibility: visible; will-change: transform; }
+/* The whole card is the drag handle (cardDrag.ts). The pointer is captured on
+   the held card, so nothing under the ghost takes hover, and a text selection is
+   refused by `selectstart` there. No inherited property (`user-select`,
+   `pointer-events`) is set on the board for it: that would restyle every element
+   on it (3000 and more) in the frame the drag begins. */
+.kb .card[data-id] { cursor: grab; }
+.kb[data-card-drag] .card.dragging { cursor: grabbing; }
+/* A working agent's glyph turns, breathes and pulses on SVG children, which
+   Chromium animates on the main thread: a style recalculation and a layout in
+   every frame, for as many glyphs as the board has live, and four times as long
+   on a phone's CPU. A held card has the operator's eye, and the board stands
+   still around it. The desktop marks its board (`.kb`), the phone its body. The
+   glyph's `animation` shorthand resets the play state, hence `!important`; no
+   `*` or attribute-substring subject, which would restyle every element on the
+   page when the attribute is set (a 4000-element recalculation). */
+[data-card-drag] .mglyph[data-live="1"]::before,
+[data-card-drag] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+[data-card-drag] .animate-pulse,
+[data-card-drag] .motion-safe\:animate-pulse,
+[data-card-drag] .pedge.live,
+[data-card-drag] .pnode.pulse .pdot,
+[data-card-drag] .pstrip.pulse .pmark::before { animation-play-state: paused !important; }
 .kb .card.flash { animation: kb-flash var(--motion-slow) var(--ease-standard) 2; }
 @keyframes kb-flash { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 35%, transparent); } }
 .kb .card.done { background: var(--surface-quiet); }
