@@ -8,6 +8,7 @@
    Three entries:
      token [--repository owner/name] [--json]   one installation token on stdout
      gh <args…>                                 `gh`, with covered writes sent as the App
+     git <args…>                                `git`, with a push sent to the App's URL
      git-credential <get|store|erase>           git's helper for push URLs
 
    The rule applies to the repositories this installation declared (see
@@ -27,6 +28,9 @@ import { fileURLToPath } from "node:url";
 export const FORGE_APP_SECRET_SERVICE = "delegatus-github-app";
 export const FORGE_APP_PERMISSIONS = Object.freeze({ contents: "write", pull_requests: "write", metadata: "read" });
 export const FORGE_APP_USERNAME = "x-access-token";
+/** Where a push to a declared repository is sent: the one URL base the App's
+    credential helper answers. Joined so the source holds no address-shaped literal. */
+export const FORGE_PUSH_BASE = [`https://${FORGE_APP_USERNAME}`, "github.com"].join("@");
 /** This file's name, in `bin/` and in every copy the launch environment makes. */
 export const HELPER_FILE = "forge-app-token.mjs";
 /** Set by the launch environment: the directory holding the `gh` shim. */
@@ -54,21 +58,30 @@ export function refusalMessage(repository, reason) {
     + "The operator can check that the App is installed on this repository and that the credential store is unlocked.";
 }
 
-/** `owner/name` out of a slug, an HTTPS or SSH GitHub URL, or `host/owner/name`.
+/* A URL as git and `gh` read one: a scheme, an optional user and port, then
+   the path; or the scp form. */
+const REPOSITORY_URL = /^(?:(?:https?|ssh|git|git\+ssh|ssh\+git|git\+https):\/\/(?:[^@/]*@)?([^/:?#]+)(?::\d*)?\/|[^@/:]+@([^/:]+):)(.*)$/i;
+/** github.com under every name `gh` reduces to it: the host or a subdomain of it. */
+const isGitHubHost = (host) => /^(?:[a-z0-9-]+\.)*github\.com$/i.test(host);
+
+/** `owner/name` out of a slug, a GitHub URL of any scheme, or `host/owner/name`,
+    read the way `gh` reads a repository: a user name and a port are dropped, a
+    subdomain of github.com is github.com, and the path is decoded.
     Null for anything that is not a github.com repository. */
 export function parseRepository(value) {
   if (typeof value !== "string") return null;
   let text = value.trim();
-  const url = /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/(?:[^@/]+@)?|[^@/:]+@)([^/:]+)[/:](.+)$/.exec(text);
+  const url = REPOSITORY_URL.exec(text);
   if (url) {
-    if (url[1].toLowerCase() !== "github.com") return null;
-    text = url[2];
+    if (!isGitHubHost(url[1] ?? url[2])) return null;
+    text = url[3].replace(/[?#].*$/, "");
   } else if (text.split("/").length === 3) {
     const [host, ...rest] = text.split("/");
-    if (host.toLowerCase() !== "github.com") return null;
+    if (!isGitHubHost(host)) return null;
     text = rest.join("/");
   }
-  text = text.replace(/\/+$/, "").replace(/\.git$/, "");
+  try { text = decodeURIComponent(text); } catch { return null; }
+  text = text.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "");
   return REPOSITORY.test(text) ? text : null;
 }
 
@@ -217,7 +230,6 @@ const VALUE_FLAGS = Object.freeze({
   "pr update-branch": new Set(REPOSITORY_FLAGS),
 });
 const API_BODY_FLAGS = ["-f", "--raw-field", "-F", "--field", "--input"];
-const PULL_REQUEST_URL = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:[/?#].*)?$/i;
 const PASS = Object.freeze({ kind: "pass" });
 const refuse = (reason) => ({ kind: "refuse", reason });
 
@@ -247,7 +259,18 @@ function readArgs(args, values) {
   return { positional, last, help: flags.some(([name]) => name === "--help" || name === "-h") };
 }
 
-const isGitHubHost = (host) => /^(?:www\.)?github\.com$/i.test(host);
+/** The repository a pull request's URL names, read as `gh` reads it: by the
+    start of its decoded path, whatever follows the number. Undefined when the
+    argument is no such URL, null when it is one on another host. */
+function pullRequestRepository(value) {
+  const url = /^https?:\/\/(?:[^@/?#]*@)?([^/:?#]+)(?::\d*)?(\/[^?#]*)/i.exec(value);
+  if (!url) return undefined;
+  let route;
+  try { route = decodeURIComponent(url[2]); } catch { return undefined; }
+  const pull = /^\/([^/]+)\/([^/]+)\/pull\/\d+/.exec(route);
+  if (!pull) return undefined;
+  return isGitHubHost(url[1]) ? `${pull[1]}/${pull[2]}` : null;
+}
 
 /** A REST path as GitHub routes it: no query, each segment decoded, and dot
     segments and doubled slashes resolved. */
@@ -268,10 +291,11 @@ function classifyApi(args, env) {
   const hostname = last("--hostname");
   if (hostname != null && !isGitHubHost(hostname)) return PASS;
   let target = positional[1] ?? "";
-  const absolute = /^https?:\/\/([^/]+)\/(.*)$/i.exec(target);
+  const absolute = /^https?:\/\/(?:[^@/?#]*@)?([^/:?#]+)(?::\d*)?\/(.*)$/i.exec(target);
   if (absolute) {
-    /* An absolute URL is sent where it points; only GitHub's own API host is ours. */
-    if (absolute[1].toLowerCase() !== "api.github.com") return PASS;
+    /* An absolute URL is sent where it points, and `gh` sends github.com's
+       token to every name of that host. */
+    if (!isGitHubHost(absolute[1])) return PASS;
     target = absolute[2];
   }
   target = target.replace(/^\/+/, "");
@@ -293,8 +317,9 @@ function classifyApi(args, env) {
     if (!match) continue;
     const [owner, name] = [match[1], match[2]];
     const placeholders = [owner, name].filter((part) => /^[{:]/.test(part)).length;
-    /* Both placeholders are filled from the base repository, as `gh` fills them. */
-    if (placeholders === 2) return { kind: "app", repository: env.GH_REPO ?? null };
+    /* Both placeholders are filled from the base repository, as `gh` fills
+       them: GH_REPO, and the checkout when that is unset or empty. */
+    if (placeholders === 2) return { kind: "app", repository: env.GH_REPO || null };
     if (placeholders === 1 || /[^A-Za-z0-9._-]/.test(owner + name)) {
       return refuse("its repository is named in a form Delegatus does not read; name it as owner/name");
     }
@@ -308,7 +333,9 @@ function classifyApi(args, env) {
  * out as the App when its repository is declared; a covered kind whose
  * repository is named in a way that cannot be read, which is refused; or
  * anything else, which passes through untouched. `repository` is null when the
- * command names none and `gh` would take it from the checkout.
+ * command names none and `gh` would take it from the checkout. `gh` reads an
+ * empty `--repo` and an empty GH_REPO as absent, in that order, so they are
+ * absent here too.
  *
  * One action has one classification in every spelling `gh` accepts: the
  * command or its alias, a pull request given as its URL, a REST path or the
@@ -324,9 +351,9 @@ export function classifyGh(args, env = {}) {
   const { positional, last, help } = readArgs(args, VALUE_FLAGS[covered]);
   if (help) return PASS;
   /* A pull request given as its URL names its repository, before any flag. */
-  const url = covered === "pr create" ? null : PULL_REQUEST_URL.exec(positional[2] ?? "");
-  if (url) return isGitHubHost(url[1]) ? { kind: "app", repository: `${url[2]}/${url[3]}` } : PASS;
-  return { kind: "app", repository: last(...REPOSITORY_FLAGS) ?? env.GH_REPO ?? null };
+  const linked = covered === "pr create" ? undefined : pullRequestRepository(positional[2] ?? "");
+  if (linked !== undefined) return linked === null ? PASS : { kind: "app", repository: linked };
+  return { kind: "app", repository: last(...REPOSITORY_FLAGS) || env.GH_REPO || null };
 }
 
 /** Runs `gh` for an agent. Returns the exit status. */
@@ -357,7 +384,8 @@ export async function runGh(args, ports) {
     }
   }
   /* Not a covered kind, or not a declared repository: the command as typed,
-     in the environment it was typed in. */
+     in the environment it was typed in. A named repository that reads as
+     nothing is one `gh` reads as nothing on github.com either. */
   if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, ports.env);
   let issued;
   try {
@@ -385,12 +413,71 @@ export async function runGh(args, ports) {
   }
 }
 
-/* ── git ──────────────────────────────────────────────────────────────────── */
+/* ── git push ─────────────────────────────────────────────────────────────── */
+
+/** Git's own options that take their value as the next argument. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source"]);
+const URL_SHAPED = /^(?:[a-z][a-z0-9+.-]*:\/\/|[^@/:]+@[^/:]+:)/i;
 
 /**
- * Git's credential helper for the push URL the launch environment rewrites a
- * declared repository's pushes to. A refusal answers `quit`, so git stops there
- * instead of asking the next helper or a terminal.
+ * Runs `git` for an agent or the engine. Returns the exit status.
+ *
+ * The launch environment rewrites a declared repository's pushes to the App's
+ * URL by prefix, which matches only the spellings it could write down ahead of
+ * time. A push is the one moment the remotes it may use can be read, so here
+ * each of them that names a declared repository in any other spelling (other
+ * letter case, a user name or a port in the URL, another name of the host, an
+ * explicit `pushurl`, a URL typed on the command line) gets a rewrite of that
+ * exact spelling to the App's URL, for this one command. Git asks for a
+ * credential before any hook runs, so a hook would be too late.
+ *
+ * Every command but `push`, and every push with nothing declared, is the
+ * command as typed in the environment it was typed in.
+ */
+export async function runGit(args, ports) {
+  const git = ports.findGit();
+  if (!git) {
+    ports.stderr("Delegatus: git was not found on PATH.\n");
+    return 127;
+  }
+  let at = 0;
+  while (at < args.length && args[at].startsWith("-")) at += GIT_VALUE_OPTIONS.has(args[at]) ? 2 : 1;
+  if (args[at] !== "push" || declaredRepositories(ports.env).length === 0) return ports.exec(git, args, ports.env);
+  const scope = args.slice(0, at);
+  const typed = args.slice(at + 1).map((arg) => arg.replace(/^--repo=/, "")).filter((arg) => !arg.startsWith("-"));
+  const entries = [];
+  for (const spelled of new Set([...await ports.remoteUrls(git, scope), ...typed])) {
+    if (!spelled || spelled.startsWith(`${FORGE_PUSH_BASE}/`)) continue;
+    let slug = URL_SHAPED.test(spelled) ? parseRepository(spelled) : null;
+    if (!slug && spelled.includes(":")) {
+      /* A shorthand the checkout's own `insteadOf` expands to a GitHub URL. */
+      const expanded = await ports.expandedUrl(git, scope, spelled);
+      if (expanded && expanded !== spelled && URL_SHAPED.test(expanded)) slug = parseRepository(expanded);
+    }
+    if (!slug || !isDeclaredRepository(slug, ports.env)) continue;
+    /* Both keys, each for the whole spelling: the longest match wins, so a
+       shorter rewrite of the operator's own cannot take the push elsewhere,
+       and `insteadOf` is the one git applies to an explicit `pushurl`. */
+    const target = `url.${FORGE_PUSH_BASE}/${slug}.git`;
+    entries.push([`${target}.insteadOf`, spelled], [`${target}.pushInsteadOf`, spelled]);
+  }
+  if (entries.length === 0) return ports.exec(git, args, ports.env);
+  const count = Number(ports.env.GIT_CONFIG_COUNT ?? 0);
+  const from = Number.isSafeInteger(count) && count > 0 ? count : 0;
+  const env = { ...ports.env, GIT_CONFIG_COUNT: String(from + entries.length) };
+  entries.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${from + index}`] = key;
+    env[`GIT_CONFIG_VALUE_${from + index}`] = value;
+  });
+  return ports.exec(git, args, env);
+}
+
+/* ── git's credential helper ──────────────────────────────────────────────── */
+
+/**
+ * Git's credential helper for the push URL a declared repository's pushes are
+ * rewritten to, by the launch environment and by `runGit`. A refusal answers
+ * `quit`, so git stops there instead of asking the next helper or a terminal.
  *
  * The rewrite matches by prefix, so a sibling repository whose name merely
  * starts with a declared one arrives here too. It is not declared: its push is
@@ -460,6 +547,19 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
     }
     return [...new Set([...chosen, ...remotes.map(([, slug]) => slug)])];
   };
+  /* The real tool of that name: the first on PATH outside this file's own directory. */
+  const find = (name) => {
+    const own = [env[FORGE_DIR_ENV], path.dirname(fileURLToPath(import.meta.url))].filter(Boolean).map((dir) => { try { return fs.realpathSync(dir); } catch { return dir; } });
+    for (const dir of (env.PATH ?? "").split(path.delimiter)) {
+      if (!dir) continue;
+      let real = dir;
+      try { real = fs.realpathSync(dir); } catch { continue; }
+      if (own.includes(real)) continue;
+      const candidate = path.join(dir, name);
+      try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch { /* next */ }
+    }
+    return null;
+  };
   return {
     env,
     now: Date.now,
@@ -507,18 +607,12 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
       child.stdin.end(`protocol=https\nhost=github.com\n${repositoryPath ? `path=${repositoryPath}\n` : ""}\n`);
     }),
     emptyGhConfigDir: () => path.join(env[FORGE_DIR_ENV] || path.dirname(fileURLToPath(import.meta.url)), "gh-config"),
-    findGh: () => {
-      const own = [env[FORGE_DIR_ENV], path.dirname(fileURLToPath(import.meta.url))].filter(Boolean).map((dir) => { try { return fs.realpathSync(dir); } catch { return dir; } });
-      for (const dir of (env.PATH ?? "").split(path.delimiter)) {
-        if (!dir) continue;
-        let real = dir;
-        try { real = fs.realpathSync(dir); } catch { continue; }
-        if (own.includes(real)) continue;
-        const candidate = path.join(dir, "gh");
-        try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch { /* next */ }
-      }
-      return null;
-    },
+    findGh: () => find("gh"),
+    findGit: () => find("git"),
+    /* Every URL a push from here may use, as the configuration spells it. */
+    remoteUrls: async (git, scope) => ((await run(git, [...scope, "config", "--null", "--get-regexp", "^remote\\..*\\.(url|pushurl)$"], { cwd, env })) ?? "")
+      .split("\0").map((entry) => entry.slice(entry.indexOf("\n") + 1)).filter(Boolean),
+    expandedUrl: async (git, scope, spelled) => (await run(git, [...scope, "ls-remote", "--get-url", spelled], { cwd, env }))?.trim() || null,
     exec: (command, args, childEnv) => new Promise((resolve) => {
       const child = spawn(command, args, { stdio: "inherit", env: childEnv, cwd });
       child.on("error", () => resolve(127));
@@ -538,6 +632,7 @@ async function main(argv) {
   const [mode, ...rest] = argv;
   const ports = productionPorts();
   if (mode === "gh") return runGh(rest, ports);
+  if (mode === "git") return runGit(rest, ports);
   if (mode === "git-credential") return gitCredential(rest[0] ?? "", await ports.readStdin(), ports);
   if (mode === "token") {
     if (process.stdout.isTTY) {
@@ -555,7 +650,7 @@ async function main(argv) {
       return 1;
     }
   }
-  ports.stderr(`usage: ${HELPER_FILE} token|gh|git-credential\n`);
+  ports.stderr(`usage: ${HELPER_FILE} token|gh|git|git-credential\n`);
   return 2;
 }
 

@@ -9,11 +9,10 @@ import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import type { AgentEnvironment } from "./agentHistoryGuard";
 
-import { FORGE_APP_USERNAME, FORGE_DIR_ENV, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
+import { FORGE_DIR_ENV, FORGE_PUSH_BASE as PUSH_BASE, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
 
 /* Joined here so the sources hold no address-shaped literal for the publication gate. */
 const at = (user: string, host: string) => [user, host].join("@");
-const PUSH_BASE = `https://${at(FORGE_APP_USERNAME, "github.com")}`;
 const CREDENTIAL = `credential.${PUSH_BASE}`;
 const pushRewrite = (repository: string) => `url.${PUSH_BASE}/${repository}.pushInsteadOf`;
 
@@ -74,6 +73,46 @@ ${mode === "git-credential" ? 'if [ "$1" = get ]; then echo quit=true; fi\n' : "
 `;
 };
 
+/* `git` for an agent and for the engine. Every command but a push goes
+   straight to the real git, with no process started in between. A push goes
+   through the App helper, which sends each remote that names a declared
+   repository to the App's URL however that remote spells it. A push the helper
+   cannot be started for is refused: the prefix rewrite alone would let such a
+   spelling reach a person's credential. */
+const gitRunner = () => `#!/bin/sh
+# Delegatus: a push to an App repository goes to the App's URL however its remote is spelled.
+set -f
+self=\${0%/*}
+real=
+old=$IFS
+IFS=:
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir" != "$self" ] && [ -f "$dir/git" ] && [ -x "$dir/git" ] && [ ! "$dir/git" -ef "$0" ]; then
+    real=$dir/git
+    break
+  fi
+done
+IFS=$old
+if [ -z "$real" ]; then
+  echo "Delegatus: git was not found on PATH." >&2
+  exit 127
+fi
+for arg do
+  if [ "$arg" = push ]; then
+    helper="$self/${HELPER}"
+    if [ ! -f "$helper" ]; then
+      echo "Delegatus: the GitHub App helper is missing, so this agent cannot push; a person's credentials are never used instead." >&2
+      exit 1
+    fi
+    if command -v bun >/dev/null 2>&1; then exec bun "$helper" git "$@"; fi
+    if command -v node >/dev/null 2>&1; then exec node "$helper" git "$@"; fi
+    echo "Delegatus: neither bun nor node is on PATH, so this agent cannot push; a person's credentials are never used instead." >&2
+    exit 1
+  fi
+done
+exec "$real" "$@"
+`;
+
 let helperSource: string | null | undefined;
 
 /** The helper ships in `bin/`, which a container's host namespace cannot see;
@@ -98,12 +137,12 @@ function publish(target: string, content: string, mode: number): void {
   fs.renameSync(pending, target);
 }
 
-/** The directory holding the `gh` shim, git's push credential helper and the
-    App helper they both start. Content-addressed, so a resumed agent finds the
+/** The directory holding the `gh` and `git` shims, git's push credential helper
+    and the App helper they all start. Content-addressed, so a resumed agent finds the
     files its environment names and a new release never edits them in place. */
 export function agentForgeDir(source: AgentEnvironment): string {
   const helper = readHelper(source);
-  const files: Array<[string, string, number]> = [["gh", runner("gh"), 0o700], ["forge-git-credential", runner("git-credential"), 0o700]];
+  const files: Array<[string, string, number]> = [["gh", runner("gh"), 0o700], ["git", gitRunner(), 0o700], ["forge-git-credential", runner("git-credential"), 0o700]];
   if (helper !== null) files.push([HELPER, helper, 0o600]);
   const hash = crypto.createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 24);
   const directory = path.join(source.HOME?.trim() || os.homedir(), ".cache", "delegatus", "agent-forge", hash);
@@ -114,20 +153,22 @@ export function agentForgeDir(source: AgentEnvironment): string {
 
 const SHELL_PROBE_MS = 15_000;
 const SHELL_PROBE_KEPT_MS = 30_000;
-const SHELL_PROBE_MARK = "delegatus-gh=";
-const shellProbes = new Map<string, { at: number; found: string | null }>();
+const SHIMMED = ["gh", "git"] as const;
+const shellProbeMark = (tool: string) => `delegatus-${tool}=`;
+type ShellProbe = Record<typeof SHIMMED[number], string> | null;
+const shellProbes = new Map<string, { at: number; found: ShellProbe }>();
 
-/** The `gh` a login shell resolves in `env`: its path, "" when it finds none,
-    null when the shell gave no answer. */
-function ghInLoginShell(shell: string, env: Record<string, string>): string | null {
+/** The `gh` and the `git` a login shell resolves in `env`: each one's path, ""
+    when it finds none; null when the shell gave no answer. */
+function toolsInLoginShell(shell: string, env: Record<string, string>): ShellProbe {
   const key = [shell, env.PATH, env.HOME].join("\0");
   const kept = shellProbes.get(key);
   if (kept && Date.now() - kept.at < SHELL_PROBE_KEPT_MS) return kept.found;
-  const result = spawnSync(shell, ["-lc", `printf '\\n${SHELL_PROBE_MARK}%s\\n' "$(command -v gh)"`], {
+  const result = spawnSync(shell, ["-lc", SHIMMED.map((tool) => `printf '\\n${shellProbeMark(tool)}%s\\n' "$(command -v ${tool})"`).join("; ")], {
     env: env as NodeJS.ProcessEnv, encoding: "utf8", timeout: SHELL_PROBE_MS, stdio: ["ignore", "pipe", "ignore"],
   });
-  const line = (result.stdout ?? "").split("\n").findLast((entry) => entry.startsWith(SHELL_PROBE_MARK));
-  const found = line === undefined ? null : line.slice(SHELL_PROBE_MARK.length);
+  const answers = SHIMMED.map((tool) => (result.stdout ?? "").split("\n").findLast((entry) => entry.startsWith(shellProbeMark(tool)))?.slice(shellProbeMark(tool).length));
+  const found = answers.some((answer) => answer === undefined) ? null : { gh: answers[0]!, git: answers[1]! };
   shellProbes.set(key, { at: Date.now(), found });
   return found;
 }
@@ -136,23 +177,25 @@ function ghInLoginShell(shell: string, env: Record<string, string>): string | nu
  * An engine runs each command an agent types through a login shell, and a
  * login profile may put its own directories in front of the PATH it was given.
  * A `gh` in one of those would be found before the shim and send a covered
- * write with a person's configuration. So the launch asks the shells an engine
- * uses which `gh` they find in the launch environment, and refuses when it is
- * any file but the shim.
+ * write with a person's configuration, and a `git` there would push through a
+ * remote the prefix rewrite does not match. So the launch asks the shells an
+ * engine uses which `gh` and which `git` they find in the launch environment,
+ * and refuses when either is any file but its shim.
  */
-function assertShimIsTheShellsGh(directory: string, launch: Record<string, string | undefined>): void {
+function assertShimsAreTheShellsTools(directory: string, launch: Record<string, string | undefined>): void {
   const env = Object.fromEntries(Object.entries(launch).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
   const real = (file: string) => { try { return fs.realpathSync(file); } catch { return file; } };
-  const shim = real(path.join(directory, "gh"));
   const shells = [...new Set([env.SHELL ?? "", "/bin/bash"])]
     .filter((shell) => path.isAbsolute(shell) && ["bash", "zsh", "sh", "dash", "ksh"].includes(path.basename(shell)) && fs.existsSync(shell));
   for (const shell of shells) {
-    const found = ghInLoginShell(shell, env);
+    const found = toolsInLoginShell(shell, env);
     if (found === null) {
-      throw new Error(`Delegatus did not start this agent: ${shell} run as a login shell gave no answer about which gh it finds, so a GitHub write could not be kept from a person's credentials. Check that the login profile runs to its end, then start the agent again.`);
+      throw new Error(`Delegatus did not start this agent: ${shell} run as a login shell gave no answer about which gh and git it finds, so a GitHub write could not be kept from a person's credentials. Check that the login profile runs to its end, then start the agent again.`);
     }
-    if (found && real(found) !== shim) {
-      throw new Error(`Delegatus did not start this agent: ${shell} run as a login shell finds gh at ${found}, ahead of the Delegatus gh, so a pull request write to an App repository would go out with a person's credentials. The login profile puts that directory in front of PATH; keep gh in a directory it does not add, such as /usr/bin, then start the agent again.`);
+    for (const tool of SHIMMED) {
+      if (!found[tool] || real(found[tool]) === real(path.join(directory, tool))) continue;
+      const write = tool === "gh" ? "a pull request write to an App repository" : "a push to an App repository through a remote spelled differently from its declaration";
+      throw new Error(`Delegatus did not start this agent: ${shell} run as a login shell finds ${tool} at ${found[tool]}, ahead of the Delegatus ${tool}, so ${write} would go out with a person's credentials. The login profile puts that directory in front of PATH; keep ${tool} in a directory it does not add, such as /usr/bin, then start the agent again.`);
     }
   }
 }
@@ -185,10 +228,13 @@ function gitConfigEntries(source: AgentEnvironment): Array<[string, string]> {
  *
  * `throughShell` says the commands are typed into an engine's shell, which is
  * every agent launch; the launch is then refused when that shell would find
- * another `gh` first.
+ * another `gh` or another `git` first.
  *
- * The rewrite matches a remote spelled as the declaration spells it or in
- * lower case, which is how GitHub and `gh` write clone URLs.
+ * The rewrite written here matches by prefix and case, so it covers a remote
+ * spelled as the declaration spells it or in lower case. Every other spelling
+ * of a declared repository (other letter case, a user name in the URL, an
+ * explicit pushurl) is rewritten by the `git` shim at the push itself, where
+ * the remotes can be read.
  *
  * Returns the variables to set, the whole `GIT_CONFIG_*` list among them. The
  * history guard appends its own entry after these and expects to stay last.
@@ -228,7 +274,7 @@ export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly 
     env[`GIT_CONFIG_KEY_${index}`] = key;
     env[`GIT_CONFIG_VALUE_${index}`] = value;
   });
-  if (throughShell) assertShimIsTheShellsGh(directory, { ...source, ...env });
+  if (throughShell) assertShimsAreTheShellsTools(directory, { ...source, ...env });
   return env;
 }
 
@@ -238,7 +284,7 @@ export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly 
  * workflow. Merged over the Viewer's environment for that one child. Empty
  * when no repository is declared, so that child starts as it always did. The
  * engine starts `git` and `gh` directly, with no shell between, so the PATH
- * given here is the one that resolves them.
+ * given here is the one that resolves them to their shims.
  */
 export function engineForgeWriteEnv(source: AgentEnvironment = process.env, declared: readonly string[] = forgeAppRepositories()): Record<string, string | undefined> {
   return agentForgeWriteEnv(source, declared, false);

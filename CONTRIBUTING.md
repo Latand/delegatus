@@ -103,8 +103,12 @@ for `pr create`, a pull request given as its URL (which names the repository
 from any directory, before `--repo`), a REST path or its absolute
 `https://api.github.com/` URL, flags joined to their values (`-ftitle=x`,
 `-XPUT`), and both placeholders, `{owner}/{repo}` and `:owner/:repo`, filled
-from `GH_REPO` or the checkout. A covered kind whose repository is named in a
-form the shim cannot read (a repository number, one placeholder beside a
+from `GH_REPO` or the checkout. The repository is read the way `gh` reads it:
+an empty `--repo` or `-R` and an empty `GH_REPO` are absent, so the next source
+in `gh`'s order (the flag, `GH_REPO`, the checkout) names it; a subdomain of
+github.com, a user name and a port in a URL are dropped; and a pull request URL
+is read by its start, whatever follows the number. A covered kind whose
+repository is named in a form the shim cannot read (a repository number, one placeholder beside a
 written name) is refused, and so is one typed in a checkout whose first GitHub
 remote is undeclared while another is declared, until `--repo` names it. An
 alias the operator defined with `gh alias set` is not expanded.
@@ -120,26 +124,37 @@ alias the operator defined with `gh alias set` is not expanded.
   The shim is found because its directory is first on `PATH`, and an engine
   types commands into a login shell whose profile may put directories of its
   own in front. So each agent launch asks `bash -lc` (and `$SHELL`) which `gh`
-  it finds in the launch environment and is refused, with the path it found,
-  when that is any file but the shim. Keep `gh` in a directory the login
-  profile does not prepend, such as `/usr/bin`.
+  and which `git` it finds in the launch environment and is refused, with the
+  path it found, when either is any file but its shim. Keep `gh` and `git` in
+  a directory the login profile does not prepend, such as `/usr/bin`.
 - **`git push` to a declared repository** is rewritten, in the agent's
   environment only, to a push URL that one credential helper answers, with
   every other helper cleared for that URL. SSH remotes are rewritten the same
   way. Fetches, and pushes to every other repository, keep the remote and the
-  credentials they had. The rewrite matches a remote spelled as the declaration
-  spells it or in lower case. It matches by prefix, so a sibling whose name
-  starts with a declared one is caught too; the helper answers that push from
-  git's ordinary helpers, over HTTPS. A refusal answers `quit=true`, also from
-  a shim that finds no helper file or no `bun` or `node`, so git never goes on
-  to askpass or a terminal prompt.
+  credentials they had. The rewrite written at launch matches a remote spelled
+  as the declaration spells it or in lower case. It matches by prefix, so a
+  sibling whose name starts with a declared one is caught too; the helper
+  answers that push from git's ordinary helpers, over HTTPS. A refusal answers
+  `quit=true`, also from a shim that finds no helper file or no `bun` or
+  `node`, so git never goes on to askpass or a terminal prompt.
+- **`git` in an agent's shell** is a shim too. Every command but a push goes
+  straight to the real `git`, with no process started in between. A push runs
+  `bin/forge-app-token.mjs git`, which reads the checkout's remote URLs and the
+  URLs typed on the command line and, for each that names a declared
+  repository in a spelling the launch rewrite does not match (other letter
+  case, a user name or a port in the URL, `www.github.com`, an explicit
+  `pushurl`, a shorthand the checkout's own `insteadOf` expands), adds a
+  rewrite of that exact spelling to the App's URL for that one command. Git
+  asks for a credential before any hook runs, which is why this is done in
+  front of `git` and not in `pre-push`. A push the shim cannot start the helper
+  for is refused. A git alias that stands for `push` is not expanded.
 - **The engine** (`src/lib/forge/autoMerge.ts`) merges and updates a branch
   through `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the
   refusal as its reason. The push that publishes a lane's branch
   (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
   workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
-  the same push rewrite and `gh` shim.
+  the same push rewrite and the same `gh` and `git` shims.
 - **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
   installation endpoint. Run from a launched agent in a declared repository,
   that check and the merge both go through the shim.

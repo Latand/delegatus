@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 
 import {
-  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_PERMISSIONS, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
-  isDeclaredRepository, mintInstallationToken, parseRepository, runGh,
+  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
+  isDeclaredRepository, mintInstallationToken, parseRepository, runGh, runGit,
 } from "./forge-app-token.mjs";
 
 /* The App helper against an invented App: a key generated here, an invented
@@ -42,7 +42,7 @@ function fakeGitHub(overrides: Record<string, Answer> = {}) {
    as the launch pins it, and the declaration naming the one App repository. */
 const AGENT_ENV = { [FORGE_REPOSITORIES_ENV]: "Acme/Widgets", GH_CONFIG_DIR: OPERATOR_CONFIG, GITHUB_TOKEN: "inherited-token" };
 
-function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; remotes?: string[]; ordinary?: string | null } = {}) {
+function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; remotes?: string[]; ordinary?: string | null; remoteUrls?: string[]; expanded?: Record<string, string> } = {}) {
   const github = options.github ?? fakeGitHub();
   const started: Array<{ command: string; args: string[]; env: Record<string, string | undefined> }> = [];
   const out: string[] = [];
@@ -60,6 +60,11 @@ function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeG
     readCredential: async () => (credential == null ? null : JSON.stringify(credential)),
     request: github.request,
     findGh: () => "/usr/bin/gh",
+    findGit: () => "/usr/bin/git",
+    /* The checkout's remote URLs as its configuration spells them, and what
+       its own `insteadOf` makes of a shorthand. */
+    remoteUrls: async () => options.remoteUrls ?? [],
+    expandedUrl: async (_git: string, _scope: string[], spelled: string) => options.expanded?.[spelled] ?? spelled,
     exec: async (command: string, args: string[], env: Record<string, string | undefined>) => { started.push({ command, args, env }); return 0; },
     readStdin: async () => "",
     stdout: (text: string) => { out.push(text); },
@@ -123,6 +128,16 @@ test("repositories are named from slugs and GitHub URLs only", () => {
   expect(parseRepository(`${at("git", "github.com")}:acme/widgets.git`)).toBe(REPO);
   expect(parseRepository(`ssh://${at("git", "github.com")}/acme/widgets`)).toBe(REPO);
   expect(parseRepository("github.com/acme/widgets")).toBe(REPO);
+  /* The other names `gh` and git reach the same repository by: a subdomain of
+     the host, a user name, a port, an encoded path. */
+  expect(parseRepository("www.github.com/acme/widgets")).toBe(REPO);
+  expect(parseRepository("https://WWW.GitHub.com/acme/widgets/")).toBe(REPO);
+  expect(parseRepository(`https://${at("someone", "github.com")}:443/acme/widgets.git`)).toBe(REPO);
+  expect(parseRepository(`ssh://${at("git", "ssh.github.com")}:443/acme/widgets.git`)).toBe(REPO);
+  expect(parseRepository(`git+ssh://${at("git", "github.com")}/acme/widgets`)).toBe(REPO);
+  expect(parseRepository("https://github.com/acme/wid%67ets.git?x=1")).toBe(REPO);
+  expect(parseRepository("https://notgithub.com/acme/widgets")).toBeNull();
+  expect(parseRepository("github.com.example.invalid/acme/widgets")).toBeNull();
   expect(parseRepository("https://example.invalid/acme/widgets")).toBeNull();
   expect(parseRepository("acme/widgets/extra/part")).toBeNull();
   expect(parseRepository("")).toBeNull();
@@ -178,6 +193,14 @@ describe("what a gh command is", () => {
     [["api", `repos/${REPO}/pulls/5`, "-X=patch"], REPO], [["api", "--hostname", "github.com", "-XPUT", `repos/${REPO}/pulls/5/merge`], REPO],
     [["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"], null], [["api", "-XPUT", "/repos/{owner}/{repo}/pulls/5/merge"], null],
     [["api", "-XPUT", "REPOS/acme/./x/../wid%67ets//pulls/5/merge/?a=b"], REPO],
+    /* An empty flag is absent to gh: the checkout names the repository. */
+    [["pr", "merge", "5", "--repo", "", "--squash"], null], [["pr", "merge", "5", "-R", ""], null], [["pr", "create", "--repo=", "--fill"], null],
+    [["pr", "merge", "5", "--repo", REPO, "--repo", ""], null],
+    /* A pull request URL is read by its start, on any name of the host. */
+    [["pr", "merge", `${PR_URL}.`], REPO], [["pr", "merge", `${PR_URL}abc`, "-R", "acme/gadgets"], REPO],
+    [["pr", "edit", "HTTPS://www.github.com/acme/widgets/pull/5"], REPO], [["pr", "merge", "https://github.com:443/acme/wid%67ets/pull/5"], "acme/widgets"],
+    [["api", "https://api.github.com:443/repos/acme/widgets/pulls/5/merge", "-XPUT"], REPO],
+    [["api", "--hostname", "www.github.com", "-XPUT", `repos/${REPO}/pulls/5/merge`], REPO],
   ] as const)("%j is a covered kind", (args, repository) => {
     expect(classifyGh([...args])).toEqual({ kind: "app", repository });
   });
@@ -186,6 +209,9 @@ describe("what a gh command is", () => {
     [["pr", "merge", "5"]], [["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"]], [["api", "-XPATCH", "repos/{owner}/{repo}/pulls/5"]],
   ])("%j takes its repository from GH_REPO before the checkout", (args) => {
     expect(classifyGh(args, { GH_REPO: REPO })).toEqual({ kind: "app", repository: REPO });
+    /* An empty GH_REPO is absent to gh, and an empty flag falls to GH_REPO. */
+    expect(classifyGh(args, { GH_REPO: "" })).toEqual({ kind: "app", repository: null });
+    if (args[0] === "pr") expect(classifyGh([...args, "--repo", ""], { GH_REPO: REPO })).toEqual({ kind: "app", repository: REPO });
   });
 
   /* A covered kind whose repository is named but cannot be read is refused,
@@ -233,7 +259,14 @@ const OTHER_SPELLINGS = (repository: string) => [
   ["api", `https://api.github.com/repos/${repository}/pulls/5/merge`, "-X", "PUT"],
   ["api", `repos/${repository}/pulls`, "-ftitle=x", "-fhead=y", "-fbase=main"],
 ];
-const FROM_THE_CHECKOUT = [["pr", "new", "--fill"], ["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"], ["api", "-XPUT", "repos/{owner}/{repo}/pulls/5/merge"]];
+const FROM_THE_CHECKOUT = [["pr", "new", "--fill"], ["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"], ["api", "-XPUT", "repos/{owner}/{repo}/pulls/5/merge"],
+  /* A repository flag given empty, which gh reads as absent. */
+  ["pr", "merge", "5", "--repo", "", "--squash"], ["pr", "merge", "5", "-R", ""], ["pr", "create", "--repo=", "--fill"]];
+/* Names gh reduces to the same repository. */
+const REDUCED = (repository: string) => [
+  ["pr", "merge", "5", "--repo", `www.github.com/${repository}`], ["pr", "merge", `https://github.com/${repository}/pull/5.`, "--squash"],
+  ["pr", "edit", "5", "-R", `https://${at("someone", "github.com")}/${repository}.git`],
+];
 
 describe("running gh for an agent", () => {
   test("a covered write to a declared repository starts gh with the App token as its whole identity, then revokes it", async () => {
@@ -285,15 +318,17 @@ describe("running gh for an agent", () => {
        the command itself names the declared one. */
     for (const origin of [null, "acme/gadgets"]) {
       const p = ports({ credential: null, origin });
-      for (const write of OTHER_SPELLINGS(REPO)) expect(await runGh(write, p)).toBe(1);
+      for (const write of [...OTHER_SPELLINGS(REPO), ...REDUCED(REPO)]) expect(await runGh(write, p)).toBe(1);
       expect(p.started).toEqual([]);
-      expect(p.err).toHaveLength(OTHER_SPELLINGS(REPO).length);
+      expect(p.err).toHaveLength(OTHER_SPELLINGS(REPO).length + REDUCED(REPO).length);
       for (const line of p.err) expect(line).toContain(`Delegatus refused this GitHub write to ${REPO}: no GitHub App credential is available for it.`);
     }
     /* In the declared checkout, and with GH_REPO naming it from anywhere. */
-    for (const p of [ports({ credential: null }), ports({ credential: null, origin: null, env: { ...AGENT_ENV, GH_REPO: REPO } })]) {
+    /* An empty GH_REPO is absent too, and the checkout is read. */
+    for (const p of [ports({ credential: null }), ports({ credential: null, origin: null, env: { ...AGENT_ENV, GH_REPO: REPO } }), ports({ credential: null, env: { ...AGENT_ENV, GH_REPO: "" } })]) {
       for (const write of FROM_THE_CHECKOUT) expect(await runGh(write, p)).toBe(1);
       expect(p.started).toEqual([]);
+      expect(p.err).toHaveLength(FROM_THE_CHECKOUT.length);
       for (const line of p.err) expect(line).toContain(`Delegatus refused this GitHub write to ${REPO}`);
     }
   });
@@ -315,7 +350,7 @@ describe("running gh for an agent", () => {
 
   test("the same spellings aimed at an undeclared repository pass through unchanged", async () => {
     const p = ports({ credential: null, origin: "acme/gadgets" });
-    const typed = [...OTHER_SPELLINGS("acme/gadgets"), ...FROM_THE_CHECKOUT];
+    const typed = [...OTHER_SPELLINGS("acme/gadgets"), ...REDUCED("acme/gadgets"), ...FROM_THE_CHECKOUT];
     for (const args of typed) expect(await runGh(args, p)).toBe(0);
     expect(p.started).toEqual(typed.map((args) => ({ command: "/usr/bin/gh", args, env: p.env })));
     for (const [index, start] of p.started.entries()) expect(start.args).toBe(typed[index]!);
@@ -348,6 +383,58 @@ describe("running gh for an agent", () => {
     expect(p.started[0]!.env).toBe(p.env);
     expect(p.github.calls).toEqual([]);
     expect(p.err).toEqual([]);
+  });
+});
+
+describe("running git for an agent", () => {
+  const APP_URL = `${FORGE_PUSH_BASE}/`;
+  const added = (env: Record<string, string | undefined>, from: number) =>
+    Array.from({ length: Number(env.GIT_CONFIG_COUNT) - from }, (_, index) => [env[`GIT_CONFIG_KEY_${from + index}`], env[`GIT_CONFIG_VALUE_${from + index}`]]);
+  /* Spellings of the declared repository no prefix written ahead of time matches. */
+  const CASED = "https://github.com/ACME/Widgets.git";
+  const NAMED = `https://${at("someone", "github.com")}/acme/widgets.git`;
+  const SCP = `${at("git", "github.com")}:Acme/widgets.git`;
+
+  test("a push gets a rewrite to the App's URL for every remote that names a declared repository in its own spelling", async () => {
+    const env = { ...AGENT_ENV, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: "/guard" };
+    const p = ports({ env, remoteUrls: [CASED, NAMED, SCP, "https://www.github.com/acme/widgets", "https://github.com/acme/gadgets.git", "https://example.invalid/acme/widgets.git", `${APP_URL}acme/widgets.git`] });
+    const typed = ["-C", "push", "-c", "a=b", "push", "--force-with-lease=main:abc", "origin", "HEAD:refs/heads/x"];
+    expect(await runGit(typed, p)).toBe(0);
+    expect(p.started).toHaveLength(1);
+    expect(p.started[0]!.args).toBe(typed);
+    const started = p.started[0]!.env;
+    /* What the launch set stays where it was; the rewrites follow it. */
+    expect([started.GIT_CONFIG_KEY_0, started.GIT_CONFIG_VALUE_0]).toEqual(["core.hooksPath", "/guard"]);
+    expect(added(started, 1)).toEqual([
+      [`url.${APP_URL}ACME/Widgets.git.insteadOf`, CASED], [`url.${APP_URL}ACME/Widgets.git.pushInsteadOf`, CASED],
+      [`url.${APP_URL}acme/widgets.git.insteadOf`, NAMED], [`url.${APP_URL}acme/widgets.git.pushInsteadOf`, NAMED],
+      [`url.${APP_URL}Acme/widgets.git.insteadOf`, SCP], [`url.${APP_URL}Acme/widgets.git.pushInsteadOf`, SCP],
+      [`url.${APP_URL}acme/widgets.git.insteadOf`, "https://www.github.com/acme/widgets"], [`url.${APP_URL}acme/widgets.git.pushInsteadOf`, "https://www.github.com/acme/widgets"],
+    ]);
+  });
+
+  test("a URL typed on the command line, and a shorthand the checkout expands, are rewritten the same way", async () => {
+    const p = ports({ remoteUrls: ["gh:Acme/Widgets"], expanded: { "gh:Acme/Widgets": "https://github.com/Acme/Widgets" } });
+    expect(await runGit(["push", `--repo=${CASED}`, NAMED, "HEAD:refs/heads/x"], p)).toBe(0);
+    expect(added(p.started[0]!.env, 0).map(([, value]) => value)).toEqual(["gh:Acme/Widgets", "gh:Acme/Widgets", CASED, CASED, NAMED, NAMED]);
+  });
+
+  /* Each of these reaches git with the arguments and the environment object the caller had. */
+  test.each([
+    ["a fetch", ["fetch", "origin"], {}],
+    ["a commit whose message is the word", ["commit", "-m", "push"], {}],
+    ["a push with only undeclared remotes", ["push", "origin"], { remoteUrls: ["https://github.com/acme/gadgets.git", `${at("git", "github.com")}:acme/widgets-site.git`] }],
+    ["a push to a typed URL of an undeclared repository", ["push", "https://github.com/Acme/Gadgets.git", "main"], {}],
+    ["a push with nothing declared", ["push", "origin"], { env: { GH_CONFIG_DIR: OPERATOR_CONFIG }, remoteUrls: [CASED] }],
+    ["a push with another repository declared", ["push", "origin"], { env: { [FORGE_REPOSITORIES_ENV]: "acme/gadgets" }, remoteUrls: [CASED] }],
+  ] as const)("%s passes through unchanged", async (_name, args, options) => {
+    const p = ports(options as Parameters<typeof ports>[0]);
+    const typed = [...args];
+    expect(await runGit(typed, p)).toBe(0);
+    expect(p.started).toEqual([{ command: "/usr/bin/git", args: typed, env: p.env }]);
+    expect(p.started[0]!.args).toBe(typed);
+    expect(p.started[0]!.env).toBe(p.env);
+    expect(p.github.calls).toEqual([]);
   });
 });
 
