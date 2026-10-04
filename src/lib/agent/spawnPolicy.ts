@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { installMemoryHook } from "@/lib/memory/hook";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
 import { statePath } from "@/lib/configDir";
@@ -406,6 +407,7 @@ export function applyClaudeSpawnPolicy(
     providerAccount?: boolean;
     /** Installation publication settings from the launch's original env. */
     publicationEnv?: NodeJS.ProcessEnv;
+    memoryQueuePath?: string;
     profileId?: string;
     cwd?: string;
     mcpServers?: readonly string[];
@@ -445,6 +447,9 @@ export function applyClaudeSpawnPolicy(
   if (!hooks) throw new Error("Claude settings hooks must contain a JSON object");
 
   const preToolUse = withoutManagedHandlers(hooks.PreToolUse);
+  let memoryHook: ReturnType<typeof installMemoryHook> = null;
+  try { memoryHook = installMemoryHook(home, options.publicationEnv ?? process.env, options.memoryQueuePath ?? null); } catch { /* optional memory must never stop a launch */ }
+  const promptHooks = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : [];
   if (!options.allowSubagents) {
     const script = `#!/bin/sh\nprintf '%s\\n' ${shellQuote(NATIVE_SUBAGENT_DENY_MESSAGE)} >&2\nexit 2\n`;
     atomicWrite(result.hookPath, script, 0o700);
@@ -487,7 +492,8 @@ export function applyClaudeSpawnPolicy(
     ...approvalSettings,
     // Claude reapplies settings.env after startup, over the child's launch env.
     env: { ...(record(settingsWithoutMcp.env) ?? {}), ...publicationIdentity },
-    hooks: { ...hooks, PreToolUse: preToolUse },
+    hooks: { ...hooks, PreToolUse: preToolUse,
+      ...(memoryHook ? { UserPromptSubmit: [...promptHooks, { hooks: [memoryHook] }] } : {}) },
   }, null, 2) + "\n", 0o600);
   atomicWrite(result.mcpConfigPath, JSON.stringify({ mcpServers }, null, 2) + "\n", 0o600);
   return result;
