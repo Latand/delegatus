@@ -81,7 +81,7 @@ async function advanceToStage(pipelineId: string, stageId: string): Promise<Pipe
   }, `the pipeline to advance to ${stageId}`);
 }
 
-test("real pipeline launch keeps access and sandbox independent through settlement", async () => {
+test.skipIf(!isolatedHome)("real pipeline launch keeps access and sandbox independent through settlement", async () => {
   if (!isolatedHome) {
     throw new Error("authenticated Codex integration requires a ChatGPT-authenticated credential");
   }

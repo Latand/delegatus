@@ -1,3 +1,5 @@
+import { seedAccountSource } from "./accountsStoreFixture";
+import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,7 +16,7 @@ process.env.LLV_CLAUDE_HOME = path.join(sandbox, "legacy-claude");
 const { activeCodexAccountId, createManagedCodexAccount } = await import("./codex");
 const { activeClaudeAccountId, createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
 const { accountMutationRevisionForTests, withAccountMutationLock } = await import("./accountMutation");
-const { AgentRegistry } = await import("@/lib/agent/registry");
+const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { syncCompatibilityRouting } = await import("./migration/controller");
 
 function selfPidNamespace(): string | null {
@@ -23,11 +25,15 @@ function selfPidNamespace(): string | null {
 }
 
 beforeEach(() => {
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.rmSync(path.join(sandbox, "accounts"), { recursive: true, force: true });
 });
 
 afterAll(() => {
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
   if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
@@ -43,10 +49,12 @@ async function childResult(child: { exited: Promise<number>; stderr: ReadableStr
 }
 
 async function selectionRemovalRace(engine: "claude" | "codex"): Promise<void> {
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   const account = engine === "codex" ? createManagedCodexAccount("Removal target") : createManagedClaudeAccount("Removal target");
   fs.writeFileSync(path.join(account.home, engine === "codex" ? "auth.json" : ".credentials.json"), "{}", { mode: 0o600 });
-  const registry = new AgentRegistry();
+  const registry = agentRegistry();
   registry.setEngineRouting(engine, "default");
 
   const caseDir = path.join(sandbox, `remove-${engine}`);
@@ -69,8 +77,8 @@ async function selectionRemovalRace(engine: "claude" | "codex"): Promise<void> {
     cmd: [process.execPath, "-e", `
       const fs = await import("node:fs");
       const manager = await import(${JSON.stringify(managerPath)});
-      const { AgentRegistry } = await import(${JSON.stringify(registryPath)});
-      const registry = new AgentRegistry();
+      const { agentRegistry } = await import(${JSON.stringify(registryPath)});
+      const registry = agentRegistry();
       const routing = {
         engineRouting(engine) { return registry.engineRouting(engine); },
         setEngineRouting(engine, accountId) {
@@ -123,7 +131,7 @@ async function selectionRemovalRace(engine: "claude" | "codex"): Promise<void> {
 }
 
 test("an aligned compatibility sync skips transaction admission", () => {
-  const registry = new AgentRegistry();
+  const registry = agentRegistry();
   const revision = accountMutationRevisionForTests();
 
   syncCompatibilityRouting(registry);
@@ -282,7 +290,7 @@ test("overlapping selections keep catalog and launch routing aligned across proc
 async function controllerSelectionRace(): Promise<void> {
   const account = createManagedCodexAccount("Controller race");
   fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
-  const registry = new AgentRegistry();
+  const registry = agentRegistry();
   registry.setEngineRouting("codex", "default");
   const caseDir = path.join(sandbox, "controller-sync");
   fs.rmSync(caseDir, { recursive: true, force: true });
@@ -302,9 +310,9 @@ async function controllerSelectionRace(): Promise<void> {
   const controller = Bun.spawn({
     cmd: [process.execPath, "-e", `
       const fs = await import("node:fs");
-      const { AgentRegistry } = await import(${JSON.stringify(registryPath)});
+      const { agentRegistry } = await import(${JSON.stringify(registryPath)});
       const { syncCompatibilityRouting } = await import(${JSON.stringify(controllerPath)});
-      const registry = new AgentRegistry();
+      const registry = agentRegistry();
       const snapshot = registry.readOnlySnapshot.bind(registry);
       registry.readOnlySnapshot = () => {
         const value = snapshot();
@@ -340,6 +348,8 @@ async function controllerSelectionRace(): Promise<void> {
 }
 
 async function persistedLoginFence(engine: "claude" | "codex"): Promise<void> {
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   const account = engine === "codex" ? createManagedCodexAccount("Pending login") : createManagedClaudeAccount("Pending login");
   fs.writeFileSync(path.join(account.home, engine === "codex" ? "auth.json" : ".credentials.json"), "{}", { mode: 0o600 });
@@ -381,14 +391,14 @@ async function persistedLoginFence(engine: "claude" | "codex"): Promise<void> {
   const now = Date.now();
   withAccountMutationLock(() => {
     if (engine === "codex") {
-      fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "codex-login-attempts.json"), JSON.stringify({
+      seedAccountSource("codex-login-attempts.json", {
         version: 1,
         attempts: {
           [account.home]: { accountId: account.id, generation: 1, state: "pending", startedAt: now, updatedAt: now, reason: null },
         },
-      }));
+      });
     } else {
-      fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "claude-auth-operations.json"), JSON.stringify([{
+      seedAccountSource("claude-auth-operations.json", [{
         operationId: "other-process-login",
         accountId: account.id,
         phase: "awaiting_code",
@@ -397,7 +407,7 @@ async function persistedLoginFence(engine: "claude" | "codex"): Promise<void> {
         generation: 1,
         startedAt: new Date(now).toISOString(),
         deadlineAt: new Date(now + 60_000).toISOString(),
-      }]));
+      }]);
     }
   });
   fs.writeFileSync(releasePath, "release");

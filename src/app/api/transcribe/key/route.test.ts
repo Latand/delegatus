@@ -31,7 +31,7 @@ function configHome(): string {
   roots.push(root);
   setEnv("XDG_CONFIG_HOME", root);
   for (const name of SAVED.slice(1)) setEnv(name, undefined);
-  return path.join(root, "agent-log-viewer");
+  return path.join(root, "delegatus");
 }
 
 afterEach(() => {

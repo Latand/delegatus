@@ -249,7 +249,8 @@ test("issue 626 refresh after turn completion retains both handoffs until adopte
     }
 
     const refreshed = installSnapshot(journal.snapshot());
-    const liveTurn = refreshed.sessions[fixture.identity.conversationId]?.liveTurn;
+    expect(refreshed.sessions[fixture.identity.conversationId]?.liveTurn).toBeNull();
+    const liveTurn = journal.sessionState(fixture.identity.conversationId)?.liveTurn;
     expect(refreshed.sessions[fixture.identity.conversationId]).toMatchObject({
       revision: 9,
       turn: "idle",

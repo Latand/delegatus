@@ -91,6 +91,7 @@ function writeFeed(lines: string[], mode = 0o600): string {
   ensureTelegramStateDir(true);
   const feedFile = telegramIncomingFeedPath(CREDENTIAL_A);
   fs.writeFileSync(feedFile, lines.join("\n") + "\n", { mode });
+  fs.chmodSync(feedFile, mode);
   return feedFile;
 }
 

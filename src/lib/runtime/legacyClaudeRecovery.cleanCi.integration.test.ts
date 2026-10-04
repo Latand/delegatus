@@ -9,7 +9,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { createTranscriptHostObserver, reconcileObservedTranscriptHosts } from "@/lib/agent/transcriptHost";
-import { viewerMcpBindings } from "@/lib/mcp/bindings";
+import { sendDownstreamKey, viewerMcpBindings } from "@/lib/mcp/bindings";
 import type { FileEntry } from "@/lib/types";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -27,6 +27,7 @@ import { structuredContent } from "./structuredContent";
 function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
     snapshot: async () => journal.snapshot(),
+    readSession: async (identity) => journal.readSession(identity),
     events: async (after) => journal.replay(after),
     waitEvents: async (after) => journal.replay(after),
     append: async (event) => journal.append(event),
@@ -85,6 +86,7 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
   const messageSha256 = crypto.createHash("sha256").update(message).digest("hex");
   const profile = emptyLaunchProfile({
     cwd: workspace,
+    title: "Verify legacy recovery",
     model: "claude-fable-fixture",
     effort: "high",
     permissionMode: "bypassPermissions",
@@ -436,7 +438,7 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
     expect(mcpBodies).toHaveLength(2);
     expect(mcpBodies).toEqual(mcpBodies.map(() => expect.objectContaining({
       conversationId,
-      clientMessageId: mcpClientRequestId,
+      clientMessageId: sendDownstreamKey(mcpClientRequestId),
       text: message,
       images: [],
     })));
@@ -466,7 +468,7 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
     expect(brokerEventStore.load(sessionId).filter((event) => event.kind === "delta" && event.text === "RECOVERY_OK"))
       .toHaveLength(1);
     const mcpProbe = Object.values(registry.snapshot().heldDeliveries)
-      .find((delivery) => delivery.clientMessageId === mcpClientRequestId);
+      .find((delivery) => delivery.clientMessageId === sendDownstreamKey(mcpClientRequestId));
     expect(mcpProbe).toMatchObject({ state: "delivered", text: "", error: null });
     expect(registry.snapshot().heldDeliveries[retrySource.id]).toMatchObject({ state: "failed", error: "dead-host" });
     expect(registry.snapshot().heldDeliveries[historicalNoClaim.id]).toMatchObject({ state: "failed", error: "no-claim" });
@@ -490,7 +492,7 @@ test("production acceptance recovers a lifecycle-busy legacy Fable tail from a s
     expect(mcpBodies).toHaveLength(3);
     expect(mcpBodies).toEqual(mcpBodies.map(() => expect.objectContaining({
       conversationId,
-      clientMessageId: mcpClientRequestId,
+      clientMessageId: sendDownstreamKey(mcpClientRequestId),
       text: message,
       images: [],
     })));

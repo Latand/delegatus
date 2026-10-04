@@ -1827,7 +1827,7 @@ function ViewerApp() {
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       <LinkedSettingsHost />
-      <TelemetrySettingsHost />
+      <TelemetrySettingsHost project={project === OVERVIEW ? undefined : project} />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card

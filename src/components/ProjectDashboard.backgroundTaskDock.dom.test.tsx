@@ -21,6 +21,7 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
+import { parentlessBackgroundTasks } from "@/components/projectModel";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
@@ -246,18 +247,17 @@ async function mountedOrigin(files: FileEntry[]): Promise<{ host: HTMLElement; o
 }
 
 test("two live parentless background tasks draw no strip and leave the board origin where it was", async () => {
-  const withTasks = await mountedOrigin([conversation(), backgroundTask("aaaa1111"), backgroundTask("bbbb2222")]);
+  const files = [conversation(), backgroundTask("aaaa1111"), backgroundTask("bbbb2222")];
+  const withTasks = await mountedOrigin(files);
 
   /* Nothing above the board names them, and the board itself draws neither of
-     them — no strip, full-width or otherwise. They keep their rows in the
-     quiet strips and the switchboard BELOW the board, which is what «reachable
-     from the sidebar or the file list» means here, and which costs the board
-     no space. */
+     them — no strip, full-width or otherwise. The sidebar and file list
+     own their desktop navigation, which costs the board no space. */
   expect(withTasks.origin.join("\n")).not.toContain("Background task");
   const board = withTasks.host.querySelector("[data-kanban-board]")!;
   expect(board.textContent ?? "").not.toContain("Background task");
-  /* Not a vacuous reading: the dashboard did receive them. */
-  expect(withTasks.host.textContent ?? "").toContain("Background task aaaa1111");
+  /* The production selector recognizes both input records as background tasks. */
+  expect(parentlessBackgroundTasks(files, PROJECT).map(file => file.path)).toEqual(files.slice(1).map(file => file.path));
 
   /* The origin itself: identical to a board that never had them. */
   PROJECT = `${PROJECT}-clean`;
