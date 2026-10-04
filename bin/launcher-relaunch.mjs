@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { dispatchActivityVersion, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
+import { dispatchActivityVersion, headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
@@ -243,27 +243,44 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
   let pendingRecovery = trial?.state === "preflight" || trial?.state === "starting" && trial.stopped === true;
   if (pendingRecovery) directTrial = true;
   if (!trial) {
-    try {
-      const request = JSON.parse(readFileSync(paths.request, "utf8"));
-      const apply = JSON.parse(readFileSync(join(dirname(paths.request), "apply.json"), "utf8"));
-      const owner = JSON.parse(readFileSync(paths.record, "utf8"))?.launcher;
-      if (request.role === "relaunch" && apply.state === "switching" && request.requestId === apply.requestId
-        && request.target === apply.target && request.target === release.sha && request.rollbackPointer === apply.rollbackPointer
-        && apply.releasePointer === paths.releasePointer && request.requestedAt === apply.startedAt
-        && owner?.pid === apply.launcherPid && owner.startIdentity === apply.launcherIdentity
-        && (request.rollbackPointer === null || typeof request.rollbackPointer === "string")) {
-        const prior = request.rollbackPointer === null ? installRoot : JSON.parse(request.rollbackPointer).dir;
-        if (typeof prior !== "string" || !existsSync(join(prior, "bin", "cli.mjs"))) throw new Error("Missing prior launcher");
-        // The request still owns the handoff if a crash preceded its durable
-        // trial. A cold process rolls it back before starting any candidate.
-        trial = { requestId: request.requestId, target: request.target, rollbackPointer: request.rollbackPointer,
-          previousEntry: join(prior, "bin", "cli.mjs"), state: "starting", at: apply.startedAt };
-        atomic(trialFile, JSON.stringify(trial) + "\n");
-        rmSync(paths.request, { force: true }); directTrial = true; pendingRecovery = true;
-      }
-    } catch (error) {
-      if (trial) throw error;
-      // No matching durable apply means no authority to consume a request.
+    const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
+    const applyFile = join(dirname(paths.request), "apply.json");
+    const apply = read(applyFile);
+    if (apply && ["building", "ready", "switching"].includes(apply.state) && !apply.externalRestart) {
+      const request = read(paths.request);
+      const owner = read(paths.record)?.launcher;
+      if (typeof apply.requestId !== "string" || !/^[0-9a-f]{40}$/.test(apply.target)
+        || apply.releasePointer !== paths.releasePointer || !apply.launcherIdentity
+        || owner?.pid !== apply.launcherPid || owner.startIdentity !== apply.launcherIdentity
+        || !(apply.rollbackPointer === null || typeof apply.rollbackPointer === "string")
+        || request && (request.role !== "relaunch" || request.requestId !== apply.requestId || request.target !== apply.target
+          || request.rollbackPointer !== apply.rollbackPointer || request.requestedAt !== apply.startedAt))
+        throw new Error("Cold recovery cannot verify the accepted apply owner; custody is retained.");
+      const pointer = read(paths.releasePointer);
+      if (pointer && pointer.sha !== apply.target && readFileSync(paths.releasePointer, "utf8") !== apply.rollbackPointer)
+        throw new Error("Another release owns the pointer; accepted custody is retained.");
+      const priorPointer = readPointer(apply.rollbackPointer);
+      const prior = apply.rollbackPointer === null ? installRoot : priorPointer?.dir;
+      if (typeof prior !== "string" || !existsSync(join(prior, "bin", "cli.mjs")))
+        throw new Error("Cold recovery cannot verify the prior launcher; custody is retained.");
+      const previousSha = priorPointer?.sha ?? headRevision(prior);
+      if (priorPointer?.kind === "package" || apply.rollbackPackage) {
+        const version = read(join(prior, "package.json"))?.version;
+        if (version !== (priorPointer?.version ?? apply.rollbackPackage?.version))
+          throw new Error("Cold recovery cannot verify the prior package; custody is retained.");
+      } else if (!previousSha || headRevision(prior) !== previousSha
+        || apply.rollbackWebRevision !== previousSha.slice(0, 7) || apply.rollbackHostRevision !== previousSha.slice(0, 7))
+        throw new Error("Cold recovery cannot verify the prior serving release; custody is retained.");
+      // The earliest accepted apply is authoritative even before any request
+      // exists. Its real request and original owner bind the recovery trial.
+      trial = { requestId: apply.requestId, target: apply.target, rollbackPointer: apply.rollbackPointer,
+        previousEntry: join(prior, "bin", "cli.mjs"), state: "starting", at: apply.startedAt };
+      atomic(trialFile, JSON.stringify(trial) + "\n");
+      atomic(join(dirname(paths.request), "auto-drain.json"), JSON.stringify({ id: apply.requestId, target: apply.target,
+        since: apply.startedAt, until: Date.now() + 600000, persistent: true }) + "\n");
+      atomic(applyFile, JSON.stringify({ ...apply, state: "switching", switchedAt: apply.switchedAt ?? new Date().toISOString() }) + "\n");
+      if (request) rmSync(paths.request, { force: true });
+      directTrial = true; pendingRecovery = true;
     }
   }
   return {
@@ -370,6 +387,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         ? { kind: "fell-back", revision: trial.target.slice(0, 7), detail: trial.detail }
         : null;
       record.set("launcher", { state: "healthy", requestId: trial?.requestId ?? null, error });
+      if (trial) atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: trial.requestId,
+        target: trial.target, state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
       if (trial) rmSync(trialFile, { force: true });
       trial = null;
       delete process.env.LLV_LAUNCHER_TRIAL;

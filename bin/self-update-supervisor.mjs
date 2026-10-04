@@ -290,7 +290,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
           if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
         } catch { /* already consumed */ }
       }
-      if (!retain && !isStopping() && request.autoGateId) {
+      if (!retain && !isStopping() && request.autoGateId && request.role !== "relaunch") {
         try {
           if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
         } catch { /* already removed */ }

@@ -2,6 +2,7 @@ import { recoverCheckoutDeployments, settleCheckoutDeployment } from "./deployme
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { endRestartGate, restartGateFile } from "./restartGate";
 import { releaseDrain, writeDrain } from "./drain";
 import { launcherControlFile, publishLauncherRequest, type LauncherRecord } from "./launcher";
 export interface ApplyIntent {
@@ -63,7 +64,7 @@ export class ApplyController {
     } catch (error) {
       this.restoreUntaken(record);
       this.patch({ state: "failed", detail: "The launcher request could not be published" });
-      releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId);
+      this.releaseAdmission(record, intent);
       throw error;
     }
   }
@@ -76,7 +77,7 @@ export class ApplyController {
     const trialFile = launcherControlFile(record.requestFile, "trial");
     let trial: { requestId?: string; target?: string; rollbackPointer?: string | null; state?: string; detail?: string; previousEntry?: string } | null = null;
     try { trial = JSON.parse(readFileSync(trialFile, "utf8")); } catch { /* no readable trial */ }
-    const coherentRollback = (): boolean => {
+    const coherentRollback = (requirePointer = true): boolean => {
       if (!hostHealthy || (record.launcher.state && record.launcher.state !== "healthy")
         || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy") return false;
       let rollbackRevision: string | null = null;
@@ -93,7 +94,7 @@ export class ApplyController {
         && intent.rollbackWebRevision === null && intent.rollbackHostRevision === null) {
         try { packageRestored = JSON.parse(readFileSync(join(intent.rollbackPackage.root, "package.json"), "utf8")).version === intent.rollbackPackage.version; } catch { /* Missing or changed package cannot settle. */ }
       }
-      return pointerRestored && webRevision === hostRevision && !!(packageRestored || webRevision && hostRevision)
+      return (!requirePointer || pointerRestored) && (!record.launcher.revision || record.launcher.revision.slice(0, 7) === webRevision) && webRevision === hostRevision && !!(packageRestored || webRevision && hostRevision)
         && record.web.revision === webRevision && record.runtimeHost.revision === hostRevision;
     };
     // A first upgrade may return to a launcher predating the trial protocol.
@@ -106,7 +107,7 @@ export class ApplyController {
       && record.web.state === "healthy" && record.runtimeHost.state === "healthy") {
       if (coherentRollback()) {
         this.patch({ state: "failed", rolledBack: true, detail: trial.detail ?? "The replacement rolled back to the previous release" });
-        releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); rmSync(trialFile, { force: true }); return "failed";
+        this.releaseAdmission(record, intent); rmSync(trialFile, { force: true }); return "failed";
       }
     }
     const externalUntaken = intent.state === "switching" && intent.externalRestart && intent.switchedAt
@@ -119,12 +120,14 @@ export class ApplyController {
       && record.launcher.requestId !== intent.requestId && !existsSync(record.requestFile)
       && !existsSync(launcherControlFile(record.requestFile, "trial"));
     if ((result?.requestId === intent.requestId && result.state === "rejected") || untaken || externalUntaken) {
-      // Restore only the pointer owned by this untaken transaction.
+      // A pointer restore is allowed only when the verified source already
+      // serves coherently. A cold candidate needs launcher recovery first.
+      if (!coherentRollback(false)) return null;
       this.restoreUntaken(record);
       if (!coherentRollback()) return null;
       if (externalUntaken && trial?.requestId === intent.requestId) rmSync(trialFile, { force: true });
       this.patch({ state: "failed", admissionRefused: true, detail: result?.detail ?? "The launcher did not take the durable update request" });
-      releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
+      this.releaseAdmission(record, intent); return "failed";
     }
     const trialProtocol = record.launcher.relaunch === 1 || record.launcher.protocol === "delegatus-launcher-relaunch-v1";
     const bootstrap = intent.state === "ready" && trialProtocol && record.launcher.state === "healthy" && hostHealthy
@@ -135,17 +138,24 @@ export class ApplyController {
     if (error?.kind === "fell-back") {
       if (!coherentRollback()) return null;
       this.patch({ state: "failed", rolledBack: true, detail: error.detail });
-      releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
+      this.releaseAdmission(record, intent); return "failed";
     }
     if (error && record.launcher.state === "healthy") {
+      if (!coherentRollback(false)) return null;
       this.restoreUntaken(record);
       if (!coherentRollback()) return null;
       const detail = error.kind === "message" ? error.text : "The launcher refused the replacement";
       this.patch({ state: "failed", detail });
-      releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "failed";
+      this.releaseAdmission(record, intent); return "failed";
     }
     if (!hostHealthy || record.launcher.state !== "healthy" || error || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy"
+      || record.launcher.revision && record.launcher.revision !== intent.target
       || record.web.revision !== intent.target.slice(0, 7) || record.runtimeHost.revision !== intent.target.slice(0, 7)) return null;
-    this.patch({ state: "done" }); releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId); return "done";
+    this.patch({ state: "done" }); this.releaseAdmission(record, intent); return "done";
   }
+  private releaseAdmission(record: LauncherRecord, intent: ApplyIntent): void {
+    releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId);
+    if (intent.autoGateId) endRestartGate(restartGateFile(record.requestFile), intent.autoGateId);
+  }
+
 }
