@@ -11,6 +11,8 @@ import { probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
+import "./envAlias.mjs";
+import { restoreLauncherCredentials } from "./launcher-credentials.mjs";
 import { lockLauncherStartup } from "./launcher-lock.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
@@ -27,6 +29,7 @@ function atomic(file, value) {
    supervisor alive after reporting a failed upgrade to the terminal. */
 async function terminalBootstrap(encoded, nextEntry, args) {
   const plan = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  restoreLauncherCredentials(plan.root);
   const name = basename(plan.requestFile);
   if (!/^request(?:-[^/\\]+)?\.json$/.test(name)) throw new Error("Invalid launcher request filename");
   const directory = dirname(plan.requestFile);
@@ -70,7 +73,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   let loads;
   try {
     loads = spawnSync(process.execPath, [...process.execArgv, nextEntry, "--version"], { cwd: dirname(dirname(nextEntry)), timeout: 30000, stdio: "ignore",
-      env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch,
+      env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch, LLV_LAUNCHER_CREDENTIAL_HANDOFF: "0",
         LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_INSTALL_ROOT: plan.root, LLV_LAUNCHER_CHECKOUT: plan.root } }).status === 0;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
   const rollback = detail => {
@@ -309,7 +312,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
           const child = spawn(process.execPath, [...process.execArgv, nextEntry, "--version"], {
             cwd: next.dir, stdio: "ignore",
             env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"),
-              XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch,
+              XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch, LLV_LAUNCHER_CREDENTIAL_HANDOFF: "0",
               LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot },
           });
           preflightChild = child;

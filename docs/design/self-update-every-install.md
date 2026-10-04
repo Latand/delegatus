@@ -378,3 +378,38 @@ Never use 8898 or the operator's state.
 **Notes:**
 - All host checks were read-only. The only things executed were two Bun `execve` probes in `$TMPDIR`; no Delegatus process was touched.
 - The EADDRINUSE teardown race (`cli.mjs:482-516`) and the unprotected launcher release in prune are real defects today. P1 and P2 fix them.
+
+
+## Protected terminal credential custody
+
+An Update prerequisite with an effective access key persists that exact key in
+`<state>/launcher-custody-<installId>/environment.json`. The command carries only
+`LLV_LAUNCHER_CREDENTIAL_HANDOFF=1`, alongside its existing nonsecret context.
+The canonical install root and its filesystem identity are checked in a separate
+private `identity.json` before the credential file is opened. `DELEGATUS_TOKEN`
+uses the entrypoints' existing alias precedence. The new CLI reads custody before
+pointer selection; the terminal bootstrap reads it before trials, probes or children.
+Rollback and cold recovery retain the same record and key.
+
+POSIX custody requires current-user ownership, directories with mode 0700,
+regular single-link files with mode 0600, descriptor identity checks and
+`O_NOFOLLOW`. Windows uses the current Windows SID and a protected NTFS DACL
+with one FullControl grant to that SID, verified through PowerShell `Get-Acl`;
+creation uses `Set-Acl` before writing any credential. Every reparse point is
+refused. Existing unsafe ACLs or modes are never repaired automatically.
+A foreign install identity, reused root, partial record or conflicting key refuses
+the handoff. The Update surface then gives a storage prerequisite without a command;
+the existing launcher remains running with its access gate intact.
+
+The same custody includes the effective `LLV_PUBLIC_HOST`, `LLV_TS_HOST` and
+`LLV_TS_URL`, which participate in origin admission and phone access. Team,
+operator and internal-service authority are already durable under the carried
+state/config roots. The Telegram connector has its own provisioned credential
+and refuses startup without it. Client-only MCP control credentials and provider
+credentials are outside this install's HTTP perimeter. No new key is minted and
+no browser state is changed. An install with no key and no custody behaves as before.
+
+Windows continues to apply each built update from its terminal because it has
+no launcher exec capability. Both localized instructions and the shared capture
+case describe that repeated prerequisite. Rendered evidence for the changed copy
+is pending an independent build of the published head.

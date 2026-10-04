@@ -1536,8 +1536,13 @@ async function checkoutLauncher() {
   await main();
 }
 
-const selectedLauncher = releaseLauncher();
 try {
+  const custodyModule = join(cliDir, "launcher-credentials.mjs");
+  if (existsSync(custodyModule)) {
+    const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
+    restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir));
+  } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
+  const selectedLauncher = releaseLauncher();
   if (!selectedLauncher || !(await handOffLauncher(selectedLauncher))) await checkoutLauncher();
 } catch (error) {
   if (relaunch?.hasTrial()) await relaunch.failed(error instanceof Error ? error.message : String(error));

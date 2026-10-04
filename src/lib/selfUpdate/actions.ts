@@ -7,6 +7,7 @@ import { headOf, ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
 import { sameProcess } from "./pid";
+import { prepareLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 
 const quote = (text: string) => `\u0027${text.replaceAll("\u0027", "\u0027\\\u0027\u0027")}\u0027`;
 export function userUnit(cgroup: string): string | null {
@@ -56,7 +57,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   const shellQuote = (value: string) => windows ? `'${value.replaceAll("'", "''")}'` : quote(value);
   // State custody and config belong to the install even in a clean terminal.
   // Explicit allowlisting keeps credentials out of the displayed command.
-  const context = Object.fromEntries(["HOME", "LLV_STATE_DIR", "XDG_CONFIG_HOME"].flatMap(name => {
+  const context: Record<string, string> = Object.fromEntries(["HOME", "LLV_STATE_DIR", "XDG_CONFIG_HOME"].flatMap(name => {
     const value = env[name as keyof typeof env];
     return value ? [[name, value]] : [];
   }));
@@ -127,10 +128,27 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
       }
     }
     const unit = userUnit(ports.cgroup(decision.record.launcher.pid));
+    if (!unit) {
+      try {
+        if (prepareLauncherCredentials(root, env)) {
+          const entry = command.includes("--terminal") ? join(next.dir, "bin", "launcher-credentials.mjs") : join(root, "bin", "launcher-credentials.mjs");
+          if (!read(entry).includes("delegatus-launcher-credential-custody-v1")) throw new Error("prerequisite");
+          command = withContext(command, { LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" });
+        }
+      } catch { return { id: "secure-handoff", button: false }; }
+    }
     return unit ? { id: "restart-service", button: true, unit }
       : { id: "restart-terminal", button: false, command, ...(windows ? { terminalEveryUpdate: true } : {}) };
   }
   const unit = serviceFor(root);
+  if (!unit) {
+    try {
+      if (prepareLauncherCredentials(root, env)) {
+        if (!read(join(root, "bin", "launcher-credentials.mjs")).includes("delegatus-launcher-credential-custody-v1")) throw new Error("prerequisite");
+        command = withContext(command, { LLV_LAUNCHER_CREDENTIAL_HANDOFF: "1" });
+      }
+    } catch { return { id: "secure-handoff", button: false }; }
+  }
   return unit ? { id: "start-service", button: true, unit } : { id: "start-launcher", button: false, command };
 }
 export interface ServiceRecovery { file: string; entry: string; bun: string }

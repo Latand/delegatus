@@ -153,4 +153,7 @@ jobs:
           LLV_STATE_DIR: ${{ runner.temp }}\llv-state
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
-        run: bun test bin/launcher-relaunch.test.ts
+        run: >
+          bun test
+          bin/launcher-relaunch.test.ts
+          bin/launcher-credentials.test.ts

@@ -84,7 +84,7 @@ test.each(["linux", "win32"] as const)("terminal context escapes state/config an
   const state = "/srv/state ' $(literal); spaced";
   const config = "/srv/config ' $(literal); spaced";
   const action = await installAction({ mode: "checkout", record } as never, {
-    cgroup: () => "", ready: () => true, platform, env: { HOME: "/srv/fixture home", LLV_STATE_DIR: state, XDG_CONFIG_HOME: config, LLV_TOKEN: "synthetic-secret" } as never,
+    cgroup: () => "", ready: () => true, platform, env: { HOME: "/srv/fixture home", LLV_STATE_DIR: state, XDG_CONFIG_HOME: config } as never,
   });
   expect(action?.command).toContain(platform === "win32" ? "$env:HOME=" : "HOME=");
   expect(action?.command).toContain("LLV_STATE_DIR");
@@ -93,4 +93,10 @@ test.each(["linux", "win32"] as const)("terminal context escapes state/config an
   expect(action?.command).not.toContain("LLV_TOKEN");
   const escaped = platform === "win32" ? state.replaceAll("'", "''") : state.replaceAll("'", "'\\''");
   expect(action?.command).toContain(escaped);
+});
+
+test.each(["linux", "win32"] as const)("an env-only gate with unavailable private storage refuses its command: %s", async platform => {
+  const action = await installAction({ mode: "unsupported", record: null, reason: "no-launcher", installRoot: "/srv/nonexistent-fixture" },
+    { cgroup: () => "", ready: () => false, platform, env: { LLV_TOKEN: "synthetic-key" } });
+  expect(action).toEqual({ id: "secure-handoff", button: false });
 });

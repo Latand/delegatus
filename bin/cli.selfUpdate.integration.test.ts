@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, expect, test } from "bun:test";
@@ -93,7 +93,7 @@ process.on("SIGTERM", stop);
 `;
 
 const STUB_HOST = `
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 const socketPath = process.env.LLV_RUNTIME_HOST_SOCKET;
@@ -130,7 +130,7 @@ function install(options: { oldSupervisor?: boolean; oldServerRuntime?: boolean;
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs", "launcher-credentials.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -1669,18 +1669,20 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   const env = { ...fixture.env };
   delete env.LLV_STATE_DIR;
   delete env.XDG_CONFIG_HOME;
+  delete env.LLV_TOKEN;
+  delete env.DELEGATUS_TOKEN;
   env.HOME = path.join(fixture.root, "terminal-home");
   mkdirSync(env.HOME, { recursive: true });
   return env;
 }
 
-test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIGINT"] as const).flatMap(signal => (["pending", "admitting", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
+test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["pending", "admitting", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
   const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
   const { idleUpdate } = await import("../src/lib/selfUpdate/types");
-  const fixture = install();
+  const { f: fixture, key } = await protectedInstall("checkout", "LLV_TOKEN");
   const admissionMarker = path.join(fixture.root, "admission-entered");
   if (boundary === "admitting") {
     const next = path.join(fixture.checkout, "node_modules", ".bin", "next");
@@ -1698,6 +1700,11 @@ test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIG
   }
   const running = await start(fixture);
   const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const { installAction } = await import("../src/lib/selfUpdate/actions");
+  const recovery = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: fixture.checkout },
+    { cgroup: () => "", ready: () => false, env: { ...fixture.env, PORT: String(running.port) } });
+  expect(recovery?.id).toBe("start-launcher");
+  await perimeterRemains(running.port, key);
   const candidate = release(fixture, "crash-preflight");
   const marker = path.join(candidate.dir, "preflight-entered");
   const entry = path.join(candidate.dir, "bin", "cli.mjs");
@@ -1736,9 +1743,11 @@ test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIG
   for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");
   await until(() => !isAlive(before.web.pid!) && !isAlive(before.runtimeHost.pid!));
   await Bun.sleep(2200);
-  const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(running.port)], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" }); children.add(child);
+  const child = spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: "ignore" }); children.add(child);
   const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
-  expect(await socketAnswers(after.socket)).toBe(true); expect(await served(running.port)).toBe(fixture.checkout);
+  expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);
+  const page = await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(2000) });
+  expect(await page.text()).toBe(fixture.checkout);
   const service = new SelfUpdateService({
     now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
     mode: async () => ({ mode: "checkout", reason: null, record: after as never }), check: async () => ({ ok: false, error: "fixture", installed: null }),
@@ -1801,3 +1810,96 @@ test.each(["restart-terminal", "start-launcher"] as const)("the actual %s comman
   expect(webEnvironment).toContain(`XDG_CONFIG_HOME=${fixture.env.XDG_CONFIG_HOME}`);
   expect(webEnvironment).toContain(`LLV_STATE_DIR=${fixture.state}`);
 }, 45_000);
+
+// Compile the actual perimeter into the fixture. Launcher children serve it on
+// their own listener; no copied authentication predicate can hide a lost key.
+async function protectedInstall(shape: "checkout" | "package", alias: "LLV_TOKEN" | "DELEGATUS_TOKEN") {
+  const f = install();
+  const bundle = await Bun.build({ entrypoints: [path.resolve("src/proxy.ts")], target: "bun", external: ["next/server"] });
+  if (!bundle.success) throw new Error("Production perimeter fixture did not compile");
+  writeFileSync(path.join(f.checkout, "dist", "perimeter.mjs"), await bundle.outputs[0]!.text());
+  symlinkSync(path.resolve("node_modules/next"), path.join(f.checkout, "node_modules/next"), "dir");
+  const server = `
+    import { proxy } from "../../dist/perimeter.mjs";
+    import { NextRequest } from "next/server";
+    const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT), fetch(request) {
+      const result = proxy(new NextRequest(request));
+      if (result.headers.get("x-middleware-next") !== "1") return result;
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });
+      return new Response(process.cwd());
+    } });
+    const stop = () => { server.stop(true); process.exit(0); };
+    process.on("SIGTERM", stop); process.on("SIGINT", stop);
+  `;
+  writeFileSync(path.join(f.checkout, "node_modules/.bin/next"), server);
+  if (shape === "package") {
+    mkdirSync(path.join(f.checkout, "dist/standalone"));
+    writeFileSync(path.join(f.checkout, "dist/standalone/server.js"), server.replace("../../dist/perimeter.mjs", "../perimeter.mjs"));
+  }
+  git(f.checkout, "add", "-f", "."); git(f.checkout, "commit", "-m", "production perimeter fixture");
+  f.first = git(f.checkout, "rev-parse", "HEAD");
+  const candidate = release(f, "private-terminal-candidate");
+  if (shape === "package") {
+    renameSync(path.join(f.checkout, ".git"), path.join(f.root, "saved-git"));
+    writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ type: "module", version: "0.0.1" }));
+  }
+  const key = randomBytes(32).toString("hex");
+  delete f.env.LLV_TOKEN; delete f.env.DELEGATUS_TOKEN;
+  f.env[alias] = key;
+  return { f, candidate, key };
+}
+async function perimeterRemains(port: number, key: string) {
+  for (const route of ["/api/files", "/api/runtime/deployments", "/api/mcp"]) {
+    for (const [credential, status] of [[null, 403], ["wrong-synthetic-key", 403], [key, 200]] as const) {
+      const response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: credential ? { authorization: `Bearer ${credential}` } : {}, signal: AbortSignal.timeout(2000) });
+      // Keep expectations boolean: a failed assertion must never print a key.
+      expect(response.status === status).toBe(true);
+      expect((await response.text()).includes(key)).toBe(false);
+    }
+  }
+}
+for (const shape of ["checkout", "package"] as const) for (const alias of ["LLV_TOKEN", "DELEGATUS_TOKEN"] as const)
+for (const actionId of ["start-launcher", "restart-terminal"] as const) for (const rollback of [false, true])
+test(`private terminal custody ${shape}/${alias}/${actionId}, rollback=${rollback}`, async () => {
+  const { installAction } = await import("../src/lib/selfUpdate/actions");
+  const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { f, candidate, key } = await protectedInstall(shape, alias);
+  const running = await start(f);
+  const before = await until(() => { const r = readRecord(f.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  await perimeterRemains(running.port, key);
+  const apply = new ApplyController(path.dirname(before.requestFile));
+  apply.begin(before as never, candidate.sha, "operator"); apply.patch({ state: "ready", externalRestart: true });
+  writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, ...(shape === "package" ? { kind: "package", baseVersion: "0.0.0", version: "0.0.1" } : { checkoutHead: f.first }) }));
+  if (rollback) writeFileSync(path.join(candidate.dir, "bin/cli.mjs"), 'throw new Error("synthetic load failure");\n' + readFileSync(path.join(candidate.dir, "bin/cli.mjs"), "utf8").replace(/^#![^\n]*\n/, ""));
+  const decision = actionId === "restart-terminal"
+    ? { mode: shape, reason: null, record: { ...before, launcher: { ...before.launcher, relaunch: undefined } } }
+    : { mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.checkout };
+  const action = await installAction(decision as never, { cgroup: () => "", ready: () => true, argv: () => [], env: { ...f.env, PORT: String(running.port) } });
+  expect(action?.id).toBe(actionId);
+  expect(Boolean(action?.command?.includes(key))).toBe(false);
+  const clean = cleanTerminalEnv(f);
+  expect(clean.LLV_TOKEN === undefined && clean.DELEGATUS_TOKEN === undefined).toBe(true);
+  const exited = new Promise(resolve => running.child.once("exit", resolve));
+  if (actionId === "start-launcher" && rollback) {
+    // A real admitted request survives a killed launcher. The cold entrypoint
+    // must roll it back before serving, using its original owner and request.
+    process.kill(before.launcher.pid, "SIGSTOP"); apply.send(before as never);
+    running.child.kill("SIGKILL"); await exited;
+    const { isAlive } = await import("../src/lib/selfUpdate/pid");
+    for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");
+    await until(() => !isAlive(before.web.pid!) && !isAlive(before.runtimeHost.pid!));
+  } else { running.child.kill("SIGTERM"); await exited; }
+  const child = spawn("sh", ["-c", `exec ${action!.command!}`], { cwd: f.checkout, env: clean, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+  let output = ""; child.stdout!.on("data", bytes => output += bytes); child.stderr!.on("data", bytes => output += bytes);
+  const after = await until(() => { const r = readRecord(f.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  await perimeterRemains(running.port, key);
+  expect(after.releasePointer).toBe(before.releasePointer); expect(after.socket).toBe(before.socket);
+  expect(after.web.revision).toBe(after.runtimeHost.revision);
+  if (!rollback) expect(after.web.revision).toBe(candidate.sha.slice(0, 7));
+  if (rollback) expect(after.web.revision).toBe(shape === "checkout" ? f.first.slice(0, 7) : null);
+  for (const entry of [after.launcher, after.web, after.runtimeHost]) {
+    expect(readFileSync(`/proc/${entry.pid}/cmdline`, "utf8").includes(key)).toBe(false);
+  }
+  expect(output.includes(key)).toBe(false);
+}, 60000);

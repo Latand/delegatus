@@ -802,7 +802,7 @@ for (const locale of ["en", "uk"] as const) {
 
 test.each(["en", "uk"] as const)("every install prerequisite is actionable and localized in %s", (language) => {
   setLocale(language);
-  for (const id of ["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments"] as const) {
+  for (const id of ["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments", "secure-handoff"] as const) {
     const hasButton = ["restart-service", "update-first", "start-service"].includes(id);
     const el = render(snapshot({ mode: "unsupported", unsupportedReason: "no-launcher", action: { id, button: hasButton, command: "bun bin/cli.mjs --port 45123 --no-open" } }));
     expect(Boolean(button(el, "install-action"))).toBe(hasButton);
