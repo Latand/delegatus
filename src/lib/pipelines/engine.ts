@@ -73,7 +73,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -3163,11 +3163,22 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
     to change, short enough that a lane is not forgotten. Then it parks. */
 const PUBLICATION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
+type RefusedPublication = { error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
+
+/** A quiescent publisher whose push never reached the remote: ended by a
+    signal, by its time limit, or together with the Viewer that started it. */
+function publicationNotLanded(published: RefusedPublication): boolean {
+  return published.outcome === "not-landed" || published.error === "interrupted publication did not leave its accepted head on the remote";
+}
+
 /** The first line of a publication park: the cause and what a person does. */
-function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: { error: string; failure?: import("./types").PipelinePublicationFailure }): string {
+function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
-  if (!failure) return `publishing the passed stage: ${published.error}`;
   const retried = attempt.publicationRetry?.exhausted ? `; retried ${PUBLICATION_RETRY_DELAYS_MS.length} times` : "";
+  if (publicationNotLanded(published)) {
+    return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
+  }
+  if (!failure) return `publishing the passed stage: ${published.error}`;
   const action = commitsRefusedByPrivacy(failure)
     ? "The commits this push carries were refused: correct their author, message or content on this branch, then retry-stage."
     : failure.changedFiles === 0
@@ -3183,21 +3194,25 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
 }
 
 /**
- * A refused publication of a head that changes nothing cannot be the stage's
- * doing, so the lane waits and tries again instead of asking a person at once.
+ * A publication that failed for a reason the stage cannot have caused waits
+ * and tries again instead of asking a person at once: a refusal of a head that
+ * changes nothing, or a push interrupted before it reached the remote (the
+ * hook was not allowed to finish, so there is no verdict about the branch).
  * Each failed operation is counted once on the attempt; the wait is durable
- * across ticks and restarts, and the last refusal parks with its cause.
- * A stage that changed files parks at once: its own gate verdict is news.
+ * across ticks and restarts, and the last failure parks with its cause.
+ * A refused stage that changed files parks at once: its own gate verdict is news.
  */
 function retryRefusedPublication(
   pipeline: Pipeline,
   attempt: PipelineStageAttempt,
-  published: { error: string; failure?: import("./types").PipelinePublicationFailure },
+  published: RefusedPublication,
   ports: PipelinePorts,
 ): boolean {
   const operation = pipeline.delivery?.operation;
   const failure = published.failure;
-  if (!operation || operation.state !== "settled" || !failure || failure.changedFiles !== 0 || commitsRefusedByPrivacy(failure)) return false;
+  const notLanded = publicationNotLanded(published);
+  if (!operation || operation.state !== "settled") return false;
+  if (!notLanded && (!failure || failure.changedFiles !== 0 || commitsRefusedByPrivacy(failure))) return false;
   const previous = attempt.publicationRetry?.sha === operation.sha ? attempt.publicationRetry : undefined;
   let record = previous;
   if (previous?.operationId !== operation.id) {
@@ -3207,8 +3222,11 @@ function retryRefusedPublication(
       attempt.publicationRetry = { ...previous!, operationId: operation.id, exhausted: true };
       return false;
     }
+    // A publisher that died with its Viewer left no evidence and its cause
+    // went with the restart: the first retry is immediate, and still counted.
+    const delay = failures === 1 && notLanded && !failure ? 0 : PUBLICATION_RETRY_DELAYS_MS[failures - 1]!;
     record = { sha: operation.sha, operationId: operation.id, failures,
-      retryAt: new Date(unixMs(ports.now()) + PUBLICATION_RETRY_DELAYS_MS[failures - 1]!).toISOString() };
+      retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
     attempt.publicationRetry = record;
   } else if (previous.exhausted) return false;
   const wait = unixMs(record!.retryAt) - unixMs(ports.now());
@@ -3221,7 +3239,9 @@ function retryRefusedPublication(
     ports.scheduleTick?.(0);
     return true;
   }
-  keepPassedStageUnpublished(pipeline, attempt, `${publicationFailureCause(failure)}. The stage changed no files; automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`);
+  const schedule = `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
+  keepPassedStageUnpublished(pipeline, attempt, notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
+    : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
   ports.scheduleTick?.(Math.max(1_000, wait));
   return true;
 }
@@ -7318,12 +7338,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           changed = true;
         }
         // A quiescent interrupted writer that did not land can safely reserve
-        // publication again. Its passed stage and accepted revision stay put.
+        // publication again, outside a passed stage's bounded retry.
         if (operation?.state === "settled" && operation.result?.ok === false
           && operation.sha === pipeline.lastPassedCommit && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && (operation.result.outcome === "not-landed" || operation.result.error === "interrupted publication did not leave its accepted head on the remote")
-          && pipeline.state === "running") {
+          // A passed stage's own retry counts this failure and waits its turn.
+          && pipeline.state === "running" && !(passed && awaitingPassedPublication(pipeline))) {
           delete pipeline.delivery!.operation;
           persistPipeline();
         }

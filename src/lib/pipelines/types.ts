@@ -410,7 +410,8 @@ export type PipelineStageAttempt = {
   /** Publication accepted only clean main integrations after this passed SHA.
       The review's exact-head fields continue to name what was reviewed. */
   publicationIntegration?: { passedSha: string; acceptedSha: string; mainSha: string };
-  /** Automatic retries of a refused publication the stage cannot have caused.
+  /** Automatic retries of a publication the stage cannot have caused to fail:
+      a refusal of an unchanged head, or a push interrupted before it landed.
       Each failed operation is counted once; `exhausted` waits for retry-stage. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
   /** Authoritative projection of the embedded flow. The generation is a
@@ -742,6 +743,8 @@ export type PipelinePublicationFailure = {
   /** Tracked files the accepted head changes against its base branch; absent
       when that could not be read. Zero means the stage cannot have caused it. */
   changedFiles?: number;
+  /** The command budget the step ran past, when that is what ended it. */
+  timedOutMs?: number;
 };
 
 export type PipelinePublicationResult = (

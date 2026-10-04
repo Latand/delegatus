@@ -1196,12 +1196,24 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
+/** A push that was stopped before it reached the remote, in one line: what
+    ended it and which phase the hook had announced. Evidence is absent when
+    the Viewer itself died with the push. */
+export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
+  const phase = failure ? publicationFailurePhase(failure) : null;
+  const ended = failure?.timedOutMs ? `the push ran past its ${Math.round(failure.timedOutMs / 60_000)}-minute limit`
+    : failure?.signal ? `the push was ended by ${failure.signal}` : "the push was interrupted";
+  return `${ended}${phase ? ` in the hook's "${phase}" phase` : ""} and did not reach the remote`;
+}
+
 /** A repository hook is the project's own gate and runs as it would from a
     person's shell. The Viewer's private settings (its interface language, its
     launcher handoff, its token, its state owner) are no part of that: a test
     the hook runs reads them and fails for a reason no branch can fix. Gate
     slot and privacy settings are the hook's own inputs and stay, and so does
-    a publication identity or commit guard handed to this process. */
+    a publication identity or commit guard handed to this process. Anything
+    else a publication command needs (forge credentials, say) is spread over
+    this result, so the Viewer's settings are removed first. */
 export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.env): Partial<NodeJS.ProcessEnv> {
   const env: Partial<NodeJS.ProcessEnv> = {};
   for (const key of Object.keys(source)) {
@@ -1466,10 +1478,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long test diagnostics must not erase the hook's phase markers.
+        const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
-          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail };
+          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
+          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}) };
       }
       return executed;
     };

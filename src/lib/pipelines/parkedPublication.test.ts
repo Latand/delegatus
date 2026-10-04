@@ -590,6 +590,52 @@ test("a refused publication of an unchanged head retries on a bounded backoff, t
   } finally { h.cleanup(); }
 });
 
+test("an interrupted push that never landed is retried on the same bounded backoff, then parks naming the interruption", async () => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2);
+    // The hook's parent is the push itself: it dies by signal mid-phase.
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: types' >&2\nkill -9 $PPID\nsleep 0.2\n", { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const scheduled: number[] = [];
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: (delay: number) => { scheduled.push(delay); } };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    // Eight controller ticks with the clock standing still: one push, no loop.
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    const cause = "the push was ended by SIGKILL in the hook's \"types\" phase and did not reach the remote";
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ sha: head, failures: 1 });
+    expect(scheduled).toContain(60_000);
+    for (const [wait, pushes] of [[60_000, 2], [5 * 60_000, 3]] as const) {
+      clock += wait;
+      for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+      expect(h.pushes()).toBe(pushes);
+      expect(h.current().state).toBe("running");
+    }
+    expect(h.current().stateDetail).toContain("automatic retry 3 of 3 at 2026-10-04T10:21:00.000Z");
+    clock += 15 * 60_000;
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(4);
+    expect(h.current().state).toBe("needs_decision");
+    const [line, ...evidence] = h.current().stateDetail!.split("\n");
+    expect(line).toBe(`publishing the passed stage: ${cause}; retried 3 times. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.`);
+    expect(evidence.join("\n")).toContain("pre-push: types");
+    expect(h.current().runs[0]!.attempts[0]!).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+    clock += 60 * 60_000;
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(4);
+    expect(h.current().publishedCommit).toBeNull();
+    // retry-stage starts a new round: the push that survives lands the same head.
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toBeUndefined();
+  } finally { h.cleanup(); }
+});
+
 test("a refused publication of a head that changed code parks at once and is never retried on its own", async () => {
   const h = fixture();
   try {
@@ -639,6 +685,34 @@ test("the publication hook environment drops the Viewer's settings and keeps the
   // Every key present is an explicit removal; a kept variable is inherited untouched.
   expect(Object.values(env).every((value) => value === undefined)).toBe(true);
   expect(Object.keys(env).sort()).toEqual(["DELEGATUS_DEBUG", "LLV_LANG", "LLV_LAUNCHER_CHECKOUT", "LLV_LAUNCHER_REEXEC", "LLV_SKIP_HOOKS", "LLV_STATE_OWNER", "LLV_TOKEN", "NEXT_RUNTIME", "NODE_ENV"]);
+});
+
+test("a publisher that died with its Viewer retries at once, and that retry is counted against the same bound", async () => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: types' >&2\nkill -9 $PPID\nsleep 0.2\n", { mode: 0o700 });
+    // What reconciliation leaves when the executor retained nothing.
+    h.lane.delivery!.operation = { id: "died-with-its-viewer", epoch: 1, sha: head, state: "settled", passedStage: true,
+      requestKey: `pass:build:${h.lane.runs[0]!.attempts[0]!.n}`,
+      result: { ok: false, error: "interrupted publication did not leave its accepted head on the remote", outcome: "not-landed" } };
+    savePipelines([h.lane]);
+    const clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toContain("automatic retry 2 of 3 at 2026-10-04T10:05:00.000Z");
+  } finally { h.cleanup(); }
+});
+
+test("an interrupted push is named by what ended it and the phase the hook had reached", async () => {
+  const { publicationInterruptionCause } = await import("./git");
+  const failure = { step: "publishing the pipeline branch", code: null, signal: "SIGKILL" as const, durationMs: 900_004, outputTail: "pre-push: privacy\npre-push: Linux tests" };
+  expect(publicationInterruptionCause({ ...failure, timedOutMs: 900_000 })).toBe("the push ran past its 15-minute limit in the hook's \"Linux tests\" phase and did not reach the remote");
+  expect(publicationInterruptionCause({ ...failure, outputTail: "" })).toBe("the push was ended by SIGKILL and did not reach the remote");
+  // The Viewer died with its push: nothing was retained.
+  expect(publicationInterruptionCause()).toBe("the push was interrupted and did not reach the remote");
 });
 
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
