@@ -29,7 +29,7 @@ test("push checks commits, types and all sibling test variants, excluding browse
   const steps = plan("pre-push", ["src/example.ts", "src/deleted.test.ts"], context());
   expect(steps.find(step => step.name === "privacy")!.command).toContain("--check-commits");
   const tests = steps.find(step => step.name === "touched tests")!;
-  expect(tests.command).toEqual(["bun", "test", "./src/example.test.ts", "./src/example.integration.test.ts"]);
+  expect(tests.command).toEqual(["bun", "scripts/local-gate-tests.ts", "--base", "base", "./src/example.test.ts", "./src/example.integration.test.ts"]);
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
 });
@@ -181,8 +181,8 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   f.git("remote", "add", "origin", remote);
   const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(result.status).toBe(0);
-  const tests = f.calls().find(call => call.args[0] === "test")!;
-  expect(tests.args).toEqual(["test", "./example.test.ts"]);
+  const tests = f.calls().find(call => call.args[0] === "scripts/local-gate-tests.ts")!;
+  expect(tests.args).toEqual(["scripts/local-gate-tests.ts", "--base", f.git("rev-parse", "HEAD^").toString().trim(), "./example.test.ts"]);
   expect(tests.gitDir).toBeUndefined(); expect(tests.index).toBeUndefined(); expect(tests.workTree).toBeUndefined(); expect(tests.commonDir).toBeUndefined();
   for (const key of ["state", "home", "config", "tmp"] as const) expect(tests[key]).toContain("delegatus-local-gate-");
   expect(existsSync(tests.state!)).toBeFalse();
