@@ -140,22 +140,19 @@ const FOCUS_CAP = typeof window !== "undefined" && window.matchMedia("(pointer: 
 const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
 
 /** How long after a programmatic glue an untagged not-at-bottom scroll event
-    is treated as layout settling (content-visibility estimates, pane resizes)
+    is treated as layout settling (initial row windows, pane resizes)
     and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
+
+/** Frames the position has to stay put after a scrollend before a released
+    phone feed aligns: a scrollend that momentum outlives is not the end. */
+const REST_QUIET_FRAMES = 2;
 
 /* Read at call time: the glue runs from effects bound once at mount, and a
    render-scope `useIsMobile()` value would be the one from that first render. */
 function onPhoneLayout(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches === true;
 }
-
-/** Quiet time after the last scroll event before a released phone feed moves
-    to the nearest line boundary (#1978): momentum has ended by then. */
-const REST_ALIGN_MS = 160;
-/** Settles in a row, without the operator's input between them, before the
-    feed stops trying; one is the norm, the band clearance makes a second rare. */
-const MAX_AUTO_ALIGNS = 3;
 
 type ScrollCause =
   | { kind: "programmatic" }
@@ -203,6 +200,89 @@ function rowForAnchor(scroller: HTMLElement, key: string): HTMLElement | null {
   return scroller.querySelector<HTMLElement>(`[data-feed-key="${key.replace(/["\\]/g, "\\$&")}"]`);
 }
 
+/* The reader's own anchor: the row at the top edge, plus the block inside it
+   that the edge crosses. A message or a tool run can be taller than the
+   screen, and the reader rests deep inside it; a late image above the reader
+   in that same row leaves the row's top where it was, so only the block
+   under the reader can say that the content moved. The block is held as an
+   element, never in the scroll memory, which outlives the page's nodes.
+
+   Offsets are in the scroller's own layout pixels, the unit of `scrollTop`.
+   A pane under the canvas's zoom changes every rectangle without a scroll
+   event, so an offset kept in window pixels would read the next zoom as the
+   content having moved. */
+interface ReaderAnchor {
+  path: string;
+  key: string;
+  offset: number;
+  inner: { el: Element; offset: number } | null;
+}
+
+/** On-screen height over layout height: 1 on the phone, below 1 for a pane
+    under the canvas's zoom. */
+function layoutScale(scroller: HTMLElement): number {
+  const scale = scroller.offsetHeight ? scroller.getBoundingClientRect().height / scroller.offsetHeight : 1;
+  return scale > 0 ? scale : 1;
+}
+
+/** A closed `<details>` leaves its summary's other label in the DOM with no
+    box, and its rectangle then reads as zeros. */
+function hasBox(el: Element): boolean {
+  return el.getClientRects().length > 0;
+}
+
+const INNER_DEPTH = 8;
+const INNER_CHILD_CAP = 400;
+
+function innerBlock(row: HTMLElement, top: number, scale: number): ReaderAnchor["inner"] {
+  let node: Element = row;
+  for (let depth = 0; depth < INNER_DEPTH; depth += 1) {
+    if (!node.children.length || node.children.length > INNER_CHILD_CAP) break;
+    const next = firstRowPastTop(Array.from(node.children), top);
+    if (!next) break;
+    /* Only a block laid out in flow can anchor: an inline run has no box of
+       its own, and a sticky or positioned one does not move with the content. */
+    const style = getComputedStyle(next);
+    if (style.display === "inline" || style.display === "contents" || (style.position !== "static" && style.position !== "relative")) break;
+    node = next;
+  }
+  return node === row ? null : { el: node, offset: (node.getBoundingClientRect().top - top) / scale };
+}
+
+function readerAnchorAt(scroller: HTMLElement, path: string): ReaderAnchor | null {
+  const viewportTop = scroller.getBoundingClientRect().top;
+  const row = firstRowPastTop(readingRows(scroller), viewportTop);
+  const key = row?.dataset.feedKey;
+  const scale = layoutScale(scroller);
+  return row && key
+    ? { path, key, offset: (row.getBoundingClientRect().top - viewportTop) / scale, inner: innerBlock(row, viewportTop, scale) }
+    : null;
+}
+
+/** How far the reader's anchor has moved from where it was taken, in layout
+    pixels. A block with no box is as good as gone and the row stands in for
+    it; null when neither the block nor its row can say. */
+function anchorDrift(scroller: HTMLElement, anchor: ReaderAnchor): number | null {
+  if (!hasBox(scroller)) return null;
+  const top = scroller.getBoundingClientRect().top;
+  const scale = layoutScale(scroller);
+  const inner = anchor.inner;
+  if (inner && inner.el.isConnected && scroller.contains(inner.el) && hasBox(inner.el)) {
+    return (inner.el.getBoundingClientRect().top - top) / scale - inner.offset;
+  }
+  const row = rowForAnchor(scroller, anchor.key);
+  return row && hasBox(row) ? (row.getBoundingClientRect().top - top) / scale - anchor.offset : null;
+}
+
+/** The anchor after the reader's own travel of `distance` layout pixels. */
+function anchorAfterTravel(anchor: ReaderAnchor, distance: number): ReaderAnchor {
+  return {
+    ...anchor,
+    offset: anchor.offset - distance,
+    inner: anchor.inner && { el: anchor.inner.el, offset: anchor.inner.offset - distance },
+  };
+}
+
 interface PrependViewportProps {
   children: ReactNode;
   scroller: RefObject<HTMLDivElement | null>;
@@ -210,24 +290,26 @@ interface PrependViewportProps {
   prependGen: number;
   visibleCount: number;
   following: RefObject<boolean>;
+  readerAnchor: RefObject<ReaderAnchor | null>;
+  onRestore: (scroller: HTMLElement) => void;
 }
 
 /* The before-mutation lifecycle reads the current viewport, including gestures
    made while history was in flight. Layout-effect cleanups can run after DOM
    mutations and therefore cannot supply this snapshot. */
 class PrependViewport extends Component<PrependViewportProps> {
-  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ViewportAnchor & { toolSource?: string }) | null {
+  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ReaderAnchor & { toolSource?: string }) | null {
     const { scroller, identity, prependGen, visibleCount, following } = this.props;
     if (identity !== previous.identity || following.current
       || (prependGen === previous.prependGen && visibleCount <= previous.visibleCount)) return null;
     const el = scroller.current;
-    const anchor = el ? viewportAnchor(el, identity) : null;
+    const anchor = el ? readerAnchorAt(el, identity) : null;
     if (!el || !anchor) return null;
     const toolSource = rowForAnchor(el, anchor.key)?.dataset.feedToolSources?.split(" ")[0];
     return { ...anchor, toolSource };
   }
 
-  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ViewportAnchor & { toolSource?: string }) | null) {
+  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ReaderAnchor & { toolSource?: string }) | null) {
     const el = this.props.scroller.current;
     if (!el || !anchor || this.props.following.current) return;
     // A boundary tool run can absorb older calls and acquire a new group key.
@@ -236,13 +318,17 @@ class PrependViewport extends Component<PrependViewportProps> {
       ? feedRows(el).find((candidate) => candidate.dataset.feedToolSources?.split(" ").includes(anchor.toolSource!))
       : null);
     if (!row) return;
-    // Measure the residual after native anchoring, avoiding double compensation.
-    const bounds = el.getBoundingClientRect();
-    const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
+    // Measure the residual so an already restored layout is not compensated twice.
     // Compact panes can sit inside the scaled project canvas. DOM rectangles
-    // use viewport pixels while scrollTop uses untransformed layout pixels.
-    const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
-    if (delta && scale > 0) el.scrollTop += delta / scale;
+    // use viewport pixels while scrollTop and the anchor use layout pixels.
+    if (!hasBox(row)) return;
+    const bounds = el.getBoundingClientRect();
+    const delta = (row.getBoundingClientRect().top - bounds.top) / layoutScale(el) - anchor.offset;
+    if (delta) {
+      el.scrollTop += delta;
+      this.props.onRestore(el);
+    }
+    this.props.readerAnchor.current = { path: anchor.path, key: row.dataset.feedKey!, offset: anchor.offset, inner: anchor.inner };
   }
 
   render() { return this.props.children; }
@@ -420,6 +506,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     magnet ? (compact ? TAIL_CAP : FOCUS_CAP) : 0,
   );
   const scroller = useRef<HTMLDivElement | null>(null);
+  const readerAnchor = useRef<ReaderAnchor | null>(null);
+  /* Where the feed's own anchor write left the scroll offset. The first scroll
+     event after it can also carry the reader's momentum; the difference is the
+     reader's travel, and the anchor follows it. */
+  const ownTopRef = useRef<number | null>(null);
+  const scrollSeqRef = useRef(0);
+  const restFrameRef = useRef<number | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
   const olderRequestRef = useRef<object | null>(null);
   const historyOwnerRef = useRef<object>({});
@@ -478,6 +571,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      lives through the gesture; a stamped programmatic cause still wins. */
   const scrollbarPointerRef = useRef<{ fromBottom: number } | null>(null);
   const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const gestureRestPending = useRef(false);
+  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
@@ -515,8 +610,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      the content alone. The spacer sits outside `content`, whose resize
      observer would otherwise re-glue. */
   const tailSpacer = useRef<HTMLDivElement | null>(null);
-  const restTimer = useRef<number | null>(null);
-  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const alignFollowedTop = (el: HTMLElement) => {
     const spacer = tailSpacer.current;
     if (!spacer) return;
@@ -536,32 +629,59 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     spacer.style.height = `${plan.spacer}px`;
     el.scrollTop = el.scrollHeight;
   };
-  /* Released from the tail, a feed that came to rest mid-line moves by the
-     shorter way to a line boundary, once the finger is off the glass and the
-     momentum has run out. */
-  const scheduleRestAlign = () => {
-    if (!onPhoneLayout()) return;
-    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
-    restTimer.current = window.setTimeout(() => {
-      restTimer.current = null;
-      const el = scroller.current;
-      if (!el || magnetRef.current || feedTouchRef.current) return;
-      const delta = restingDelta(el);
-      if (!delta) return;
-      /* A settle never undoes the one before it, and gives up after a few
-         in a row: the operator's next touch, wheel or key starts afresh. */
-      const previous = autoAlignRef.current;
-      if (previous && (Math.sign(previous.delta) !== Math.sign(delta) || previous.count >= MAX_AUTO_ALIGNS)) return;
+  /* Only a reader gesture may align a released phone feed. The browser's
+     scrollend includes momentum; prepends and resize restoration never arm
+     this step. Record the settled boundary as the shared reader anchor. */
+  const alignGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    if (!onPhoneLayout() || magnetRef.current) {
+      gestureRestPending.current = false;
+      return;
+    }
+    const delta = restingDelta(el);
+    const previous = autoAlignRef.current;
+    // Clearing a row can expose ink in its enclosing tall card. Continue on
+    // the glide's next scrollend, without reversing or exceeding three moves.
+    if (delta && (!previous || (Math.sign(previous.delta) === Math.sign(delta) && previous.count < 3))) {
       autoAlignRef.current = { delta, count: (previous?.count ?? 0) + 1 };
       markProgrammaticScroll();
       const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
-    }, REST_ALIGN_MS);
+      return;
+    }
+    gestureRestPending.current = false;
+    readerAnchor.current = readerAnchorAt(el, `${memoryKey}\0${tailPath}`);
+    if (memoryKey && tailPath) rememberScroll(memoryKey, {
+      magnet: false,
+      fromBottom: distanceFromBottom(el),
+      anchor: viewportAnchor(el, tailPath),
+    });
+  };
+  /* A scrollend is also fired for the feed's own write, and a page that lands
+     during a flick writes while the finger is already up and the momentum is
+     still travelling. Aligning on that one would aim at a boundary the
+     momentum then carries past, and the glide would pull the feed back
+     against the reader. The reader's own scroll has ended when the position
+     stays put for a couple of frames after the event; otherwise the
+     momentum's own scrollend is still to come. */
+  const settleGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+    const seq = scrollSeqRef.current;
+    const top = el.scrollTop;
+    let quiet = 0;
+    const check = () => {
+      restFrameRef.current = null;
+      if (scrollSeqRef.current !== seq || el.scrollTop !== top || feedTouchRef.current) return;
+      quiet += 1;
+      if (quiet < REST_QUIET_FRAMES) restFrameRef.current = requestAnimationFrame(check);
+      else alignGestureRest(el);
+    };
+    restFrameRef.current = requestAnimationFrame(check);
   };
   useEffect(() => () => {
-    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
+    if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
   }, []);
-
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -828,6 +948,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     filePathRef.current = tailPath;
     restoreInitializedPathRef.current = null;
     pendingRestoreRef.current = null;
+    readerAnchor.current = null;
+    gestureRestPending.current = false;
+    autoAlignRef.current = null;
   }, [tailPath]);
 
   useLayoutEffect(() => {
@@ -887,13 +1010,17 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !inner) return;
     const observer = new ResizeObserver(() => {
       if (magnetRef.current) glue();
-      else {
-        restorePendingPosition();
-        /* Rows that grew or shrank above a released feed move it without a
-           scroll event; it settles on a row edge again (#1978), as a fresh
-           layout, since a settle's own scroll never resizes anything. */
-        autoAlignRef.current = null;
-        scheduleRestAlign();
+      else if (!restorePendingPosition()) {
+        // Native anchoring may choose the newly prepended predecessor instead
+        // of the message being read. Own the same anchor across later layout.
+        const anchor = readerAnchor.current;
+        if (!anchor) return;
+        const delta = anchorDrift(el, anchor);
+        if (delta) {
+          markProgrammaticScroll();
+          el.scrollTop += delta;
+          ownTopRef.current = el.scrollTop;
+        }
       }
     });
     observer.observe(inner);
@@ -1617,6 +1744,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const el = scroller.current;
     if (!el) return;
     autoAlignRef.current = null;
+    if (direction !== null && direction !== 0) gestureRestPending.current = true;
     scrollCauseRef.current = {
       kind: "user",
       fromBottom: distanceFromBottom(el),
@@ -1699,6 +1827,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            capture measures this scroller's rendered height against the usable
            visual viewport to prove the transcript owns its ≥60% share. */
         data-log-feed-scroller
+        // Prepend and resize share the reader's message anchor. Letting the
+        // browser independently choose another row causes double restoration.
+        style={{ overflowAnchor: "none" }}
         data-tail-lines-start={tail.linesStart}
         data-tail-line-count={tail.lines.length}
         className={compact ? "min-h-0 flex-1 overflow-y-auto py-3" : "min-h-0 flex-1 overflow-y-auto py-6"}
@@ -1708,7 +1839,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         onPointerDownCapture={(event) => {
           if (event.button === 0 && pointerHitsVerticalScrollbar(event.currentTarget, event.clientX)) {
             scrollbarPointerRef.current = { fromBottom: distanceFromBottom(event.currentTarget) };
-            autoAlignRef.current = null;
             scrollCauseRef.current = null;
           }
         }}
@@ -1728,7 +1858,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         }}
         onTouchEndCapture={() => {
           feedTouchRef.current = null;
-          scheduleRestAlign();
         }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
@@ -1736,6 +1865,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
         }}
+        onScrollEnd={(event) => settleGestureRest(event.currentTarget)}
         onScroll={(event) => {
           const el = event.currentTarget;
           const fromBottom = distanceFromBottom(el);
@@ -1762,7 +1892,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           if (userReturnedToBottom && !magnetRef.current) setMagnet(true, true);
           else if ((userReleasedMagnet || !atBottom) && magnetRef.current) {
             /* Off-bottom right after a programmatic glue is layout settling
-               (content-visibility estimates, pane resizes during a scheme
+               (initial row windows, pane resizes during a scheme
                reshuffle) — hold the magnet and glue again. A preceding input
                event identifies an operator release inside the same window. */
             if (settling && !userInitiated) glue();
@@ -1775,15 +1905,30 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               anchor: magnetRef.current ? null : viewportAnchor(el, tailPath ?? file.path),
             });
           }
+          scrollSeqRef.current += 1;
+          const ownTop = ownTopRef.current;
+          ownTopRef.current = null;
+          if (magnetRef.current) readerAnchor.current = null;
+          else if (cause?.kind !== "programmatic") readerAnchor.current = readerAnchorAt(el, `${memoryKey}\0${tailPath}`);
+          else if (ownTop !== null && readerAnchor.current) {
+            /* The feed's own write is already in the anchor; whatever else
+               moved the offset is the reader's momentum, so the anchor moves
+               with it instead of reading it back as drift. */
+            const travel = el.scrollTop - ownTop;
+            if (travel) readerAnchor.current = anchorAfterTravel(readerAnchor.current, travel);
+          }
           if (!tail.loadingOlder && !tail.loading) {
             if (el.scrollTop < 120 && canRevealOlder) revealOlder();
             else if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
           }
-          if (!magnetRef.current) scheduleRestAlign();
         }}
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
-        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}>
+        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}
+        readerAnchor={readerAnchor} onRestore={(el) => {
+          markProgrammaticScroll();
+          ownTopRef.current = el.scrollTop;
+        }}>
       <div
         ref={content}
         /* Whether this feed has settled, readable off the page: a surface that
@@ -1888,9 +2033,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               const foldResumes = resumes !== undefined && phone && item.kind === "prose" && row.live?.phase !== "streaming";
               return (
                 /* Session-stable keys: a row keeps its DOM node while the
-                   window slides, and an older page prepended to it. Off-screen
-                   rows skip layout/paint via content-visibility, on the
-                   zoomable canvas and in the desktop reader (see
+                   window slides, and an older page prepended to it. On the
+                   phone rows keep their measured heights: a guessed intrinsic
+                   height invalidates the prepend snapshot, then shifts the
+                   reader again as those rows enter the viewport. On the
+                   zoomable canvas and in the desktop reader off-screen rows
+                   skip layout/paint via content-visibility (see
                    rowsSkipOffscreen); the text they skip stays findable and
                    copyable. */
                 <div
