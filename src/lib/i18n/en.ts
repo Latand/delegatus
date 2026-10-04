@@ -1653,6 +1653,8 @@ export const en = {
   "preview.pageOf": "Page {page} of {pages}",
 
   // LogFeed
+  "feed.processingFailed": "Could not display this record",
+  "feed.processingFailedRecord": "Record: {type}",
   "feed.agentEnded": "agent finished",
   "feed.copyCode": "Copy code",
   "feed.copyMd": "Copy message (Markdown)",
