@@ -182,8 +182,12 @@ function bandInk(roots: readonly Element[], scroller: Element, low: number, high
     control again, so both are cleared together. Null when nothing crosses;
     an unreachable direction is Infinity. Moves stay inside the band and
     inside the row being read, so the position they reach is clear by
-    construction and the next reading finds nothing to do. */
-export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
+    construction and the next reading finds nothing to do. `probe: false` is
+    for an edge already known to sit on a row boundary: no row crosses it, so
+    the probes would only hit the rows' container, and walking that is one
+    rectangle per mounted row. Only the controls of the rows beside the edge
+    are read then. */
+export function inkEdgeCut(scroller: HTMLElement, probe = true): EdgeCut | null {
   if (scroller.scrollHeight <= scroller.clientHeight || typeof document.elementFromPoint !== "function") return null;
   const bounds = scroller.getBoundingClientRect();
   const edge = bounds.top + scroller.clientTop;
@@ -204,7 +208,7 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
       break;
     }
   }
-  if (!roots.length) {
+  if (!roots.length && probe) {
     const left = bounds.left + scroller.clientLeft;
     for (const column of PROBE_COLUMNS) {
       const hit = document.elementFromPoint(left + scroller.clientWidth * column, edge + 0.5);
@@ -247,7 +251,7 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
     aligned whole; otherwise the ink under the edge. Zero when nothing is cut. */
 export function restingDelta(scroller: HTMLElement): number {
   const row = rowEdgeCut(scroller);
-  const ink = inkEdgeCut(scroller);
+  const ink = inkEdgeCut(scroller, row !== ON_BOUNDARY);
   // A whole-row landing must also clear an action overhanging its neighbour.
   const cut = row && (row.hidden || row.shown)
     ? { hidden: Math.max(row.hidden, ink?.hidden ?? 0), shown: Math.max(row.shown, ink?.shown ?? 0) }

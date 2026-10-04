@@ -7016,4 +7016,307 @@ describe("long conversation scroll", () => {
       }
     }
   }, 240_000);
+
+  /*
+   * A page that lands while a flick's momentum is still travelling: the
+   * finger is up, so nothing marks the reader as holding the feed, and the
+   * feed's own restore write fires a scrollend of its own. The feed neither
+   * pulls itself back against the reader (a glide aimed at a boundary the
+   * momentum then passes) nor reads the momentum as drift and writes it back.
+   */
+  browserTest("a page landing during momentum leaves the feed to the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const rounds: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (let round = 0; round < 3; round += 1) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${base}/?scroll-history=1`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            feed.scrollTop = 6000;
+            const state = { frames: [] as Array<{ top: number; height: number; time: number }>,
+              writes: [] as Array<{ time: number; delta: number }>, glides: [] as number[] };
+            (window as unknown as { momentum: typeof state }).momentum = state;
+            // Every write the page makes to the feed's offset, and every glide it starts.
+            const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+            Object.defineProperty(Element.prototype, "scrollTop", { ...descriptor, set(this: Element, value: number) {
+              const before = this.scrollTop;
+              descriptor.set!.call(this, value);
+              if (this === feed) state.writes.push({ time: performance.now(), delta: this.scrollTop - before });
+            } });
+            const scrollBy = Element.prototype.scrollBy as (...args: unknown[]) => void;
+            Element.prototype.scrollBy = function (this: Element, ...args: unknown[]) {
+              if (this === feed) state.glides.push(performance.now());
+              return scrollBy.apply(this, args);
+            } as typeof Element.prototype.scrollBy;
+            const frame = (time: number) => {
+              state.frames.push({ top: feed.scrollTop, height: feed.scrollHeight, time });
+              requestAnimationFrame(frame);
+            };
+            requestAnimationFrame(frame);
+          });
+          const rect = await rectOf(page, "[data-log-feed-scroller]");
+          if (!rect) throw new Error("no feed");
+          const x = rect.x + rect.width / 2;
+          let landed = false;
+          for (let gesture = 0; gesture < 60 && !landed; gesture += 1) {
+            await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 20));
+            // Finger up, momentum travelling: this is when the page lands.
+            if (await page.evaluate(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending)) {
+              await page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend());
+              landed = true;
+            } else await page.waitForTimeout(140);
+          }
+          expect(landed).toBe(true);
+          await page.waitForTimeout(1_500);
+          const reading = await page.evaluate(() => {
+            const { frames, writes, glides } = (window as unknown as { momentum: { frames: Array<{ top: number; height: number; time: number }>;
+              writes: Array<{ time: number; delta: number }>; glides: number[] } }).momentum;
+            const arrival = frames.findIndex((f, i) => i > 0 && f.height - frames[i - 1]!.height > 1_000);
+            const speed = (i: number) => Math.abs(frames[i]!.top - frames[i - 1]!.top);
+            // The momentum is over once the offset has stayed put for six frames.
+            let end = arrival + 1;
+            for (let still = 0; end < frames.length && still < 6; end += 1) still = speed(end) < 0.5 ? still + 1 : 0;
+            const travelling = frames.slice(arrival + 1, end);
+            const rises = travelling.map((f, i) => f.top - frames[arrival + i]!.top);
+            const restore = writes.find((w) => w.time >= frames[arrival]!.time - 20);
+            return {
+              arrival, framesInFlight: travelling.length, speedBefore: arrival > 0 ? speed(arrival - 1) : 0,
+              maxRise: Math.max(0, ...rises),
+              // Frames right after the landing in which the feed stood still against a moving flick.
+              stalled: frames.slice(arrival + 1, arrival + 6).filter((f, i) => Math.abs(f.top - frames[arrival + i]!.top) < 0.5).length,
+              laterWrites: writes.filter((w) => w !== restore && w.time >= frames[arrival]!.time - 20 && Math.abs(w.delta) > 3).map((w) => Math.round(w.delta)),
+              glidesInFlight: glides.filter((time) => time >= frames[arrival]!.time && time < frames[Math.min(end, frames.length - 1)]!.time).length,
+            };
+          });
+          rounds.push({ locale, round, ...reading });
+          console.log(`scroll-history momentum locale=${locale} round=${round} ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          // The check means something only if the flick was still carrying the feed when the page landed.
+          expect(reading.framesInFlight).toBeGreaterThanOrEqual(5);
+          expect(reading.speedBefore).toBeGreaterThan(20);
+          expect(reading.maxRise).toBeLessThanOrEqual(3);
+          expect(reading.stalled).toBe(0);
+          expect(reading.laterWrites).toEqual([]);
+          expect(reading.glidesInFlight).toBe(0);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "momentum.json"), `${JSON.stringify({ rounds }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * Late layout above the reader inside the message being read. A long answer
+   * or a long tool run is one row taller than the screen, and the reader rests
+   * deep inside it: an image that decodes above them in the same row leaves
+   * the row's top where it was, so the row alone cannot say the text moved.
+   * The block under the reader is held across the growth. The first-child
+   * image grows the row above the reader; the same image added to the row
+   * above is the control.
+   */
+  browserTest("late content above the reader inside the row being read keeps the text still", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const [width, locale] of [[390, "en"], [390, "uk"], [1440, "en"]] as const) for (const compact of [false, true]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 },
+          ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          // One message taller than the screen: sixteen more paragraphs in its row.
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const rows = [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")];
+            const row = rows[40]!;
+            row.dataset.reading = "1";
+            rows[39]!.dataset.above = "1";
+            for (let n = 0; n < 16; n += 1) {
+              const paragraph = document.createElement("p");
+              paragraph.dataset.late = String(n);
+              paragraph.style.cssText = "margin:0 0 16px";
+              paragraph.textContent = `Paragraph ${n} of a long answer. `.repeat(6);
+              row.append(paragraph);
+            }
+            feed.scrollTop = row.getBoundingClientRect().top - feed.getBoundingClientRect().top + feed.scrollTop - 200;
+          });
+          await page.waitForTimeout(400);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          const box = await rectOf(page, "[data-log-feed-scroller]");
+          if (!box) throw new Error("no feed");
+          // Real input releases the tail and walks into the message: about 685 px in.
+          const depth = () => page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            return feed.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-reading]")!.getBoundingClientRect().top;
+          });
+          const cdp = width === 390 ? await context.newCDPSession(page) : null;
+          if (!cdp) await scroller.hover();
+          for (let step = 0; step < 40 && Math.abs((await depth()) - 685) > 40; step += 1) {
+            const move = Math.max(-300, Math.min(300, 685 - (await depth())));
+            if (cdp) await touch(cdp, along([box.x + box.width / 2, box.y + box.height * 0.6], [box.x + box.width / 2, box.y + box.height * 0.6 - move], 12), 40);
+            else await page.mouse.wheel(0, move);
+            await page.waitForTimeout(700);
+          }
+          const rested = await depth();
+          // The paragraph under the reader's eye, and the first-child image added above it.
+          const under = () => page.evaluate(() => {
+            const top = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.getBoundingClientRect().top;
+            const hit = [...document.querySelectorAll<HTMLElement>("[data-late]")].find((p) => p.getBoundingClientRect().bottom > top + 1)!;
+            return { id: hit.dataset.late!, y: hit.getBoundingClientRect().top - top };
+          });
+          const before = await under();
+          await page.screenshot({ path: path.join(out, `inside-${width}-${locale}-${compact}-before.png`) });
+          const grow = (selector: string) => page.evaluate((selector) => {
+            const img = document.createElement("img");
+            img.width = 200; img.height = 180; img.style.display = "block";
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            document.querySelector<HTMLElement>(selector)!.prepend(img);
+          }, selector);
+          await grow("[data-above]");
+          await page.waitForTimeout(650);
+          const afterNeighbour = await under();
+          await grow("[data-reading]");
+          await page.waitForTimeout(650);
+          const afterInside = await under();
+          await page.screenshot({ path: path.join(out, `inside-${width}-${locale}-${compact}-after.png`) });
+          const reading = { width, locale, compact, rested: Math.round(rested), sameParagraph: before.id === afterInside.id && before.id === afterNeighbour.id,
+            neighbourDrift: Math.abs(afterNeighbour.y - before.y), insideDrift: Math.abs(afterInside.y - before.y) };
+          readings.push(reading);
+          console.log(`scroll-history inside-row ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          expect(reading.rested).toBeGreaterThan(600);
+          expect(reading.sameParagraph).toBe(true);
+          expect(reading.neighbourDrift).toBeLessThanOrEqual(3);
+          expect(reading.insideDrift).toBeLessThanOrEqual(3);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "inside-row.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * The reading that brings a released feed to rest on a line costs the same
+   * on a long history as on a short one. With 1500 rows mounted at 4x CPU, 24
+   * short drags each come to rest; the layout reads made between a scrollend
+   * and the first scroll event after it are the rest reading (its longest
+   * task is timed), and an edge on a row boundary used to walk every mounted
+   * row there.
+   */
+  browserTest("the rest reading does not walk the mounted rows", async () => {
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    const walks: Array<{ rows: number; mounted: number; rests: number[]; restMs: number[]; restBursts: string[]; slowFrames: number }> = [];
+    try {
+      for (const turns of [60, 600]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+          await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=${turns}&window=${turns * 4}&page=100`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+          await pause(page, 600);
+          await page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const state = { counting: false, reads: 0, bursts: [] as Array<{ reads: number; start: number; end: number }>, rests: [] as number[], restMs: [] as number[], restBursts: [] as string[], gaps: [] as number[] };
+            (window as unknown as { rest: typeof state }).rest = state;
+            const count = <T extends object>(target: T, name: keyof T) => {
+              const original = target[name] as unknown as (...args: unknown[]) => unknown;
+              (target as Record<keyof T, unknown>)[name] = function (this: unknown, ...args: unknown[]) {
+                if (!state.counting) return original.apply(this, args);
+                const started = performance.now();
+                state.reads += 1;
+                try { return original.apply(this, args); } finally {
+                  const ended = performance.now();
+                  const burst = state.bursts.at(-1);
+                  // Reads of one task follow each other; another task starts a new burst.
+                  if (burst && started - burst.end < 8) { burst.reads += 1; burst.end = ended; } else state.bursts.push({ reads: 1, start: started, end: ended });
+                }
+              };
+            };
+            count(Element.prototype, "getBoundingClientRect");
+            count(Range.prototype, "getClientRects");
+            count(Document.prototype, "elementFromPoint");
+            count(window, "getComputedStyle");
+            // The reading's own span: from its first layout read to its last.
+            const finish = () => {
+              if (!state.counting) return;
+              state.counting = false;
+              state.rests.push(state.reads);
+              state.restMs.push(Math.max(0, ...state.bursts.map((burst) => burst.end - burst.start)));
+              state.restBursts.push(state.bursts.map((burst) => `${burst.reads}r/${Math.round(burst.end - burst.start)}ms`).join(" "));
+            };
+            window.addEventListener("scrollend", (event) => {
+              if (event.target !== feed) return;
+              state.counting = true; state.reads = 0; state.bursts = [];
+              window.setTimeout(finish, 400);
+            }, true);
+            feed.addEventListener("scroll", finish);
+            let last = performance.now();
+            const tick = (now: number) => { state.gaps.push(now - last); last = now; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+          });
+          const rect = await rectOf(page, "[data-log-feed-scroller]");
+          if (!rect) throw new Error("no feed");
+          const x = rect.x + rect.width / 2;
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.scrollTop = 4000; });
+          // The page's own start-up and this jump are not rests: measure from the first touch.
+          await pause(page, 2_000);
+          await page.evaluate(() => { (window as unknown as { rest: { gaps: number[]; rests: number[] } }).rest.gaps.length = 0; (window as unknown as { rest: { rests: number[]; restMs: number[] } }).rest.rests.length = 0; (window as unknown as { rest: { restMs: number[] } }).rest.restMs.length = 0; });
+          for (let drag = 0; drag < 24; drag += 1) {
+            // A short drag: a few lines, no momentum worth the name, then rest.
+            await touch(cdp, along([x, rect.y + rect.height * 0.5], [x, rect.y + rect.height * (drag % 2 ? 0.58 : 0.42) + drag], 8), 40);
+            await pause(page, 900);
+          }
+          const walk = await page.evaluate(() => {
+            const { rests, restMs, gaps } = (window as unknown as { rest: { rests: number[]; restMs: number[]; gaps: number[] } }).rest;
+            return { mounted: document.querySelectorAll("[data-feed-key]").length, rests, restMs: restMs.map((ms) => Math.round(ms * 10) / 10),
+              restBursts: (window as unknown as { rest: { restBursts: string[] } }).rest.restBursts, slowFrames: gaps.slice(1).filter((ms) => ms > 100).length };
+          });
+          walks.push({ rows: turns * 4, ...walk });
+          console.log(`scroll-history rest turns=${turns} mounted=${walk.mounted} rests=${walk.rests.length} maxReads=${Math.max(0, ...walk.rests)} maxRestMs=${Math.max(0, ...walk.restMs)} slowFrames=${walk.slowFrames}`);
+          expect(errors).toEqual([]);
+          expect(walk.rests.length).toBeGreaterThanOrEqual(12);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "rest-reads.json"), `${JSON.stringify({ walks }, null, 2)}\n`);
+    }
+    const [short, long] = walks;
+    expect(long!.mounted).toBeGreaterThan(1_000);
+    // Reads per rest do not grow with the rows mounted.
+    expect(Math.max(...long!.rests)).toBeLessThanOrEqual(Math.max(...short!.rests) + 20);
+    // No rest reading takes over 100 ms at 4x. Its reads are one task; the
+    // frames of the whole walk are recorded for the evidence, not asserted:
+    // a frame of the page's own rendering can be long on a busy machine.
+    expect(Math.max(...long!.restMs)).toBeLessThan(100);
+  }, 300_000);
 });

@@ -140,6 +140,10 @@ const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
     and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
 
+/** Frames the position has to stay put after a scrollend before a released
+    phone feed aligns: a scrollend that momentum outlives is not the end. */
+const REST_QUIET_FRAMES = 2;
+
 /* Read at call time: the glue runs from effects bound once at mount, and a
    render-scope `useIsMobile()` value would be the one from that first render. */
 function onPhoneLayout(): boolean {
@@ -192,6 +196,62 @@ function rowForAnchor(scroller: HTMLElement, key: string): HTMLElement | null {
   return scroller.querySelector<HTMLElement>(`[data-feed-key="${key.replace(/["\\]/g, "\\$&")}"]`);
 }
 
+/* The reader's own anchor: the row at the top edge, plus the block inside it
+   that the edge crosses. A message or a tool run can be taller than the
+   screen, and the reader rests deep inside it; a late image above the reader
+   in that same row leaves the row's top where it was, so only the block
+   under the reader can say that the content moved. The block is held as an
+   element, never in the scroll memory, which outlives the page's nodes. */
+interface ReaderAnchor extends ViewportAnchor {
+  inner: { el: Element; offset: number } | null;
+}
+
+const INNER_DEPTH = 8;
+const INNER_CHILD_CAP = 400;
+
+function innerBlock(row: HTMLElement, top: number): ReaderAnchor["inner"] {
+  let node: Element = row;
+  for (let depth = 0; depth < INNER_DEPTH; depth += 1) {
+    if (!node.children.length || node.children.length > INNER_CHILD_CAP) break;
+    const next = firstRowPastTop(Array.from(node.children), top);
+    if (!next) break;
+    /* Only a block laid out in flow can anchor: an inline run has no box of
+       its own, and a sticky or positioned one does not move with the content. */
+    const style = getComputedStyle(next);
+    if (style.display === "inline" || style.display === "contents" || (style.position !== "static" && style.position !== "relative")) break;
+    node = next;
+  }
+  return node === row ? null : { el: node, offset: node.getBoundingClientRect().top - top };
+}
+
+function readerAnchorAt(scroller: HTMLElement, path: string): ReaderAnchor | null {
+  const viewportTop = scroller.getBoundingClientRect().top;
+  const row = firstRowPastTop(readingRows(scroller), viewportTop);
+  const key = row?.dataset.feedKey;
+  return row && key
+    ? { path, key, offset: row.getBoundingClientRect().top - viewportTop, inner: innerBlock(row, viewportTop) }
+    : null;
+}
+
+/** How far the reader's anchor has moved from where it was taken, in
+    viewport pixels; null when neither the block nor its row is on the page. */
+function anchorDrift(scroller: HTMLElement, anchor: ReaderAnchor): number | null {
+  const top = scroller.getBoundingClientRect().top;
+  const inner = anchor.inner;
+  if (inner && inner.el.isConnected && scroller.contains(inner.el)) return inner.el.getBoundingClientRect().top - top - inner.offset;
+  const row = rowForAnchor(scroller, anchor.key);
+  return row ? row.getBoundingClientRect().top - top - anchor.offset : null;
+}
+
+/** The anchor after the reader's own travel of `distance` viewport pixels. */
+function anchorAfterTravel(anchor: ReaderAnchor, distance: number): ReaderAnchor {
+  return {
+    ...anchor,
+    offset: anchor.offset - distance,
+    inner: anchor.inner && { el: anchor.inner.el, offset: anchor.inner.offset - distance },
+  };
+}
+
 interface PrependViewportProps {
   children: ReactNode;
   scroller: RefObject<HTMLDivElement | null>;
@@ -199,26 +259,26 @@ interface PrependViewportProps {
   prependGen: number;
   visibleCount: number;
   following: RefObject<boolean>;
-  readerAnchor: RefObject<ViewportAnchor | null>;
-  onRestore: () => void;
+  readerAnchor: RefObject<ReaderAnchor | null>;
+  onRestore: (scroller: HTMLElement) => void;
 }
 
 /* The before-mutation lifecycle reads the current viewport, including gestures
    made while history was in flight. Layout-effect cleanups can run after DOM
    mutations and therefore cannot supply this snapshot. */
 class PrependViewport extends Component<PrependViewportProps> {
-  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ViewportAnchor & { toolSource?: string }) | null {
+  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ReaderAnchor & { toolSource?: string }) | null {
     const { scroller, identity, prependGen, visibleCount, following } = this.props;
     if (identity !== previous.identity || following.current
       || (prependGen === previous.prependGen && visibleCount <= previous.visibleCount)) return null;
     const el = scroller.current;
-    const anchor = el ? viewportAnchor(el, identity) : null;
+    const anchor = el ? readerAnchorAt(el, identity) : null;
     if (!el || !anchor) return null;
     const toolSource = rowForAnchor(el, anchor.key)?.dataset.feedToolSources?.split(" ")[0];
     return { ...anchor, toolSource };
   }
 
-  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ViewportAnchor & { toolSource?: string }) | null) {
+  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ReaderAnchor & { toolSource?: string }) | null) {
     const el = this.props.scroller.current;
     if (!el || !anchor || this.props.following.current) return;
     // A boundary tool run can absorb older calls and acquire a new group key.
@@ -234,10 +294,10 @@ class PrependViewport extends Component<PrependViewportProps> {
     // use viewport pixels while scrollTop uses untransformed layout pixels.
     const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
     if (delta && scale > 0) {
-      this.props.onRestore();
       el.scrollTop += delta / scale;
+      this.props.onRestore(el);
     }
-    this.props.readerAnchor.current = { path: anchor.path, key: row.dataset.feedKey!, offset: anchor.offset };
+    this.props.readerAnchor.current = { path: anchor.path, key: row.dataset.feedKey!, offset: anchor.offset, inner: anchor.inner };
   }
 
   render() { return this.props.children; }
@@ -415,7 +475,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     magnet ? (compact ? TAIL_CAP : FOCUS_CAP) : 0,
   );
   const scroller = useRef<HTMLDivElement | null>(null);
-  const readerAnchor = useRef<ViewportAnchor | null>(null);
+  const readerAnchor = useRef<ReaderAnchor | null>(null);
+  /* Where the feed's own anchor write left the scroll offset. The first scroll
+     event after it can also carry the reader's momentum; the difference is the
+     reader's travel, and the anchor follows it. */
+  const ownTopRef = useRef<number | null>(null);
+  const scrollSeqRef = useRef(0);
+  const restFrameRef = useRef<number | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
   const olderRequestRef = useRef<object | null>(null);
   const historyOwnerRef = useRef<object>({});
@@ -553,13 +619,38 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       return;
     }
     gestureRestPending.current = false;
-    readerAnchor.current = viewportAnchor(el, `${memoryKey}\0${tailPath}`);
+    readerAnchor.current = readerAnchorAt(el, `${memoryKey}\0${tailPath}`);
     if (memoryKey && tailPath) rememberScroll(memoryKey, {
       magnet: false,
       fromBottom: distanceFromBottom(el),
       anchor: viewportAnchor(el, tailPath),
     });
   };
+  /* A scrollend is also fired for the feed's own write, and a page that lands
+     during a flick writes while the finger is already up and the momentum is
+     still travelling. Aligning on that one would aim at a boundary the
+     momentum then carries past, and the glide would pull the feed back
+     against the reader. The reader's own scroll has ended when the position
+     stays put for a couple of frames after the event; otherwise the
+     momentum's own scrollend is still to come. */
+  const settleGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+    const seq = scrollSeqRef.current;
+    const top = el.scrollTop;
+    let quiet = 0;
+    const check = () => {
+      restFrameRef.current = null;
+      if (scrollSeqRef.current !== seq || el.scrollTop !== top || feedTouchRef.current) return;
+      quiet += 1;
+      if (quiet < REST_QUIET_FRAMES) restFrameRef.current = requestAnimationFrame(check);
+      else alignGestureRest(el);
+    };
+    restFrameRef.current = requestAnimationFrame(check);
+  };
+  useEffect(() => () => {
+    if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+  }, []);
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -893,14 +984,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         // of the message being read. Own the same anchor across later layout.
         const anchor = readerAnchor.current;
         if (!anchor) return;
-        const row = rowForAnchor(el, anchor.key);
-        if (!row) return;
-        const bounds = el.getBoundingClientRect();
-        const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
-        const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
+        const delta = anchorDrift(el, anchor);
+        const scale = el.offsetHeight ? el.getBoundingClientRect().height / el.offsetHeight : 1;
         if (delta && scale > 0) {
           markProgrammaticScroll();
           el.scrollTop += delta / scale;
+          ownTopRef.current = el.scrollTop;
         }
       }
     });
@@ -1695,7 +1784,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
         }}
-        onScrollEnd={(event) => alignGestureRest(event.currentTarget)}
+        onScrollEnd={(event) => settleGestureRest(event.currentTarget)}
         onScroll={(event) => {
           const el = event.currentTarget;
           const fromBottom = distanceFromBottom(el);
@@ -1735,8 +1824,19 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               anchor: magnetRef.current ? null : viewportAnchor(el, tailPath ?? file.path),
             });
           }
+          scrollSeqRef.current += 1;
+          const ownTop = ownTopRef.current;
+          ownTopRef.current = null;
           if (magnetRef.current) readerAnchor.current = null;
-          else if (cause?.kind !== "programmatic") readerAnchor.current = viewportAnchor(el, `${memoryKey}\0${tailPath}`);
+          else if (cause?.kind !== "programmatic") readerAnchor.current = readerAnchorAt(el, `${memoryKey}\0${tailPath}`);
+          else if (ownTop !== null && readerAnchor.current) {
+            /* The feed's own write is already in the anchor; whatever else
+               moved the offset is the reader's momentum, so the anchor moves
+               with it instead of reading it back as drift. */
+            const scale = el.offsetHeight ? el.getBoundingClientRect().height / el.offsetHeight : 1;
+            const travel = (el.scrollTop - ownTop) * scale;
+            if (travel) readerAnchor.current = anchorAfterTravel(readerAnchor.current, travel);
+          }
           if (!tail.loadingOlder && !tail.loading) {
             if (el.scrollTop < 120 && canRevealOlder) revealOlder();
             else if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
@@ -1745,7 +1845,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
         prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}
-        readerAnchor={readerAnchor} onRestore={markProgrammaticScroll}>
+        readerAnchor={readerAnchor} onRestore={(el) => {
+          markProgrammaticScroll();
+          ownTopRef.current = el.scrollTop;
+        }}>
       <div
         ref={content}
         /* Whether this feed has settled, readable off the page: a surface that
