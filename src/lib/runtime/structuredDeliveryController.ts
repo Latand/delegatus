@@ -14,7 +14,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import { readOrchestratorSeatFileOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, readOrchestratorSeatFileOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -896,18 +896,22 @@ export async function bindStructuredDeliveryQueue(
         if (!seats || !conversation) return false;
         const namesConversation = (id: string | null) => id !== null
           && resolveConversationAlias(snapshot, id as ViewerConversationId) === conversation.id;
-        const liveEpoch = Math.max(0, ...[
+        const revokedEpochs = new Map<string, number>();
+        for (const revocation of seats.revocations) {
+          if (namesConversation(revocation.conversationId)) revokedEpochs.set(revocation.project,
+            Math.max(revokedEpochs.get(revocation.project) ?? 0, revocation.seatEpoch));
+        }
+        const designations = [
           ...Object.values(seats.seats),
           ...Object.values(seats.pending).filter(seat => seat.intent.error === null),
           ...(seats.seatLineage ?? []),
-        ].filter(seat => namesConversation(seat.conversationId)).map(seat => seat.seatEpoch));
-        const revokedEpoch = Math.max(0, ...seats.revocations
-          .filter(seat => namesConversation(seat.conversationId)).map(seat => seat.seatEpoch));
-        if (liveEpoch > revokedEpoch) return false;
-        // Memberships persist after rotation. Only durable revocation can end
-        // their protection; a newer designation above restores it.
-        if (revokedEpoch === 0 && (snapshot.memberships[conversation.id] ?? [])
-          .some(membership => membership.kind === "orchestrator")) return false;
+        ];
+        if (designations.some(seat => namesConversation(seat.conversationId)
+          && seat.seatEpoch > (revokedEpochs.get(seat.project) ?? 0))) return false;
+        // Memberships persist after rotation. Only that project's durable
+        // revocation ends protection; another project's rotation cannot do it.
+        if ((snapshot.memberships[conversation.id] ?? []).some(membership => membership.kind === "orchestrator"
+          && !revokedEpochs.has(canonicalOrchestratorProject(membership.containerId)))) return false;
         // A host's terminal persistence callback releases its writer when the
         // captured tree prevents it clearing the row. The same captured tree
         // still belongs to this teardown; a replacement writer never does.

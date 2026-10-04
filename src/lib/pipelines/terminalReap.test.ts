@@ -404,7 +404,7 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
 });
 
 
-const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage"];
+const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project"];
 const socketChild = process.env.LLV_TERMINAL_REAP_SOCKET_CHILD === "1";
 
 // Task admission caches its store on module load. A fresh process gives each
@@ -529,14 +529,17 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     const { statePath } = await import("@/lib/configDir");
     const seatProject = "fixture-seat-project";
     let designation = 0;
-    const designate = (id: string, pending = false) => {
+    const designate = (id: string, pending = false, project = seatProject) => {
       const clientRequestId = `fixture-seat-${++designation}`;
-      expect(beginOrchestratorSeatIntent({ project: seatProject, mandate: "run the board",
+      expect(beginOrchestratorSeatIntent({ project, mandate: "run the board",
         clientRequestId, mode: "existing", conversationId: id }).kind).toBe("begun");
-      if (!pending) expect(completeOrchestratorSeatIntent({ project: seatProject, clientRequestId,
+      if (!pending) expect(completeOrchestratorSeatIntent({ project, clientRequestId,
         conversationId: id, path: transcript }).kind).toBe("activated");
     };
-    const rememberSeat = () => registry.rememberMembership(conversationId, { kind: "orchestrator", containerId: seatProject, role: "seat", slot: "orchestrator" });
+    const rememberSeat = (project = seatProject) => registry.rememberMembership(conversationId, {
+      kind: "orchestrator", containerId: project, role: "seat", slot: "orchestrator",
+      parentConversationId: null, stageId: null, stageOrder: null, round: null,
+    });
     if (["live-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat"].includes(scenario)) {
       designate(conversationId, scenario === "pending-seat");
       if (scenario !== "store-only-seat" && scenario !== "pending-seat") rememberSeat();
@@ -549,6 +552,14 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       designate(conversationId);
       const file = readOrchestratorSeatFile();
       expect(file.seats[seatProject]!.seatEpoch).toBeGreaterThan(file.revocations.find(row => row.conversationId === conversationId)!.seatEpoch);
+    }
+    if (scenario === "seat-in-another-project") {
+      designate(conversationId);
+      rememberSeat();
+      designate(conversationId, false, "fixture-other-project");
+      rememberSeat("fixture-other-project");
+      designate("conversation_other_successor", false, "fixture-other-project");
+      expect(readOrchestratorSeatFile().seats[seatProject]!.conversationId).toBe(conversationId);
     }
     if (scenario === "legacy-seat") rememberSeat();
     const seatFile = statePath("orchestrator-seats.json");
@@ -701,7 +712,7 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       }
       if (["resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation"].includes(scenario)) expect(actuationChecked).toBe(true);
       if (scenario === "seat-before-signal") expect(seatAcquired).toBe(true);
-      if (["live-seat", "legacy-seat", "store-only-seat", "pending-seat", "redesignated-seat", "seat-before-signal"].includes(scenario)) {
+      if (["live-seat", "legacy-seat", "store-only-seat", "pending-seat", "redesignated-seat", "seat-before-signal", "seat-in-another-project"].includes(scenario)) {
         // Idle live seats survive repeated sweeps without spending the budget.
         await tick();
         expect(procBackend.pidAlive(recordedPid)).toBe(true);
