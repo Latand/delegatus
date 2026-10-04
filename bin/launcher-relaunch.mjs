@@ -249,9 +249,14 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     if (apply && ["building", "ready", "switching"].includes(apply.state) ) {
       const request = read(paths.request);
       const owner = read(paths.record)?.launcher;
+      const receipt = read(`${paths.request}.result.json`);
+      const receiptOwner = receipt?.requestId === apply.requestId && receipt.target === apply.target
+        && ["done", "rolled-back"].includes(receipt.state) && receipt.issuerPid === apply.launcherPid
+        && receipt.issuerIdentity === apply.launcherIdentity && receipt.launcherPid === owner?.pid
+        && receipt.launcherIdentity === owner?.startIdentity;
       if (typeof apply.requestId !== "string" || !/^[0-9a-f]{40}$/.test(apply.target)
         || apply.releasePointer !== paths.releasePointer || !apply.launcherIdentity
-        || owner?.pid !== apply.launcherPid || owner.startIdentity !== apply.launcherIdentity
+        || !receiptOwner && (owner?.pid !== apply.launcherPid || owner.startIdentity !== apply.launcherIdentity)
         || !(apply.rollbackPointer === null || typeof apply.rollbackPointer === "string")
         || request && (request.role !== "relaunch" || request.requestId !== apply.requestId || request.target !== apply.target
           || request.rollbackPointer !== apply.rollbackPointer || request.requestedAt !== apply.startedAt))
@@ -283,10 +288,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         since: apply.startedAt, until: Date.now() + 600000, persistent: true }) + "\n");
       atomic(applyFile, JSON.stringify({ ...apply, state: "switching", switchedAt: apply.switchedAt ?? new Date().toISOString() }) + "\n");
       if (request) rmSync(paths.request, { force: true });
-      const receipt = read(`${paths.request}.result.json`);
       const completed = receipt?.requestId === apply.requestId && receipt.target === apply.target && receipt.state === "done"
-        && receipt.launcherPid === apply.launcherPid && receipt.launcherIdentity === apply.launcherIdentity
-        && receipt.revision === apply.target && release.sha === apply.target;
+        && receiptOwner && receipt.revision === apply.target && release.sha === apply.target;
       const externalReady = apply.externalRestart && apply.state === "ready" && release.sha === apply.target
         && entry === join(release.dir, "bin", "cli.mjs");
       directTrial = true; pendingRecovery = !completed && !externalReady;
@@ -408,9 +411,15 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         ? { kind: "fell-back", revision: trial.target.slice(0, 7), detail: trial.detail }
         : null;
       record.set("launcher", { state: "healthy", requestId: trial?.requestId ?? null, error });
-      if (trial) atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: trial.requestId,
-        target: trial.target, previousEntry: trial.previousEntry, launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), revision: release.sha,
-        state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
+      if (trial) {
+        let accepted;
+        try { accepted = JSON.parse(readFileSync(join(dirname(paths.request), "apply.json"), "utf8")); } catch { /* legacy trial */ }
+        const owned = accepted?.requestId === trial.requestId && accepted.target === trial.target;
+        atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: trial.requestId,
+          target: trial.target, previousEntry: trial.previousEntry, launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), revision: release.sha,
+          ...(owned ? { issuerPid: accepted.launcherPid, issuerIdentity: accepted.launcherIdentity } : {}),
+          state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
+      }
       if (trial) rmSync(trialFile, { force: true });
       trial = null;
       delete process.env.LLV_LAUNCHER_TRIAL;

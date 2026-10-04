@@ -202,8 +202,9 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
         catch (error) {
           if (error.code !== "ENOENT") return; // Unreadable custody is retained.
         }
-        if (apply?.launcherPid === record.launcher.pid && apply.launcherIdentity === record.launcher.startIdentity
-          && apply.releasePointer === record.releasePointer) {
+        if (apply && apply.releasePointer === record.releasePointer
+          && (apply.launcherPid === record.launcher.pid && apply.launcherIdentity === record.launcher.startIdentity
+            || current.launcher.requestId === apply.requestId)) {
           if (["building", "ready", "switching"].includes(apply.state)) return;
           // Terminal persistence and hold release are separate writes. Retain
           // the original owner across a signal between those two boundaries.
