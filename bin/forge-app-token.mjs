@@ -402,10 +402,10 @@ export async function runGh(args, ports) {
   try {
     const status = await ports.exec(gh, args, env);
     /* Older `gh` reads a pull request's classic project cards before every
-       edit, which an installation token may not, and fails there. The REST
-       form edits the same pull request and is a covered kind too. */
+       edit and fails there, with any token. The REST form edits the same
+       pull request and is a covered kind too. */
     if (status !== 0 && readArgs(args, VALUE_FLAGS[""]).positional.slice(0, 2).join(" ") === "pr edit") {
-      ports.stderr(`Delegatus: if \`gh pr edit\` failed on a Projects query, this version of gh cannot edit a pull request with an App token; \`gh api -X PATCH repos/${named}/pulls/<number> -f title=… -F body=@file\` makes the same edit as the App.\n`);
+      ports.stderr(`Delegatus: if \`gh pr edit\` failed on a Projects query, this version of gh cannot edit a pull request;\`gh api -X PATCH repos/${named}/pulls/<number> -f title=… -F body=@file\` makes the same edit as the App.\n`);
     }
     return status;
   } finally {
