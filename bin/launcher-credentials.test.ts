@@ -11,27 +11,71 @@ import { isAlive } from "../src/lib/selfUpdate/pid";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
 import { prepareLauncherCredentials } from "./launcher-credentials.mjs";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
+import { resetWindowsSnapshotForTests, windowsBackend } from "../src/lib/proc/windows";
 
 const fixtures: string[] = [];
 const children = new Set<ReturnType<typeof spawn>>();
 const owners = new Map<number, string>();
+const terminalOwners = new Map<number, { startIdentity: string; role: string; fixtureCwd: boolean }>();
+const ownedIdentity = (pid: number) => process.platform === "win32" ? windowsBackend.processIdentity(pid) : readStartIdentity(pid);
+function cleanupEvidence(event: string, facts: Record<string, unknown> = {}) {
+  if (process.platform === "win32") console.error("[custody-cleanup]", JSON.stringify({ event, ...facts }));
+}
+function track(child: ReturnType<typeof spawn>) {
+  children.add(child);
+  if (child.pid) { const identity = ownedIdentity(child.pid); if (identity) owners.set(child.pid, identity); }
+}
+function observeTerminal(child: ReturnType<typeof spawn>, root: string) {
+  if (process.platform !== "win32" || !child.pid) return;
+  const shellIdentity = owners.get(child.pid);
+  if (!shellIdentity || ownedIdentity(child.pid) !== shellIdentity) return;
+  resetWindowsSnapshotForTests();
+  const parents = windowsBackend.ppidMap();
+  // Enroll only the bootstrap directly spawned by our identity-verified shell.
+  // The snapshot filters stale parent links using both creation times.
+  for (const [pid, parent] of parents) {
+    if (parent !== child.pid) continue;
+    const argv = windowsBackend.readArgv(pid);
+    if (!argv.includes("--terminal") || !argv.some(arg => /[/\\]launcher-relaunch\.mjs$/.test(arg))) continue;
+    const identity = ownedIdentity(pid), cwd = windowsBackend.readCwd(pid);
+    if (!identity || ownedIdentity(child.pid) !== shellIdentity || ownedIdentity(pid) !== identity) continue;
+    const relative = cwd === null ? null : path.relative(root, cwd);
+    const fixtureCwd = relative !== null && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+    owners.set(pid, identity); terminalOwners.set(pid, { startIdentity: identity, role: "terminal-bootstrap", fixtureCwd });
+    cleanupEvidence("terminal-owner-observed", { pid, startIdentity: identity, shellPid: child.pid, shellStartIdentity: shellIdentity, fixtureCwd, alive: isAlive(pid) });
+  }
+}
+function ownerExited(pid: number, identity: string) {
+  if (!isAlive(pid)) return true;
+  const current = ownedIdentity(pid);
+  return current !== null && current !== identity; // Reuse also proves our process exited.
+}
 async function stop(child: ReturnType<typeof spawn>) {
   if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!child.pid || owners.get(child.pid) !== ownedIdentity(child.pid)) throw new Error("Owned child identity could not be verified");
   const exited = new Promise(resolve => child.once("exit", resolve)); child.kill("SIGTERM");
   await Promise.race([exited, Bun.sleep(3000)]);
   if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
 }
 afterEach(async () => {
+  cleanupEvidence("teardown-start", { terminalOwners: [...terminalOwners].map(([pid, record]) => ({ pid, ...record, exited: ownerExited(pid, record.startIdentity) })) });
   for (const child of children) await stop(child); children.clear();
   for (const [pid, identity] of owners) {
-    if (!isAlive(pid) || readStartIdentity(pid) !== identity) continue;
+    if (ownerExited(pid, identity)) { cleanupEvidence("owner-exited", { pid, startIdentity: identity }); continue; }
+    if (ownedIdentity(pid) !== identity) throw new Error("Fixture owner identity could not be verified");
     try { process.kill(pid, "SIGTERM"); } catch { continue; }
     const deadline = Date.now() + 3000;
-    while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(50);
-    if (isAlive(pid) && readStartIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* exited */ } }
+    while (!ownerExited(pid, identity) && Date.now() < deadline) await Bun.sleep(50);
+    if (!ownerExited(pid, identity) && ownedIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* exited */ } }
+    await until(() => ownerExited(pid, identity) ? true : null, 3000);
+    cleanupEvidence("owner-exited", { pid, startIdentity: identity });
   }
+  for (const [pid, identity] of owners) if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
   owners.clear();
+  terminalOwners.clear();
+  cleanupEvidence("all-owners-exited-before-remove");
   for (const root of fixtures) rmSync(root, { force: true, recursive: true }); fixtures.length = 0;
+  cleanupEvidence("fixture-removed");
 }, 30000);
 async function until<T>(read: () => T | false | null, budget = 30000): Promise<T> {
   const deadline = Date.now() + budget;
@@ -39,6 +83,7 @@ async function until<T>(read: () => T | false | null, budget = 30000): Promise<T
   throw new Error("Private handoff did not settle");
 }
 async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN") {
+  if (process.platform === "win32" && !ownedIdentity(process.pid)) throw new Error("Native kernel identity reader is unavailable");
   const root = mkdtempSync(path.join(process.platform === "win32" ? tmpdir() : "/var/tmp", "dlg-custody-")); fixtures.push(root);
   const base = path.join(root, "package"), candidate = path.join(root, "candidate"), state = path.join(root, "state");
   mkdirSync(state);
@@ -104,7 +149,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   const f = await fixture(alias);
   const listener = net.createServer(); await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
   const port = (listener.address() as net.AddressInfo).port; await new Promise<void>(resolve => listener.close(() => resolve()));
-  const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); children.add(old);
+  const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); track(old);
   const before = await until(() => { const r = f.readRecord(); return r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   await gateIntact(port, f.key);
   const target = "b".repeat(40);
@@ -123,7 +168,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   }
   const child = process.platform === "win32"
     ? spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", action!.command!], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] })
-    : spawn("sh", ["-c", `exec ${action!.command!}`], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+    : spawn("sh", ["-c", `exec ${action!.command!}`], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] }); track(child);
   let output = ""; child.stdout!.on("data", data => output += data); child.stderr!.on("data", data => output += data);
   let after = await until(() => { const r = f.readRecord(); return r?.launcher.pid !== before.launcher.pid && r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   await gateIntact(port, f.key);
@@ -131,8 +176,11 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   // Let the tracked terminal command finish before teardown can stop its
   // launcher and leave the bootstrap holding the fixture's Windows cwd.
   if (action?.id === "restart-terminal") {
+    observeTerminal(child, f.root);
     await until(() => child.exitCode !== null ? true : null);
     expect(child.exitCode).toBe(rollback ? 1 : 0);
+    cleanupEvidence("terminal-command-complete", { pid: child.pid, startIdentity: child.pid ? owners.get(child.pid) : null, exit: child.exitCode,
+      terminalOwners: [...terminalOwners].map(([pid, record]) => ({ pid, ...record, exited: ownerExited(pid, record.startIdentity) })) });
   }
   if (actionId === "start-launcher" && rollback) {
     // A failed real terminal trial is already rolled back. Cold recovery via
@@ -145,7 +193,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
     expect(recovery?.id).toBe("start-launcher");
     const recovered = process.platform === "win32"
       ? spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", recovery!.command!], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] })
-      : spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] }); children.add(recovered);
+      : spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] }); track(recovered);
     recovered.stdout!.on("data", data => output += data); recovered.stderr!.on("data", data => output += data);
     const priorPid = after.launcher.pid;
     after = await until(() => { const r = f.readRecord(); return r?.launcher.pid !== priorPid && r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
@@ -163,6 +211,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
     const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { env: windowsPowerShellEnv(), encoding: "utf8", timeout: 10000 });
     expect(observed.status).toBe(0); expect(observed.stdout.includes(f.key)).toBe(false); expect(observed.stderr.includes(f.key)).toBe(false);
   }
+  cleanupEvidence("body-complete", { alias, actionId, rollback, assertionsCompleted: true });
 }, 120000);
 
 function windowsPowerShellEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -179,7 +228,7 @@ for (const unsafe of ["readable", "writable", "directory", "link", "foreign-iden
   const f = await fixture();
   const listener = net.createServer(); await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
   const port = (listener.address() as net.AddressInfo).port; await new Promise<void>(resolve => listener.close(() => resolve()));
-  const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); children.add(old);
+  const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); track(old);
   const before = await until(() => { const r = f.readRecord(); return r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   expect(prepareLauncherCredentials(f.base, f.env)).toBe(true);
   const file = path.join(f.directory, "environment.json"), receipt = path.join(f.root, "credential-read");
