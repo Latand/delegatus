@@ -597,6 +597,8 @@ export class SelfUpdateService {
       // The launcher may have been replaced while GitHub and activity were read.
       // Re-read the record before filing anything an older watcher would take.
       this.decision = null;
+      const dispatchActivity = quietDispatchVersion(quiet, this.deps.now());
+      const dispatchOwner = { ...record.launcher };
       const admissionDecision = await this.decide();
       if (admissionDecision.mode !== "checkout" || admissionDecision.record?.launcher.autoAdmission !== 1
         || admissionDecision.record.launcher.pid !== record.launcher.pid
@@ -605,10 +607,11 @@ export class SelfUpdateService {
       const admissionProbe = await probeQuiet(admissionSnapshot, quiet, this.deps.now(), this.draining());
       this.autoBlockers = admissionProbe.blockers;
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
-      const admissionRecord = recordFile ? readLauncherRecord(recordFile) : admissionDecision.record;
-      if ((!this.auto.enabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || activeRestartGate(gateFile) !== gateId || !this.quietAdmits(admissionProbe)
-        || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== record.launcher.pid
-        || admissionRecord.launcher.startIdentity !== record.launcher.startIdentity || admissionRecord.requestFile !== record.requestFile
+      const admissionRecord = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : admissionDecision.record);
+      if ((!this.auto.enabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || !ownsRestartGate(gateFile, gateId) || !this.quietAdmits(admissionProbe)
+        || dispatchActivity !== quietDispatchVersion(quiet, this.deps.now())
+        || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== dispatchOwner.pid
+        || admissionRecord.launcher.startIdentity !== dispatchOwner.startIdentity || admissionRecord.requestFile !== record.requestFile
         || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
         || admissionSnapshot.serving.web?.sha !== finalSnapshot.serving.web?.sha
         || admissionSnapshot.serving.runtimeHost?.sha !== finalSnapshot.serving.runtimeHost?.sha) return;

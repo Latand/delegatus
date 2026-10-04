@@ -165,6 +165,11 @@ export class ApplyController {
     this.patch({ state: "done" }); this.releaseAdmission(record, intent); return "done";
   }
   private releaseAdmission(record: LauncherRecord, intent: ApplyIntent): void {
+    // Consume only this settled request, after coherent serving verification.
+    try {
+      const request = JSON.parse(readFileSync(record.requestFile, "utf8"));
+      if (request.requestId === intent.requestId && request.target === intent.target) rmSync(record.requestFile, { force: true });
+    } catch { /* Missing, unreadable or foreign requests keep their custody. */ }
     releaseDrain(join(this.directory, "auto-drain.json"), intent.requestId);
     if (intent.autoGateId) endRestartGate(restartGateFile(record.requestFile), intent.autoGateId);
   }
