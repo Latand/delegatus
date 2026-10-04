@@ -379,6 +379,30 @@ test("injected names remain the offered names after source edits, removal and re
 });
 
 
+test("confirmed emissions survive contention and reload with exactly one original scored name", async () => {
+  const index = new MemoryIndex();
+  await index.refresh([{ path: fixture("confirmed.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
+  const entries = index.injectionCandidates("widget", "project-a", "claude", "confirmed-conversation").map(entry => ({ ...entry, score: .8 }));
+  expect(entries).toHaveLength(1);
+  const writer = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    index.recordConfirmedInjection(entries, "confirmed-turn", "confirmed-conversation");
+    index.recordConfirmedInjection(entries, "confirmed-turn", "confirmed-conversation");
+    expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "memory-injection-pending"))).toHaveLength(1);
+  } finally { writer.exec("ROLLBACK"); writer.close(); index.close(); }
+  try {
+    // Remove the source before replay: the durable evidence keeps the offer.
+    await index.refresh([], { complete: true });
+    expect(index.turnOffers("confirmed-conversation")).toMatchObject([{ title: entries[0].title, score: .8 }]);
+    index.recordConfirmedInjection(entries.map(entry => ({ ...entry, title: "Later title" })), "confirmed-turn", "confirmed-conversation");
+    index.close();
+    expect(index.turnOffers("confirmed-conversation")).toMatchObject([{ title: entries[0].title, score: .8 }]);
+    expect(index.turnOffers("confirmed-conversation")).toHaveLength(1);
+    expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "memory-injection-pending"))).toHaveLength(0);
+  } finally { index.close(); }
+});
+
 test("cold hook bookkeeping fails open on contention and retries initialization after unlock", () => {
   const index = new MemoryIndex();
   index.search({ query: "widget" });
@@ -392,6 +416,25 @@ test("cold hook bookkeeping fails open on contention and retries initialization 
   } finally { db.exec("ROLLBACK"); db.close(); }
   try { expect(index.claimHook("cold-conversation", "cold-turn")).toBeTrue(); }
   finally { index.close(); }
+});
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} ambiguous identical journal rows cannot establish operator authorship`, () => {
+  const transcript = fixture("ambiguous.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
+  const line = (id: string) => JSON.stringify(engine === "claude"
+    ? { type: "user", uuid: id, message: { role: "user", content: prompt } }
+    : { type: "response_item", payload: { type: "message", turn_id: id, role: "user", content: [{ type: "input_text", text: prompt }] } }) + "\n";
+  try {
+    index.recordTerminalDelivery("ambiguous-machine", "ambiguous-conversation", prompt, "agent", transcript);
+    fs.appendFileSync(transcript, line("synthetic-queued") + line("synthetic-machine"));
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
+    index.close();
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
+    // Once native ownership disambiguates the earlier row, bind only the machine.
+    index.recordNativeTurn("ambiguous-conversation", "native:synthetic-queued", transcript, 0, prompt);
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("agent");
+    fs.appendFileSync(transcript, line("synthetic-typed"));
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBeNull();
+  } finally { index.close(); }
 });
 
 for (const engine of ["claude", "codex"] as const) test(`${engine} two queued identical machine receipts own separate native occurrences`, () => {

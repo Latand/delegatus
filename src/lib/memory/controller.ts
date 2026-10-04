@@ -37,7 +37,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       const emittedAt = input.delegatus_emitted_at;
       if (offer && typeof emittedAt === "number" && Number.isFinite(emittedAt)
         && emittedAt >= offer.preparedAt && emittedAt < offer.expires && offer.index === memoryIndex()) {
-        offer.index.recordInjection(offer.entries, offer.requestId, conversationId);
+        offer.index.recordConfirmedInjection(offer.entries, offer.requestId, conversationId);
         pendingOffers.delete(offerKey);
       }
       return "";

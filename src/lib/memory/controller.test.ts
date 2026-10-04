@@ -43,7 +43,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-for (const mode of ["delayed input", "delayed body", "delayed confirmation", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only successfully emitted output`, async () => {
+for (const mode of ["delayed input", "delayed body", "delayed confirmation", "contended confirmation", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only successfully emitted output`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-output-boundary-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
@@ -60,10 +60,15 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "un
     return Response.json({ answers: { [id]: { noul: .8 } }, usage: { cost: .0001 } });
   }) as unknown as typeof fetch;
   let finished: Promise<string> = Promise.resolve("");
+  const confirmationLock: { db: Database | null } = { db: null };
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
     const input = await request.json();
     finished = (async () => {
       if (mode === "delayed confirmation" && input.delegatus_confirm) await Bun.sleep(650);
+      if (mode === "contended confirmation" && input.delegatus_confirm) {
+        confirmationLock.db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+        confirmationLock.db.exec("BEGIN IMMEDIATE");
+      }
       return prepareForHook(request, input);
     })();
     const block = await finished;
@@ -84,14 +89,15 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "un
         if (mode === "delayed input") await Bun.sleep(600);
         proc.stdin.write(JSON.stringify(input)); proc.stdin.end();
         expect(await proc.exited).toBe(0);
-        expect((await new Response(proc.stdout).text()).length > 0).toBe((mode === "successful" || mode === "delayed confirmation"));
+        expect((await new Response(proc.stdout).text()).length > 0).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation"));
         await finished;
+        confirmationLock.db?.exec("ROLLBACK"); confirmationLock.db?.close(); confirmationLock.db = null;
       } finally { proc.kill(); await proc.exited; }
     }
-    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation") ? 1 : 0);
     memoryIndex().close();
+    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation") ? 1 : 0);
     const reloaded = memoryIndex().turnOffers(receipt.conversationId);
-    if (mode === "successful" || mode === "delayed confirmation") {
+    if (mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation") {
       expect(reloaded).toHaveLength(1);
       expect(reloaded[0]).toMatchObject({ title: "Widget parser", score: .8 });
       fs.writeFileSync(transcript, JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] } }) + "\n");
@@ -104,8 +110,8 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "un
       const lookup = provenanceLookupFor({ memoryOffers: offers }, entries.map(entry => entry.item));
       expect(lookup.memoryFor!(entries.find(entry => entry.item.kind === "user")!.item)).toEqual(["Widget parser"]);
     }
-    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation") ? 0 : 1);
-  } finally { server.stop(true); }
+    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation") ? 0 : 1);
+  } finally { confirmationLock.db?.exec("ROLLBACK"); confirmationLock.db?.close(); server.stop(true); }
 }, 5000);
 
 for (const engine of ["claude", "codex"] as const) for (const prompt of ["Proceed", "Так"]) {
@@ -239,7 +245,7 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
 });
 
-for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} deliveries abstain while identical typed operator occurrences receive memory`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) for (const queued of ["different", "identical"] as const) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} ${queued} queued input deliveries abstain while identical typed operator occurrences receive memory`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
   process.env.OPENROUTER_API_KEY = "fixture";
@@ -274,6 +280,7 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   if (mode === "relay") { fs.writeFileSync(child, ""); registry.ensureConversation(engine, child, "default"); }
   const entry = { path: transcript, root, engine, title: "Synthetic terminal" } as FileEntry;
   const childEntry = { ...entry, path: child, parent: transcript };
+  // The earlier operator hook ran before its journal row materialized.
   const lock = contended ? new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite")) : null;
   lock?.exec("BEGIN IMMEDIATE");
   let result;
@@ -285,10 +292,14 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   finally { lock?.exec("ROLLBACK"); lock?.close(); }
   memoryIndex().close();
   expect(result.ok).toBe(true);
+  if (queued === "identical") memoryIndex().recordNativeTurn(receipt.conversationId, "native:synthetic-earlier", transcript, fs.statSync(transcript).size, wire);
   // Another submission queued before actuation can journal after this receipt.
   fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
-    ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Earlier queued input" } }
-    : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Earlier queued input" }] } }) + "\n");
+    ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: queued === "identical" ? wire : "Earlier queued input" } }
+    : { type: "response_item", payload: { type: "message", turn_id: "synthetic-earlier", role: "user", content: [{ type: "input_text", text: queued === "identical" ? wire : "Earlier queued input" }] } }) + "\n");
+  if (queued === "identical") fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
+    ? { type: "user", uuid: "synthetic-machine", message: { role: "user", content: wire } }
+    : { type: "response_item", payload: { type: "message", turn_id: "synthetic-machine", role: "user", content: [{ type: "input_text", text: wire }] } }) + "\n");
   if (engine === "claude") for (const source of ["sdk", "system", "loop_wakeup", "schedule_wakeup", "poll_event"]) {
     expect(await offerForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
       prompt_id: `synthetic-${source}`, prompt: "Update widget parser background wakeup", source })).toBe("");

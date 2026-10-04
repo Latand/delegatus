@@ -255,6 +255,7 @@ export class MemoryIndex {
     // has its own short CPU budget and abandons incomplete filtering entirely.
     const deadline = Math.min(requestDeadline, performance.now() + 100);
     const check = () => { if (performance.now() >= deadline) throw Error("memory candidate budget"); };
+    this.replayConfirmedInjections();
     const query = queryFor(prompt, "recall");
     if (!query) return [];
     const db = this.database();
@@ -362,12 +363,23 @@ export class MemoryIndex {
   }
 
   private terminalOccurrences(db: BunDatabase, filename: string, engine: "claude" | "codex", conversation?: string) {
+    const deadline = performance.now() + 100;
     const bound = db.query<{ delivery: string; occurrence: string }, [string]>("SELECT delivery, occurrence FROM memory_terminal_occurrences WHERE transcript = ?").all(filename);
     const seen = new Set(bound.map(row => row.occurrence)), joined = new Set(bound.map(row => row.delivery));
+    // A prior operator hook can finish before its journal append. Resolve its
+    // native id first so identical words cannot transfer its row to a receipt.
+    const nativeTurns = db.query<{ request: string; digest: string; occurrence: string | null }, [string, string | null]>(
+      "SELECT request, digest, occurrence FROM memory_native_turns WHERE transcript = ? OR (transcript = '' AND conversation = ?) ORDER BY rowid DESC LIMIT 256"
+    ).all(filename, conversation ?? null);
+    for (const turn of nativeTurns) {
+      if (performance.now() >= deadline) throw Error("memory occurrence join budget");
+      if (turn.occurrence) { seen.add(turn.occurrence); continue; }
+      const cursor = nativeHookCursor(filename, engine, turn.request.slice("native:".length));
+      if (cursor.key && cursor.digest === turn.digest) seen.add(cursor.key);
+    }
     const receipts = db.query<{ id: string; conversation: string; digest: string; request: string | null; offset: number | null }, [string, string | null]>(
       "SELECT id, conversation, digest, request, offset FROM memory_terminal_deliveries WHERE transcript = ? OR (transcript IS NULL AND conversation = ?) ORDER BY rowid DESC LIMIT 256"
     ).all(filename, conversation ?? null).reverse();
-    const deadline = performance.now() + 100;
     for (const receipt of receipts) {
       if (joined.has(receipt.id)) continue;
       if (performance.now() >= deadline) throw Error("memory occurrence join budget");
@@ -375,6 +387,7 @@ export class MemoryIndex {
       const occurrence = cursor?.key && cursor.digest === receipt.digest && !seen.has(cursor.key) ? cursor
         : nativeOccurrenceAfter(filename, engine, receipt.offset ?? 0, receipt.digest, seen);
       if (!occurrence?.key) continue;
+      if (!receipt.request && nativeOccurrenceAfter(filename, engine, receipt.offset ?? 0, receipt.digest, new Set([...seen, occurrence.key]))) continue;
       db.query("INSERT OR IGNORE INTO memory_terminal_occurrences VALUES (?, ?, ?, ?, ?)")
         .run(receipt.id, receipt.conversation, filename, occurrence.key, occurrence.offset);
       seen.add(occurrence.key);
@@ -396,7 +409,7 @@ export class MemoryIndex {
       // Replay before the binding transaction: a receipt file is removed only
       // after its independent SQLite insert committed successfully.
       this.replayTerminalDeliveries(db);
-      if (transcript && engine) this.terminalOccurrences(db, transcript, engine, conversation);
+      const owned = transcript && engine ? this.terminalOccurrences(db, transcript, engine, conversation) : new Set<string>();
       return db.transaction(() => {
         const existing = db.query<{ origin: string }, [string, string]>("SELECT origin FROM memory_terminal_deliveries WHERE conversation = ? AND request = ?").get(conversation, request);
         if (existing) return existing.origin;
@@ -406,8 +419,11 @@ export class MemoryIndex {
           const journal = delivery.transcript ?? (delivery.id.startsWith("spawn:") ? transcript : undefined);
           if (journal && engine) {
             const joined = db.query<{ key: string; offset: number }, [string]>("SELECT occurrence AS key, offset FROM memory_terminal_occurrences WHERE delivery = ?").get(delivery.id);
-            const seen = new Set(db.query<{ occurrence: string }, [string]>("SELECT occurrence FROM memory_terminal_occurrences WHERE transcript = ?").all(journal).map(row => row.occurrence));
+            const seen = journal === transcript ? owned : this.terminalOccurrences(db, journal, engine, conversation);
             const journaled = joined ?? nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt), seen);
+            // No receipt-to-row identity can be inferred from repeated words.
+            // Keep the receipt pending until native ownership disambiguates it.
+            if (!joined && journaled && nativeOccurrenceAfter(journal, engine, delivery.offset ?? 0, messageTextDigest(prompt), new Set([...seen, journaled.key]))) return "unknown";
             if (journaled && journaled.key !== cursor?.key) {
               // Retire only the matching delivery occurrence. Unrelated queued
               // records can precede actuation and carry no receipt evidence.
@@ -443,7 +459,7 @@ export class MemoryIndex {
     return this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_hook_attempts VALUES (?, ?)").run(conversation, request).changes === 1);
   }
 
-  recordInjection(entries: Array<Candidate & { score: number }>, requestId: string, conversation: string) {
+  recordInjection(entries: Array<Pick<Candidate, "id" | "title"> & { score: number }>, requestId: string, conversation: string) {
     this.hookDatabase(db => db.transaction(() => {
       for (const entry of entries) {
         db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, new Date().toISOString(), entry.score);
@@ -453,7 +469,48 @@ export class MemoryIndex {
     })());
   }
 
+  recordConfirmedInjection(entries: Array<Candidate & { score: number }>, requestId: string, conversation: string) {
+    const evidence = JSON.stringify({ requestId, conversation, entries: entries.map(({ id, title, score }) => ({ id, title, score })) });
+    const directory = statePath("memory-injection-pending");
+    const filename = path.join(directory, crypto.createHash("sha256").update(JSON.stringify([conversation, requestId])).digest("hex") + ".json");
+    fsSync.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const temporary = filename + "." + crypto.randomUUID() + ".tmp";
+    try {
+      fsSync.writeFileSync(temporary, evidence, { mode: 0o600 });
+      fsSync.renameSync(temporary, filename);
+    } finally { fsSync.rmSync(temporary, { force: true }); }
+    // Confirmation is a delivery fact even when the derivative has a writer.
+    // Preserve only scored names, never the prompt, body or credentials.
+    try { this.replayConfirmedInjections(); } catch { /* durable evidence is retried on the next ledger read */ }
+  }
+
+  private replayConfirmedInjections() {
+    const directory = statePath("memory-injection-pending");
+    let names: string[];
+    try { names = fsSync.readdirSync(directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+    if (names.length > 256) throw Error("memory confirmation replay budget");
+    const deadline = performance.now() + 100;
+    for (const name of names) {
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+      if (performance.now() >= deadline) throw Error("memory confirmation replay budget");
+      const filename = path.join(directory, name), stat = fsSync.lstatSync(filename);
+      if (!stat.isFile() || stat.size > 128000) throw Error("invalid memory confirmation evidence");
+      const row = JSON.parse(fsSync.readFileSync(filename, "utf8"));
+      if (typeof row.requestId !== "string" || typeof row.conversation !== "string"
+        || crypto.createHash("sha256").update(JSON.stringify([row.conversation, row.requestId])).digest("hex") + ".json" !== name
+        || !Array.isArray(row.entries) || row.entries.length > 15
+        || row.entries.some((entry: { id: unknown; title: unknown; score: unknown }) => !entry || typeof entry.id !== "string"
+          || typeof entry.title !== "string" || typeof entry.score !== "number" || !Number.isFinite(entry.score) || entry.score < .7 || entry.score > 1)) throw Error("invalid memory confirmation evidence");
+      this.recordInjection(row.entries, row.requestId, row.conversation);
+      // Removal follows the committed idempotent inserts. A retry after reload
+      // or a duplicate confirmation keeps precisely one row and its first name.
+      fsSync.rmSync(filename, { force: true });
+    }
+  }
+
   turnOffers(conversation: string) {
+    this.replayConfirmedInjections();
     return this.database().query<{ id: string; title: string; requestId: string; score: number }, [string]>(`SELECT o.memory_id AS id, COALESCE(n.title, e.title, o.memory_id) AS title, o.request_id AS requestId, o.score
       FROM memory_offers o LEFT JOIN memory_injection_names n ON n.memory_id = o.memory_id AND n.request_id = o.request_id
       LEFT JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'
