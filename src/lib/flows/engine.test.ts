@@ -1574,6 +1574,8 @@ test("fresh auto reviewer rechecks admission after waiting for the account mutat
   const exec = await import("./exec");
   const account = { engine: "claude" as const, accountId: "account-a", kind: "managed" as const, home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account });
+  // A headless round resolves its account here; without this the test needs a signed-in account in HOME.
+  const resolveHeadless = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account });
   const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "admitted-review", reviewerPath: null });
   const nativeStatus = exec.headlessReviewStatus;
   const status = spyOn(exec, "headlessReviewStatus").mockImplementation((...args) => launch.mock.calls.length
@@ -1605,7 +1607,7 @@ test("fresh auto reviewer rechecks admission after waiting for the account mutat
     expect(flow.rounds).toHaveLength(1); expect(flow.rounds[0].launchId).toBeTruthy();
   } finally {
     resume(); await locking; await ticking;
-    lock.mockRestore(); resolve.mockRestore(); launch.mockRestore(); status.mockRestore();
+    lock.mockRestore(); resolve.mockRestore(); resolveHeadless.mockRestore(); launch.mockRestore(); status.mockRestore();
     releaseDrain(drainFile(), "reviewer-admission");
   }
 });
