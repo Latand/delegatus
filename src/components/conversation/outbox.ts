@@ -1727,7 +1727,6 @@ function sameCounts(left: TranscriptEchoCounts | undefined, right: TranscriptEch
 }
 
 interface EchoOwner {
-  type: "tombstone" | "queue";
   id: string;
   at: number;
   key: string;
@@ -1759,9 +1758,8 @@ interface EchoOwner {
 function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly OutboxEntry[]; tombstones: readonly PersistedOccurrenceTombstone[] } {
   const queue = readOutbox(cardId);
   const tombstones = readOccurrenceTombstones(cardId);
-  const owners: EchoOwner[] = [
+  const representations: EchoOwner[] = [
     ...tombstones.map((entry) => ({
-      type: "tombstone" as const,
       id: entry.id,
       at: entry.at,
       key: entry.key,
@@ -1782,7 +1780,6 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
        submissions of the same text still own two different records and
        identical text alone never merges them. */
     ...queue.map((entry) => ({
-      type: "queue" as const,
       id: entry.id,
       at: entry.at,
       key: echoKey(entry.echoText ?? entry.text),
@@ -1793,7 +1790,22 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
       ...(submissionNamesItsDelivery(entry) ? { identified: true as const } : {}),
       ...(entry.deliveryUncertain ? { uncertain: true as const } : {}),
     })),
-  ].sort((left, right) => left.at - right.at);
+  ];
+  // Compaction and a recurring launch seed can leave two representations of
+  // one submission. Preserve the original occurrence watermark and propagate
+  // its claim to both; another submission with identical text remains separate.
+  const byId = new Map<string, EchoOwner>();
+  for (const entry of representations) {
+    const original = byId.get(entry.id);
+    byId.set(entry.id, original ? {
+      ...original,
+      key: entry.key,
+      retiredEchoId: original.retiredEchoId ?? entry.retiredEchoId,
+      identified: original.identified || entry.identified,
+      uncertain: original.uncertain || entry.uncertain,
+    } : entry);
+  }
+  const owners = [...byId.values()].sort((left, right) => left.at - right.at);
   return { owners, queue, tombstones };
 }
 
@@ -1905,11 +1917,14 @@ function reconcileEchoRetirements(
   const claimed = new Set(owners.flatMap((owner) => owner.retiredEchoId ? [owner.retiredEchoId] : []));
   const retirements = new Map<string, { echoId: string; retiredAt: number }>();
   for (const entry of owners) {
-    if (entry.retiredEchoId) continue;
+    if (entry.retiredEchoId) {
+      retirements.set(entry.id, { echoId: entry.retiredEchoId, retiredAt: Date.now() });
+      continue;
+    }
     const owner = claimEcho(entry, ledger, claimed);
     if (!owner) continue;
     claimed.add(owner.id);
-    retirements.set(`${entry.type}:${entry.id}`, {
+    retirements.set(entry.id, {
       echoId: owner.id,
       retiredAt: Date.now(),
     });
@@ -1917,8 +1932,8 @@ function reconcileEchoRetirements(
 
   let tombstonesChanged = false;
   const nextTombstones = tombstones.map((entry) => {
-    const retirement = retirements.get(`tombstone:${entry.id}`);
-    if (!retirement) return entry;
+    const retirement = retirements.get(entry.id);
+    if (!retirement || entry.retiredEchoId === retirement.echoId) return entry;
     tombstonesChanged = true;
     return {
       ...entry,
@@ -1941,8 +1956,8 @@ function reconcileEchoRetirements(
 
   let queueChanged = false;
   const nextQueue = queue.map((entry) => {
-    const retirement = retirements.get(`queue:${entry.id}`);
-    if (retirement) {
+    const retirement = retirements.get(entry.id);
+    if (retirement && entry.retiredEchoId !== retirement.echoId) {
       queueChanged = true;
       return {
         ...entry,

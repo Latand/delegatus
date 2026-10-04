@@ -85,25 +85,45 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests compare one initial head sample with the merge base. Assertions
-that failed the initial head sample run three more times on each side, filtered
-by their full test name in their file. A failure on any base sample or a pass
-on any head retry produces `FLAKY`, with the file and
-suite/test name and pass/fail counts for both sides, and permits the push.
-An assertion that fails every head sample and never fails on base remains
-`NEW` and refuses the push. New tests have zero base observations. Missing,
-skipped or incomplete retry results are gate errors, never passing evidence.
-Runner and between-tests errors retain the existing comparison: matching
-base diagnostics are `PRE-EXISTING`, additional head diagnostics are `NEW`.
-Fixed and removed/skipped tests remain listed separately. Under this policy,
-assertions that consistently fail on both sides also appear under `FLAKY`,
-because an observed base failure suffices to permit the push.
+Touched tests compare one initial head sample with one initial sample of the
+merge base. The three verdicts read as follows.
+`PRE-EXISTING`: the assertion failed the initial sample on both sides. It is
+classified on those two samples, runs no further, and permits the push.
+`FLAKY`: the assertion failed the initial head sample, passed the initial base
+sample, and then gave mixed results on at least one side. It is listed with the
+file, suite/test name and pass/fail counts for both sides, and permits the push.
+`NEW`: the assertion fails every head sample and never fails on base. It
+refuses the push.
+Only an assertion that could end as `NEW` is confirmed: it runs three more
+times on each side, filtered by its full test name in its file. A failure on
+any base retry or a pass on any head retry makes it `FLAKY`. New tests have
+zero base observations. Missing, skipped or incomplete retry results are gate
+errors, never passing evidence.
+A failure on both initial samples gets no reruns because neither label it could
+end with blocks the push; reruns there bought only the label and cost three
+filtered runs per side on every push that touched the file. An intermittent
+test that happens to fail both initial samples is therefore printed as
+`PRE-EXISTING` for that push.
+A file whose run is broken on the base the same way as on the head never
+blocks. "The same way" means the same diagnostic identity: the file, the kind
+of diagnostic, and its first error line, with the checkout path and the
+private sandbox path replaced by placeholders. That covers an error between
+tests and a run that did not finish (no complete report, a timeout, a runner
+exit that disagrees with its report). Such a diagnostic prints as
+`PRE-EXISTING ... (the base run of this file is broken the same way)`. A
+diagnostic only the head shows, or one whose error line differs, is `NEW` and
+refuses the push. A base file that did not finish while the head finished it,
+or failed to finish differently, remains a gate error. During confirmation a
+side may repeat the between-tests errors of its own initial sample; any other
+runner or between-tests error in a retry is a gate error.
+Fixed and removed/skipped tests remain listed separately.
 When several assertions share the same file, suite and test name, retry
 evidence and the initial base/head comparison preserve their occurrence numbers;
 a recovered occurrence is `FIXED` while a separately failing head occurrence
 remains `NEW`.
 
-Clean head samples incur no reruns. The three rounds share a five-minute
+Clean head samples and failures already present in the initial base sample
+incur no reruns. The three rounds share a five-minute
 budget across all candidate files and both sides, including baseline checkout
 and dependency setup on a cache hit. Each child command is capped by the
 remaining budget; exhausting it blocks with a gate error. This adds at most
@@ -114,7 +134,9 @@ Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
 
-The baseline cache stores only complete green initial samples. A parsed
+The baseline cache stores only complete green initial samples, so a base with
+a failing assertion is sampled once on every push and never read from the
+cache. A parsed
 baseline retry failure evicts its green entry immediately, even when a later
 file in that retry batch errors; any aborted baseline retry also evicts the
 entry. Neither retry verdicts nor head results are cached. Even a warm green

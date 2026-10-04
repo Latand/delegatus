@@ -429,6 +429,9 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     expect(tool?.description).toContain("has this been solved before?");
     expect(tool?.description).toContain("conversation_messages");
     expect(tool?.description).toContain("byteOffset");
+    /* The second pass's mark is explained where the agent reads it. */
+    expect(tool?.description).toContain("A unit ending in ~ matched loosely");
+    expect(tool?.description).toContain("its fragment decides");
     expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",

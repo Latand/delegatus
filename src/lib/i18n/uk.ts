@@ -1604,6 +1604,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "preview.nextPage": "Наступна сторінка",
   "preview.pageOf": "Сторінка {page} з {pages}",
 
+  "feed.processingFailed": "Не вдалося показати цей запис",
+  "feed.processingFailedRecord": "Запис: {type}",
   "feed.agentEnded": "агент завершився",
   "feed.copyCode": "Скопіювати код",
   "feed.copyMd": "Скопіювати повідомлення (Markdown)",

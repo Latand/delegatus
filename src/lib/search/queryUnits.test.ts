@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { queryUnits } from "./queryUnits";
+import { queryUnits, widerExpression } from "./queryUnits";
 
 test("word forms preserve identifiers, numbers and phrase boundaries", () => {
   expect(queryUnits("logins картки").map((u) => u.label)).toEqual(["login*", "картк*"]);
@@ -14,4 +14,26 @@ test("word forms preserve identifiers, numbers and phrase boundaries", () => {
 test("a common stem keeps the rarer original word, and syntax cannot inject FTS operators", () => {
   expect(queryUnits("rebasing", (word) => word === "rebas" ? 100 : 1, 1000)[0].label).toBe("rebasing*");
   expect(queryUnits('alpha OR beta* -gamma').map((u) => u.expression)).toEqual(['"alpha"*', '"or"', '"beta"', '"gamma"*']);
+});
+
+test("the second pass widens unquoted compound terms and identifiers only", () => {
+  const wider = (query: string) => widerExpression(queryUnits(query)[0]);
+  expect(wider("account_project_binding")).toBe('("account_project_binding" OR NEAR("account" "project" "binding", 8) OR "account_project_binding"*)');
+  expect(wider("src/search.ts")).toBe('("src search ts" OR NEAR("src" "search" "ts", 8))');
+  expect(wider("4f9a2c7")).toBe('("4f9a2c7" OR "4f9a2c7"*)');
+  for (const query of ['"account project binding"', '"api_gateway_id"', "5.3", "v2-1", "sign-in", "of-the", "same-same", "migration", "#1533", "1533", "ab_1"]) {
+    expect(wider(query)).toBeNull();
+  }
+});
+
+test("a duplicate of a quoted phrase stays quoted in either order", () => {
+  for (const [quoted, bare] of [['"account_project_binding"', "account_project_binding"], ['"account project binding"', "account-project-binding"]]) {
+    for (const query of [`${quoted} ${bare}`, `${bare} ${quoted}`]) {
+      const units = queryUnits(query);
+      expect(units).toHaveLength(1);
+      expect(units[0].quoted).toBe(true);
+      expect(widerExpression(units[0])).toBeNull();
+    }
+    expect(queryUnits(`${quoted} ${bare}`)[0]).toEqual({ ...queryUnits(bare)[0], quoted: true });
+  }
 });
