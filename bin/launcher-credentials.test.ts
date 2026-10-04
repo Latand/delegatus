@@ -95,8 +95,13 @@ afterEach(async () => {
   for (const child of children) await stop(child);
   children.clear();
   for (const [pid, identity] of owners) {
-    if (ownerExited(pid, identity)) { cleanupEvidence("owner-exited", { pid, startIdentity: identity }); continue; }
-    if (ownedIdentity(pid) !== identity) throw new Error("Fixture owner identity could not be verified");
+    // A process on its way out can still be listed while its identity no
+    // longer reads. That proves neither exit nor ownership, so it is read
+    // again within a bound; nothing is signalled until the identity matches.
+    let owned = false;
+    for (const deadline = Date.now() + 5000; !ownerExited(pid, identity) && !(owned = ownedIdentity(pid) === identity) && Date.now() < deadline;) await Bun.sleep(100);
+    if (!owned && ownerExited(pid, identity)) { cleanupEvidence("owner-exited", { pid, startIdentity: identity }); continue; }
+    if (!owned) throw new Error("Fixture owner identity could not be verified");
     try { process.kill(pid, "SIGTERM"); } catch { continue; }
     const deadline = Date.now() + 3000;
     while (!ownerExited(pid, identity) && Date.now() < deadline) await Bun.sleep(50);
