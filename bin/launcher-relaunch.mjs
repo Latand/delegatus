@@ -283,7 +283,11 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         since: apply.startedAt, until: Date.now() + 600000, persistent: true }) + "\n");
       atomic(applyFile, JSON.stringify({ ...apply, state: "switching", switchedAt: apply.switchedAt ?? new Date().toISOString() }) + "\n");
       if (request) rmSync(paths.request, { force: true });
-      directTrial = true; pendingRecovery = true;
+      const receipt = read(`${paths.request}.result.json`);
+      const completed = receipt?.requestId === apply.requestId && receipt.target === apply.target && receipt.state === "done"
+        && receipt.launcherPid === apply.launcherPid && receipt.launcherIdentity === apply.launcherIdentity
+        && receipt.revision === apply.target && release.sha === apply.target;
+      directTrial = true; pendingRecovery = !completed;
     }
   }
   return {
@@ -391,7 +395,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         : null;
       record.set("launcher", { state: "healthy", requestId: trial?.requestId ?? null, error });
       if (trial) atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: trial.requestId,
-        target: trial.target, state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
+        target: trial.target, launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), revision: release.sha,
+        state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
       if (trial) rmSync(trialFile, { force: true });
       trial = null;
       delete process.env.LLV_LAUNCHER_TRIAL;

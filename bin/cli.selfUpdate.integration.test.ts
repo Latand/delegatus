@@ -1676,7 +1676,7 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   return env;
 }
 
-test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["begin", "ready", "pointer", "switching", "pending", "admitting", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
+test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["begin", "ready", "pointer", "switching", "pending", "admitting", "consumed", "preflight", "starting", "verified", "settlement", "settled"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
@@ -1734,6 +1734,12 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
     await until(() => existsSync(admissionMarker));
     expect(JSON.parse(readFileSync(before.requestFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, role: "relaunch", autoGateId: gateId });
     expect(existsSync(trialFile)).toBe(false);
+  } else if (["verified", "settlement", "settled"].includes(boundary)) {
+    const verified = await until(() => { const r = readRecord(fixture.state); return r.launcher.requestId === apply.current!.requestId
+      && r.launcher.state === "healthy" && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+    await perimeterRemains(running.port, key); expect(await socketAnswers(verified.socket)).toBe(true);
+    if (boundary === "settlement") apply.patch({ state: "done" }); // Exact write before releaseAdmission.
+    if (boundary === "settled") expect(apply.observe(verified as never, true)).toBe("done");
   } else if (boundary !== "pending") {
     await until(() => existsSync(trialFile) && (boundary === "starting"
       ? JSON.parse(readFileSync(trialFile, "utf8")).state === "starting"
@@ -1747,7 +1753,7 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
   process.kill(before.launcher.pid, signal);
   if (boundary === "pending" && signal !== "SIGKILL") process.kill(before.launcher.pid, "SIGCONT");
   await Promise.race([killed, Bun.sleep(6000).then(() => { throw new Error("Launcher ignored termination at the custody boundary"); })]);
-  expect(readRecord(fixture.state).launcher).toMatchObject({ pid: before.launcher.pid, startIdentity: before.launcher.startIdentity });
+  if (boundary !== "settled") expect(readRecord(fixture.state).launcher).toMatchObject({ pid: before.launcher.pid, startIdentity: before.launcher.startIdentity });
   // A crashed launcher leaves its recorded children. Stop only these fixture
   // PIDs; cold startup then exercises the durable handoff on the same install.
   for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");
@@ -1756,13 +1762,15 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
   const child = spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: "ignore" }); children.add(child);
   const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);
-  expect(after.launcher.requestId).toBe(apply.current!.requestId);
-  expect(after.launcher.revision).toBe((signal === "SIGKILL" && boundary === "starting") ? candidate.sha : fixture.first);
-  expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
+  const terminalBeforeBoot = boundary === "settlement" || boundary === "settled";
+  if (!terminalBeforeBoot) expect(after.launcher.requestId).toBe(apply.current!.requestId);
+  const targetServes = signal === "SIGKILL" && boundary === "starting" || ["verified", "settlement", "settled"].includes(boundary);
+  expect(after.launcher.revision).toBe(targetServes ? candidate.sha : fixture.first);
+  if (boundary !== "settled") expect(activeDrain(path.join(directory, "auto-drain.json"))).not.toBeNull();
   const page = await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(2000) });
   // SIGKILL cannot write the stop marker. A durable starting trial is allowed
   // to finish its accepted target; handled signals retain their rollback rule.
-  const completesTrial = signal === "SIGKILL" && boundary === "starting";
+  const completesTrial = targetServes;
   expect(await page.text()).toBe(completesTrial ? candidate.dir : fixture.checkout);
   const service = new SelfUpdateService({
     now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
@@ -1778,6 +1786,10 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
     expect(snapshot.busy).toBeNull(); expect(new ApplyController(directory).current).toMatchObject({ requestId: apply.current!.requestId, state: completesTrial ? "done" : "failed", rolledBack: !completesTrial });
     expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
     expect(existsSync(before.releasePointer)).toBe(completesTrial);
+    const receipt = JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8"));
+    expect(receipt).toMatchObject({ requestId: apply.current!.requestId, state: completesTrial ? "done" : "rolled-back" });
+    const terminal = readFileSync(path.join(directory, "apply.json"), "utf8");
+    await service.snapshot(); expect(readFileSync(path.join(directory, "apply.json"), "utf8")).toBe(terminal);
   } finally { service.stop(); }
 }, 60_000);
 

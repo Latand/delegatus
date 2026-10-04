@@ -202,7 +202,7 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
         catch (error) {
           if (error.code !== "ENOENT") return; // Unreadable custody is retained.
         }
-        if (apply?.state === "switching" && apply.launcherPid === record.launcher.pid
+        if (["building", "ready", "switching"].includes(apply?.state) && apply.launcherPid === record.launcher.pid
           && apply.launcherIdentity === record.launcher.startIdentity
           && apply.releasePointer === record.releasePointer) return;
         rmSync(file, { force: true });
@@ -355,8 +355,10 @@ export function exitError(child, startedAt, clock = () => Date.now()) {
 }
 
 /** Durable work can be admitted by another process while a read is awaited. */
-export function dispatchActivityVersion(state, env = process.env) {
-  const files = [join(state, "agent-registry.json"), join(state, "agent-registry.sqlite"), join(state, "agent-registry.sqlite-wal")];
+export function dispatchActivityVersion(state, env = {}) {
+  const files = [join(state, "agent-registry.json"), join(state, "state.sqlite"), join(state, "state.sqlite-wal")];
+  try { files.push(...readdirSync(state).filter(name => /^runtime-events-.*\.sqlite(?:-wal)?$/.test(name)).sort().map(name => join(state, name))); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
   if (env.LLV_RUNTIME_JOURNAL) files.push(env.LLV_RUNTIME_JOURNAL, `${env.LLV_RUNTIME_JOURNAL}-wal`);
   for (const name of ["pipelines", "flows"]) {
     const dir = join(state, name);

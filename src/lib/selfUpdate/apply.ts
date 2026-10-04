@@ -70,7 +70,7 @@ export class ApplyController {
   }
   observe(record: LauncherRecord, hostHealthy = true, now = Date.now()): "done" | "failed" | null {
     const intent = this.current;
-    if (!intent || !["ready", "switching"].includes(intent.state)) return null;
+    if (!intent || !["ready", "switching", "done", "failed"].includes(intent.state)) return null;
     let result: { requestId?: string; state?: string; detail?: string } | null = null;
     try { result = JSON.parse(readFileSync(`${record.requestFile}.result.json`, "utf8")); } catch { /* no terminal admission result */ }
     const sameLauncher = record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity;
@@ -97,6 +97,17 @@ export class ApplyController {
       return (!requirePointer || pointerRestored) && (!record.launcher.revision || record.launcher.revision.slice(0, 7) === webRevision) && webRevision === hostRevision && !!(packageRestored || webRevision && hostRevision)
         && record.web.revision === webRevision && record.runtimeHost.revision === hostRevision;
     };
+    // A crash can follow the terminal intent write but precede hold release.
+    // Verify the cold serving generation before releasing that same owner;
+    // the terminal state and its receipt are never written a second time.
+    if (intent.state === "done" || intent.state === "failed") {
+      const targetServing = hostHealthy && record.launcher.state === "healthy" && record.web.state === "healthy"
+        && record.runtimeHost.state === "healthy" && record.web.revision === intent.target.slice(0, 7)
+        && record.runtimeHost.revision === intent.target.slice(0, 7)
+        && (!record.launcher.revision || record.launcher.revision === intent.target);
+      if (intent.state === "done" ? targetServing : coherentRollback()) this.releaseAdmission(record, intent);
+      return null;
+    }
     // A first upgrade may return to a launcher predating the trial protocol.
     // Its healthy record carries no request ID; the owned trial, restored raw
     // pointer and independently checked serving processes establish rollback.
