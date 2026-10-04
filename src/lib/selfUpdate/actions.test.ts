@@ -164,12 +164,16 @@ exec "$CREDENTIAL_GIT" "$@"
   Object.assign(process.env, { PATH: `${bin}:${process.env.PATH}`, CREDENTIAL_COUNT: count, CREDENTIAL_ENTERED: entered, CREDENTIAL_RELEASE: release, CREDENTIAL_GIT: git });
   let pending;
   try {
-    pending = installAction(decision as never, { cgroup: () => "", ready: () => true, env: { LLV_STATE_DIR: state } });
+    // The Viewer's own evidence of admitted work; the state directory holds
+    // no file that names a record.
+    let work = "admitted";
+    pending = installAction(decision as never, { cgroup: () => "", ready: () => true, env: { LLV_STATE_DIR: state } }, undefined, () => work);
     const deadline = Date.now() + 1500;
     while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
     expect(existsSync(entered)).toBe(true);
     if (change === "gate-expired") writeFileSync(gate, JSON.stringify({ id: "owned-preflight", until: 0 }));
-    if (change === "new-work") writeFileSync(join(state, "agent-registry.json"), JSON.stringify({ accepted: "new-turn" }));
+    writeFileSync(join(state, "state.sqlite-wal"), "an open turn's traffic");
+    if (change === "new-work") work = "admitted, and a new turn";
     if (change === "custody-changed") decision.record.launcher.startIdentity = "successor";
     const pointerBefore = readFileSync(pointer, "utf8"), gateBefore = readFileSync(gate, "utf8");
     writeFileSync(release, "");

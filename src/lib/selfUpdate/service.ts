@@ -954,16 +954,27 @@ export class SelfUpdateService {
       // by a stale issuer, launcher, request or activity observation.
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
       const current = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : decision.record);
-      let request, durable;
+      // The launcher asks twice: before it takes the request, and again after
+      // its load check, when the request has given way to its preflight trial.
+      const filed = (file: string) => {
+        try { return JSON.parse(readFileSync(file, "utf8")); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+      };
+      let request, trial, durable;
       try {
-        request = JSON.parse(readFileSync(record.requestFile, "utf8"));
+        request = filed(record.requestFile);
+        trial = request ? null : filed(launcherControlFile(record.requestFile, "trial"));
         durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8"));
       } catch { return false; }
+      const bound = request
+        ? request.role === "relaunch" && request.requestId === requestId && request.target === apply.target && request.autoGateId === gateId
+          && request.requestedAt === apply.startedAt && request.rollbackPointer === apply.rollbackPointer
+        : trial?.state === "preflight" && trial.requestId === requestId && trial.target === apply.target
+          && trial.rollbackPointer === apply.rollbackPointer;
       return green.state === "green" && reachable && this.quietAdmits(quiet) && known
         && activity !== null && activity === quietDispatchVersion(this.deps.quiet, this.deps.now())
         && binding === JSON.stringify(this.apply.current) && binding === JSON.stringify(durable)
-        && request.role === "relaunch" && request.requestId === requestId && request.target === apply.target && request.autoGateId === gateId
-        && request.requestedAt === apply.startedAt && request.rollbackPointer === apply.rollbackPointer
+        && bound === true
         && current?.launcher.pid === owner.pid && current.launcher.startIdentity === owner.startIdentity
         && current.requestFile === record.requestFile && this.deps.processAlive(owner.pid, owner.startIdentity!)
         && ownsRestartGate(restartGateFile(record.requestFile), gateId);
@@ -1461,7 +1472,8 @@ export class SelfUpdateService {
   }
 
   private async actionFor(decision: ModeDecision): Promise<InstallAction | null> {
-    return this.deps.install ? this.deps.install.action(decision) : installAction(decision, undefined, decision.record?.checkout ?? (decision.record ? packageRoot(decision.record) : decision.installRoot));
+    return this.deps.install ? this.deps.install.action(decision) : installAction(decision, undefined, decision.record?.checkout ?? (decision.record ? packageRoot(decision.record) : decision.installRoot),
+      () => quietDispatchVersion(this.deps.quiet, this.deps.now()));
   }
 
   async performInstallAction(): Promise<ActionResult> {

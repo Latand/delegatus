@@ -5,7 +5,7 @@ import { initialAuto, pruneReleaseWorktrees, readAuto, writeAuto } from "./auto"
 import { initialCheck } from "./checkState";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
-import type { LauncherRecord } from "./launcher";
+import { launcherControlFile, type LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { targetOnCurrentBranch } from "./git";
 import { admittedRecords, createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
@@ -1505,6 +1505,49 @@ test.each(["journal-traffic", "stage-started", "turn-started"] as const)("a forc
     expect(await service.admitAutoRestart(again.requestId, again.autoGateId)).toBe(true);
     expect(readAuto(file).waitingSince).toBe(waiting.waitingSince);
   } finally { release(); watcher.stop(); service.stop(); }
+});
+
+/* The launcher's load check runs after its request was admitted and can take
+   half a minute. Work started in that window is filed in the Viewer's
+   database, so the launcher asks the Viewer again before it stops anything.
+   By then it has taken the request and holds a preflight trial in its place. */
+test.each(["journal-traffic", "stage-started", "turn-started", "another-trial", "starting-trial"] as const)("the admission asked after the launcher load check sees work started during it: %s", async change => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const sessions = [{ conversationId: "conversation_let_go", engine: "codex", host: "hosted", turn: "running" }];
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [...sessions] }) as never;
+  let events = 0;
+  h.deps.quiet!.dispatchVersion = () => JSON.stringify(admittedRecords({ receipts: {},
+    entries: { conversation_let_go: { claimEpoch: 1, pendingAction: null, status: events % 2 ? "working" : "live", updatedAt: String(events++) } } }));
+  const service = h.service();
+  const file = join(h.dir, "auto.json");
+  const state = dirname(dirname(h.record.requestFile));
+  try {
+    await service.autoTick(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    expect(await service.decideDrain(readAuto(file).drain!.id, "deploy-now")).toEqual({ ok: true });
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: TARGET });
+    expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(true);
+    // The registry is in sqlite: nothing in the state directory names a record.
+    expect(existsSync(join(state, "agent-registry.json"))).toBe(false);
+    const apply = readFileSync(join(h.dir, "apply.json"), "utf8");
+    // The launcher takes the request: its preflight trial replaces the file.
+    const trial = { requestId: request.requestId, target: request.target, rollbackPointer: request.rollbackPointer, previousEntry: "/fixture/bin/cli.mjs", state: "preflight", at: new Date(h.deps.now()).toISOString() };
+    writeFileSync(launcherControlFile(h.record.requestFile, "trial"), `${JSON.stringify(
+      change === "another-trial" ? { ...trial, requestId: "another-request" } : change === "starting-trial" ? { ...trial, state: "starting" } : trial)}\n`);
+    rmSync(h.record.requestFile);
+    // The open turn keeps writing through the load check.
+    for (const name of ["runtime-events-load-check.sqlite", "runtime-events-load-check.sqlite-wal", "state.sqlite-wal"]) writeFileSync(join(state, name), `event ${change} ${events}`);
+    if (change === "stage-started") h.setStage(true);
+    if (change === "turn-started") sessions.push({ conversationId: "conversation_new", engine: "claude", host: "hosted", turn: "running" });
+    expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(change === "journal-traffic");
+    // Asking consumes nothing: the accepted apply is as it was.
+    expect(readFileSync(join(h.dir, "apply.json"), "utf8")).toBe(apply);
+    if (change === "journal-traffic") {
+      // With no request and no trial there is nothing left to admit.
+      rmSync(launcherControlFile(h.record.requestFile, "trial"));
+      expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(false);
+    }
+  } finally { service.stop(); }
 });
 
 test("ending the drain delivers a held autonomous message once without any other wake", async () => {

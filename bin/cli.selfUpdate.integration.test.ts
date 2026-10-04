@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import path from "node:path";
 import { expect, test } from "bun:test";
 import {
-  BROKEN_HOST, STUB_HOST, STUB_NEXT, availablePort, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile,
+  ADMISSION_LOG, BROKEN_HOST, STUB_HOST, STUB_NEXT, WORK_STARTED, availablePort, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile,
   protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, socketAnswers, start, stateText, until, version,
   type LauncherRecord,
 } from "./__fixtures__/cli-self-update";
@@ -641,6 +641,10 @@ for (const invalidCharacter of ["\n", "\r", "\u0100", "\u0436", "\u00e9"] as con
     const fixture = install({ tokenProtected: true });
     const token = `fixture-prefix${invalidCharacter}fixture-suffix`;
     fixture.env.LLV_TOKEN = token;
+    /* The dialog shows this record's text as written, so the launcher writes
+       it in the operator's language. */
+    const language = invalidCharacter === "\u0436" ? "uk" : "en";
+    (fixture.env as Record<string, string | undefined>).LLV_LANG = language;
     const running = await start(fixture);
     const before = await until(() => {
       const record = readRecord(fixture.state);
@@ -680,7 +684,9 @@ for (const invalidCharacter of ["\n", "\r", "\u0100", "\u0436", "\u00e9"] as con
     });
     expect(again.web.state).toBe("healthy");
     expect(again.web.error?.kind).toBe("message");
-    expect(again.web.error?.text).toContain("GET / answered 401");
+    expect(again.web.error?.text).toBe(language === "uk"
+      ? "перевірка готовності не пройшла автентифікацію (GET / answered 401), тому лишився реліз, що працював до перезапуску"
+      : "the readiness probe could not authenticate (GET / answered 401), so the release serving before the restart was kept");
     expect((await fetch(url)).status).toBe(401);
     expect(stateText(fixture.state)).not.toContain(token);
     expect(running.output()).not.toContain(token);
@@ -1544,7 +1550,14 @@ test.each(["gate-expired", "new-work", "launcher-changed"] as const)("resident r
   const originalApply = readFileSync(path.join(dir, "apply.json"), "utf8"), originalRequest = readFileSync(before.requestFile, "utf8");
   await until(() => existsSync(entered));
   if (change === "gate-expired") { const gate = JSON.parse(readFileSync(gateFile, "utf8")); writeFileSync(gateFile, JSON.stringify({ ...gate, until: 0 })); }
-  if (change === "new-work") writeFileSync(path.join(f.state, "agent-registry.json"), JSON.stringify({ admitted: "new-work-during-load" }));
+  // A turn or a stage that starts now is filed in the Viewer's database, with
+  // the registry in sqlite: no file the launcher reads names it. The files an
+  // open turn writes move as well, and say nothing about new work.
+  const admissions = () => readFileSync(path.join(f.state, ADMISSION_LOG), "utf8").trim().split("\n");
+  expect(admissions()).toEqual(["request filed"]);
+  expect(existsSync(path.join(f.state, "agent-registry.json"))).toBe(false);
+  for (const name of ["state.sqlite", "state.sqlite-wal", "runtime-events-fixture.sqlite-wal"]) writeFileSync(path.join(f.state, name), `event ${change}`);
+  if (change === "new-work") writeFileSync(path.join(f.state, WORK_STARTED), "");
   if (change === "launcher-changed") { const r = readRecord(f.state); r.launcher.startIdentity = "foreign-custody"; writeFileSync(recordFile(f.state), JSON.stringify(r)); }
   const finalGate = readFileSync(gateFile, "utf8"), finalOwner = readFileSync(recordFile(f.state), "utf8");
   writeFileSync(released, "");
@@ -1556,6 +1569,10 @@ test.each(["gate-expired", "new-work", "launcher-changed"] as const)("resident r
   let refusal;
   try { refusal = JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8")); } catch { /* a stale dispatch produces no refusal */ }
   expect(refusal?.state).toBe("rejected");
+  // The Viewer was asked again once the load check was over, with the request
+  // already taken, and its answer decided the dispatch.
+  expect(admissions().slice(0, 2)).toEqual(["request filed", "request taken"]);
+  if (change === "new-work") expect(refusal.detail).toBe("The Viewer did not admit the relaunch after the launcher load check");
   expect(readFileSync(path.join(dir, "apply.json"), "utf8")).toBe(originalApply);
   expect(readFileSync(before.requestFile, "utf8")).toBe(originalRequest);
   expect(readFileSync(gateFile, "utf8")).toBe(finalGate); expect(readFileSync(recordFile(f.state), "utf8")).toBe(finalOwner);
@@ -1566,6 +1583,7 @@ test.each(["gate-expired", "new-work", "launcher-changed"] as const)("resident r
 
 test("a refused relaunch keeps both children through the Viewer's settlement and every later poll", async () => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { beginRestartGate, restartGateFile } = await import("../src/lib/selfUpdate/restartGate");
   const fixture = install();
   const running = await start(fixture);
   const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
@@ -1577,15 +1595,22 @@ test("a refused relaunch keeps both children through the Viewer's settlement and
     + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
   const dir = path.dirname(before.requestFile), apply = new ApplyController(dir);
   const trialFile = before.requestFile.replace("request-", "trial-"), receipt = `${before.requestFile}.result.json`;
-  apply.begin(before as never, candidate.sha, "operator"); apply.patch({ state: "ready" });
+  const gateId = beginRestartGate(restartGateFile(before.requestFile))!;
+  apply.begin(before as never, candidate.sha, "auto", undefined, { autoGateId: gateId }); apply.patch({ state: "ready" });
   expect(existsSync(before.releasePointer)).toBe(false);
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
-  apply.send(before as never);
-  // Work the admission never saw is filed during the first load check.
+  apply.send(before as never, gateId);
+  // Work the admission never saw starts during the first load check. The
+  // Viewer files it in its database, and the launcher learns of it by asking
+  // the Viewer again once the load check is over.
   await until(() => existsSync(`${gate}-entered-0`));
-  writeFileSync(path.join(fixture.state, "agent-registry.json"), JSON.stringify({ version: 2, entries: { "conversation-new": { claimEpoch: 0, pendingAction: "spawn" } }, receipts: {} }));
+  writeFileSync(path.join(fixture.state, WORK_STARTED), "");
   writeFileSync(`${gate}-released-0`, "");
-  await until(() => { try { return JSON.parse(readFileSync(receipt, "utf8")).state === "rejected"; } catch { return false; } });
+  await until(() => { try { return JSON.parse(readFileSync(receipt, "utf8")).detail === "The Viewer did not admit the relaunch after the launcher load check"; } catch { return false; } });
+  expect(readFileSync(path.join(fixture.state, ADMISSION_LOG), "utf8").trim().split("\n").slice(0, 2)).toEqual(["request filed", "request taken"]);
+  expect(readRecord(fixture.state).web.pid).toBe(before.web.pid); expect(readRecord(fixture.state).runtimeHost.pid).toBe(before.runtimeHost.pid);
+  // That work ends, and the retained request is admitted to a second load check.
+  rmSync(path.join(fixture.state, WORK_STARTED));
   await until(() => !existsSync(trialFile) || existsSync(`${gate}-entered-1`));
   // The request is offered again. The Viewer settles the refusal and restores
   // the pointer while that second load check is still running.
@@ -1613,23 +1638,25 @@ test("a refused relaunch keeps both children through the Viewer's settlement and
 
 test("journal traffic during the load check does not refuse a relaunch", async () => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
+  const { beginRestartGate, restartGateFile } = await import("../src/lib/selfUpdate/restartGate");
   const fixture = install();
   const running = await start(fixture);
   const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
-  // A turn that is already running has its registry record and its journal.
-  writeFileSync(path.join(fixture.state, "agent-registry.json"), JSON.stringify({ version: 2, receipts: {}, entries: { "conversation-open": { claimEpoch: 2, pendingAction: null, status: "live", updatedAt: "0" } } }));
+  // A turn that is already running has its record in the state database and
+  // its journal beside it.
+  for (const name of ["runtime-events-fixture.sqlite", "state.sqlite"]) writeFileSync(path.join(fixture.state, name), "admitted");
   const candidate = release(fixture, "journal-traffic");
   const entered = path.join(fixture.root, "load-entered"), released = path.join(fixture.root, "load-released"), entry = path.join(candidate.dir, "bin", "cli.mjs");
   writeFileSync(entry, `if (process.argv.includes("--version")) { const fs = await import("node:fs"); fs.writeFileSync(${JSON.stringify(entered)}, ""); while (!fs.existsSync(${JSON.stringify(released)})) await Bun.sleep(5); }\n`
     + readFileSync(entry, "utf8").replace(/^#![^\n]*\n/, ""));
   const apply = new ApplyController(path.dirname(before.requestFile));
-  apply.begin(before as never, candidate.sha, "operator"); apply.patch({ state: "ready" });
+  const gateId = beginRestartGate(restartGateFile(before.requestFile))!;
+  apply.begin(before as never, candidate.sha, "auto", undefined, { autoGateId: gateId }); apply.patch({ state: "ready" });
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
-  apply.send(before as never);
+  apply.send(before as never, gateId);
   await until(() => existsSync(entered));
   // Every event of that turn moves these while the load check runs.
   for (const name of ["runtime-events-fixture.sqlite", "runtime-events-fixture.sqlite-wal", "state.sqlite", "state.sqlite-wal"]) writeFileSync(path.join(fixture.state, name), "event");
-  writeFileSync(path.join(fixture.state, "agent-registry.json"), JSON.stringify({ version: 2, receipts: {}, entries: { "conversation-open": { claimEpoch: 2, pendingAction: null, status: "working", updatedAt: "1" } } }));
   writeFileSync(released, "");
   const after = await until(() => {
     const r = readRecord(fixture.state);
@@ -1637,6 +1664,9 @@ test("journal traffic during the load check does not refuse a relaunch", async (
       && r.web.revision === candidate.sha.slice(0, 7) && r.runtimeHost.revision === candidate.sha.slice(0, 7) ? r : null;
   });
   expect(JSON.parse(readFileSync(`${before.requestFile}.result.json`, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, state: "done" });
+  // The Viewer admitted the same work twice: before the request was taken,
+  // and after the load check that the traffic ran through.
+  expect(readFileSync(path.join(fixture.state, ADMISSION_LOG), "utf8").trim().split("\n")).toEqual(["request filed", "request taken"]);
   expect(after.launcher.pid).toBe(before.launcher.pid);
   expect(await served(running.port)).toBe(candidate.dir);
 }, 60_000);

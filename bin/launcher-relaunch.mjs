@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { dispatchActivityVersion, headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
+import { headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
@@ -355,7 +355,9 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     async recoverPending() {
       if (pendingRecovery) await this.failed("The launcher stopped before taking the durable update request.");
     },
-    async begin(request, next, dispatchFence = () => true) {
+    /* `readmit` asks the Viewer to admit an automatic request once more. A
+       caller that cannot ask leaves an automatic request refused. */
+    async begin(request, next, dispatchFence = () => true, readmit = async () => false) {
       if (stopping) return;
       if (!canExec) throw new Error("This interpreter needs a launcher restart to apply an update.");
       const read = file => { try { return readFileSync(file, "utf8"); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
@@ -381,7 +383,6 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
             || acceptedApply.launcherPid !== process.pid || acceptedApply.launcherIdentity !== owner.startIdentity)
         || !dispatchFence()) return false;
       const ownerBinding = JSON.stringify(owner);
-      const activity = dispatchActivityVersion(dirname(dirname(paths.request)));
       let intent = { requestId: request.requestId, target: next.sha, rollbackPointer, previousEntry: entry, state: "preflight", at: new Date().toISOString() };
       try { atomic(trialFile, `${JSON.stringify(intent)}\n`); }
       catch (error) { restore(rollbackPointer); throw error; }
@@ -418,13 +419,20 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         rmSync(trialFile, { force: true }); trial = null;
         return;
       }
-      // The load check is the last awaited read. The final fence and starting
-      // intent write form one synchronous dispatch boundary.
+      // The load check can run for half a minute, and work admitted meanwhile
+      // is written where only the Viewer reads it. An automatic request is
+      // therefore admitted by the Viewer again: its answer is the last awaited
+      // read, and the final fence and the starting intent write that follow
+      // form one synchronous dispatch boundary. An operator's request carries
+      // the operator's own decision and is not asked about again.
+      let readmitted = request.autoGateId === undefined;
+      if (!readmitted) try { readmitted = await readmit() === true; } catch { /* refused below */ }
+      if (stopping) return;
       let currentGate;
       try { currentGate = JSON.parse(read(gateFile)); } catch { /* refused below */ }
       const pending = read(paths.request);
       if (read(applyFile) !== applyBinding || JSON.stringify(JSON.parse(read(paths.record))?.launcher) !== ownerBinding
-        || activity !== dispatchActivityVersion(dirname(dirname(paths.request)))
+        || !readmitted
         || read(trialFile) !== `${JSON.stringify(intent)}\n`
         || pending !== null && JSON.parse(pending)?.requestId !== request.requestId
         || request.autoGateId && (read(gateFile) !== gateBinding || currentGate?.id !== request.autoGateId || currentGate.until <= Date.now()) || !dispatchFence(true)) {
@@ -434,7 +442,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
           catch (error) { if (error.code !== "EEXIST") throw error; }
           finally { rmSync(temporary, { force: true }); }
         }
-        atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: "Stale launcher dispatch custody or work evidence" }) + "\n");
+        atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: readmitted ? "Stale launcher dispatch custody" : "The Viewer did not admit the relaunch after the launcher load check" }) + "\n");
         // The refusal owns no transition: nothing was stopped, so no later
         // failure may roll this trial back. The receipt precedes its removal.
         if (read(trialFile) === `${JSON.stringify(intent)}\n`) rmSync(trialFile, { force: true });

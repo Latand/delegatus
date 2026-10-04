@@ -58,6 +58,7 @@ import type { SeatTickControllerDependencies } from "./seatTickController";
 import type { GithubRunner, OpenPullRequest, OpenPullRequestsUnavailable } from "./githubEvidence";
 import type { SeatTickWakeState, SeatTickWithdrawal } from "./seatTickSources";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { mcpLauncherImports } from "@/runtime-host/mcpRuntimeRelease";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import type { HostState } from "@/lib/runtime/engineHost";
 import {
@@ -793,8 +794,9 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
-  // Keep the same transitive module set as the published MCP launcher.
-  fs.cpSync(path.join(import.meta.dir, "../../../bin"), bin, { recursive: true });
+  // The module set the product publishes beside the stable launcher, and nothing else.
+  const sourceBin = path.join(import.meta.dir, "../../../bin");
+  for (const name of ["mcp-server.mjs", ...mcpLauncherImports(sourceBin)]) fs.copyFileSync(path.join(sourceBin, name), path.join(bin, name));
   const crashFlag = path.join(packageRoot, "crash.flag");
   fs.writeFileSync(crashFlag, "crash");
   fs.writeFileSync(path.join(dist, "mcp-server.mjs"), `

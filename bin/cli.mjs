@@ -124,6 +124,7 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other delegatus instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     webRestartFailed: (detail) => `[web] restart failed, the runtime host keeps running: ${detail}`,
+    webProbeRefused: (detail) => `the readiness probe could not authenticate (${detail}), so the release serving before the restart was kept`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
     phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
     phoneAccessUngated: (detail) => `Warning: the access key could not be read, so this start asks no key: ${detail}`,
@@ -174,6 +175,7 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший delegatus для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     webRestartFailed: (detail) => `[web] перезапуск не вдався, runtime host працює далі: ${detail}`,
+    webProbeRefused: (detail) => `перевірка готовності не пройшла автентифікацію (${detail}), тому лишився реліз, що працював до перезапуску`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
     phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
     phoneAccessUngated: (detail) => `Увага: не вдалося прочитати ключ доступу, тому цей запуск не питає ключа: ${detail}`,
@@ -1317,7 +1319,7 @@ async function main() {
       /* The web process is the page the operator restarts from: a release
          that does not come up gives way to the one it replaced. */
       if (failure && typeof failure === "object") {
-        record.set("web", { state: "healthy", error: { kind: "message", text: `The readiness probe could not authenticate (${failure.refused}), so the release serving before the restart was kept.` } });
+        record.set("web", { state: "healthy", error: { kind: "message", text: m.webProbeRefused(failure.refused) } });
         return;
       }
       const fallbackFailure = await attemptWeb(previousRelease, false);
@@ -1342,7 +1344,7 @@ async function main() {
         record.set("runtimeHost", { state: "failed", error: { kind: "message", text: error instanceof Error ? error.message : String(error) } });
       }
     };
-    restartRequests = watchRestartRequests(selfUpdate.request, async (request, dispatchFence) => {
+    restartRequests = watchRestartRequests(selfUpdate.request, async (request, dispatchFence, readmit) => {
       const { requestId, role } = request;
       if (role !== "runtime-host") {
         pauseWebRecovery();
@@ -1350,7 +1352,7 @@ async function main() {
         pauseWebRecovery();
       }
       if (role === "relaunch") {
-        try { return await relaunch.begin(request, releaseNow(), dispatchFence); }
+        try { return await relaunch.begin(request, releaseNow(), dispatchFence, readmit); }
         catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           if (relaunch.hasTrial()) await relaunch.failed(detail);

@@ -451,11 +451,24 @@ registry records by launch (key, host claim epoch, pending launch, spawn
 receipts), each pipeline's cursor and current attempt, each flow's last round,
 the controllers' idle state and the operator's last interaction; an automatic
 relaunch also requires every open turn and stage in its final probe to be one
-the admission that filed the request already saw. The launcher compares the
-mirrored registry by the same launch identity and the files a stage or a flow
-is filed in. The runtime journal and the state database are left out: every
-event of a turn that is already running moves them, so they cannot tell new
-work from the work an operator let go.
+the admission that filed the request already saw. The runtime journal and the
+state database are left out: every event of a turn that is already running
+moves them, so they cannot tell new work from the work an operator let go.
+
+The launcher reads no work evidence of its own. The registry, the pipelines
+and the flows are filed in the Viewer's database, and no file in the state
+directory names a record, so a comparison of files there is constant. The
+launcher asks the Viewer instead. An automatic request is admitted before the
+watcher dispatches it, and admitted again after the replacement launcher's
+load check, which can run for thirty seconds: by then the launcher has taken
+the request, so the Viewer binds the second admission to the preflight trial
+that replaced it (same request, target and rollback pointer). A turn or a
+stage that started during the load check is not in the set the first
+admission saw, the Viewer answers no, and the launcher refuses with both
+children untouched. Between the Viewer's answer and the starting intent the
+launcher awaits nothing. An operator's request carries the operator's own
+decision and is not asked about again; the admission hold still keeps
+autonomous work from starting under it.
 
 A refused relaunch owns no transition. The launcher removes its preflight
 trial with the refusal, a later failure in that launcher stops nothing, and a
@@ -472,8 +485,8 @@ installed release already serves coherently.
 | Service prerequisite | selected release, green source, serving snapshot and rollback ancestry before reservation; replacement CLI load after reservation | `reserve` checks current owner before begin; post-load binding, owner, request and work checks precede ready/trial publication and the service request |
 | Automatic publication | green reads, mode, ancestry, snapshot, quiet probe and rollback ancestry; final mode, snapshot and quiet probe | owned unexpired gate, copied launcher identity, request vacancy and synchronous work evidence before begin/send |
 | Automatic launcher admission | mode, refreshed green, current branch ancestry, snapshot and quiet probe (including runtime snapshot, per-turn liveness and controller reads) | ancestry precedes quiet; durable apply/request, current launcher, issuer identity and unexpired gate plus synchronous work evidence are checked after the last await |
-| Watcher | authenticated admission response and JSON body | current request, launcher, work evidence and unchanged unexpired gate immediately before handler dispatch |
-| Resident launcher | replacement CLI load preflight | unchanged apply, trial, request, launcher, work evidence and unexpired gate immediately before starting intent and child shutdown; shutdown completion is an action, followed by the existing stop/exec fence |
+| Watcher | authenticated admission response and JSON body (the Viewer's read of admitted work) | current request, launcher and unchanged unexpired gate immediately before handler dispatch |
+| Resident launcher | replacement CLI load preflight; for an automatic request, the Viewer's second admission after it | the Viewer's answer, then unchanged apply, trial, request, launcher and unexpired gate immediately before starting intent and child shutdown; shutdown completion is an action, followed by the existing stop/exec fence |
 | Credential restoration prerequisite | readiness, `ReleasePointer.current` checkout/candidate ancestry, prior checkout and release-cache ancestry | final request/apply/gate/drain/launcher/work binding and gate expiry before protected credential preparation or command return; restoration itself performs synchronous protected descriptor reads |
 
 Cold startup binds recovery to the earliest accepted `apply.json`, including

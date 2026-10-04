@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRelaunch } from "./launcher-relaunch.mjs";
-import { dispatchActivityVersion, readStartIdentity } from "./self-update-supervisor.mjs";
+import { readStartIdentity } from "./self-update-supervisor.mjs";
 
 /*
  * A relaunch the launcher refused owns no transition: nothing was stopped, so
@@ -13,8 +13,11 @@ import { dispatchActivityVersion, readStartIdentity } from "./self-update-superv
 
 const roots: string[] = [];
 const execve = process.execve;
+const cwd = process.cwd();
 afterEach(() => {
   process.execve = execve;
+  // A launcher that reaches its exec has moved into the release it starts.
+  process.chdir(cwd);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -69,23 +72,40 @@ test("a refused relaunch leaves no trial, and a later failure stops nothing", as
   const f = install();
   const relaunch = f.relaunch("prior");
   f.accept();
-  writeFileSync(f.paths.request, JSON.stringify(f.request));
+  // An automatic request: the Viewer admitted it under this gate.
+  const request = { ...f.request, autoGateId: "fixture-gate" };
+  writeFileSync(path.join(f.control, "auto-admission.json"), JSON.stringify({ id: request.autoGateId, until: Date.now() + 600_000 }));
+  writeFileSync(f.paths.request, JSON.stringify(request));
   const next = { sha: TARGET, dir: f.next };
-  const first = relaunch.begin(f.request, next);
-  // Work the admission never saw is filed while the load check runs.
-  await f.load(0, () => writeFileSync(path.join(f.state, "agent-registry.json"), JSON.stringify({ version: 2, entries: { "conversation-new": { claimEpoch: 1, pendingAction: "spawn" } }, receipts: {} })));
+  // Work the admission never saw starts while the load check runs. It is
+  // filed in the Viewer's database, so only the Viewer can say so: the
+  // launcher asks it again once the load check is over, and is refused. The
+  // state directory holds no registry file, as with the registry in sqlite.
+  let working = false;
+  const asked: unknown[] = [];
+  const readmit = async () => {
+    asked.push({ loaded: existsSync(`${f.paths.request}`) ? "request still filed" : JSON.parse(readFileSync(f.paths.trial, "utf8")).state });
+    return !working;
+  };
+  const first = relaunch.begin(request, next, undefined, readmit);
+  await f.load(0, () => { expect(asked).toEqual([]); working = true; });
   expect(await first).toBe(false);
-  expect(f.receipt()).toMatchObject({ requestId: f.request.requestId, state: "rejected" });
+  // Asked once, after the load check, with the request already taken.
+  expect(asked).toEqual([{ loaded: "preflight" }]);
+  expect(existsSync(path.join(f.state, "agent-registry.json"))).toBe(false);
+  expect(f.receipt()).toEqual({ requestId: request.requestId, state: "rejected", detail: "The Viewer did not admit the relaunch after the launcher load check" });
   expect(existsSync(f.paths.trial)).toBe(false);
   expect(relaunch.hasTrial()).toBe(false);
   // The request is offered again; custody stays with the serving launcher.
-  expect(JSON.parse(readFileSync(f.paths.request, "utf8"))).toEqual(f.request);
+  expect(JSON.parse(readFileSync(f.paths.request, "utf8"))).toEqual(request);
   expect(relaunch.retainsCustody()).toBe(true);
   expect(await relaunch.failed("a later launcher failure")).toBe(false);
+  expect(f.stops()).toBe(0); expect(f.execs()).toBe(0);
 
   // The Viewer settles the refusal and restores the pointer while the
   // republished request is in its second load check.
-  const second = relaunch.begin(f.request, next);
+  working = false;
+  const second = relaunch.begin(request, next, undefined, readmit);
   await f.load(1, () => {
     rmSync(f.paths.releasePointer);
     writeFileSync(f.applyFile, `${JSON.stringify({ ...f.apply, state: "failed", admissionRefused: true })}\n`);
@@ -94,8 +114,8 @@ test("a refused relaunch leaves no trial, and a later failure stops nothing", as
   expect(existsSync(f.paths.trial)).toBe(false);
   expect(existsSync(f.paths.request)).toBe(false);
   // A request republished before the settlement is dropped without a word.
-  writeFileSync(f.paths.request, JSON.stringify(f.request));
-  expect(await relaunch.begin(f.request, { sha: "a".repeat(40), dir: f.prior })).toBeUndefined();
+  writeFileSync(f.paths.request, JSON.stringify(request));
+  expect(await relaunch.begin(request, { sha: "a".repeat(40), dir: f.prior }, undefined, readmit)).toBeUndefined();
   expect(relaunch.hasTrial()).toBe(false);
   expect(f.stops()).toBe(0); expect(f.execs()).toBe(0);
   expect(f.launcherState.launcher).toBeUndefined();
@@ -121,7 +141,7 @@ test.each(["no-trial", "preflight-trial"] as const)("a cold start on the target 
   const f = install();
   f.accept();
   writeFileSync(f.paths.request, JSON.stringify(f.request));
-  writeFileSync(`${f.paths.request}.result.json`, JSON.stringify({ requestId: f.request.requestId, state: "rejected", detail: "Stale launcher dispatch custody or work evidence" }));
+  writeFileSync(`${f.paths.request}.result.json`, JSON.stringify({ requestId: f.request.requestId, state: "rejected", detail: "The Viewer did not admit the relaunch after the launcher load check" }));
   // A crash between the refusal receipt and the trial's removal leaves both.
   if (shape === "preflight-trial") writeFileSync(f.paths.trial, `${JSON.stringify({ requestId: f.request.requestId, target: TARGET, rollbackPointer: null,
     previousEntry: path.join(f.prior, "bin", "cli.mjs"), state: "preflight", at: f.request.requestedAt })}\n`);
@@ -141,7 +161,7 @@ test("a cold start on the prior image after a refusal leaves the settlement to t
   const f = install();
   f.accept();
   writeFileSync(f.paths.request, JSON.stringify(f.request));
-  const refusal = JSON.stringify({ requestId: f.request.requestId, state: "rejected", detail: "Stale launcher dispatch custody or work evidence" });
+  const refusal = JSON.stringify({ requestId: f.request.requestId, state: "rejected", detail: "The Viewer did not admit the relaunch after the launcher load check" });
   writeFileSync(`${f.paths.request}.result.json`, refusal);
   writeFileSync(f.paths.trial, `${JSON.stringify({ requestId: f.request.requestId, target: TARGET, rollbackPointer: null,
     previousEntry: path.join(f.prior, "bin", "cli.mjs"), state: "preflight", at: f.request.requestedAt })}\n`);
@@ -156,25 +176,36 @@ test("a cold start on the prior image after a refusal leaves the settlement to t
   expect(readFileSync(`${f.paths.request}.result.json`, "utf8")).toBe(refusal);
 });
 
-test("work evidence follows records and launches and ignores journal and database traffic", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "dlg-work-evidence-")); roots.push(root);
-  const registry = (entries: Record<string, unknown>, receipts: Record<string, unknown> = {}) =>
-    writeFileSync(path.join(root, "agent-registry.json"), JSON.stringify({ version: 2, entries, receipts }));
-  registry({ a: { claimEpoch: 3, pendingAction: null, status: "live", updatedAt: "2026-01-01T00:00:00.000Z" } });
-  const admitted = dispatchActivityVersion(root);
-  // Every event of a turn already running moves these.
-  for (const name of ["state.sqlite", "state.sqlite-wal", "runtime-events-fixture.sqlite", "runtime-events-fixture.sqlite-wal"]) writeFileSync(path.join(root, name), "event");
-  registry({ a: { claimEpoch: 3, pendingAction: null, status: "working", updatedAt: "2026-01-01T00:00:05.000Z" } });
-  expect(dispatchActivityVersion(root)).toBe(admitted);
-  registry({ a: { claimEpoch: 4, pendingAction: "resume", status: "working" } });
-  expect(dispatchActivityVersion(root)).not.toBe(admitted);
-  registry({ a: { claimEpoch: 3, pendingAction: null }, b: { claimEpoch: 0, pendingAction: "spawn" } });
-  expect(dispatchActivityVersion(root)).not.toBe(admitted);
-  registry({ a: { claimEpoch: 3, pendingAction: null } }, { "attempt-1": {} });
-  expect(dispatchActivityVersion(root)).not.toBe(admitted);
-  // A registry this launcher cannot read by record still refuses any change.
-  writeFileSync(path.join(root, "agent-registry.json"), JSON.stringify({ admitted: "one" }));
-  const opaque = dispatchActivityVersion(root);
-  writeFileSync(path.join(root, "agent-registry.json"), JSON.stringify({ admitted: "two" }));
-  expect(dispatchActivityVersion(root)).not.toBe(opaque);
-});
+test.each(["no way to ask", "the question fails"] as const)("an automatic relaunch the Viewer cannot admit again stops nothing: %s", async shape => {
+  const f = install();
+  const relaunch = f.relaunch("prior");
+  f.accept();
+  const request = { ...f.request, autoGateId: "fixture-gate" };
+  writeFileSync(path.join(f.control, "auto-admission.json"), JSON.stringify({ id: request.autoGateId, until: Date.now() + 600_000 }));
+  writeFileSync(f.paths.request, JSON.stringify(request));
+  const pending = shape === "no way to ask" ? relaunch.begin(request, { sha: TARGET, dir: f.next })
+    : relaunch.begin(request, { sha: TARGET, dir: f.next }, undefined, async () => { throw new Error("the Viewer did not answer"); });
+  await f.load(0, () => {});
+  expect(await pending).toBe(false);
+  expect(f.receipt()).toMatchObject({ requestId: request.requestId, state: "rejected" });
+  expect(existsSync(f.paths.trial)).toBe(false);
+  expect(readFileSync(f.paths.releasePointer, "utf8")).toBe(f.pointer);
+  expect(f.stops()).toBe(0); expect(f.execs()).toBe(0);
+  expect(f.launcherState.launcher).toBeUndefined();
+}, 30_000);
+
+/* An operator's request carries the operator's decision: it is not asked
+   about again, and it reaches the stop that the starting intent admits. */
+test("an operator's relaunch is not put to the Viewer a second time", async () => {
+  const f = install();
+  const relaunch = f.relaunch("prior");
+  f.accept();
+  writeFileSync(f.paths.request, JSON.stringify(f.request));
+  let asked = 0;
+  const pending = relaunch.begin(f.request, { sha: TARGET, dir: f.next }, undefined, async () => { asked++; return true; });
+  await f.load(0, () => {});
+  await expect(pending).rejects.toThrow("fixture exec");
+  expect(asked).toBe(0);
+  expect(f.stops()).toBe(1); expect(f.execs()).toBe(1);
+  expect(JSON.parse(readFileSync(f.paths.trial, "utf8"))).toMatchObject({ requestId: f.request.requestId, state: "starting" });
+}, 30_000);

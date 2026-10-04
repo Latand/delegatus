@@ -32,8 +32,7 @@ import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
 import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
@@ -230,8 +229,15 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
  * Ordinary restarts consume before handling. Relaunch consumes only after
  * its controller has persisted the trial that owns crash recovery.
  *
+ * Work the installation admits is known to the Viewer alone: the registry and
+ * the pipelines live in its database, and the files of an open turn move with
+ * every event. The launcher therefore reads no work evidence of its own. An
+ * automatic request is admitted by the Viewer before the handler runs, and a
+ * handler that waits on anything afterwards asks again through `readmit`, so
+ * the Viewer's read is the last awaited step before anything is stopped.
+ *
  * @param {string} requestFile
- * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }, dispatchFence: (consumed?: boolean) => boolean) => Promise<void | false>} handle
+ * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }, dispatchFence: (consumed?: boolean) => boolean, readmit: () => Promise<boolean>) => Promise<void | false>} handle
  * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean>, isStopping?: () => boolean }} options
  */
 export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false, isStopping = () => false } = {}) {
@@ -256,7 +262,6 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
     const recordFile = join(dirname(requestFile), basename(requestFile).replace(/^request/, "launcher"));
     const owner = () => { try { return JSON.stringify(JSON.parse(readFileSync(recordFile, "utf8"))?.launcher); } catch { return null; } };
     const originalOwner = owner();
-    const activity = dispatchActivityVersion(dirname(dirname(requestFile)));
     const originalGate = request.autoGateId ? (() => { try { return readFileSync(gateFile, "utf8"); } catch { return null; } })() : null;
     const dispatchFence = (consumed = false) => {
       try {
@@ -267,7 +272,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
           const trial = JSON.parse(readFileSync(join(dirname(requestFile), basename(requestFile).replace(/^request/, "trial")), "utf8"));
           if (trial.requestId !== request.requestId || trial.target !== request.target) return false;
         }
-        if (owner() !== originalOwner || activity !== dispatchActivityVersion(dirname(dirname(requestFile)))) return false;
+        if (owner() !== originalOwner) return false;
         if (request.autoGateId) {
           const bytes = readFileSync(gateFile, "utf8"), gate = JSON.parse(bytes);
           if (bytes !== originalGate || gate.id !== request.autoGateId || gate.until <= Date.now()) return false;
@@ -307,7 +312,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
         }
       }
       if (!dispatchFence()) {
-        retain = true; rejected("Final dispatch has stale launcher or work custody"); return;
+        retain = true; rejected("Final dispatch has stale launcher custody"); return;
       }
       admitted = true;
       // Do not remove a newer request that arrived while admission was read.
@@ -315,7 +320,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
       if (request.role !== "relaunch") rmSync(requestFile, { force: true });
-      if (await handle(request, dispatchFence) === false) retain = true;
+      if (await handle(request, dispatchFence, () => admitAuto(request)) === false) retain = true;
     } catch (error) {
       if (!isStopping() && !admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -385,36 +390,11 @@ export function exitError(child, startedAt, clock = () => Date.now()) {
 /** The registry records an admission saw, by launch: each record's key, the
     epoch of its host claim and its pending launch, plus the spawn receipts.
     A record's status and timestamps move with every event of a turn that is
-    already running, so they are not evidence of newly admitted work. */
+    already running, so they are not evidence of newly admitted work. The
+    Viewer builds its work evidence from this over its own registry; the
+    launcher has no registry to read. */
 export function admittedRecords(file) {
   if (!file || typeof file.entries !== "object" || file.entries === null || Array.isArray(file.entries)) return null;
   const receipts = file.receipts && typeof file.receipts === "object" ? Object.keys(file.receipts).sort() : [];
   return [Object.keys(file.entries).sort().map(id => [id, file.entries[id]?.claimEpoch ?? null, file.entries[id]?.pendingAction ?? null]), receipts];
-}
-
-/** Durable work can be admitted by another process while a read is awaited.
-    The launcher compares admitted work: the mirrored registry by launch
-    identity, and the files a stage or a flow is filed in. Journal traffic is
-    left out, because the runtime journal and the state database move with
-    every event of an open turn and cannot tell new work from the work an
-    operator let go. New turns are fenced by the admission hold and by the
-    Viewer's own final read. */
-export function dispatchActivityVersion(state) {
-  let records = null;
-  try {
-    const bytes = readFileSync(join(state, "agent-registry.json"), "utf8");
-    try { records = admittedRecords(JSON.parse(bytes)); } catch { /* unreadable: hashed below */ }
-    // An unrecognised registry cannot name its records; any change refuses.
-    records ??= createHash("sha256").update(bytes).digest("hex");
-  } catch (error) { if (error.code !== "ENOENT") throw error; }
-  const files = [];
-  for (const name of ["pipelines", "flows"]) {
-    const dir = join(state, name);
-    try { files.push(...readdirSync(dir).filter(name => name.endsWith(".json")).sort().map(name => join(dir, name))); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-  }
-  return JSON.stringify([records, files.map(file => {
-    try { const stat = statSync(file, { bigint: true }); return [file, String(stat.ino), String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
-    catch (error) { if (error.code === "ENOENT") return [file, null]; throw error; }
-  })]);
 }

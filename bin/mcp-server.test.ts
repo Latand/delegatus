@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 import { seatMcpHealth } from "../src/lib/monitor/seatMcpHealth";
+import { mcpLauncherImports } from "../src/runtime-host/mcpRuntimeRelease";
 import { appDirIn } from "./appDir.mjs";
 import { headlessCodexThreadConfig } from "../src/lib/codexHeadlessConfig";
 
@@ -120,8 +121,10 @@ function installedPackage(serverSource = `
   sandboxes.push(root);
   fs.mkdirSync(path.join(root, "bin"), { recursive: true });
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
-  // Use the published bin module set so transitive launcher imports stay present.
-  fs.cpSync(import.meta.dir, path.join(root, "bin"), { recursive: true });
+  // The module set the product publishes beside the stable launcher, and nothing else.
+  for (const name of ["mcp-server.mjs", ...mcpLauncherImports(import.meta.dir)]) {
+    fs.copyFileSync(path.join(import.meta.dir, name), path.join(root, "bin", name));
+  }
   fs.writeFileSync(path.join(root, "dist", "mcp-server.mjs"), serverSource, "utf8");
   return { root, launcher: path.join(root, "bin", "mcp-server.mjs") };
 }

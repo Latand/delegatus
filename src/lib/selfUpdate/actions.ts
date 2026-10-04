@@ -7,7 +7,6 @@ import { headOf, ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
 import { sameProcess } from "./pid";
-import { dispatchActivityVersion } from "../../../bin/self-update-supervisor.mjs";
 import { prepareLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 
 const quote = (text: string) => `\u0027${text.replaceAll("\u0027", "\u0027\\\u0027\u0027")}\u0027`;
@@ -36,7 +35,10 @@ function serviceFor(root: string): string | null {
 export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: Partial<NodeJS.ProcessEnv>; platform?: NodeJS.Platform } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
-}, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd()): Promise<InstallAction | null> {
+}, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd(),
+  /* The Viewer's own evidence of admitted work (`quietDispatchVersion`). Work
+     is filed in the Viewer's database, so no file beside the request names it. */
+  work: () => string | null = () => null): Promise<InstallAction | null> {
   if (decision.mode === "managed" || decision.record?.launcher.relaunch === 1) return null;
   if (decision.reason === "docker-deployments") return { id: "docker-deployments", button: false,
     command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" };
@@ -47,7 +49,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     const files = [launcherControlFile(record.requestFile, "launcher"), record.requestFile,
       join(dirname(record.requestFile), "apply.json"), join(dirname(record.requestFile), "auto-admission.json"),
       join(dirname(record.requestFile), "auto-drain.json")];
-    return JSON.stringify([record.launcher, dispatchActivityVersion(dirname(dirname(record.requestFile))), files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
+    return JSON.stringify([record.launcher, work(), files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
   };
   const accepted = custody();
   const gateFile = decision.record?.requestFile ? join(dirname(decision.record.requestFile), "auto-admission.json") : null;

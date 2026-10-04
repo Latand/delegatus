@@ -57,6 +57,19 @@ export function git(cwd: string, ...args: string[]): string {
    phone-access flag is present. It reads the files on every request, as the
    Viewer's own gate can come on while it runs. The rule is written out here
    on purpose, so the launcher's resolver is checked against a second copy. */
+/* The fixture Viewer's admission, as the launcher sees the real one: it is
+   the only reader of the work an installation has admitted. Each question is
+   logged with whether the launcher had taken the request by then, and the
+   answer is a refusal while work the admission never saw is running. */
+export const ADMISSION_LOG = "fixture-admissions.log";
+export const WORK_STARTED = "fixture-work-started";
+export const STUB_ADMISSION = `if (pathname === "/api/self-update/launcher-admission") {
+      const fs = require("node:fs"), state = process.env.LLV_STATE_DIR;
+      const filed = fs.readdirSync(state + "/self-update").some((name) => name.startsWith("request-") && !name.includes(".result") && name.endsWith(".json"));
+      fs.appendFileSync(state + "/${ADMISSION_LOG}", (filed ? "request filed" : "request taken") + "\\n");
+      if (fs.existsSync(state + "/${WORK_STARTED}")) return Response.json({ admitted: false });
+    }`;
+
 export const STUB_NEXT = (exitAtOnce: boolean, tokenProtected = false) => exitAtOnce ? "process.exit(3);\n" : `
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,6 +96,7 @@ export const server = Bun.serve({
         return new Response("Unauthorized", { status: 401 });
       }
     }
+    ${STUB_ADMISSION}
     if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });
     return new Response(process.cwd());
   },
@@ -311,6 +325,7 @@ export async function protectedInstall(shape: "checkout" | "package", alias: "LL
       const result = proxy(new NextRequest(request));
       if (result.headers.get("x-middleware-next") !== "1") return result;
       const pathname = new URL(request.url).pathname;
+      ${STUB_ADMISSION}
       if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });
       return new Response(process.cwd());
     } });
