@@ -1218,7 +1218,7 @@ const WARNING_BADGE = "border-warning/45 bg-warning-soft text-warning";
     tone the rest of the app spends on a wait is what «needs you» wears. */
 const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
   "needs-you": { tone: WARNING_BADGE, key: "orchPanel.badgeNeedsYou" },
-  live: { tone: "border-success/45 bg-success-soft text-success", key: "orchPanel.badgeLive" },
+  working: { tone: "border-success/45 bg-success-soft text-success", key: "orchPanel.badgeWorking" },
   /* Hosted and idle. Not green: green is the word for a turn that is running,
      and an agent awaiting input is a state the operator may want to act on. */
   waiting: { tone: QUIET_BADGE, key: "orchPanel.badgeWaiting" },

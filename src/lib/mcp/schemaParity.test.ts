@@ -429,6 +429,9 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     expect(tool?.description).toContain("has this been solved before?");
     expect(tool?.description).toContain("conversation_messages");
     expect(tool?.description).toContain("byteOffset");
+    /* The second pass's mark is explained where the agent reads it. */
+    expect(tool?.description).toContain("A unit ending in ~ matched loosely");
+    expect(tool?.description).toContain("its fragment decides");
     expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",
@@ -946,6 +949,29 @@ test("task coordinates publish finite axes and retain pinned-update position sem
       }
     }
     expect(TOOL_INPUT_SCHEMAS.update_task.safeParse({ clientRequestId: "retain-position", taskId: "task-fixture", placement: "pinned", expectedProject: "fixture-project", expectedRevision: "opaque" }).success).toBe(true);
+  });
+});
+
+test("task writes advertise hold reasons and the additive checklist with stopping guidance", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const listed = await client.listTools();
+    for (const name of ["create_task", "update_task"] as const) {
+      const tool = listed.tools.find(entry => entry.name === name)!;
+      const properties = tool.inputSchema.properties as Record<string, { description?: string; enum?: string[]; items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; properties?: Record<string, { enum?: string[]; type?: string }> }> }>;
+      const holdSchema = properties.hold as typeof properties.hold & { properties?: Record<string, { enum?: string[]; type?: string }> };
+      const hold = holdSchema.properties ? holdSchema : holdSchema.anyOf?.find(part => part.type === "object") ?? {};
+      const stepsSchema = properties.steps as unknown as { items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; items?: { properties?: Record<string, unknown> }; maxItems?: number }> };
+      const steps = stepsSchema.items ? stepsSchema : stepsSchema.anyOf?.find(part => part.type === "array") ?? {};
+      expect(hold.properties?.kind.type).toBe("string");
+      expect(hold.properties?.kind.enum).toBeUndefined();
+      expect(hold.properties?.note.type).toBe("string");
+      expect(hold.properties).not.toHaveProperty("by");
+      expect(hold.properties).not.toHaveProperty("conversationId");
+      expect(steps.maxItems).toBe(20);
+      expect(steps.items?.properties).toHaveProperty("id");
+      expect(steps.items?.properties).toHaveProperty("state");
+      expect(tool.description).toContain("Stop work while waiting");
+    }
   });
 });
 

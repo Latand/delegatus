@@ -22,6 +22,7 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { readTaskHold, storedTaskHold } from "@/lib/tasks/hold";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
@@ -1640,6 +1641,39 @@ const tasks: BoardTask[] = [
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
+// Structured task motion, over the same real Viewer and existing fixture driver.
+if (SCENARIO === "task-motion") {
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("motion-inbox", "inbox", L("Plan the next audit", "Запланувати наступний аудит"), "", 30 * MIN),
+    task("motion-working", "assigned", L("Finish the running work", "Завершити поточну роботу"), "", 5 * MIN, [exportImpl]),
+    task("motion-stopped", "assigned", L("Finish the remaining work", "Завершити решту роботи"), "", 10 * MIN, [exportExplore]),
+    task("motion-worker", "blocked", L("Wait for a free worker", "Дочекатися вільного агента"), "", 60 * MIN, [], { hold: { kind: "worker", note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(60 * MIN), by: "agent" } }),
+    task("motion-pr", "blocked", L("Wait for the release PR", "Дочекатися PR релізу"), "", 45 * MIN, [], { hold: { kind: "pr", ref: "2190", note: L("After merge", "Після злиття"), since: iso(45 * MIN), by: "agent" } }),
+    task("motion-issue", "blocked", L("Wait for the issue", "Дочекатися issue"), "", 40 * MIN, [], { hold: { kind: "issue", ref: "2044", note: L("After closure", "Після закриття"), since: iso(40 * MIN), by: "agent" } }),
+    task("motion-taskref", "blocked", L("Wait for the linked task", "Дочекатися повʼязаної задачі"), "", 35 * MIN, [], { hold: { kind: "task", ref: "motion-bare", note: L("After the audit review", "Після перевірки аудиту"), since: iso(35 * MIN), by: "agent" } }),
+    task("motion-checklist", "blocked", L("Complete the audit causes", "Усунути причини аудиту"), "", 70 * MIN, [], { steps: [
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: L(`Fixed cause ${index + 1}`, `Усунена причина ${index + 1}`), state: "done" as const })),
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, ...(index === 0 ? { ref: "p-motion-checklist" } : {}), hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
+    ] }),
+    task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { steps: [{ id: "choose-release", text: L("Choose release", "Оберіть реліз"), state: "open", ref: "p-motion-operator", hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }] }),
+    task("motion-long", "blocked", L("Migrate the legacy billing integration safely", "Безпечно перенести інтеграцію старих платежів"), "", 25 * MIN, [], { hold: { kind: "external", note: L("Waiting for the external audit team to finish its review of the migration plan and confirm that every legacy billing record has been reconciled before the cutover can proceed without risking customer invoices or payment history", "Очікуємо, поки зовнішня аудиторська команда завершить перевірку плану міграції та підтвердить звірку всіх старих платіжних записів, перш ніж продовжити перенесення без ризику для рахунків клієнтів та історії платежів").slice(0, 200), since: iso(25 * MIN), by: "agent" } }),
+    task("motion-bare", "blocked", L("Review older work", "Переглянути давнішу роботу"), "", 120 * MIN),
+    task("motion-due", "blocked", L("Run the postponed check", "Виконати відкладену перевірку"), "", 120 * MIN, [], { hold: { kind: "postponed", note: L("After green checks", "Після успішних перевірок"), since: iso(120 * MIN), until: iso(60 * MIN), by: "operator" } }),
+    task("motion-done", "done", L("Completed review", "Завершене ревʼю"), "", 10 * MIN, [], { doneAt: iso(10 * MIN) }),
+    task("motion-hidden", "blocked", L("Hidden older work", "Прихована давніша робота"), "", 120 * MIN, [], { groupHidden: { at: iso(60 * MIN), by: "operator", admitted: [] } }),
+  );
+  pipelines.push(pipeline("p-motion-checklist", L("Run one checklist cause", "Виконати одну причину аудиту"), "motion-checklist", "running",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "running", null)] }],
+    { stageId: "implement", state: "running", input: null, activatedBy: null }));
+  pipelines.push(pipeline("p-motion-operator", L("Wait for release choice", "Дочекатися вибору релізу"), "motion-operator", "paused",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "passed", null)] }],
+    { stageId: "implement", state: "committing", input: null, activatedBy: null },
+    { pausedAt: iso(10 * MIN), pausedState: "running" }));
+}
+
 /* `&empty=<status>` empties one column: its tasks move to Done, so the
    column's strip can be read beside the others (an empty column folds). */
 const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
@@ -2330,7 +2364,7 @@ function fixtureWorkLinks(): FilesWorkLinks {
     completeSince: iso(24 * 60 * MIN),
     pr: (number) => prs.find((entry) => entry.number === number),
     byHead: (head) => prs.filter((entry) => entry.headRefName === head),
-    isIssue: () => false,
+    isIssue: (number) => number === 2044,
   };
   const cache: ForgeCacheView = { repository: (name) => (name === repository ? view : null) };
   const delivered = (lane: Pipeline) => ({
@@ -2346,12 +2380,13 @@ function fixtureWorkLinks(): FilesWorkLinks {
   }
   for (const entry of tasks) {
     const own = entry.id === "t-longtitle" ? { workLinks: [{ repository, number: 2210, kind: "pr" as const, addedAt: iso(MIN), addedBy: "operator" as const }] } : {};
-    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache);
-    if (resolved.links.length) out.tasks[entry.id] = resolved;
+    const numberedHold = (entry.hold?.kind === "pr" || entry.hold?.kind === "issue") && /^\d+$/.test(entry.hold.ref ?? "");
+    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache, numberedHold ? repository : null);
+    if (resolved.links.length || (numberedHold && resolved.repository)) out.tasks[entry.id] = resolved;
   }
   return out;
 }
-const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
+const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
 
 /* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
    that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`
@@ -2711,7 +2746,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body.expectedRevision !== undefined && body.expectedRevision !== current.revision) return json({ error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH", field: "expectedRevision" }, 409);
     /* The route's rules for the fields the board writes (#1695 K4a). */
     const next = { ...current } as BoardTask & Record<string, unknown>;
-    if (body.status) next.status = body.status as TaskStatus;
+    if (body.status) { next.status = body.status as TaskStatus; if (next.status !== "blocked") delete next.hold; }
+    if (Object.hasOwn(body, "hold")) {
+      next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
+      if (next.hold) next.status = "blocked";
+    }
+    if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];
     if (typeof body.text === "string") {
       next.text = body.text;

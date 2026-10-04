@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
-import { TaskStatusMutations, type PatchBody, type PatchResult, type TaskMutationPorts } from "./useTaskMutations";
+import { drawnTasks, TaskStatusMutations, type PatchBody, type PatchResult, type TaskMutationPorts } from "./useTaskMutations";
 
 /* The optimistic status controller against scripted ports: no server, no
    state directory, no timers. Every answer the ports give is explicit, so each
@@ -699,4 +699,37 @@ test("a chain of this board's own writes stays in one lineage", async () => {
   server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 3) });
   expect(await first).toMatchObject({ kind: "saved", lineage: 0 });
   expect(await second).toMatchObject({ kind: "saved", lineage: 0 });
+});
+
+test("moving out of Waiting and undo restores the exact hold with the move fence", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const hold = { kind: "worker" as const, note: "When a worker is free", since: "2026-09-19T10:00:00.000Z", by: "agent" as const };
+  const original = { ...task("held", "blocked", 1), hold };
+  const moved = mutations.move(original, "assigned");
+  await flush();
+  const assigned = task("held", "assigned", 2);
+  server.patches[0]!.answer.resolve({ ok: true, task: assigned });
+  await moved;
+  const undone = mutations.move(assigned, "blocked", { fenced: true, restoreHold: hold });
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ status: "blocked", restoreHold: hold, expectedProject: "fixture", expectedRevision: REV(2) });
+  server.patches[1]!.answer.resolve({ ok: true, task: { ...task("held", "blocked", 3), hold } });
+  expect((await undone).kind).toBe("saved");
+});
+
+
+test("a saved reason is drawn before the poll and an older poll cannot replace it", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = { ...task("held", "blocked", 1), hold: { kind: "worker" as const, note: "When free", since: "2026-09-19T10:00:00.000Z", by: "operator" as const } };
+  const operation = mutations.move(original, "blocked", { hold: { kind: "resource", note: "After memory is free" } });
+  await flush();
+  const saved = { ...task("held", "blocked", 2), hold: { ...original.hold, kind: "resource" as const, note: "After memory is free" } };
+  server.patches[0]!.answer.resolve({ ok: true, task: saved });
+  await operation;
+  mutations.reconcile([original]);
+  const drawn = drawnTasks([original], mutations.edits(), new Map())[0]!;
+  expect(drawn.hold).toEqual(saved.hold);
+  expect(mutations.holdFor(original)).toEqual(saved.hold);
 });
