@@ -15176,9 +15176,10 @@ describe("task motion and waiting reasons", () => {
   }, 180_000);
 
   /* The reason filters stand under the bar when the bar is narrower than 1168 px (1280 with the Tasks panel
-     beside it). Their row's height comes out of the reader and draft height, so a launched agent and the next
+     beside it). Their row's height comes out of the reader and draft height twice, so a launched agent and the next
      draft's prompt keep the places they have with the filters in the bar. Window 900 px high, seat closed; the
-     launched agent's share is read where the board shows columns. The prompt may end 24 px above the window's
+     launched agent's share is read where the board shows columns, as the first-prompt case reads it (above
+     60% at 1280, where the reader's column is cut at the window's side). The prompt may end 24 px above the window's
      foot at 1440 and 1280; at 1000 it keeps the 2 px main leaves. Frames go to LLV_TASK_STATES_PNG_DIR. */
   browserTest("a launched agent and the next draft keep their places with the reason filters under the bar at 1440, 1280 and 1000 px in en and uk", async () => {
     const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
@@ -15213,7 +15214,10 @@ describe("task motion and waiting reasons", () => {
           const read = await page.evaluate(() => {
             const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
             const box = reader?.getBoundingClientRect();
-            const share = box && box.height > 0 ? Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0)) / box.height : null;
+            /* The same share the first-prompt case reads: the visible width times the visible height over the reader's box. */
+            const share = box && box.width > 0 && box.height > 0
+              ? (Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) * Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0))) / (box.width * box.height)
+              : null;
             const area = document.querySelector<HTMLElement>("[data-kanban-draft] textarea")?.getBoundingClientRect();
             return { share, areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
           });

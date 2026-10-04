@@ -83,7 +83,7 @@
    gives on its own (the bar's border is then the row's, so no line runs between them). The page
    scrolls from the row's lower edge, so scrolled content never touches a chip, and the Orchestrator
    row keeps its one 12 px gap from that edge. The row is 8 + 18 + 8 + 1 px; the reader and the
-   draft take that height out of theirs (--reason-row-h), so the row costs the card nothing. */
+   draft take that height out of theirs twice (--reason-row-h), so the row costs the card nothing. */
 .kb > .reason-filter-row {
   flex: 0 0 auto; flex-wrap: wrap; max-width: none; padding: 8px var(--kb-edge); overflow: visible;
   background: var(--surface-card); border-bottom: 1px solid var(--border-default);
@@ -718,12 +718,16 @@
      scrolls, so it takes the viewport minus the bar and the column's chrome
      (100dvh - 180px), and never less than min(700px, 84dvh), which keeps it
      above the old min(620px, 74vh) at every window height. The
-     reason-filter row, when it stands under the bar, comes out of the result.
+     reason-filter row, when it stands under the bar, comes out of the result
+     twice: its height pushes the card down, and the reader's lower edge rises
+     by the same height again, which keeps the share of a launched reader the
+     window shows above what the layout without the row gives. The old height
+     stays the floor.
    The phone does not use these: its conversation screen (MobileFocusView)
    already fills the viewport. */
 .kb {
   --seat-default-h: 75dvh;
-  --conv-in-card-h: calc(max(min(700px, 84dvh), 100dvh - 180px) - var(--reason-row-h, 0px));
+  --conv-in-card-h: max(min(620px, 74dvh), max(min(700px, 84dvh), 100dvh - 180px) - 2 * var(--reason-row-h, 0px));
 }
 
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
