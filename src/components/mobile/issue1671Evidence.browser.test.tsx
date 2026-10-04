@@ -6873,136 +6873,147 @@ describe("older history on the phone", () => {
   }, 300_000);
 });
 
-browserTest("long conversation scroll: history and late layout preserve the reader", async () => {
-  const { base, stop } = await serveFixture();
-  const browser = await launchChromium();
-  const out = path.resolve(".artifacts/scroll-history");
-  fs.mkdirSync(out, { recursive: true });
-  const readings: unknown[] = [];
-  try {
-    for (const width of [390, 1440]) for (const compact of [false, true]) {
-      const context = await browser.newContext({ viewport: { width, height: 844 },
-        ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
-      try {
-        const page = await context.newPage();
-        const errors: string[] = [];
-        page.on("pageerror", (error) => errors.push(error.message));
-        await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
-        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
-        await page.waitForTimeout(500);
-        const scroller = page.locator("[data-log-feed-scroller]");
-        // Start within the oldest loaded answer, then drive actual upward input.
-        await scroller.evaluate((el) => { el.scrollTop = 300; });
-        await page.waitForTimeout(400);
-        await scroller.hover();
-        await page.mouse.wheel(0, -220);
-        await page.waitForFunction(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending);
-        await page.waitForTimeout(500);
-        await page.evaluate(() => {
-          const el = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
-          const row = [...el.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top)!;
-          const state = window as unknown as { scrollTrace: { anchor: string; frames: Array<Record<string, unknown>>; phase: string; running: boolean } };
-          state.scrollTrace = { anchor: row.dataset.feedKey!, frames: [], phase: "idle", running: true };
-          const frame = (time: number) => {
-            if (!state.scrollTrace.running) return;
-            const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
-            state.scrollTrace.frames.push({ time, phase: state.scrollTrace.phase, scrollTop: el.scrollTop,
-              anchorY: row.getBoundingClientRect().top, height: el.scrollHeight, viewport: el.clientHeight,
-              viewportTop: el.getBoundingClientRect().top, visualHeight: visualViewport?.height,
-              overflowAnchor: getComputedStyle(el).overflowAnchor });
+describe("long conversation scroll", () => {
+  /*
+   * A reader partway up a long conversation while an older page arrives. The
+   * scene is the fixture's `?scroll-history` feed: 120 loaded records, 60
+   * prepended while a real wheel and touch gesture are in flight, then late
+   * image and code growth above the reader, a tail append and a toolbar
+   * resize. The message under the reader's eye may move by no more than 3 px
+   * through all of it, at 390 px in both languages and at 1440 px. Readings
+   * and frames go to `.artifacts/scroll-history/`.
+   */
+  browserTest("history and late layout preserve the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const [width, locale] of [[390, "en"], [390, "uk"], [1440, "en"]] as const) for (const compact of [false, true]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 },
+          ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1${compact ? "&compact=1" : ""}`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          // Start within the oldest loaded answer, then drive actual upward input.
+          await scroller.evaluate((el) => { el.scrollTop = 300; });
+          await page.waitForTimeout(400);
+          await scroller.hover();
+          await page.mouse.wheel(0, -220);
+          await page.waitForFunction(() => (window as unknown as { historyFixture: { pending: boolean } }).historyFixture.pending);
+          await page.waitForTimeout(500);
+          await page.evaluate(() => {
+            const el = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const row = [...el.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top)!;
+            const state = window as unknown as { scrollTrace: { anchor: string; frames: Array<Record<string, unknown>>; phase: string; running: boolean } };
+            state.scrollTrace = { anchor: row.dataset.feedKey!, frames: [], phase: "idle", running: true };
+            const frame = (time: number) => {
+              if (!state.scrollTrace.running) return;
+              const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
+              state.scrollTrace.frames.push({ time, phase: state.scrollTrace.phase, scrollTop: el.scrollTop,
+                anchorY: row.getBoundingClientRect().top, height: el.scrollHeight, viewport: el.clientHeight,
+                viewportTop: el.getBoundingClientRect().top, visualHeight: visualViewport?.height,
+                overflowAnchor: getComputedStyle(el).overflowAnchor });
+              requestAnimationFrame(frame);
+            };
+            // rAF runs before ResizeObserver in the rendering algorithm. Keep
+            // that raw reading, then record the offset that survives pre-paint
+            // resize restoration (the production observer was registered first).
+            const settled = new ResizeObserver(() => {
+              const latest = state.scrollTrace.frames.at(-1);
+              if (!latest || !state.scrollTrace.running) return;
+              const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
+              latest.preResizeAnchorY ??= latest.anchorY;
+              latest.preResizeScrollTop ??= latest.scrollTop;
+              latest.anchorY = row.getBoundingClientRect().top;
+              latest.scrollTop = el.scrollTop;
+              latest.resizeObserved = true;
+            });
+            settled.observe(el);
+            settled.observe(el.firstElementChild!);
             requestAnimationFrame(frame);
+          });
+          const phase = async (name: string, action: () => Promise<unknown>) => {
+            await page.evaluate((name) => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = name; }, name);
+            await action();
+            await page.waitForTimeout(650);
           };
-          // rAF runs before ResizeObserver in the rendering algorithm. Keep
-          // that raw reading, then record the offset that survives pre-paint
-          // resize restoration (the production observer was registered first).
-          const settled = new ResizeObserver(() => {
-            const latest = state.scrollTrace.frames.at(-1);
-            if (!latest || !state.scrollTrace.running) return;
-            const row = el.querySelector<HTMLElement>(`[data-feed-key="${state.scrollTrace.anchor}"]`)!;
-            latest.preResizeAnchorY ??= latest.anchorY;
-            latest.preResizeScrollTop ??= latest.scrollTop;
-            latest.anchorY = row.getBoundingClientRect().top;
-            latest.scrollTop = el.scrollTop;
-            latest.resizeObserved = true;
+          await phase("wheel-up", () => page.mouse.wheel(0, -20));
+          if (width === 390) {
+            const cdp = await context.newCDPSession(page);
+            await phase("touch-up", async () => {
+              await touch(cdp, along([190, 260], [190, 295]), 24);
+              await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "touch-rest"; });
+            });
+            await cdp.detach();
+          }
+          await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "steady"; });
+          await page.waitForTimeout(100);
+          const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-before.png`) });
+          await phase("prepend", () => page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend()));
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-prepend.png`) });
+          await phase("live-bottom", () => page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append()));
+          await phase("late-image-above", () => page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
+            const img = document.createElement("img"); img.width = 200; img.height = 180;
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            row.append(img);
+          }));
+          await phase("late-code-markdown-above", () => page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
+            const pre = document.createElement("pre");
+            pre.textContent = "const late = 1;\n".repeat(8);
+            const paragraph = document.createElement("p");
+            paragraph.textContent = "Late markdown wrapping on a phone. ".repeat(12);
+            row.append(pre, paragraph);
+          }));
+          await phase("toolbar-resize", () => page.setViewportSize({ width, height: 780 }));
+          await page.screenshot({ path: path.join(out, `${label}-${width}-${locale}-${compact}-after.png`) });
+          const result = await page.evaluate(() => {
+            const trace = (window as unknown as { scrollTrace: { frames: Array<{phase: string; anchorY: number; scrollTop: number}>; running: boolean } }).scrollTrace;
+            trace.running = false;
+            const baseline = trace.frames.filter((f) => f.phase === "steady").at(-1)!.anchorY;
+            const stationary = trace.frames.filter((f) => ["prepend", "live-bottom", "late-image-above", "late-code-markdown-above", "toolbar-resize"].includes(f.phase));
+            const rest = trace.frames.filter((f) => f.phase === "touch-rest");
+            const restSteps = rest.slice(1).map((f, i) => Math.abs(f.anchorY - rest[i].anchorY));
+            return { frames: trace.frames, baseline, maxDrift: Math.max(...stationary.map((f) => Math.abs(f.anchorY - baseline))),
+              gestureRestMaxStep: Math.max(0, ...restSteps), gestureRestTravel: restSteps.reduce((sum, step) => sum + step, 0),
+              gestureRestMovingFrames: restSteps.filter((step) => step > 0).length };
           });
-          settled.observe(el);
-          settled.observe(el.firstElementChild!);
-          requestAnimationFrame(frame);
-        });
-        const phase = async (name: string, action: () => Promise<unknown>) => {
-          await page.evaluate((name) => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = name; }, name);
-          await action();
-          await page.waitForTimeout(650);
-        };
-        await phase("wheel-up", () => page.mouse.wheel(0, -20));
-        if (width === 390) {
-          const cdp = await context.newCDPSession(page);
-          await phase("touch-up", async () => {
-            await touch(cdp, along([190, 260], [190, 295]), 24);
-            await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "touch-rest"; });
-          });
-          await cdp.detach();
-        }
-        await page.evaluate(() => { (window as unknown as { scrollTrace: { phase: string } }).scrollTrace.phase = "steady"; });
-        await page.waitForTimeout(100);
-        const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
-        await page.screenshot({ path: path.join(out, `${label}-${width}-${compact}-before.png`) });
-        await phase("prepend", () => page.evaluate(() => (window as unknown as { historyFixture: { prepend(): void } }).historyFixture.prepend()));
-        await page.screenshot({ path: path.join(out, `${label}-${width}-${compact}-prepend.png`) });
-        await phase("live-bottom", () => page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append()));
-        await phase("late-image-above", () => page.evaluate(() => {
-          const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
-          const img = document.createElement("img"); img.width = 200; img.height = 180;
-          img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-          row.append(img);
-        }));
-        await phase("late-code-markdown-above", () => page.evaluate(() => {
-          const row = document.querySelector<HTMLElement>('[data-feed-key="row:59:0"]')!;
-          const pre = document.createElement("pre");
-          pre.textContent = "const late = 1;\n".repeat(8);
-          const paragraph = document.createElement("p");
-          paragraph.textContent = "Late markdown wrapping on a phone. ".repeat(12);
-          row.append(pre, paragraph);
-        }));
-        await phase("toolbar-resize", () => page.setViewportSize({ width, height: 780 }));
-        await page.screenshot({ path: path.join(out, `${label}-${width}-${compact}-after.png`) });
-        const result = await page.evaluate(() => {
-          const trace = (window as unknown as { scrollTrace: { frames: Array<{phase: string; anchorY: number; scrollTop: number}>; running: boolean } }).scrollTrace;
-          trace.running = false;
-          const baseline = trace.frames.filter((f) => f.phase === "steady").at(-1)!.anchorY;
-          const stationary = trace.frames.filter((f) => ["prepend", "live-bottom", "late-image-above", "late-code-markdown-above", "toolbar-resize"].includes(f.phase));
-          const rest = trace.frames.filter((f) => f.phase === "touch-rest");
-          const restSteps = rest.slice(1).map((f, i) => Math.abs(f.anchorY - rest[i].anchorY));
-          return { frames: trace.frames, baseline, maxDrift: Math.max(...stationary.map((f) => Math.abs(f.anchorY - baseline))),
-            gestureRestMaxStep: Math.max(0, ...restSteps), gestureRestTravel: restSteps.reduce((sum, step) => sum + step, 0),
-            gestureRestMovingFrames: restSteps.filter((step) => step > 0).length };
-        });
 
-        console.log(`scroll-history width=${width} compact=${compact} maxDrift=${result.maxDrift}`);
-        // Re-follow at the bottom, then prove new tail rows remain visible.
-        await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
-        await page.mouse.wheel(0, 100);
-        const back = page.getByRole("button", { name: "Back to the live tail" });
-        if (await back.count()) await back.click();
-        await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
-        await page.waitForTimeout(300);
-        const bottomGap = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
-        readings.push({ width, compact, ...result, bottomGap, errors });
-        expect(bottomGap).toBeLessThanOrEqual(50);
-        expect(errors).toEqual([]);
-      } finally { await context.close(); }
+          console.log(`scroll-history width=${width} locale=${locale} compact=${compact} maxDrift=${result.maxDrift}`);
+          // Re-follow at the bottom, then prove new tail rows remain visible.
+          await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+          await page.mouse.wheel(0, 100);
+          const back = page.getByRole("button", { name: locale === "uk" ? "Повернутись до живого хвоста" : "Back to the live tail" });
+          if (await back.count()) await back.click();
+          await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+          await page.waitForTimeout(300);
+          const bottomGap = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
+          readings.push({ width, locale, compact, ...result, bottomGap, errors });
+          expect(bottomGap).toBeLessThanOrEqual(50);
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
+    fs.writeFileSync(path.join(out, `${label}.json`), `${JSON.stringify({ readings }, null, 2)}\n`);
+    if (label === "after") for (const reading of readings as Array<{ width: number; maxDrift: number; gestureRestMaxStep: number; gestureRestTravel: number; gestureRestMovingFrames: number }>) {
+      expect(reading.maxDrift).toBeLessThanOrEqual(3);
+      if (reading.width === 390) {
+        // Native smooth scrolling follows the browser's easing curve. Require
+        // the settle to span several frames, rather than a one-frame snap.
+        expect(reading.gestureRestMaxStep).toBeLessThan(reading.gestureRestTravel);
+        expect(reading.gestureRestMovingFrames).toBeGreaterThanOrEqual(3);
+      }
     }
-  } finally { await browser.close(); stop(); }
-  fs.mkdirSync("evidence/scroll-history", { recursive: true });
-  const label = process.env.LLV_SCROLL_MEASUREMENT ?? "after";
-  fs.writeFileSync(`evidence/scroll-history/${label}.json`, `${JSON.stringify({ readings }, null, 2)}\n`);
-  if (label === "after") for (const reading of readings as Array<{ width: number; maxDrift: number; gestureRestMaxStep: number; gestureRestTravel: number; gestureRestMovingFrames: number }>) {
-    expect(reading.maxDrift).toBeLessThanOrEqual(3);
-    if (reading.width === 390) {
-      // Native smooth scrolling follows the browser's easing curve. Require
-      // the settle to span several frames, rather than a one-frame snap.
-      expect(reading.gestureRestMaxStep).toBeLessThan(reading.gestureRestTravel);
-      expect(reading.gestureRestMovingFrames).toBeGreaterThanOrEqual(3);
-    }
-  }
-}, 120_000);
+  }, 240_000);
+});

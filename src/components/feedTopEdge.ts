@@ -191,14 +191,18 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
      none, whatever the edge probes hit. */
   let span: Span = { top: -Infinity, bottom: Infinity };
   let roots: Element[] = [];
+  /* Rows that end within a frame above the edge, and the one crossing it:
+     the only rows whose controls can reach the edge. */
+  const near: HTMLElement[] = [];
   for (const row of rowsAtEdge(scroller, edge)) {
     const rect = row.getBoundingClientRect();
-    if (rect.top < edge && rect.bottom > edge) {
+    if (rect.top >= edge) break;
+    if (rect.bottom > edge - FRAME_PX) near.push(row);
+    if (rect.bottom > edge) {
       roots = [row];
       span = { top: rect.top, bottom: rect.bottom };
       break;
     }
-    if (rect.top >= edge) break;
   }
   if (!roots.length) {
     const left = bounds.left + scroller.clientLeft;
@@ -211,7 +215,7 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
   // after its enclosing message has already left it. Include that overhang
   // in the same ink reading, even when the next row starts on a boundary.
   const overhangs: Span[] = [];
-  for (const control of scroller.querySelectorAll("button")) {
+  for (const control of new Set(near.flatMap((row) => Array.from(row.querySelectorAll("button"))))) {
     const rect = control.getBoundingClientRect();
     if (rect.height > MAX_CONTROL_PX || rect.top >= edge || rect.bottom <= edge) continue;
     overhangs.push({ top: rect.top, bottom: rect.bottom });
