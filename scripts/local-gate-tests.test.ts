@@ -347,6 +347,83 @@ test("a base that failed its first sample needs no reruns even when later sample
   expect(readFileSync(f.marker + "-head", "utf8")).toBe("1");
 });
 
+// A throw inside a describe callback is Bun's "Unhandled error between tests":
+// the report stays complete and the error appears on every run, filtered or not.
+const betweenTests = (message: string | null, extra = "") => `import { test, expect, describe } from "bun:test";
+test("steady red", () => expect(false).toBe(true));
+${extra}
+${message === null ? "" : `describe("broken", () => { test("inner", () => {}); throw new Error(${JSON.stringify(message)}); });`}`;
+const cliAt = (f: ReturnType<typeof fixture>, base: string, files = ["./example.test.ts"]) => spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, ...files], { cwd: f.dir, env: f.env, encoding: "utf8" });
+const SAME_WAY = "(the base run of this file is broken the same way)";
+
+test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", () => {
+  const f = fixture(betweenTests("describe boom"));
+  const accepted = cliAt(f, f.base);
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
+  expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: steady red\n");
+  expect(accepted.stdout).toContain("0 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+  expect(accepted.stdout).not.toContain("gate error"); expect(accepted.stderr).not.toContain("gate error");
+});
+
+test("a retry in a file whose base is broken the same way still confirms its candidates", () => {
+  const f = fixture(source(true));
+  const counter = path.join(f.dir, "between-schedule");
+  const recovering = `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const run = existsSync(${JSON.stringify(counter)} + side) ? Number(readFileSync(${JSON.stringify(counter)} + side, "utf8")) + 1 : 1;
+writeFileSync(${JSON.stringify(counter)} + side, String(run));
+test("recovers", () => expect(side === "base" || run > 1).toBe(true));
+test("stays red", () => expect(side === "base").toBe(true));`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("describe boom", recovering));
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "broken base with a head-only schedule");
+  const refused = cliAt(f, f.git("rev-parse", "HEAD"));
+  expect(refused.stderr).not.toContain("gate error");
+  expect(refused.stdout).toContain("FLAKY example.test.ts: recovers (base 4 pass/0 fail; head 3 pass/1 fail)");
+  expect(refused.stdout).toContain("NEW example.test.ts: stays red");
+  expect(refused.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
+  expect(refused.stdout).toContain("1 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(refused.status).toBe(1);
+});
+
+test("a file that cannot finish on either side in the same way is PRE-EXISTING from the CLI and is never cached", () => {
+  const f = fixture("process.exit(0);");
+  writeFileSync(path.join(f.dir, "example.test.ts"), "// harmless edit\nprocess.exit(0);");
+  const accepted = cliAt(f, f.base);
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toMatch(/PRE-EXISTING example\.test\.ts: <runner error> .+ \(the base run of this file is broken the same way\)/);
+  expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+  expect(f.run().preexisting).toHaveLength(1);
+  expect(f.logs.join("\n")).toContain("baseline run");
+  expect(readdirSync(f.cache)).toHaveLength(0);
+});
+
+test("a between-tests error only on the head, or a different one, is NEW from the CLI and blocks", () => {
+  const f = fixture(betweenTests(null));
+  writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("describe boom"));
+  const headOnly = cliAt(f, f.base);
+  expect(headOnly.status).toBe(1);
+  expect(headOnly.stdout).toContain("NEW example.test.ts: <between-tests error> error: describe boom\n");
+  expect(headOnly.stdout).not.toContain(SAME_WAY);
+  expect(headOnly.stdout).toContain("1 new failures, 1 pre-existing failures");
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "broken base");
+  writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("another boom"));
+  const different = cliAt(f, f.git("rev-parse", "HEAD"));
+  expect(different.status).toBe(1);
+  expect(different.stdout).toContain("NEW example.test.ts: <between-tests error> error: another boom\n");
+  expect(different.stdout).toContain("1 new failures, 1 pre-existing failures, 1 fixed");
+});
+
+test("a head that cannot finish a file the base finished is NEW from the CLI and blocks", () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "example.test.ts"), "process.exit(0);");
+  const refused = cliAt(f, f.base);
+  expect(refused.status).toBe(1);
+  expect(refused.stdout).toMatch(/NEW example\.test\.ts: <runner error> /);
+  expect(refused.stdout).not.toContain(SAME_WAY);
+});
+
 test("a head scheduled recovery passes CLI and never caches a head pass", () => {
   const f = scheduledFixture([], [1]);
   const accepted = f.cli();

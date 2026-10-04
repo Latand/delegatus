@@ -23,6 +23,7 @@ const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
+const RUNNER_ERROR = "<runner error> ";
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
 const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
@@ -31,8 +32,8 @@ const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.fi
  * first base sample: those alone can refuse the push. A failure the base sample
  * already showed stays PRE-EXISTING on that one sample per side and costs no
  * reruns, since neither label it could end with blocks. Mixed results on either
- * side make a confirmed assertion non-blocking FLAKY; runner errors retain
- * their existing comparison. Never treat absence as a pass.
+ * side make a confirmed assertion non-blocking FLAKY; runner and between-tests
+ * errors keep their comparison by identity. Never treat absence as a pass.
  */
 export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun) {
   const comparison = compareTests(base, head);
@@ -48,7 +49,11 @@ export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "bas
   for (let round = 0; round < FLAKY_RERUNS; round++) {
     for (const side of ["base", "head"] as const) {
       const run = rerun(side, candidates);
-      if (run.failures.some(site => site.kind === "error")) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
+      // A between-tests error the same side already showed in its first sample
+      // is that file's known state; only a diagnostic the first sample lacked
+      // leaves the retry without usable evidence.
+      const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
+      if (run.failures.some(site => site.kind === "error" && !known.has(key(site)))) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
       for (const item of evidence) {
         const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
         if (side === "base" && fail + pass !== occurrenceCount(base.passed, item.site) + occurrenceCount(base.failures, item.site)) throw new Error(`base rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
@@ -194,8 +199,8 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (label === "baseline" || options.sites) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
-      failures.push({ file, suite: "", name: `<runner error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+      if (options.sites) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
   }
   return { failures, passed, completed, elapsedMs: performance.now() - started };
@@ -316,6 +321,11 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     log(`touched-tests: ${files.length - oldFiles.length} new file(s), judged on head alone`);
     const head = runFiles(root, files, sandbox, inherited, "head");
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
+    // A base file that did not finish certifies nothing, unless the head fails
+    // to finish the same file with the same diagnostic: then the push changed
+    // nothing there and the comparison below lists it as PRE-EXISTING.
+    const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
+    for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
     const retryStarted = performance.now(), deadline = retryStarted + FLAKY_BUDGET_MS;
     let reruns = 0;
     const comparison = confirmFailures(baseline, head, (side, sites) => {
@@ -338,7 +348,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     if (reruns) log(`touched-tests: flaky confirmation ${FLAKY_RERUNS} reruns per side, ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
-      for (const site of sites) log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`);
+      for (const site of sites) log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}${label === "PRE-EXISTING" && site.kind === "error" ? " (the base run of this file is broken the same way)" : ""}`);
     }
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;

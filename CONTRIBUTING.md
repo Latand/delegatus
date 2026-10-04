@@ -104,8 +104,18 @@ end with blocks the push; reruns there bought only the label and cost three
 filtered runs per side on every push that touched the file. An intermittent
 test that happens to fail both initial samples is therefore printed as
 `PRE-EXISTING` for that push.
-Runner and between-tests errors retain the existing comparison: matching
-base diagnostics are `PRE-EXISTING`, additional head diagnostics are `NEW`.
+A file whose run is broken on the base the same way as on the head never
+blocks. "The same way" means the same diagnostic identity: the file, the kind
+of diagnostic, and its first error line, with the checkout path and the
+private sandbox path replaced by placeholders. That covers an error between
+tests and a run that did not finish (no complete report, a timeout, a runner
+exit that disagrees with its report). Such a diagnostic prints as
+`PRE-EXISTING ... (the base run of this file is broken the same way)`. A
+diagnostic only the head shows, or one whose error line differs, is `NEW` and
+refuses the push. A base file that did not finish while the head finished it,
+or failed to finish differently, remains a gate error. During confirmation a
+side may repeat the between-tests errors of its own initial sample; any other
+runner or between-tests error in a retry is a gate error.
 Fixed and removed/skipped tests remain listed separately.
 When several assertions share the same file, suite and test name, retry
 evidence and the initial base/head comparison preserve their occurrence numbers;
