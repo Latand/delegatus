@@ -1981,3 +1981,16 @@ named test 10/10 times, with all 240 reported PIDs absent. A second merge,
 `3e8fe66e043fa9aa4779fae3c8e6584785727235`, incorporated it without conflicts.
 The initial push hook reported 0 new, 0 pre-existing, 412 fixed and 8
 removed/skipped failures; the final refreshed push is checked separately.
+
+The refreshed hook sampled another timing-sensitive main fixture as NEW:
+`controlPlaneReads.test.ts`'s targeted-miss deadline. A controlled 40 ms delay
+at the initial deadline check reproduced the same failure on clean current
+main and the unmodified refreshed head: the 20 ms deadline expired before
+the targeted reader entered, leaving its asserted signal undefined. This
+fixture now uses the existing deadline scheduler seam, retaining its 20 ms
+budget and firing that deadline only after the reader starts. It also checks
+that the reader settled and both timer handles were released. The whole file
+passed 23/0 normally and with the controlled delay. That refused hook reported
+1 new, 0 pre-existing, 413 fixed and 8 removed/skipped failures; no escape was
+used. This is another concrete example of the hook's single-sample false NEW
+risk, beyond the resource receipt race.

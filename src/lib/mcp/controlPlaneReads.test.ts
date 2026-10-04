@@ -6,6 +6,7 @@ import path from "node:path";
 import { targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
 import { setAgentRegistryForTests } from "@/lib/agent/registry";
+import { systemScheduler } from "@/lib/deadline";
 
 /**
  * The control-plane reads consume ONE completed scan and ONE projection (#845).
@@ -495,25 +496,60 @@ test("get_conversation cancels a targeted miss when its caller leaves", async ()
 });
 
 test("get_conversation deadlines a targeted miss without orphan work", async () => {
-  const { counts, injected } = dependencies({ completedTranscript: false });
-  let targetedSignal: AbortSignal | undefined;
-  const domain = injected as unknown as {
-    targetedFileEntry(pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number }): Promise<ReturnType<typeof scanRow> | undefined>;
-  };
-  domain.targetedFileEntry = async (_pathname, options = {}) => new Promise((_resolve, reject) => {
-    targetedSignal = options.signal;
-    options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+  let clockNow = Date.now();
+  const deadlineAt = clockNow + 20;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  const timers = new Map<object, { handler: () => void; ms: number }>();
+  const schedule = spyOn(systemScheduler, "setTimeout").mockImplementation((handler, ms) => {
+    const handle = {};
+    timers.set(handle, { handler, ms });
+    return handle;
   });
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const clear = spyOn(systemScheduler, "clearTimeout").mockImplementation((handle) => {
+    timers.delete(handle as object);
+  });
+  try {
+    const { counts, injected } = dependencies({ completedTranscript: false });
+    let targetedSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const targetedStarted = new Promise<void>((resolve) => { started = resolve; });
+    let readerSettled = false;
+    const domain = injected as unknown as {
+      targetedFileEntry(pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number }): Promise<ReturnType<typeof scanRow> | undefined>;
+    };
+    domain.targetedFileEntry = async (_pathname, options = {}) => new Promise<ReturnType<typeof scanRow> | undefined>((_resolve, reject) => {
+      targetedSignal = options.signal;
+      options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+      started();
+    }).finally(() => { readerSettled = true; });
+    const bindings = viewerMcpBindings(undefined, undefined, injected);
 
-  const call = bindings.get_conversation(
-    { clientRequestId: "get-deadline", transcriptPath },
-    { deadlineAt: Date.now() + 20 },
-  );
+    const call = bindings.get_conversation(
+      { clientRequestId: "get-deadline", transcriptPath },
+      { deadlineAt },
+    );
 
-  await expect(call).rejects.toMatchObject({ name: "DeadlineExceededError" });
-  expect(targetedSignal?.aborted).toBeTrue();
-  expect(counts.rawScans).toBe(0);
+    const startState = await Promise.race([
+      targetedStarted.then(() => "targeted" as const),
+      call.then(() => "resolved" as const, () => "rejected" as const),
+    ]);
+    expect(startState).toBe("targeted");
+    const overall = timers.entries().next().value;
+    expect(overall).toBeDefined();
+    expect(overall![1].ms).toBe(20);
+    clockNow = deadlineAt;
+    timers.delete(overall![0]);
+    overall![1].handler();
+    await expect(call).rejects.toMatchObject({ name: "DeadlineExceededError" });
+    expect(targetedSignal?.aborted).toBeTrue();
+    expect(readerSettled).toBeTrue();
+    expect(timers.size).toBe(0);
+    expect(counts.rawScans).toBe(0);
+  } finally {
+    clear.mockRestore();
+    schedule.mockRestore();
+    clock.mockRestore();
+  }
 });
 
 test("get_conversation returns hydrated records when the deadline lands after the partial exists", async () => {
