@@ -383,6 +383,38 @@ test("same name", check);`;
   expect(readFileSync(trace, "utf8").trim().split("\n").filter(line => line.startsWith("head:")).length).toBe(8);
 });
 
+test("overlapping base and head retry evidence belongs to separate duplicate occurrences", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "overlapping-duplicate-schedule");
+  const duplicate = `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const counter = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+let occurrence = 0;
+const check = () => { const index = occurrence++; expect(index === 0 ? side === "base" : side === "base" ? run !== 2 : run > 1).toBe(true); };
+test("same name", check);
+test("same name", check);`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), duplicate);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "overlapping duplicate schedule");
+  const base = f.git("rev-parse", "HEAD");
+  const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(cli.status).toBe(1);
+  expect(cli.stdout).toContain("NEW example.test.ts: same name");
+  expect(cli.stdout).toContain("FLAKY example.test.ts: same name (base 3 pass/1 fail; head 3 pass/1 fail)");
+  expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+});
+
+test("any passing head retry makes an occurrence FLAKY", () => {
+  const f = scheduledFixture([], [1, 2, 4]);
+  const accepted = f.cli();
+  expect(accepted.status).toBe(0);
+  expect(accepted.stdout).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 4 pass/0 fail; head 1 pass/3 fail)");
+  expect(accepted.stdout).toContain("0 new failures, 0 pre-existing failures");
+});
+
 test("a later base retry file error evicts the cache after an earlier failure", () => {
   const f = scheduledFixture([2, 6], []);
   const marker = path.join(f.dir, "second-file-runs");
@@ -410,7 +442,7 @@ test("second file", () => expect(side === "base" || run !== 2).toBe(true));`;
   expect(next.flaky).toHaveLength(1);
 });
 
-test("a literal describe separator is filtered as part of the suite name", () => {
+test("a literal describe separator is filtered inside nested suite ancestry", () => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "literal-separator");
   const literal = `import { test, expect, describe } from "bun:test";
@@ -420,10 +452,10 @@ const side = basename(process.cwd()) === "baseline" ? "base" : "head";
 const file = ${JSON.stringify(marker)} + "-" + side;
 const run = existsSync(file) ? Number(readFileSync(file, "utf8")) + 1 : 1;
 writeFileSync(file, String(run));
-describe("one > two", () => {
+describe("outer", () => describe("one > two", () => {
   test("case", () => expect(side === "base" || run > 1).toBe(true));
   test("unrelated", () => appendFileSync(${JSON.stringify(marker)} + "-unrelated", side + "\\n"));
-});`;
+}));`;
   writeFileSync(path.join(f.dir, "example.test.ts"), literal);
   f.git("add", "example.test.ts"); f.git("commit", "-m", "literal suite baseline");
   const base = f.git("rev-parse", "HEAD");
@@ -431,7 +463,7 @@ describe("one > two", () => {
   const result = touchedTests(f.dir, base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
   expect(result.introduced).toHaveLength(0);
   expect(result.flaky).toHaveLength(1);
-  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: one > two > case");
+  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: one > two > outer > case (base 4 pass/0 fail; head 3 pass/1 fail)");
   expect(readFileSync(marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["base", "head"]);
 });
 
@@ -444,8 +476,9 @@ test("the retry bound stays small and incomplete samples cannot become FLAKY", (
   expect(() => confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).toThrow("incomplete runner");
   expect(() => confirmFailures(base, head, () => { throw new Error("flaky rerun budget exhausted"); })).toThrow("budget exhausted");
   // A passing duplicate cannot certify recovery of another stable failing copy.
-  const duplicate = run([site], [site]);
-  expect(confirmFailures(run([], [site, site]), duplicate, side => side === "base" ? run([], [site, site]) : duplicate).introduced).toHaveLength(1);
+  const first = { ...site, occurrence: 0 }, second = { ...site, occurrence: 1 };
+  const duplicate = run([first, second], []);
+  expect(confirmFailures(run([], [first, second]), duplicate, side => side === "base" ? run([], [first, second]) : duplicate).introduced).toHaveLength(2);
 });
 
 

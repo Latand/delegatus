@@ -5,12 +5,13 @@ import path from "node:path";
 import { decodeXML } from "entities";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 
-export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error" }
+export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
 export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
 const key = (site: TestSite) => JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind]);
+const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const MAX_CACHE_ENTRIES = 32;
 const RESULT_NAME = /^[a-f0-9]{64}\.json$/;
@@ -23,7 +24,7 @@ export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
-const occurrences = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => key(other) === key(site)).length;
+const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
 
 /** Confirm assertions that failed the first head sample. Any observed base
  * failure makes the assertion non-blocking FLAKY; runner errors retain their
@@ -31,55 +32,41 @@ const occurrences = (sites: readonly TestSite[], site: TestSite) => sites.filter
  */
 export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun) {
   const comparison = compareTests(base, head);
-  const candidates = [...new Map(head.failures.filter(site => site.kind === "test").map(site => [key(site), site])).values()];
+  const candidates = [...new Map(head.failures.filter(site => site.kind === "test").map(site => [occurrenceKey(site), site])).values()];
   const flaky: FlakySite[] = [];
   if (!candidates.length) return { ...comparison, flaky };
   const evidence = candidates.map(site => ({ site,
-    base: { pass: occurrences(base.passed, site), fail: occurrences(base.failures, site) },
-    head: { pass: occurrences(head.passed, site), fail: occurrences(head.failures, site) },
-    initialBaseFailures: occurrences(base.failures, site),
-    initialHeadFailures: occurrences(head.failures, site),
-    maxBaseRetryFailures: 0,
-    maxHeadRetryFailures: 0,
+    base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
+    head: { pass: occurrenceCount(head.passed, site), fail: occurrenceCount(head.failures, site) },
+    baseRetryFailed: false,
+    headRetryPassed: false,
   }));
   for (let round = 0; round < FLAKY_RERUNS; round++) {
     for (const side of ["base", "head"] as const) {
       const run = rerun(side, candidates);
       if (run.failures.some(site => site.kind === "error")) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
       for (const item of evidence) {
-        const fail = occurrences(run.failures, item.site), pass = occurrences(run.passed, item.site);
-        if (side === "base" && occurrences(base.passed, item.site) + occurrences(base.failures, item.site) !== fail + pass) throw new Error(`base rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
-        if (side === "base") item.maxBaseRetryFailures = Math.max(item.maxBaseRetryFailures, fail);
+        const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
+        if (side === "base" && fail + pass !== occurrenceCount(base.passed, item.site) + occurrenceCount(base.failures, item.site)) throw new Error(`base rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
+        if (side === "base" && fail) item.baseRetryFailed = true;
         if (side === "head") {
-          if (fail + pass !== occurrences(head.failures, item.site) + occurrences(head.passed, item.site)) throw new Error(`head rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
-          item.maxHeadRetryFailures = Math.max(item.maxHeadRetryFailures, fail);
+          if (fail + pass !== occurrenceCount(head.failures, item.site) + occurrenceCount(head.passed, item.site)) throw new Error(`head rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
+          if (pass) item.headRetryPassed = true;
         }
         item[side].pass += pass; item[side].fail += fail;
       }
     }
   }
-  const flakyCounts = new Map<string, number>();
+  const flakyOccurrences = new Set<string>();
   for (const item of evidence) {
-    const identity = key(item.site);
-    // Identical names can belong to distinct assertions. Spend flaky evidence
-    // against occurrences, then leave any residual introduced count blocking.
-    const baseRetryOnly = Math.max(0, item.maxBaseRetryFailures - item.initialBaseFailures);
-    const recovered = Math.max(0, item.initialHeadFailures - item.maxHeadRetryFailures);
-    const introduced = comparison.introduced.filter(site => key(site) === identity).length;
-    const preexisting = comparison.preexisting.filter(site => key(site) === identity).length;
-    const clearIntroduced = Math.min(introduced, baseRetryOnly + recovered);
-    const count = preexisting + clearIntroduced;
-    for (let index = 0; index < count; index++) flaky.push({ ...item.site, base: item.base, head: item.head });
-    if (count) flakyCounts.set(identity, count);
+    // Keep evidence attached to its duplicate assertion. A base retry failure
+    // and a different occurrence's head recovery cannot cancel each other.
+    if (!item.base.fail && !item.baseRetryFailed && !item.headRetryPassed) continue;
+    flakyOccurrences.add(occurrenceKey(item.site));
+    flaky.push({ ...item.site, base: item.base, head: item.head });
   }
-  const consume = (sites: TestSite[]) => sites.filter(site => {
-    const identity = key(site), count = flakyCounts.get(identity) ?? 0;
-    if (!count) return true;
-    flakyCounts.set(identity, count - 1);
-    return false;
-  });
-  const preexisting = consume(comparison.preexisting);
-  return { ...comparison, introduced: consume(comparison.introduced), preexisting, flaky };
+  const keepNonFlaky = (sites: TestSite[]) => sites.filter(site => !flakyOccurrences.has(occurrenceKey(site)));
+  return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky };
 }
 
 /** Match occurrences, so a duplicate test name cannot hide an additional failure. */
@@ -116,11 +103,15 @@ export function parseReport(xml: string, output: string, file: string, root: str
   const totals = attributes(opening);
   const failures: TestSite[] = [], passed: TestSite[] = [];
   let tests = 0, namedFailures = 0;
+  const testcaseOccurrences = new Map<string, number>();
   for (const match of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
     const attrs = attributes(match[1]!);
     if (attrs.name === undefined || attrs.file !== file) throw new Error("JUnit testcase has an invalid identity");
     tests++;
-    const site: TestSite = { file, suite: attrs.classname ?? "", name: attrs.name, kind: "test" };
+    const identity = JSON.stringify([attrs.classname ?? "", attrs.name]);
+    const occurrence = testcaseOccurrences.get(identity) ?? 0;
+    testcaseOccurrences.set(identity, occurrence + 1);
+    const site: TestSite = { file, suite: attrs.classname ?? "", name: attrs.name, kind: "test", occurrence };
     if (/<(?:failure|error)\b/.test(match[2] ?? "")) { failures.push(site); namedFailures++; }
     else if (!/<skipped\b/.test(match[2] ?? "")) passed.push(site);
   }
@@ -154,11 +145,22 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
     // Bun filters the outer-to-inner describe names joined by spaces. Its JUnit
     // classname records the same ancestry in reverse, separated by " > ".
     const names = options.sites?.filter(site => site.file === file).flatMap(site => {
-      const ancestors = site.suite ? site.suite.split(" > ").reverse() : [];
-      // JUnit reverses distinct suite ancestors and joins them with " > ". A
-      // literal separator in a describe name is ambiguous, so retain the raw
-      // classname form alongside the reconstructed nested-suite form.
-      return [...new Set([escape([...ancestors, site.name].join(" ")), escape([site.suite, site.name].filter(Boolean).join(" "))])];
+      const parts = site.suite ? site.suite.split(" > ") : [];
+      // JUnit uses the same delimiter for reverse ancestry and literal suite
+      // text. Enumerate possible boundaries, reversing groups while preserving
+      // the text and order inside each group.
+      const forms: string[] = [];
+      for (let mask = 0; mask < 2 ** Math.max(0, parts.length - 1); mask++) {
+        const groups: string[] = [];
+        let group = parts[0] ?? "";
+        for (let index = 1; index < parts.length; index++) {
+          if (mask & (1 << (index - 1))) { groups.push(group); group = parts[index]!; }
+          else group += ` > ${parts[index]}`;
+        }
+        if (group) groups.push(group);
+        forms.push([...groups.reverse(), site.name].join(" "));
+      }
+      return [...new Set(forms.map(escape))];
     });
     const filter = names ? [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"] : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
@@ -258,7 +260,7 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
     const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v4-green-only", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
+    const identity = digest(JSON.stringify(["per-file-junit-v5-occurrence-aware-green-only", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);
     const entry = path.join(cache, `${identity}.json`);
