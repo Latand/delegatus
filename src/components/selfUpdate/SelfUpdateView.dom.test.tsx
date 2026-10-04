@@ -873,3 +873,16 @@ for (const locale of ["en", "uk"] as const) test(`coherent capable launcher reta
   const el = render(s);
   expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
 });
+
+
+for (const locale of ["en", "uk"] as const) for (const id of ["restart-service", "restart-terminal", "secure-handoff"] as const)
+test(`launcher prerequisite still owns apply when both children serve the build: ${id}/${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ installed: NEW_REV, serving: { web: NEW_REV, runtimeHost: NEW_REV },
+    processes: { web: proc("web", { revision: NEW_REV.short }), runtimeHost: proc("runtimeHost", { revision: NEW_REV.short }) },
+    action: { id, button: id === "restart-service" },
+    update: { ...idleUpdate(CHECKOUT_STEPS), state: "done", target: NEW, targetShort: NEW_REV.short, startedAt: AT, finishedAt: NEXT } });
+  const el = render(s);
+  expect(button(el, "restart-web")).toBeNull(); expect(button(el, "arm-host")).toBeNull();
+  expect(text(el.querySelector('[data-outcome="done"]'))).toContain(locale === "en" ? "installation action above" : "дією для встановлення вище");
+});
