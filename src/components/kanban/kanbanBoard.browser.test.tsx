@@ -164,7 +164,9 @@ describe("batched turn settlement", () => {
             { width, working: translate(locale, "mobile2.chat.stateWorking") });
             const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
             if (width === 1440) {
-              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
+              /* The header counts tasks in motion, not conversations: this one's task also has a running
+                 pipeline, so settling its conversation leaves the count where it was. */
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]));
               expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
             }
             const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
@@ -783,7 +785,7 @@ describe("#1695 K1+K2 kanban board", () => {
 
         await page.evaluate(() => { (window as unknown as { evidence: { refuseNextTaskPatch: boolean } }).evidence.refuseNextTaskPatch = true; });
         await page.click('.card[data-id="task:t-verify-a"] [data-menu]');
-        await page.click('.menu [role="menuitemradio"]:has-text("Blocked")');
+        await page.click('.menu [role="menuitemradio"]:has-text("Waiting")');
         const refusedOnClick = await columnOf("t-verify-a");
         await page.waitForFunction(() => document.querySelector("[data-kanban-receipt].error"), undefined, { timeout: 5_000 });
         const refused = { onClick: refusedOnClick, afterAnswer: await columnOf("t-verify-a"), receipts: await receipts() };
@@ -873,7 +875,7 @@ describe("#1695 K1+K2 kanban board", () => {
         if (undone.column !== "assigned" || undone.patches !== 2) failures.push(`undo: U while the receipt shows left ${JSON.stringify(undone)}`);
 
         await undo.page.click('.card[data-id="task:t-disk"] [data-menu]');
-        await undo.page.click('.menu [role="menuitemradio"]:has-text("Blocked")');
+        await undo.page.click('.menu [role="menuitemradio"]:has-text("Waiting")');
         await undo.page.waitForFunction(() => document.querySelector('.card[data-id="task:t-disk"]')?.getAttribute("data-pending") === "0", undefined, { timeout: 5_000 });
         await undo.page.waitForFunction(() => !document.querySelector("[data-kanban-receipt] .act"), undefined, { timeout: 12_000 });
         const beforeLateUndo = await patches();
@@ -1317,7 +1319,7 @@ describe("#1695 K3 conversations inside cards", () => {
 
         /* The operator's own status move keeps it too. */
         await page.click(`${card("t-export")} [data-menu]`);
-        await page.click('.menu [role="menuitemradio"]:has-text("Assigned")');
+        await page.click('.menu [role="menuitemradio"]:has-text("In progress")');
         await page.waitForFunction((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status === "assigned", card("t-export"), { timeout: 5_000 });
         const ownMove = await page.evaluate(() => {
           const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-k3probe="draft"]');
@@ -9283,6 +9285,8 @@ describe("the open agents at the board's side: short names, role emblem and colo
     name: number | null;
     seat: { left: number; top: number; bottom: number } | null;
     bar: number;
+    /** The bottom of what stands right above the Orchestrator row: the bar, or the reason filters under it. */
+    above: number;
     rail: { left: number; top: number; right: number } | null;
     edge: number;
     column: number | null;
@@ -9327,6 +9331,7 @@ describe("the open agents at the board's side: short names, role emblem and colo
       name,
       seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
       bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
+      above: (rect(document.querySelector(".kb > .reason-filter-row")) ?? rect(document.querySelector(".bar[data-bar=\"project\"]")))!.bottom,
       rail: railBox ? { left: railBox.left, top: railBox.top, right: railBox.right } : null,
       edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
       column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
@@ -9352,11 +9357,11 @@ describe("the open agents at the board's side: short names, role emblem and colo
       if (edges.tier === "full" && !near(edges.railInset, edges.cardInset)) failures.push(`${label}: the rail's rows hold their content ${edges.railInset} in, the cards ${edges.cardInset}`);
     }
     if (!railExpected && !near(edges.column, edges.seat.left)) failures.push(`${label}: the first column starts at ${edges.column}, the Orchestrator row at ${edges.seat.left}`);
-    const above = edges.seat.top - edges.bar;
+    const above = edges.seat.top - edges.above;
     const next = edges.strip ?? { top: edges.columns, bottom: edges.columns };
     const below = next.top - edges.seat.bottom;
     if (!near(above, below)) failures.push(`${label}: ${above} px above the Orchestrator row, ${below} below it`);
-    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the ${edges.mode} strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below the bar`);
+    if (edges.strip && !near(edges.columns - edges.strip.bottom, above)) failures.push(`${label}: the ${edges.mode} strip stands ${edges.columns - edges.strip.bottom} px above the columns, the row ${above} below what stands above it`);
     if (edges.strip && !near(edges.strip.left, edges.column)) failures.push(`${label}: the ${edges.mode} strip starts at ${edges.strip.left}, the first column at ${edges.column}`);
     const inbox = edges.titles.inbox;
     for (const [status, title] of Object.entries(edges.titles)) {
@@ -11927,12 +11932,27 @@ describe("column dwell smooth", () => {
             // Decode captured pixels after recording, so the visibility/start
             // probes cannot introduce forced layouts into the RAF timing gate.
             const pixels = await Promise.all(frames.map(async (frame) => (await sharp(Buffer.from(frame.data, "base64")).removeAlpha().raw().toBuffer({ resolveWithObject: true }))));
+            /* Counts text ink in the column window. A filled dark button (the
+               decision card's "Retry") is not ink: it paints its final wide
+               layout in a still narrow frame for the first frames of a
+               transition, so it moves in and out of the window and swamps the
+               text count. Horizontal dark runs of FILL_RUN pixels or more are
+               fills; the run is measured across the whole row, so the window
+               edge cannot shorten a fill into text-sized pieces. */
+            const FILL_RUN = 24;
             const dark = (index: number, box: typeof narrowBoxes[number]) => {
               const { data, info } = pixels[index]!;
+              const from = Math.ceil(box.left + 20), to = Math.floor(box.left + box.width - 20);
               let count = 0;
-              for (let y = Math.ceil(box.top + 20); y < Math.floor(box.bottom - 12); y++) for (let x = Math.ceil(box.left + 20); x < Math.floor(box.left + box.width - 20); x++) {
-                const at = (y * info.width + x) * info.channels;
-                if (data[at]! < 145 && data[at + 1]! < 145 && data[at + 2]! < 145) count++;
+              for (let y = Math.ceil(box.top + 20); y < Math.floor(box.bottom - 12); y++) {
+                let x = 0;
+                while (x < info.width) {
+                  const isDark = (at: number) => data[at]! < 145 && data[at + 1]! < 145 && data[at + 2]! < 145;
+                  if (!isDark((y * info.width + x) * info.channels)) { x++; continue; }
+                  const start = x;
+                  while (x < info.width && isDark((y * info.width + x) * info.channels)) x++;
+                  if (x - start < FILL_RUN) count += Math.max(0, Math.min(x, to) - Math.max(start, from));
+                }
               }
               return count;
             };
@@ -15721,6 +15741,1001 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 600_000);
 });
 
+
+describe("task motion and waiting reasons", () => {
+  browserTest("states and reasons stay readable at 1440, 1280, 1024 and 390 px in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser: Browser | null = null;
+    const cases: Record<string, unknown>[] = [];
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1280, 1024, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-motion`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          const phone = width === 390;
+          await page.locator(phone ? '[data-phone-kanban-tab="assigned"]' : '[data-kanban-board]').waitFor();
+          const selector = (id: string) => phone ? `[data-phone-card="task:${id}"]` : card(id);
+          if (phone) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          else if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) {
+            await page.locator(selector("motion-working")).focus();
+            await page.keyboard.press("o");
+            await page.locator('[data-seat-collapse][aria-expanded="false"]').waitFor();
+          }
+          const topbar = phone ? null : await page.locator('.bar[data-bar="project"]').evaluate((bar) => {
+            const rect = bar.getBoundingClientRect();
+            const input = bar.querySelector<HTMLInputElement>('[data-kanban-search]')!;
+            const search = input.getBoundingClientRect();
+            // Measure the real input's text layout without dispatching a search.
+            // A detached canvas can undercount the rendered placeholder width.
+            const originalValue = input.value;
+            input.value = input.placeholder;
+            const placeholderClientWidth = input.clientWidth;
+            const placeholderScrollWidth = input.scrollWidth;
+            input.value = originalValue;
+            const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
+            const filterRect = filters.getBoundingClientRect();
+            const chip = bar.querySelector<HTMLElement>('[data-attention-count]')!.getBoundingClientRect();
+            const taskToggle = bar.querySelector<HTMLElement>('[data-task-panel-toggle]')!.getBoundingClientRect();
+            const moreMenu = bar.querySelector<HTMLElement>('[data-bar-group="more"]')!.getBoundingClientRect();
+            return {
+              chipLeft: chip.left, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
+              top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
+              belowBar: !bar.contains(filters),
+              barRight: rect.right,
+              documentOverflow: document.documentElement.scrollWidth > innerWidth,
+              searchTop: search.top, searchBottom: search.bottom,
+              filtersTop: filterRect.top, filtersBottom: filterRect.bottom,
+              filtersRight: filterRect.right,
+              lastFilterRight: filters.lastElementChild!.getBoundingClientRect().right,
+              groupWidth: filters.parentElement!.getBoundingClientRect().width,
+              searchWidth: search.width,
+              placeholderClientWidth, placeholderScrollWidth,
+              filterCount: filters.children.length,
+              filtersClientWidth: filters.clientWidth, filtersScrollWidth: filters.scrollWidth,
+            };
+          });
+          if (topbar) {
+            expect(topbar.height).toBe(48);
+            expect(topbar.searchTop).toBeGreaterThanOrEqual(Math.max(0, topbar.top));
+            expect(topbar.searchBottom).toBeLessThanOrEqual(topbar.bottom);
+            expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
+            if (width === 1440) {
+              expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
+              expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
+              expect(topbar.belowBar, JSON.stringify(topbar)).toBeFalse();
+              expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
+            } else {
+              expect(topbar.belowBar).toBeTrue();
+              expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.bottom);
+            }
+            // The attention chip is drawn over the bar's right reserve and must
+            // leave the task-panel toggle whole, so «13» never reads as «1», and ⋯ whole as
+            // well at every width: the chip drops its label when the full one would reach it.
+            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
+            expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
+            expect(topbar.documentOverflow).toBeFalse();
+            expect(topbar.filtersRight).toBeLessThanOrEqual(topbar.barRight);
+            expect(topbar.filterCount).toBe(5);
+            expect(topbar.lastFilterRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.filtersRight);
+            expect(topbar.filtersScrollWidth).toBeLessThanOrEqual(topbar.filtersClientWidth + 1);
+            await page.locator('.bar[data-bar="project"]').screenshot({ path: path.join(out, `${width}-${locale}-topbar.png`) });
+            await page.locator("[data-reason-filters]").screenshot({ path: path.join(out, `${width}-${locale}-filters.png`) });
+          }
+          if (width === 1280 || width === 1024) {
+            // These widths lock down the filter overflow finding. The existing
+            // full card/phone contract below remains at its named 1440/390 faces.
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
+            await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
+            const queued = page.locator('[data-reason-filter="queued"]');
+            await queued.click();
+            expect(await page.locator(selector("motion-checklist")).count()).toBe(1);
+            expect(await page.locator(selector("motion-bare")).count()).toBe(0);
+            await queued.click();
+            expect(await page.locator(selector("motion-bare")).count()).toBe(1);
+            expect(pageErrors).toEqual([]);
+            cases.push({ width, height: 844, locale, topbar, filter: "toggled", pageErrors });
+            continue;
+          }
+          const stopped = page.locator(`${selector("motion-stopped")} [data-motion="stopped"]`);
+          expect(await stopped.textContent()).toContain(translate(locale, "kanban.motion.stopped"));
+          expect(await page.locator(`${selector("motion-working")} [data-motion="working"]`).count()).toBe(1);
+          expect(await page.locator(`${selector("motion-working")} [data-foot-working]`).count()).toBe(0);
+          if (phone) expect(await page.locator(`${selector("motion-working")} [data-phone-card-agents]`).textContent()).not.toContain(translate(locale, "mobile2.kanban.working", { count: 1 }));
+          expect(translate(locale, "attention.chip")).toBe(locale === "en" ? "Needs you" : "Потрібні ви");
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
+          if (phone) await page.locator('[data-phone-kanban-tab="blocked"]').click();
+          const waiting = page.locator(`${selector("motion-worker")} [data-motion="waiting"]`);
+          expect(await waiting.textContent()).toContain(translate(locale, "kanban.hold.worker"));
+          const operatorLine = await page.locator(`${selector("motion-operator")} [data-motion="needs-you"]`).textContent();
+          expect(operatorLine).toContain(translate(locale, "kanban.hold.operator", { note: locale === "en" ? "Choose a release to publish" : "Оберіть реліз для публікації" }));
+          if (locale === "en") expect(operatorLine).not.toContain("Waiting");
+          expect(await page.locator(`${selector("motion-operator")} .motion-age`).textContent()).toMatch(/20/);
+          expect(await page.locator(`${selector("motion-operator")} [data-task-steps]`).textContent()).toContain(translate(locale, "kanban.steps.needsYou.one"));
+          if (phone) {
+            expect(await page.locator(selector("motion-operator")).getAttribute("data-edge")).toBe("warning");
+            expect(await page.locator('[data-phone-kanban-tab="blocked"] [data-phone-tab-needs]').textContent()).toContain("1");
+          }
+          await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
+          if (!phone) {
+            const waitingColumn = page.locator('[data-status="blocked"]');
+            const heading = waitingColumn.locator("h2");
+            const headingBounds = await heading.evaluate((el) => ({ clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }));
+            expect(headingBounds.scrollWidth).toBeLessThanOrEqual(headingBounds.clientWidth);
+            expect(await waitingColumn.locator(".needs").textContent()).toContain("1");
+            expect(await waitingColumn.locator(".needs").evaluate((el) => getComputedStyle(el, "::before").content)).toContain("⚠");
+          }
+          const longLine = page.locator(`${selector("motion-long")} [data-motion]`);
+          const fullLongText = await longLine.getAttribute("title");
+          expect(fullLongText!.split(" · ")[0]!.length).toBeGreaterThanOrEqual(200);
+          expect(fullLongText).toContain(locale === "en" ? "external audit team" : "зовнішня аудиторська команда");
+          const longLineHeight = await longLine.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return { height: el.getBoundingClientRect().height, lineHeight: Number.parseFloat(style.lineHeight) };
+          });
+          expect(longLineHeight.height).toBeLessThanOrEqual(longLineHeight.lineHeight * 2 + 1);
+          await page.locator(selector("motion-long")).screenshot({ path: path.join(out, `${width}-${locale}-card-long.png`) });
+          if (phone) {
+            await page.locator(selector("motion-long")).click();
+            await page.locator('[data-phone-task-title]').waitFor();
+            const fullLine = page.locator('[data-phone-task-body="motion-long"] [data-motion-full]');
+            expect(await fullLine.textContent()).toContain(fullLongText!.split("\n")[0]!);
+            expect(await fullLine.evaluate(el => getComputedStyle(el).webkitLineClamp)).toBe("none");
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-full-reason.png`) });
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator(selector("motion-long")).waitFor();
+          }
+          expect(await page.locator(selector("motion-hidden")).count()).toBe(0);
+          const stepLine = page.locator(`${selector("motion-checklist")} [data-task-steps]`);
+          await stepLine.waitFor();
+          await stepLine.scrollIntoViewIfNeeded();
+          const stepText = (await stepLine.textContent()) ?? "";
+          expect(stepText).toContain(locale === "en" ? "5 of 8 done" : "Виконано 5 з 8");
+          expect(stepText).toContain(locale === "en" ? "1 working · 2 queued: After another task finishes" : "1 у роботі · 2 у черзі: Коли завершиться інша задача");
+          expect(await page.locator("[data-task-steps]").count()).toBe(2);
+          const stepBounds = await stepLine.evaluate((el) => {
+            const rect = el.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+          });
+          expect(stepBounds.left).toBeGreaterThanOrEqual(0);
+          expect(stepBounds.right).toBeLessThanOrEqual(width + 1);
+          expect(stepBounds.bottom).toBeLessThanOrEqual(845);
+          expect(stepBounds.scrollWidth).toBeLessThanOrEqual(stepBounds.clientWidth + 1);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-checklist.png`) });
+          const prHold = page.locator(`${selector("motion-pr")} [data-motion] a`);
+          const issueHold = page.locator(`${selector("motion-issue")} [data-motion] a`);
+          if (phone) {
+            expect(await prHold.count()).toBe(0);
+            await page.locator(selector("motion-pr")).click();
+            await page.locator("[data-phone-task-title]").waitFor();
+            expect(await page.locator('[data-motion] a').getAttribute("href")).toBe("https://github.com/acme/atlas/pull/2190");
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator('[data-phone-card="task:motion-issue"]').waitFor();
+            await page.locator(selector("motion-issue")).click();
+            await page.locator("[data-phone-task-title]").waitFor();
+            expect(await page.locator('[data-motion] a').getAttribute("href")).toBe("https://github.com/acme/atlas/issues/2044");
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator('[data-phone-card="task:motion-taskref"]').waitFor();
+            await page.locator(selector("motion-taskref")).click();
+            await page.locator('[data-phone-task-title]').waitFor();
+            await page.locator('[data-motion] button').click();
+            await page.screenshot({ path: path.join(out, `${width}-${locale}-tasklink.png`) });
+            const linkedTaskTitle = page.locator('[data-phone-task-body="motion-bare"] [data-phone-task-title]');
+            await linkedTaskTitle.waitFor();
+            expect(await linkedTaskTitle.textContent()).toContain(locale === "en" ? "Review older work" : "Переглянути давнішу роботу");
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator("[data-mobile2-back]").click();
+            await page.locator('[data-phone-card="task:motion-worker"]').waitFor();
+          } else {
+            expect(await prHold.getAttribute("href")).toBe("https://github.com/acme/atlas/pull/2190");
+            expect(await issueHold.getAttribute("href")).toBe("https://github.com/acme/atlas/issues/2044");
+            const taskRefButton = page.locator(`${selector("motion-taskref")} [data-motion] button`);
+            expect(await taskRefButton.evaluate((el) => getComputedStyle(el).textAlign)).toBe(await taskRefButton.evaluate((el) => getComputedStyle(el.parentElement!).textAlign));
+            await page.locator(selector("motion-taskref")).screenshot({ path: path.join(out, `${width}-${locale}-card-taskref.png`) });
+            await page.locator(`${selector("motion-taskref")} [data-motion] button`).click();
+            await page.waitForFunction(() => document.activeElement?.getAttribute("data-id") === "task:motion-bare");
+          }
+          if (!phone) {
+            const queuedFilter = page.locator('[data-reason-filter="queued"]');
+            await queuedFilter.waitFor();
+            expect(await page.locator('[data-reason-filter="no-reason"]').count()).toBe(1);
+            const beforeCount = await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason');
+            await queuedFilter.click();
+            const filteredCards = page.locator('[data-id^="task:"]');
+            expect(await filteredCards.count()).toBeGreaterThan(0);
+            const checklist = page.locator('[data-id="task:motion-checklist"]');
+            expect(await checklist.locator('[data-motion="working"]').count()).toBeGreaterThan(0);
+            expect(await checklist.locator('[data-task-steps]').textContent()).toContain(locale === "en" ? "1 working · 2 queued" : "1 у роботі · 2 у черзі");
+            expect(await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason')).toBe(beforeCount);
+            await queuedFilter.click();
+            await page.locator('[data-reason-filter="postponed"]').click();
+            expect(await page.locator(selector("motion-due")).count()).toBe(1);
+            await page.locator('[data-reason-filter="no-reason"]').click();
+            expect(await page.locator(selector("motion-due")).count()).toBe(0);
+            expect(await page.locator(selector("motion-bare")).count()).toBe(1);
+            await page.locator('[data-reason-filter="no-reason"]').click();
+            const stoppedSummary = page.locator('[data-status="assigned"] [data-column-stopped]');
+            const bareSummary = page.locator('[data-status="blocked"] [data-column-no-reason]');
+            expect(Number(await stoppedSummary.getAttribute('data-column-stopped'))).toBeGreaterThan(0);
+            expect(Number(await bareSummary.getAttribute('data-column-no-reason'))).toBeGreaterThan(0);
+          }
+          const motionLines = page.locator(phone ? '[data-phone-kanban-column="blocked"] [data-motion]' : '[data-kanban-board] .card[data-id^="task:"] [data-motion]');
+          const lines: Array<{ motion: string | null; text: string | null; left: number; right: number; top: number; bottom: number; width: number; height: number; lineHeight: number; scrollWidth: number; clientWidth: number }> = [];
+          for (let index = 0; index < await motionLines.count(); index += 1) {
+            const line = motionLines.nth(index);
+            await line.scrollIntoViewIfNeeded();
+            lines.push(await line.evaluate(el => {
+              const rect = el.getBoundingClientRect();
+              return { motion: el.getAttribute("data-motion"), text: el.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height, lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
+            }));
+          }
+          expect(lines.length).toBeGreaterThan(0);
+          // Scrolling rounds to whole pixels while line rectangles retain fractions.
+          for (const line of lines) { expect(line.left).toBeGreaterThanOrEqual(0); expect(line.right).toBeLessThanOrEqual(width + 1); expect(line.top).toBeGreaterThanOrEqual(0); expect(line.bottom).toBeLessThanOrEqual(845); expect(line.scrollWidth).toBeLessThanOrEqual(line.clientWidth + 1); expect(line.height).toBeGreaterThan(0); expect(line.height).toBeLessThanOrEqual(line.lineHeight * 2 + 1); }
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-waiting.png`) });
+          // The same editor is reachable from the card's status menu on desktop
+          // and from its task screen's status sheet on the phone.
+          if (phone) {
+            await page.locator(selector("motion-worker")).click();
+            await page.locator('[data-phone-task-status-pill]').click();
+            await page.locator('[data-phone-task-hold]').click();
+          } else {
+            await page.locator(`${selector("motion-worker")} [data-menu]`).click();
+            await page.getByRole("menuitem", { name: translate(locale, "kanban.hold.edit"), exact: true }).click();
+          }
+          const editor = page.locator('[data-hold-editor]');
+          await editor.waitFor();
+          await editor.locator('select').selectOption("resource");
+          await editor.locator('input').fill(locale === "en" ? "After memory is free" : "Коли звільниться памʼять");
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-editor.png`) });
+          await editor.getByRole("button", { name: translate(locale, "kanban.hold.save"), exact: true }).click();
+          await page.waitForFunction(() => !document.querySelector('[data-hold-editor]'));
+          expect(pageErrors).toEqual([]);
+          cases.push({ width, height: 844, locale, topbar, lines, editor: "saved", pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); server.stop(); }
+    fs.mkdirSync("evidence/task-states-and-reasons", { recursive: true });
+    fs.writeFileSync("evidence/task-states-and-reasons/renders.json", `${JSON.stringify({ cases }, null, 2)}\n`);
+  }, 180_000);
+
+  /* The Orchestrator row keeps one gap above and below it with the reason filters under the panel, and the
+     filters keep an edge of their own under the chips. Frames at 1440, 1280, 1000, 700 and 390 in en and uk go to
+     LLV_TASK_STATES_PNG_DIR. */
+  browserTest("the Orchestrator row keeps one gap round it beside the reason filters, and scrolled content clears the chips, at 1440, 1280, 1000, 700 and 390 px in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const gaps: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1280, 1000, 700, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-motion`, { width, height: 844 }, "light", locale, "reduce", phone);
+        try {
+          await page.locator(phone ? '[data-phone-kanban-tab="assigned"]' : '[data-kanban-board] .column[data-status] .card >> visible=true').first().waitFor();
+          if (!phone) {
+            await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+            if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+            await page.waitForTimeout(700);
+            const gap = await page.evaluate(() => {
+              const seat = document.querySelector(".kb-page > .seat")!.getBoundingClientRect();
+              const filters = document.querySelector(".kb > .reason-filter-row")?.getBoundingClientRect();
+              const bar = document.querySelector('.bar[data-bar="project"]')!.getBoundingClientRect();
+              const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
+              const strip = document.querySelector(".scroll-wrap > .tabs-nav > button")?.getBoundingClientRect();
+              return { above: seat.top - (filters ?? bar).bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
+            });
+            if (Math.abs(gap.above - gap.below) > 0.5) gaps.push(`${width}-${locale}: ${gap.above} px above the Orchestrator row, ${gap.below} below it`);
+            if (width < 1440 !== gap.filtersUnderBar) gaps.push(`${width}-${locale}: the reason filters ${gap.filtersUnderBar ? "stand under" : "share"} the bar`);
+            /* The page scrolled by 40 px: the page's top edge is the row's lower edge, so no pixel of the Orchestrator row is drawn within 8 px of a chip. */
+            const scrolled = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>(".kb-page")!;
+              const spacer = document.createElement("div");
+              spacer.style.cssText = "flex:0 0 auto;height:2000px";
+              scroller.append(spacer);
+              scroller.scrollTop = 40;
+              const seat = document.querySelector(".kb-page > .seat")!.getBoundingClientRect();
+              const top = scroller.getBoundingClientRect().top;
+              const chips = [...document.querySelectorAll(".kb > .reason-filter-row .reason-filter")].map((chip) => chip.getBoundingClientRect().bottom);
+              return { scrollTop: scroller.scrollTop, drawnTop: Math.max(seat.top, top), drawn: seat.bottom > top, chipBottom: chips.length ? Math.max(...chips) : null };
+            });
+            await page.screenshot({ path: path.join(out, `orchestrator-gap-scrolled-${width}-${locale}.png`) });
+            await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>(".kb-page")!;
+              scroller.lastElementChild?.remove();
+              scroller.scrollTop = 0;
+            });
+            if (scrolled.chipBottom !== null && scrolled.drawn && scrolled.drawnTop - scrolled.chipBottom < 8) gaps.push(`${width}-${locale}: scrolled by ${scrolled.scrollTop} px the Orchestrator row is drawn ${scrolled.drawnTop - scrolled.chipBottom} px below a chip`);
+          }
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `orchestrator-gap-${width}-${locale}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(gaps).toEqual([]);
+  }, 180_000);
+
+  /* A neighbour that took the wide share leaves Assigned a narrow column. Under 300 px every counter in its head
+     shortens to a sign and its number, so the stopped count gives no width to the title and the title stays whole.
+     Frames at 1440 in the grid, 1440 and 1280 with the project rail go to LLV_TASK_STATES_PNG_DIR. */
+  browserTest("a narrow In progress column keeps its whole title beside the stopped counter at 1440 in the grid and with the rail, and at 1280, in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const [width, hideRail] of [[1440, true], [1440, false], [1280, false]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width, height: 900 }, "light", locale, "reduce");
+        const label = `${width}${hideRail ? "-grid" : "-rail"}-${locale}`;
+        try {
+          await page.locator('.column[data-status="assigned"] [data-column-stopped]').waitFor();
+          if (hideRail && await page.locator("[data-rail-hide]").count()) await page.locator("[data-rail-hide]").click();
+          await page.locator('[data-col-width="inbox"]').click();
+          await page.waitForFunction(() => document.querySelector('.column[data-status="inbox"]')?.getAttribute("data-wide") === "1" && !document.querySelector("[data-column-layout]"));
+          const head = await page.locator('.column[data-status="assigned"] .col-head').evaluate((node) => {
+            const box = node.getBoundingClientRect();
+            const title = node.querySelector<HTMLElement>("h2")!;
+            const stopped = node.querySelector<HTMLElement>("[data-column-stopped]")!;
+            return {
+              width: box.width, titleScroll: title.scrollWidth, titleClient: title.clientWidth,
+              stopped: stopped.textContent, stoppedTitle: stopped.getAttribute("title"), stoppedCount: stopped.getAttribute("data-count"),
+              outside: [...node.children].filter((child) => { const rect = child.getBoundingClientRect(); return rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5); }).map((child) => child.className || child.tagName),
+            };
+          });
+          await page.locator('.column[data-status="assigned"]').screenshot({ path: path.join(out, `narrow-in-progress-${label}.png`) });
+          if (head.width >= 300) failures.push(`${label}: the head is ${head.width} px wide, not narrow`);
+          if (head.titleScroll > head.titleClient) failures.push(`${label}: the title shows ${head.titleClient} of ${head.titleScroll} px`);
+          if (head.outside.length) failures.push(`${label}: ${head.outside.join(", ")} leave the head`);
+          if (head.stoppedTitle !== translate(locale, "kanban.columnStopped", { count: Number(head.stoppedCount) })) failures.push(`${label}: the stopped counter lost its full text title`);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 180_000);
+
+  /* A draft nothing has been sent from has started nothing, so its card carries no motion line: the line pushed
+     the prompt field onto the window's bottom edge. Frames at 1440 in en and uk go to LLV_TASK_STATES_PNG_DIR. */
+  browserTest("a card of unsent drafts carries no motion line and keeps its prompt field in the window at 1440 in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: 1440, height: 900 }, "light", locale, "reduce", false);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+          if (await seat.count()) await seat.click();
+          await page.waitForTimeout(600);
+          for (const nth of [1, 2]) {
+            await page.click(`[data-bar-control][aria-label="${locale === "uk" ? "Створити" : "Create"}"]`);
+            await page.getByRole("menuitem", { name: locale === "uk" ? "Нова розмова з агентом" : "New conversation with an agent" }).click();
+            await page.waitForFunction((count) => document.querySelectorAll("[data-kanban-draft] textarea").length >= count, nth, { timeout: 10_000 });
+            await page.waitForTimeout(800);
+            const drafts = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-draft]")].map((draft) => {
+              const area = draft.querySelector("textarea")!.getBoundingClientRect();
+              const card = draft.closest(".card");
+              return { motionLines: card?.querySelectorAll("[data-motion]").length ?? 0, areaBottom: Math.round(area.bottom), windowHeight: window.innerHeight,
+                column: card?.closest<HTMLElement>("[data-status]")?.dataset.status ?? "", opened: draft.contains(document.activeElement) };
+            }));
+            drafts.forEach((draft, index) => {
+              if (draft.motionLines) failures.push(`${locale}-${nth}: draft ${index} card draws ${draft.motionLines} motion line(s)`);
+              /* The draft just opened is the one in focus: its prompt field is in the window, as the operator types in it. */
+              if (draft.opened && draft.areaBottom > draft.windowHeight - 24) failures.push(`${locale}-${nth}: draft ${index} in ${draft.column} ends its prompt at ${draft.areaBottom} in a ${draft.windowHeight} px window`);
+            });
+            await page.screenshot({ path: path.join(out, `unsent-drafts-1440-${locale}-${nth}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 180_000);
+
+  /* The reason filters stand under the bar when the bar is narrower than 1168 px (1280 with the Tasks panel
+     beside it). Their row's height comes out of the reader and draft height twice, so a launched agent and the next
+     draft's prompt keep the places they have with the filters in the bar. Window 900 px high, seat closed; the
+     launched agent's share is read where the board shows columns, as the first-prompt case reads it (above
+     60% at 1280, where the reader's column is cut at the window's side). The prompt may end 24 px above the window's
+     foot at 1440 and 1280; at 1000 it keeps the 2 px main leaves. Frames go to LLV_TASK_STATES_PNG_DIR. */
+  browserTest("a launched agent and the next draft keep their places with the reason filters under the bar at 1440, 1280 and 1000 px in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1280, 1000]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width, height: 900 }, "light", locale, "reduce", false);
+        try {
+          const label = `${width}-${locale}`;
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+          if (await seat.count()) await seat.click();
+          await page.waitForTimeout(600);
+          const create = async () => {
+            await page.click(`[data-bar-control][aria-label="${locale === "uk" ? "Створити" : "Create"}"]`);
+            await page.getByRole("menuitem", { name: locale === "uk" ? "Нова розмова з агентом" : "New conversation with an agent" }).click();
+          };
+          await create();
+          const prompt = page.locator("[data-kanban-draft] textarea").first();
+          await prompt.waitFor({ timeout: 10_000 });
+          await prompt.fill("Read the README and tell me what this project does");
+          await page.waitForTimeout(800);
+          await page.getByRole("button", { name: locale === "uk" ? "Запустити агента" : "Launch the agent" }).first().click();
+          await page.locator('.col-body[data-status="assigned"] [data-kanban-reader]').first().waitFor({ timeout: 20_000 });
+          await page.waitForTimeout(1500);
+          await create();
+          await page.waitForFunction(() => document.querySelectorAll("[data-kanban-draft] textarea").length >= 1, undefined, { timeout: 10_000 });
+          await page.waitForTimeout(800);
+          const read = await page.evaluate(() => {
+            const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
+            const box = reader?.getBoundingClientRect();
+            /* The same share the first-prompt case reads: the visible width times the visible height over the reader's box. */
+            const share = box && box.width > 0 && box.height > 0
+              ? (Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) * Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0))) / (box.width * box.height)
+              : null;
+            const area = document.querySelector<HTMLElement>("[data-kanban-draft] textarea")?.getBoundingClientRect();
+            return { share, areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
+          });
+          if (width < 1440 !== read.rowShown) failures.push(`${label}: the reason filters ${read.rowShown ? "stand under" : "share"} the bar`);
+          /* At 1000 px the board is tabs and the launched agent's reader stands in a tab that is not shown. */
+          if (width >= 1280 && (read.share === null || read.share <= 0.6)) failures.push(`${label}: the launched agent is ${read.share === null ? "not drawn" : `${(read.share * 100).toFixed(1)}% in the window`}`);
+          const limit = width === 1000 ? 898 : 876;
+          if (read.areaBottom === null || read.areaBottom > limit) failures.push(`${label}: the next draft ends its prompt at ${read.areaBottom}, limit ${limit}`);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `launched-and-draft-${label}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+describe("needs-you filter: the board dims every card that does not wait on the operator", () => {
+  /* The `needs-filter` scenario (docs/design/needs-me-filter.md): six cards on
+     one board — a conversation that asks, a lane parked on a decision, a lane
+     whose decision was dismissed, and two that wait on no one — plus the
+     Overview (`issue1820`, where a conversation asks in another project), and
+     a finished card that folds its outside conversations into one line. At
+     1440×900 the funnel and the F key; at 390×844 the funnel in the ⚠ sheet's
+     header; the last case walks 1440, 1000, 700 and 390 px in en and uk. Every reading is the production stylesheet's computed style, in
+     light and dark, en and uk, with the filter off and on. Frames go to
+     LLV_NEEDS_FILTER_SHOTS_DIR (default `.artifacts/needs-filter-shots`);
+     readings to `evidence/needs-me-filter/geometry.json`.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 LLV_NEEDS_FILTER_SHOTS_DIR=… \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "needs-you filter" */
+  const SHOTS = path.resolve(process.env.LLV_NEEDS_FILTER_SHOTS_DIR ?? ".artifacts/needs-filter-shots");
+  const EVIDENCE = path.resolve("evidence/needs-me-filter");
+  const LIT = ["t-nf-ask", "t-nf-lane"];
+  const DIM = ["t-nf-cleared", "t-nf-run", "t-nf-idle"];
+  const DIM_OPACITY = { light: 0.6, dark: 0.55 } as const;
+
+  type Box = { left: number; top: number; width: number; height: number };
+  /** One card's computed look and box, read where the stylesheet put it. */
+  const cardReading = (page: Page, selector: string) => page.evaluate((query) => {
+    const el = document.querySelector(query) as HTMLElement | null;
+    if (!el) return null;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return { opacity: Number(style.opacity), filter: style.filter, box: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } as Box };
+  }, selector);
+  /** The arrival toast is closed and the seat folded, so the board's cards are on screen. */
+  const clearStage = async (page: Page) => {
+    const toast = page.locator("[data-attention-toast-dismiss]");
+    for (let tries = 0; tries < 3 && (await toast.count()) > 0; tries++) {
+      await toast.first().click();
+      await page.waitForTimeout(150);
+    }
+    const fold = page.locator("[data-seat-collapse]");
+    if (await fold.count()) await fold.first().click();
+  };
+  /** The filter's own state, as the stylesheet reads it. */
+  const filterAttr = (page: Page) => page.evaluate(() => document.querySelector("main")!.hasAttribute("data-needs-only"));
+  /** F is ignored while a button holds focus, so the key is pressed from the page itself. */
+  const pressF = async (page: Page) => {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("f");
+  };
+  const token = (page: Page) => page.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue("--needs-dim-opacity")));
+  const sameBox = (a: Box, b: Box) => (["left", "top", "width", "height"] as const).every((key) => Math.abs(a[key] - b[key]) < 0.01);
+
+  /** The contrast of a card's title over the canvas once the card is dimmed: the
+      text and the card's fill both composite over the canvas at the card's opacity. */
+  const titleContrast = (page: Page, selector: string) => page.evaluate((query) => {
+    const rgba = (value: string) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r!, g!, b!, a! / 255] as const;
+    };
+    const el = document.querySelector(query) as HTMLElement;
+    const title = el.querySelector("h3.title .clamp, h3.title") as HTMLElement;
+    const opacity = Number(getComputedStyle(el).opacity);
+    const canvas = rgba(getComputedStyle(document.body).backgroundColor === "rgba(0, 0, 0, 0)" ? getComputedStyle(document.documentElement).getPropertyValue("--surface-canvas") : getComputedStyle(document.body).backgroundColor);
+    const fill = rgba(getComputedStyle(el).backgroundColor);
+    const text = rgba(getComputedStyle(title).color);
+    const over = (top: readonly number[], under: readonly number[], alpha: number) => [0, 1, 2].map((i) => top[i]! * alpha + under[i]! * (1 - alpha));
+    const lum = (c: number[]) => {
+      const lin = c.map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!;
+    };
+    const cardFill = over(fill, canvas, fill[3]);
+    const shownText = over(over(text, cardFill, text[3]), canvas, opacity);
+    const shownFill = over(cardFill, canvas, opacity);
+    const [hi, lo] = [lum(shownText), lum(shownFill)].sort((a, b) => b - a);
+    return Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100;
+  }, selector);
+
+  browserTest("desktop 1440: the funnel dims the cards that do not wait and nothing moves; en and uk, light and dark", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `board-desktop-1440-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, VIEWPORT, scheme, lang);
+          try {
+            await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
+            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            await clearStage(page);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(600);
+            const ids = [...LIT, ...DIM];
+            const before = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const funnel = page.locator("[data-attention-filter]");
+            const widthOff = (await funnel.boundingBox())!.width;
+            const labelOff = await funnel.getAttribute("aria-label");
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+
+            await pressF(page);
+            await page.waitForTimeout(700);
+            const onAttr = await filterAttr(page);
+            const after = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const widthOn = (await funnel.boundingBox())!.width;
+            const labelOn = await funnel.getAttribute("aria-label");
+            const pressed = await funnel.getAttribute("aria-pressed");
+            const island = await page.evaluate(() => {
+              const box = document.querySelector("[data-attention-island]")!.getBoundingClientRect();
+              return { right: box.right, left: box.left, viewport: window.innerWidth };
+            });
+            const dimmedContrast = await titleContrast(page, card("t-nf-run"));
+            const dimToken = await token(page);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+
+            await funnel.click();
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(700);
+            const off = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const offAttr = await filterAttr(page);
+
+            /* Pointing at a dimmed card brings it back; the card under the
+               pointer is the one the operator is reading. Last, because
+               hovering scrolls the card into view and moves every box. */
+            await pressF(page);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(500);
+            const onAgainAttr = await filterAttr(page);
+            await page.locator(card("t-nf-run")).hover();
+            await page.waitForTimeout(500);
+            const hovered = await cardReading(page, card("t-nf-run"));
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on-hover.png`) });
+            readings.push({ label, token: dimToken, labelOff, labelOn, pressed, widthOff, widthOn, island, dimmedContrast, onAttr, offAttr, onAgainAttr, before, after, hovered, off, pageErrors });
+            expect(pageErrors, `${label} page errors`).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(readings, null, 2)}\n`);
+
+    type Card = { opacity: number; filter: string; box: Box };
+    for (const entry of readings as Array<{ label: string; token: number; labelOff: string; labelOn: string; pressed: string; widthOff: number; widthOn: number; island: { right: number; left: number; viewport: number }; dimmedContrast: number; onAttr: boolean; offAttr: boolean; onAgainAttr: boolean; before: Record<string, Card>; after: Record<string, Card>; hovered: Card; off: Record<string, Card> }>) {
+      const scheme = entry.label.includes("-dark-") ? "dark" : "light";
+      const locale = entry.label.endsWith("-uk") ? "uk" : "en";
+      expect(entry.token, `${entry.label} the token the stylesheet carries`).toBe(DIM_OPACITY[scheme]);
+      for (const id of [...LIT, ...DIM]) {
+        expect(entry.before[id]!.opacity, `${entry.label} ${id} full strength before`).toBe(1);
+        expect(entry.off[id]!.opacity, `${entry.label} ${id} restored by Off`).toBe(1);
+        expect(entry.off[id]!.filter, `${entry.label} ${id} unfiltered after Off`).toBe("none");
+        /* Nothing moves when the filter flips, in either direction. */
+        expect(sameBox(entry.before[id]!.box, entry.after[id]!.box), `${entry.label} ${id} keeps its box on`).toBe(true);
+        expect(sameBox(entry.before[id]!.box, entry.off[id]!.box), `${entry.label} ${id} keeps its box off`).toBe(true);
+      }
+      for (const id of LIT) {
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} waits, so stays lit`).toBe(1);
+        expect(entry.after[id]!.filter, `${entry.label} ${id} stays unfiltered`).toBe("none");
+      }
+      for (const id of DIM) {
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} recedes`).toBeCloseTo(DIM_OPACITY[scheme], 2);
+        expect(entry.after[id]!.filter, `${entry.label} ${id} drains its colour`).toContain("saturate(0.35)");
+      }
+      expect(entry.onAttr, `${entry.label} F turns the filter on`).toBe(true);
+      expect(entry.offAttr, `${entry.label} the funnel turns it off`).toBe(false);
+      expect(entry.onAgainAttr, `${entry.label} the filter was on while the card was pointed at`).toBe(true);
+      expect(entry.hovered.opacity, `${entry.label} a pointed-at card is restored`).toBe(1);
+      expect(entry.dimmedContrast, `${entry.label} a dimmed title stays readable`).toBeGreaterThanOrEqual(4.5);
+      expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
+      expect(entry.labelOff, `${entry.label} funnel label offers the filter`).toBe(translate(locale, "attention.filterOn"));
+      expect(entry.labelOn, `${entry.label} funnel label offers the way back`).toBe(translate(locale, "attention.filterOff"));
+      expect(entry.widthOn, `${entry.label} pressed and unpressed funnels are as wide`).toBe(entry.widthOff);
+      expect(entry.island.right, `${entry.label} the island stays inside the window`).toBeLessThanOrEqual(entry.island.viewport);
+      expect(entry.island.left, `${entry.label} the island starts inside the window`).toBeGreaterThanOrEqual(0);
+    }
+  }, 600_000);
+
+  browserTest("desktop 1440: where nothing waits no funnel is offered and F dims nothing", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter&nothing=1`, VIEWPORT, "light", "en");
+      try {
+        await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
+        await clearStage(page);
+        await page.waitForTimeout(600);
+        expect(await page.locator("[data-attention-filter]").count(), "no funnel while nothing waits").toBe(0);
+        await pressF(page);
+        await page.waitForTimeout(500);
+        expect(await filterAttr(page), "F arms nothing").toBe(false);
+        for (const id of [...LIT, ...DIM]) expect((await cardReading(page, card(id)))!.opacity, `${id} stays at full strength`).toBe(1);
+        await page.screenshot({ path: path.join(SHOTS, "board-desktop-1440-light-en-nothing-waits.png") });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("Overview 1440: the filter dims the cards of every project that do not wait", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=issue1820`, VIEWPORT, "light", "en");
+      try {
+        await page.waitForSelector("[data-kanban-board] .card", { timeout: 30_000 });
+        await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+        await clearStage(page);
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: path.join(SHOTS, "overview-desktop-1440-light-en-filter-off.png") });
+        await pressF(page);
+        await page.mouse.move(0, 0);
+        await page.waitForTimeout(700);
+        expect(await filterAttr(page), "F turns the Overview's filter on").toBe(true);
+        const cards = await page.evaluate(() => [...document.querySelectorAll("[data-kanban-board] .card")].map((el) => ({
+          waits: el.hasAttribute("data-attention"), opacity: Number(getComputedStyle(el).opacity),
+        })));
+        await page.screenshot({ path: path.join(SHOTS, "overview-desktop-1440-light-en-filter-on.png") });
+        expect(cards.some((entry) => entry.waits), "a card in some project waits").toBe(true);
+        expect(cards.some((entry) => !entry.waits), "a card in some project does not").toBe(true);
+        for (const entry of cards) expect(entry.opacity, entry.waits ? "a waiting card stays lit" : "a quiet card recedes").toBeCloseTo(entry.waits ? 1 : DIM_OPACITY.light, 2);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("phone 390: the ⚠ sheet's funnel dims the cards that do not wait and nothing moves; en and uk, light and dark", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const label = `board-phone-390-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+          try {
+            await page.waitForSelector("[data-phone-card-shell]", { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            /* Every shell on the board, in order: the waiting ones carry the mark. */
+            const shells = () => page.evaluate(() => [...document.querySelectorAll("[data-phone-card-shell]")].map((el) => {
+              const style = getComputedStyle(el);
+              const rect = el.getBoundingClientRect();
+              return { waits: el.getAttribute("data-attention") === "needs", opacity: Number(style.opacity), filter: style.filter, left: rect.left, top: rect.top, width: rect.width, height: rect.height, text: (el.textContent ?? "").slice(0, 40) };
+            }));
+            /* The ⚠ badge and the bar around it, with the sheet closed: the filter's
+               state has to read from the badge, and the bar must not move. */
+            const bar = () => page.evaluate(() => {
+              const badge = document.querySelector("[data-mobile2-attention-count]") as HTMLElement;
+              const title = document.querySelector("[data-mobile2-title]") as HTMLElement;
+              const pill = badge.firstElementChild as HTMLElement;
+              const box = (el: Element) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
+              return { marked: badge.hasAttribute("data-mobile2-filter"), label: badge.getAttribute("aria-label"), glyph: pill.querySelector("svg")?.getAttribute("class") ?? "", pill: getComputedStyle(pill).borderTopColor + "|" + getComputedStyle(pill).backgroundColor, badge: box(badge), pillBox: box(pill), title: box(title) };
+            });
+            const before = await shells();
+            const barOff = await bar();
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+
+            await page.locator("[data-mobile2-attention-count]").first().click();
+            await page.waitForSelector("[data-mobile2-sheet='attention'] [data-attention-filter]", { timeout: 10_000 });
+            await page.waitForTimeout(600);
+            const funnel = page.locator("[data-mobile2-sheet='attention'] [data-attention-filter]");
+            const funnelBox = (await funnel.boundingBox())!;
+            const labelOff = await funnel.getAttribute("aria-label");
+            const header = await page.evaluate(() => {
+              const sheet = document.querySelector("[data-mobile2-sheet='attention']")!.getBoundingClientRect();
+              const head = document.querySelector("[data-mobile2-sheet-header]") as HTMLElement;
+              const parts = [...head.children].map((el) => { const box = el.getBoundingClientRect(); return { left: box.left, right: box.right }; });
+              return { sheetLeft: sheet.left, sheetRight: sheet.right, parts, overflow: head.scrollWidth - head.clientWidth };
+            });
+            await page.screenshot({ path: path.join(SHOTS, `${label}-sheet-filter-off.png`) });
+            await funnel.click();
+            await page.waitForTimeout(500);
+            const pressed = await funnel.getAttribute("aria-pressed");
+            const labelOn = await funnel.getAttribute("aria-label");
+            const funnelBoxOn = (await funnel.boundingBox())!;
+            await page.screenshot({ path: path.join(SHOTS, `${label}-sheet-filter-on.png`) });
+            await page.locator("[data-mobile2-close]").first().click();
+            await page.waitForTimeout(900);
+            const after = await shells();
+            const barOn = await bar();
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+            const dimToken = await token(page);
+
+            await page.locator("[data-mobile2-attention-count]").first().click();
+            await page.waitForSelector("[data-mobile2-sheet='attention'] [data-attention-filter]", { timeout: 10_000 });
+            await page.locator("[data-mobile2-sheet='attention'] [data-attention-filter]").click();
+            await page.locator("[data-mobile2-close]").first().click();
+            await page.waitForTimeout(900);
+            const off = await shells();
+            readings.push({ label, token: dimToken, labelOff, labelOn, pressed, funnelHeight: funnelBox.height, funnelWidth: funnelBox.width, funnelWidthOn: funnelBoxOn.width, header, barOff, barOn, before, after, off, pageErrors });
+            expect(pageErrors, `${label} page errors`).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry-phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+
+    type Shell = { waits: boolean; opacity: number; filter: string; left: number; top: number; width: number; height: number };
+    type Rect = { left: number; top: number; width: number; height: number };
+    type Bar = { marked: boolean; label: string; glyph: string; pill: string; badge: Rect; pillBox: Rect; title: Rect };
+    for (const entry of readings as Array<{ label: string; token: number; labelOff: string; labelOn: string; pressed: string; funnelHeight: number; funnelWidth: number; funnelWidthOn: number; barOff: Bar; barOn: Bar; header: { sheetLeft: number; sheetRight: number; parts: Array<{ left: number; right: number }>; overflow: number }; before: Shell[]; after: Shell[]; off: Shell[] }>) {
+      const scheme = entry.label.includes("-dark-") ? "dark" : "light";
+      const locale = entry.label.endsWith("-uk") ? "uk" : "en";
+      expect(entry.token, `${entry.label} the token the stylesheet carries`).toBe(DIM_OPACITY[scheme]);
+      expect(entry.funnelHeight, `${entry.label} the funnel is a 44 px target`).toBeGreaterThanOrEqual(44);
+      expect(entry.funnelWidth, `${entry.label} the funnel is a 44 px target wide`).toBeGreaterThanOrEqual(44);
+      expect(entry.funnelWidthOn, `${entry.label} pressed and unpressed funnels are as wide`).toBe(entry.funnelWidth);
+      expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
+      expect(entry.labelOff, `${entry.label} funnel label`).toBe(translate(locale, "attention.filterOnTouch"));
+      expect(entry.labelOn, `${entry.label} funnel label when on`).toBe(translate(locale, "attention.filterOffTouch"));
+      expect(entry.barOff.marked, `${entry.label} the badge shows no filter while it is off`).toBe(false);
+      expect(entry.barOn.marked, `${entry.label} the badge shows the filter while the sheet is closed`).toBe(true);
+      expect(entry.barOn.label, `${entry.label} the badge says so to a screen reader`).toContain(translate(locale, "mobile2.bar.filterOn"));
+      expect(entry.barOff.label, `${entry.label} the badge says nothing of the filter while it is off`).not.toContain(translate(locale, "mobile2.bar.filterOn"));
+      expect(entry.barOn.glyph, `${entry.label} the funnel replaces the triangle`).not.toBe(entry.barOff.glyph);
+      expect(entry.barOn.pill, `${entry.label} the pressed tone replaces the warning tone`).not.toBe(entry.barOff.pill);
+      for (const key of ["left", "top", "width", "height"] as const) {
+        expect(Math.abs(entry.barOn.badge[key] - entry.barOff.badge[key]), `${entry.label} badge ${key} with the filter on`).toBeLessThan(0.01);
+        expect(Math.abs(entry.barOn.pillBox[key] - entry.barOff.pillBox[key]), `${entry.label} pill ${key} with the filter on`).toBeLessThan(0.01);
+        expect(Math.abs(entry.barOn.title[key] - entry.barOff.title[key]), `${entry.label} title cell ${key} with the filter on`).toBeLessThan(0.01);
+      }
+      expect(entry.header.overflow, `${entry.label} the sheet header does not overflow`).toBeLessThanOrEqual(0);
+      for (const part of entry.header.parts) {
+        expect(part.left, `${entry.label} a header part starts inside the sheet`).toBeGreaterThanOrEqual(entry.header.sheetLeft - 0.5);
+        expect(part.right, `${entry.label} a header part ends inside the sheet`).toBeLessThanOrEqual(entry.header.sheetRight + 0.5);
+      }
+      expect(entry.before.length).toBeGreaterThanOrEqual(5);
+      expect(entry.after.length).toBe(entry.before.length);
+      entry.before.forEach((shell, index) => {
+        expect(shell.opacity, `${entry.label} shell ${index} full strength before`).toBe(1);
+        const was = entry.after[index]!;
+        expect(was.waits, `${entry.label} shell ${index} keeps its mark`).toBe(shell.waits);
+        expect(was.opacity, `${entry.label} shell ${index} ${shell.waits ? "stays lit" : "recedes"}`).toBeCloseTo(shell.waits ? 1 : DIM_OPACITY[scheme], 2);
+        for (const key of ["left", "top", "width", "height"] as const) {
+          expect(Math.abs(was[key] - shell[key]), `${entry.label} shell ${index} ${key} on`).toBeLessThan(0.01);
+          expect(Math.abs(entry.off[index]![key] - shell[key]), `${entry.label} shell ${index} ${key} off`).toBeLessThan(0.01);
+        }
+        expect(entry.off[index]!.opacity, `${entry.label} shell ${index} restored`).toBe(1);
+      });
+      expect(entry.before.filter((shell) => shell.waits).length, `${entry.label} two cards wait`).toBe(2);
+    }
+  }, 600_000);
+
+  browserTest("1440, 1000, 700 and 390: the filter off and on in en and uk, with a folded card, a widened column and a card being dragged", async () => {
+    /* The board as main draws it now: a finished card folds its outside
+       conversations into one line (#2459), a column the mouse rests in widens
+       after a second (#2453), and a card is dragged by any part of it (#2421).
+       The filter has to hold through each: the folded card recedes with the
+       rest, a widened column keeps its quiet cards dimmed, and a dimmed card
+       being dragged takes the drag's own opacity while its ghost is drawn at
+       full strength. Readings go to `evidence/needs-me-filter/geometry-widths.json`. */
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const out = path.resolve(".artifacts/needs-filter-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const FOLDED = "t-nf-wall";
+    const ids = [...LIT, ...DIM, FOLDED];
+    const desktop: Record<string, unknown>[] = [];
+    const phone: Record<string, unknown>[] = [];
+    const overflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    const columns = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((el) => [el.dataset.status!, { wide: el.dataset.wide ?? null, width: Math.round(el.getBoundingClientRect().width) }])));
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const width of [1440, 1000, 700] as const) {
+          const label = `widths-${width}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width, height: 900 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
+            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            await clearStage(page);
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(600);
+            const read = async () => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
+            const before = await read();
+            const overflowOff = await overflow(page);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+
+            await pressF(page);
+            await page.waitForTimeout(700);
+            const after = await read();
+            const overflowOn = await overflow(page);
+            const funnel = await page.evaluate(() => {
+              const box = document.querySelector("[data-attention-filter]")!.getBoundingClientRect();
+              return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth, pressed: document.querySelector("[data-attention-filter]")!.getAttribute("aria-pressed") };
+            });
+            const folded = await page.locator(card(FOLDED)).evaluate((element) => ({
+              elsewhere: Number(element.querySelector("details.history")?.getAttribute("data-elsewhere-conversations") ?? 0),
+              rows: element.querySelectorAll("[data-elsewhere-row]").length,
+            })).catch(() => null);
+            await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+
+            /* The mouse rests in the narrow Done column's head until it widens:
+               every column moves, and no card changes strength for it. */
+            const columnsBefore = await columns(page);
+            let columnsAfter = columnsBefore;
+            let widened: Record<string, unknown> | null = null;
+            const doneHead = page.locator('[data-kanban-board] .column[data-status="done"] #kb-h-done');
+            if (width === 1440 && columnsBefore.done?.wide === "0" && await doneHead.count()) {
+              const head = (await doneHead.boundingBox())!;
+              await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2, { steps: 4 });
+              await page.waitForTimeout(1_900);
+              columnsAfter = await columns(page);
+              widened = await read();
+              await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on-column-widened.png`) });
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(600);
+            }
+
+            /* A dimmed card is picked up by its body and carried: the card left
+               behind takes the drag's opacity, the ghost under the pointer is whole. */
+            let drag: Record<string, unknown> | null = null;
+            if (width === 1440) {
+              /* Cards that wait on the operator come first, so the quiet card can sit below the window's foot. */
+              await page.locator(card("t-nf-run")).scrollIntoViewIfNeeded();
+              const box = (await page.locator(card("t-nf-run")).boundingBox())!;
+              const from = { x: box.x + box.width / 2, y: box.y + Math.min(box.height - 6, 30) };
+              await page.mouse.move(from.x, from.y);
+              await page.mouse.down();
+              await page.mouse.move(from.x + 60, from.y + 24, { steps: 8 });
+              await page.waitForTimeout(500);
+              drag = await page.evaluate(() => {
+                const source = document.querySelector<HTMLElement>("[data-kanban-board] .card.dragging");
+                const ghost = document.querySelector<HTMLElement>(".card.ghost");
+                const look = (el: HTMLElement | null) => el ? { opacity: Number(getComputedStyle(el).opacity), filter: getComputedStyle(el).filter } : null;
+                return { source: look(source), sourceId: source?.dataset.id ?? null, ghost: look(ghost), filterOn: document.querySelector("main")!.hasAttribute("data-needs-only") };
+              });
+              await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on-dragging.png`) });
+              await page.keyboard.press("Escape");
+              await page.mouse.up();
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(700);
+              /* The press left focus on the card's title, and a card the operator
+                 works inside stays lit; once focus leaves, it recedes again. */
+              const held = await page.locator(card("t-nf-run")).evaluate((el) => ({ focusWithin: el.matches(":focus-within"), opacity: Number(getComputedStyle(el).opacity) }));
+              await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+              await page.waitForTimeout(500);
+              drag = { ...drag, held, settled: await cardReading(page, card("t-nf-run")), lit: await cardReading(page, card("t-nf-ask")) };
+            }
+            desktop.push({ label, width, before, after, overflowOff, overflowOn, funnel, folded, columnsBefore, columnsAfter, widened, drag, token: await token(page), pageErrors });
+            expect(pageErrors, `${label} page errors`).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        const label = `widths-390-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width: 390, height: 844 }, "light", lang, "no-preference", true, 2);
+        try {
+          await page.waitForSelector("[data-phone-card-shell]", { timeout: 30_000 });
+          await page.waitForTimeout(800);
+          const shells = () => page.evaluate(() => [...document.querySelectorAll("[data-phone-card-shell]")].map((el) => {
+            const rect = el.getBoundingClientRect();
+            return { waits: el.getAttribute("data-attention") === "needs", opacity: Number(getComputedStyle(el).opacity), left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+          }));
+          const before = await shells();
+          const overflowOff = await overflow(page);
+          await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
+          await page.locator("[data-mobile2-attention-count]").first().click();
+          await page.waitForSelector("[data-mobile2-sheet='attention'] [data-attention-filter]", { timeout: 10_000 });
+          await page.waitForTimeout(500);
+          await page.locator("[data-mobile2-sheet='attention'] [data-attention-filter]").click();
+          await page.waitForTimeout(400);
+          await page.locator("[data-mobile2-close]").first().click();
+          await page.waitForTimeout(900);
+          const after = await shells();
+          const overflowOn = await overflow(page);
+          await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
+          phone.push({ label, before, after, overflowOff, overflowOn, token: await token(page), pageErrors });
+          expect(pageErrors, `${label} page errors`).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "geometry-widths.json"), `${JSON.stringify({ desktop, phone }, null, 2)}\n`);
+
+    type Card = { opacity: number; filter: string; box: Box } | null;
+    type Look = { opacity: number; filter: string } | null;
+    for (const entry of desktop as Array<{ label: string; width: number; before: Record<string, Card>; after: Record<string, Card>; overflowOff: number; overflowOn: number; funnel: { left: number; right: number; viewport: number; pressed: string }; folded: { elsewhere: number; rows: number } | null; columnsBefore: Record<string, { wide: string | null; width: number }>; columnsAfter: Record<string, { wide: string | null; width: number }>; widened: Record<string, Card> | null; drag: { source: Look; sourceId: string | null; ghost: Look; filterOn: boolean; held: { focusWithin: boolean; opacity: number }; settled: Card; lit: Card } | null; token: number }>) {
+      expect(entry.token, `${entry.label} the token`).toBe(DIM_OPACITY.light);
+      for (const id of LIT) {
+        expect(entry.after[id], `${entry.label} ${id} is on the board`).not.toBeNull();
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} waits, so stays lit`).toBe(1);
+      }
+      for (const id of [...DIM, FOLDED]) {
+        expect(entry.after[id], `${entry.label} ${id} is on the board`).not.toBeNull();
+        expect(entry.before[id]!.opacity, `${entry.label} ${id} full strength with the filter off`).toBe(1);
+        expect(entry.after[id]!.opacity, `${entry.label} ${id} recedes`).toBeCloseTo(DIM_OPACITY.light, 2);
+      }
+      for (const id of [...LIT, ...DIM, FOLDED]) expect(sameBox(entry.before[id]!.box, entry.after[id]!.box), `${entry.label} ${id} keeps its box`).toBe(true);
+      expect(entry.overflowOn, `${entry.label} the filter adds no sideways scroll`).toBe(entry.overflowOff);
+      expect(entry.overflowOn, `${entry.label} the page fits its window`).toBeLessThanOrEqual(0);
+      expect(entry.funnel.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
+      expect(entry.funnel.left, `${entry.label} the funnel starts inside the window`).toBeGreaterThanOrEqual(0);
+      expect(entry.funnel.right, `${entry.label} the funnel ends inside the window`).toBeLessThanOrEqual(entry.funnel.viewport);
+      /* The folded card holds twelve outside conversations and lists none of them. */
+      expect(entry.folded?.elsewhere, `${entry.label} the folded card counts its outside conversations`).toBe(12);
+      expect(entry.folded?.rows, `${entry.label} the folded card lists none`).toBe(0);
+      if (entry.width !== 1440) continue;
+      expect(entry.columnsBefore.done!.wide, `${entry.label} Done starts narrow`).toBe("0");
+      expect(entry.columnsAfter.done!.wide, `${entry.label} Done widens under a resting mouse`).toBe("1");
+      expect(entry.columnsAfter.done!.width, `${entry.label} Done is wider`).toBeGreaterThan(entry.columnsBefore.done!.width);
+      for (const id of LIT) expect(entry.widened![id]!.opacity, `${entry.label} ${id} stays lit beside the widened column`).toBe(1);
+      for (const id of [...DIM, FOLDED]) expect(entry.widened![id]!.opacity, `${entry.label} ${id} stays dimmed in or beside the widened column`).toBeCloseTo(DIM_OPACITY.light, 2);
+      expect(entry.drag!.filterOn, `${entry.label} the filter is on during the drag`).toBe(true);
+      expect(entry.drag!.sourceId, `${entry.label} the dimmed card is the one picked up`).toBe("task:t-nf-run");
+      expect(entry.drag!.source!.opacity, `${entry.label} the card left behind takes the drag's opacity`).toBeCloseTo(0.35, 2);
+      expect(entry.drag!.ghost!.opacity, `${entry.label} the ghost is whole`).toBe(1);
+      expect(entry.drag!.ghost!.filter, `${entry.label} the ghost keeps its colour`).toBe("none");
+      expect(entry.drag!.held.opacity, `${entry.label} the card put back is ${entry.drag!.held.focusWithin ? "lit while it holds focus" : "dimmed"}`).toBeCloseTo(entry.drag!.held.focusWithin ? 1 : DIM_OPACITY.light, 2);
+      expect(entry.drag!.settled!.opacity, `${entry.label} the card dims again once focus leaves it`).toBeCloseTo(DIM_OPACITY.light, 2);
+      expect(entry.drag!.lit!.opacity, `${entry.label} a waiting card is untouched by the drag`).toBe(1);
+    }
+    type Shell = { waits: boolean; opacity: number; left: number; top: number; width: number; height: number };
+    for (const entry of phone as Array<{ label: string; before: Shell[]; after: Shell[]; overflowOff: number; overflowOn: number }>) {
+      expect(entry.after.length, `${entry.label} the same cards`).toBe(entry.before.length);
+      expect(entry.before.filter((shell) => shell.waits).length, `${entry.label} two cards wait`).toBe(2);
+      entry.before.forEach((shell, index) => {
+        const now = entry.after[index]!;
+        expect(shell.opacity, `${entry.label} shell ${index} full strength with the filter off`).toBe(1);
+        expect(now.opacity, `${entry.label} shell ${index} ${shell.waits ? "stays lit" : "recedes"}`).toBeCloseTo(shell.waits ? 1 : DIM_OPACITY.light, 2);
+        for (const key of ["left", "top", "width", "height"] as const) expect(Math.abs(now[key] - shell[key]), `${entry.label} shell ${index} ${key}`).toBeLessThan(0.01);
+      });
+      expect(entry.overflowOn, `${entry.label} the page fits its window`).toBeLessThanOrEqual(0);
+    }
+  }, 900_000);
+});
+
 describe("agent memory isolation", () => {
   browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
     const out = path.resolve(".artifacts/agent-memory-desktop");
@@ -16150,8 +17165,9 @@ describe("launch layout shift rendered evidence", () => {
         const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
         if (await seat.count()) await seat.click();
         await page.waitForTimeout(600);
-        /* The agent the operator is reading: the first task card in Assigned, opened from its tile. */
-        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]').first();
+        /* The agent the operator is reading: the first task card in Assigned that has a tile, opened from it. The
+           needs-you card stands first under the motion order and carries stage chips, no tile. */
+        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]:has(.tile)').first();
         const readId = await card.getAttribute("data-id");
         await card.locator(".tile").first().click();
         const readerOf = `.card[data-id="${readId}"] [data-kanban-reader]`;

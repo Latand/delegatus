@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronLeft, Ellipsis, Search, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronLeft, Ellipsis, Filter, Search, TriangleAlert } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
@@ -8,6 +8,7 @@ import { reachLineText, useServerReach, type ServerReach } from "@/hooks/serverR
 import { useRuntimeBusState } from "@/hooks/useRuntime";
 import { useLocale } from "@/lib/i18n";
 
+import { BAR_PRESSED } from "@/components/ProjectBar";
 import { MobileAccountsPanel } from "../AccountsPanel";
 import { useWalkStop } from "../onboarding/walkStop";
 import { TelegramFooterRow } from "../TelegramConnect";
@@ -85,6 +86,11 @@ export interface MobileShellHost {
       carries an accent dot, and shows the dot alone when nothing else needs
       the operator (docs/design/needs-attention.md §6). Nothing moves. */
   noticeDot?: boolean;
+  /** The "Needs you" filter is on: the board dims every card that does not wait
+      on the operator. The ⚠ badge shows it with the pressed tone and a funnel
+      in place of the triangle, so a closed sheet still says why cards are
+      dimmed. The badge keeps its size. */
+  filterActive?: boolean;
   /** The arrival banner for the slot, or null. Runtime states outrank it. */
   arrival: ReactNode;
   /** The sheet for a name the host owns; null for one it does not. */
@@ -244,6 +250,7 @@ export function MobileShell({
   const attentionCount = effectiveHost?.attentionCount ?? 0;
   const noticeDot = effectiveHost?.noticeDot === true;
   const attention = attentionCount > 0 || noticeDot;
+  const filterActive = effectiveHost?.filterActive === true && attentionCount > 0;
   const barWidth = useSyncExternalStore(subscribeWidth, viewportWidth, serverWidth);
   const foldAttention = screen === "chat" && !!barAction && attention && titleCellWidth(barWidth, { back, attention: true, search: !!onOpenSearch, menu, actions: 1 }) < TITLE_MIN_PX;
   /* The interface walk's third stop points at the badge, which is hidden at
@@ -309,15 +316,16 @@ export function MobileShell({
               data-mobile2-attention-count={attentionCount}
               data-walk-anchor="needs"
               data-mobile2-notice={noticeDot ? "" : undefined}
-              aria-label={[attentionCount ? t("mobile2.bar.attention", { count: attentionCount }) : null, noticeDot ? t("notices.dot") : null].filter(Boolean).join(", ")}
+              data-mobile2-filter={filterActive ? "" : undefined}
+              aria-label={[attentionCount ? t("mobile2.bar.attention", { count: attentionCount }) : null, filterActive ? t("mobile2.bar.filterOn") : null, noticeDot ? t("notices.dot") : null].filter(Boolean).join(", ")}
               aria-haspopup="dialog"
               aria-expanded={state.sheet === "attention"}
               className="flex h-11 w-[52px] shrink-0 items-center justify-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               onClick={() => nav.openSheet("attention")}
             >
               {attentionCount ? (
-                <span className={`relative inline-flex h-7 max-w-full items-center gap-1 rounded-full border border-warning/45 bg-warning-soft ${attentionCount > 99 ? "px-0.5" : attentionCount > 9 ? "px-1.5" : "px-2.5"} text-ui font-bold tabular-nums text-warning`}>
-                  <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />
+                <span className={`relative inline-flex h-7 max-w-full items-center gap-1 rounded-full border ${filterActive ? BAR_PRESSED : "border-warning/45 bg-warning-soft text-warning"} ${attentionCount > 99 ? "px-0.5" : attentionCount > 9 ? "px-1.5" : "px-2.5"} text-ui font-bold tabular-nums`}>
+                  {filterActive ? <Filter className="h-[13px] w-[13px]" aria-hidden /> : <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />}
                   {attentionCount > 99 ? "99+" : attentionCount}
                   {noticeDot ? <span data-mobile2-notice-dot aria-hidden className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-canvas" /> : null}
                 </span>

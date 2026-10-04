@@ -85,6 +85,21 @@
 }
 .kb .bar .search input:focus { background: var(--surface-card); border-color: var(--color-accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 25%, transparent); }
 .kb .bar .search svg { position: absolute; left: 9px; top: 8px; width: 15px; height: 15px; color: var(--color-muted); pointer-events: none; }
+.kb .bar-find { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.kb .reason-filters { display: flex; min-width: 0; max-width: 420px; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+/* Under the bar the row is the bar's second line: the same surface, with the bottom border the bar
+   gives on its own (the bar's border is then the row's, so no line runs between them). The page
+   scrolls from the row's lower edge, so scrolled content never touches a chip, and the Orchestrator
+   row keeps its one 12 px gap from that edge. The row is 8 + 18 + 8 + 1 px; the reader and the
+   draft take that height out of theirs twice (--reason-row-h), so the row costs the card nothing. */
+.kb > .reason-filter-row {
+  flex: 0 0 auto; flex-wrap: wrap; max-width: none; padding: 8px var(--kb-edge); overflow: visible;
+  background: var(--surface-card); border-bottom: 1px solid var(--border-default);
+}
+.kb > .bar:has(+ .reason-filter-row) { border-bottom: 0; }
+.kb:has(> .reason-filter-row) { --reason-row-h: 35px; }
+.kb .reason-filter { flex: 0 0 auto; min-height: 18px; padding: 0 6px; border: 1px solid var(--border-default); border-radius: 999px; background: var(--surface-card); color: var(--color-secondary); font-size: 10px; line-height: 16px; white-space: nowrap; }
+.kb .reason-filter[aria-pressed="true"] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card)); color: var(--color-primary); }
 
 /* The project board's one header bar (#1801, docs/design/board-header.md): one
    48 px row at every desktop width, 32 px controls, 8 px inside a group and
@@ -112,8 +127,20 @@
    pixel from the lead, and Chrome draws the ellipsis for it. At 100 000 the lead's share of the at
    most 128 px the search gives stays under half a layout unit (1/128 px) and rounds to nothing;
    once the search sits at its floor the rest falls to the lead as before. */
-.kb .bar[data-bar="project"] .search { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
+.kb .bar[data-bar="project"] .bar-find { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
+.kb .bar[data-bar="project"] .bar-find .search { flex: 0 1 auto; max-width: none; min-width: 0; }
+/* Filters share the search row in a wide bar; below 1168 px of bar width the component
+   puts them in their own wrapping row beneath the bar. */
+/* Keep the field's placeholder readable in both locales and include that
+   floor in the group's minimum, so its children cannot overlap later controls. */
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; min-width: min-content; flex-direction: row; align-items: center; gap: 8px; }
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 144px; min-width: 144px; }
+.kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
+/* The attention island is fixed over the bar's 236 px reserve. Under 1168 px of bar the controls
+   crowd it, and the uk label is wider than the reserve leaves: the chip keeps its dot and count
+   (the button keeps its aria-label and title) so it stays clear of the panel toggles and ⋯. */
+.kb .bar[data-bar="project"][data-bar-compact] [data-attention-chip-label] { display: none; }
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
    reserve in one row; there, and only there, they wrap. The bar's own width decides, since it
    spans the Tasks panel: a board narrowed by the panel keeps its one-row bar. */
@@ -127,13 +154,15 @@
 .kb .bar[data-bar="overview"] .summary .dot.warn { background: var(--color-warning); }
 .kb .bar[data-bar="overview"] .grow { flex: 1 1 auto; }
 .kb .bar[data-bar="overview"] .bar-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.kb .bar[data-bar="overview"] .bar-find { min-width: 0; max-width: 420px; }
 .kb .bar[data-bar="overview"] .search input { width: 240px; }
 /* Two rows: only the first, beside the island, needs the clearance. */
 .kb[data-mode="scroll"] .bar[data-bar="overview"] { padding: 10px 236px 10px 16px; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-tools { margin-right: -220px; }
 .kb[data-mode="tabs"] .bar[data-bar="overview"] { padding: 44px 16px 10px; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-tools, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-tools { flex-basis: 100%; }
-.kb[data-mode="scroll"] .bar[data-bar="overview"] .search, .kb[data-mode="tabs"] .bar[data-bar="overview"] .search { flex: 1 1 auto; }
+.kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { flex: 1 1 auto; }
+.kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find .search, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find .search { flex: 1 1 auto; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .search input, .kb[data-mode="tabs"] .bar[data-bar="overview"] .search input { width: 100%; min-width: 120px; }
 .kb[data-mode="tabs"] .bar[data-bar="overview"] .summary { display: none; }
 /* On the two narrow faces the controls come first and the search field takes
@@ -141,10 +170,10 @@
    of this row, covers part of the field instead of the view tabs. */
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .view-switch, .kb[data-mode="tabs"] .bar[data-bar="overview"] .view-switch { order: 1; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .hidden-pill, .kb[data-mode="tabs"] .bar[data-bar="overview"] .hidden-pill { order: 2; }
-.kb[data-mode="scroll"] .bar[data-bar="overview"] .search, .kb[data-mode="tabs"] .bar[data-bar="overview"] .search { order: 3; min-width: 0; flex-basis: 160px; }
+.kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { order: 3; min-width: 0; flex-basis: 160px; }
 /* Tabbed (narrowest) face: the island's card spans most of the first row
    under the badge, so that row is the search field and the tabs follow. */
-.kb[data-mode="tabs"] .bar[data-bar="overview"] .search { order: 0; flex-basis: 100%; }
+.kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { order: 0; flex-basis: 100%; }
 
 .kb .btn {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
@@ -204,7 +233,9 @@
 /* The layout helper owns the visible width transition. Reflowing tracks on
    every frame repeatedly wraps every card on the board. */
 .kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
-.kb .board, .kb .col-body { overflow-anchor: none; }
+/* Tabs show one column and animate no width. Scroll anchoring stays on there:
+   it holds a draft opened under a launched agent in the window at 1000 px. */
+.kb .board:not(.tabs), .kb .board:not(.tabs) .col-body { overflow-anchor: none; }
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
@@ -249,7 +280,7 @@
 /* The head is one line from a 220 px shelf up: the title, its count and the
    buttons keep their size, and the «working» and «waiting on you» counters
    end in an ellipsis before anything wraps; under 300 px they shorten to a
-   dot and their number. Each carries its full text as a title. */
+   sign and their number, the stopped and no-reason counters included. Each carries its full text as a title. */
 .kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
 /* While the layout helper scales the head surface and counter-scales its text
    layer, the end-aligned buttons sit at their final wide position. The head
@@ -262,16 +293,24 @@
 .kb .col-head .live { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-size: var(--text-label); font-weight: 600; }
 .kb .col-head .live::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .kb .col-head .needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-size: var(--text-label); font-weight: 600; }
+.kb .col-head :is([data-column-stopped], [data-column-no-reason]) { color: var(--color-muted); font-size: var(--text-label); }
 .kb .col-head > :is(.live, .needs) { flex-shrink: 1; min-width: 0; }
 .kb .col-head :is(.live, .needs) > .ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @container col-head (max-width: 299.98px) {
   /* Shortened, the counters keep their number, and the title is what gives way last. */
-  .kb .col-head { gap: 6px; }
-  .kb .col-head > :is(.live, .needs) { flex-shrink: 0; }
+  /* A container query reaches the head's descendants, never the head, so its 8 px gap stays. The
+     zero-width spacer would still take two of them; it shares one. */
+  .kb .col-head > .spacer { margin-left: -8px; }
+  .kb .col-head > :is(.live, .needs, [data-column-stopped], [data-column-no-reason]) { flex-shrink: 0; }
   .kb .col-head > h2 { flex-shrink: 1; }
   .kb .col-head :is(.live, .needs) > .ct { display: none; }
   .kb .col-head :is(.live, .needs)::after { content: attr(data-count); }
-  .kb .col-head .needs::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .kb .col-head .needs::before { content: "⚠"; }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason]) { font-size: 0; }
+  .kb .col-head [data-column-stopped]::before { content: "■"; }
+  .kb .col-head [data-column-no-reason]::before { content: "⏸"; }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason])::before { font-size: var(--text-label); }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason])::after { content: attr(data-count); font-size: var(--text-label); margin-left: 2px; }
 }
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
@@ -305,7 +344,7 @@
   position: relative; display: flex; flex-direction: column; gap: 6px;
   padding: var(--inset-card); border-radius: var(--radius-surface); background: var(--surface-card);
   border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base), filter var(--motion-base);
   touch-action: pan-y; outline-offset: 2px;
   content-visibility: auto; contain-intrinsic-size: auto 132px;
 }
@@ -734,12 +773,17 @@
    - a reader or agent draft inside a task card sits in a column that already
      scrolls, so it takes the viewport minus the bar and the column's chrome
      (100dvh - 180px), and never less than min(700px, 84dvh), which keeps it
-     above the old min(620px, 74vh) at every window height.
+     above the old min(620px, 74vh) at every window height. The
+     reason-filter row, when it stands under the bar, comes out of the result
+     twice: its height pushes the card down, and the reader's lower edge rises
+     by the same height again, which keeps the share of a launched reader the
+     window shows above what the layout without the row gives. The old height
+     stays the floor.
    The phone does not use these: its conversation screen (MobileFocusView)
    already fills the viewport. */
 .kb {
   --seat-default-h: 75dvh;
-  --conv-in-card-h: max(min(700px, 84dvh), calc(100dvh - 180px));
+  --conv-in-card-h: max(min(620px, 74dvh), max(min(700px, 84dvh), 100dvh - 180px) - 2 * var(--reason-row-h, 0px));
 }
 
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
@@ -1109,7 +1153,7 @@
 .kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { --kb-column-width: var(--strip-w); }
 .kb .column.strip:not(.open, :focus-within, .drop) { overflow: hidden; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu]) { display: none; }
+.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu], [data-column-stopped], [data-column-no-reason]) { display: none; }
 /* The menu is not drawn on the strip, where the strip opening would move it
    from under the pointer; it stays in the tab order, and focus opens the strip. */
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head > [data-colmenu] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -1636,6 +1680,22 @@
 :is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
 .kb .remote-unbound { padding: 4px 10px; }
 
+/* Task motion stays visible when card contents fold. */
+.motion-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: 2lh; overflow: hidden; }
+.motion-line[data-motion-full] { display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; }
+.kb .card .motion-line { margin: 2px 0 6px; font-size: var(--text-label); line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere; }
+.kb .card .motion-line[data-motion="working"] { color: var(--color-success); }
+.kb .card .motion-line[data-motion="needs-you"] { color: var(--color-warning); }
+.motion-line a { text-decoration: underline; }
+.motion-line button { display: inline; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; }
+.kb .card .motion-age { color: var(--color-muted); white-space: nowrap; }
+
+.hold-editor { display: grid; gap: 8px; margin: 8px 0; font-size: var(--text-label); }
+.hold-editor label { display: grid; gap: 3px; min-width: 0; }
+.hold-editor input, .hold-editor select { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--surface-card); }
+.hold-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.hold-actions button { padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px; }
+@media (pointer: coarse) { .hold-editor input, .hold-editor select, .hold-actions button { min-height: 44px; } }
 /* Keyboard focus and an open reader expose the full note. Pointer focus keeps
    the compact note; a note already expanded by the keyboard holds its geometry
    until the pointer click has landed, even on a neighbouring card. */

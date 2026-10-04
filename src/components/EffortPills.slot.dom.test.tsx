@@ -168,7 +168,6 @@ test("narrow scheme node (360px): the in-node pane keeps the bars in-flow with n
         multi={new Set()}
         session={false}
         focus={null}
-        attentionPaths={null}
         flowsByImpl={new Map()}
         flows={[]}
         pipelineStrips={new Map()}

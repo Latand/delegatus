@@ -6,6 +6,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
+import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
+import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
+import { TaskHoldEditor } from "@/components/kanban/TaskHoldEditor";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/kanban/kanbanAssignments";
 import { KANBAN_STATUSES, summarizePipeline, workingStageConversations, type KanbanPipeline, type KanbanRecordedConversation, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
@@ -14,7 +17,7 @@ import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pi
 import { RemoteLane, useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { textField, withField } from "@/components/kanban/taskText";
-import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
@@ -29,10 +32,10 @@ import { fileModelLabel } from "@/components/utils";
 import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { formatConversationHash } from "@/lib/accounts/identity";
-import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
+import { workLinkUrl, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -637,11 +640,23 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   ) : null);
 
   /* ── Status, colour, hide ─────────────────────────────────────────────── */
-  const move = (from: TaskStatus, to: TaskStatus, receipt: boolean): void => {
+  const [holdEditing, setHoldEditing] = useState(false);
+  const move = (from: TaskStatus, to: TaskStatus, receipt: boolean, options: StatusMoveOptions = {}): void => {
     const raw = stored.current.get(taskId);
-    if (!raw || from === to) return;
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => move(to, from, false) });
-    void controller.move(raw, to).then((outcome: StatusMoveOutcome) => {
+    if (!raw || (from === to && !Object.hasOwn(options, "hold") && !Object.hasOwn(options, "restoreHold"))) return;
+    const previousHold = controller.holdFor(raw) ?? null;
+    let settled: StatusMoveOutcome | null = null;
+    const operation = controller.move(raw, to, options);
+    const undo = (outcome: StatusMoveOutcome) => {
+      if (outcome.kind !== "saved") return;
+      move(to, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
+    };
+    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
+      if (settled) undo(settled);
+      else void operation.then(undo);
+    } });
+    void operation.then((outcome: StatusMoveOutcome) => {
+      settled = outcome;
       if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title: receiptTitle, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title: receiptTitle, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
@@ -794,8 +809,12 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const sheets: SheetRenderer = (name, close) => {
     if (name === "status") {
       return (
-        <MobileSheet name="status" title={t("mobile2.task.statusTitle")} onClose={close}>
-          <div role="menu" aria-label={t("mobile2.task.statusTitle")} data-phone-task-status-sheet="" className="flex flex-col py-1">
+        <MobileSheet name="status" title={t("mobile2.task.statusTitle")} onClose={() => { setHoldEditing(false); close(); }}>
+          {holdEditing ? <div className="px-4"><TaskHoldEditor hold={task?.hold} onCancel={() => setHoldEditing(false)} onSave={(hold: Partial<TaskHold> | null) => {
+            setHoldEditing(false); close();
+            const hasOwner = task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
+            move(status, hold ? "blocked" : hasOwner ? "assigned" : "inbox", true, { hold });
+          }} /></div> : <div role="menu" aria-label={t("mobile2.task.statusTitle")} data-phone-task-status-sheet="" className="flex flex-col py-1">
             {KANBAN_STATUSES.map((entry) => {
               const Icon = STATUS_ICON[entry];
               return (
@@ -818,7 +837,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 />
               );
             })}
-          </div>
+            <MobileSheetRow label={t("kanban.hold.edit")} onSelect={() => setHoldEditing(true)} attrs={{ "data-phone-task-hold": "" }} />
+          </div>}
         </MobileSheet>
       );
     }
@@ -1077,6 +1097,17 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   {title}
                 </button></h1>
               )}
+              {card ? <>
+                <TaskMotionLine motion={card.motion} working={card.working} nowMs={now * 1000} full taskTitle={card.holdTarget?.title}
+                  onOpenTask={task?.hold?.kind === "task" && task.hold.ref ? () => nav.push({ kind: "task", id: task.hold!.ref! }) : undefined}
+                  referenceUrl={task?.hold && ["pr", "issue"].includes(task.hold.kind)
+                    ? taskLinks?.links.find(link => String(link.number) === task.hold!.ref && link.kind === task.hold!.kind)?.url
+                      ?? (taskLinks?.repository && /^\d+$/.test(task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(task.hold.ref), task.hold.kind as "pr" | "issue") : null)
+                    : null}
+                />
+                <TaskStepsLine summary={card.stepSummary} />
+              </> : null}
+              {/* Slot for the needs-you question below the motion line. */}
               {finishWaits ? (
                 /* #2187 §5.3: the move to Done waits on other open pipelines. */
                 <p data-task-finish-wait={finishWaits} className="m-0 flex items-start gap-1 px-1 text-label text-muted [overflow-wrap:anywhere]">

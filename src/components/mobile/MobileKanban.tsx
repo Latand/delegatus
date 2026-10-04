@@ -16,13 +16,15 @@ import { ChevronRight } from "@/components/icons";
 import { Z } from "@/components/layers";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
 import { subjectOf } from "@/components/kanban/cardDismissal";
+import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
+import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
-import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
@@ -264,9 +266,11 @@ function usePress(onLongPress: (() => void) | null, lift: Lift | null) {
   };
 }
 
-function Pressable({ onLongPress, lift, children }: { onLongPress: (() => void) | null; lift: Lift | null; children: ReactNode }) {
+/* `waits` marks the card the «Needs you» filter keeps lit (globals.css): the
+   outer shell carries it, so the whole card dims as one layer. */
+function Pressable({ onLongPress, lift, waits, children }: { onLongPress: (() => void) | null; lift: Lift | null; waits: boolean; children: ReactNode }) {
   const press = usePress(onLongPress, lift);
-  return <div className="select-none [-webkit-touch-callout:none]" {...press}>{children}</div>;
+  return <div className="select-none [-webkit-touch-callout:none]" data-phone-card-shell="" data-attention={waits ? "needs" : undefined} {...press}>{children}</div>;
 }
 
 /** The four columns a lifted card can be let go over. The lift draws and
@@ -411,13 +415,14 @@ function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; r
      so a remote card keeps the working count and the age and drops the word
      (the desktop card does the same). */
   const word = agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : remote ? null : t("mobile2.kanban.noAgents");
-  const lead = Boolean(agents.working || word);
+  const showWorking = agents.working > 0 && item.card.motion.key !== "working";
+  const lead = Boolean(showWorking || word);
   if (!lead && agents.atMs <= 0) return null;
   return (
     <span data-phone-card-agents="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
-      {agents.working ? (
+      {showWorking ? (
         <>
-          <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-success">
+          <span data-foot-working={agents.working} className="inline-flex shrink-0 items-center gap-1 font-semibold text-success">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success motion-safe:animate-pulse" />
             {t("mobile2.kanban.working", { count: agents.working })}
           </span>
@@ -542,6 +547,9 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         ) : null}
         <NeedBadge item={item} />
       </span>
+      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
+      <TaskStepsLine summary={card.stepSummary} />
+      {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
@@ -576,7 +584,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   );
   return (
     <>
-    <Pressable onLongPress={onLongPress} lift={lift}>
+    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0}>
       {aside ? (
         <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
           {face}
@@ -605,7 +613,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         </div>
       ) : face}
     </Pressable>
-    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1"><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
+    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
 }
@@ -933,13 +941,24 @@ export function MobileKanban(props: MobileKanbanProps) {
   }, [shownKey, onShown]);
 
   /* ── Moves, hides and the card sheet ─────────────────────────────────── */
-  const move = useCallback((item: PhoneCard, to: TaskStatus, receipt = true) => {
+  const move = useCallback((item: PhoneCard, to: TaskStatus, receipt = true, options: StatusMoveOptions = {}) => {
     const task = item.card.task ? tasksById.current.get(item.card.task.id) ?? item.card.task : null;
     const from = item.card.status;
     if (!task || from === to) return;
     const title = shortTitle(t, item);
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => move({ ...item, card: { ...item.card, status: to } }, from, false) });
-    void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
+    const previousHold = controller.holdFor(task) ?? null;
+    let settled: StatusMoveOutcome | null = null;
+    const operation = controller.move(task, to, options);
+    const undo = (outcome: StatusMoveOutcome) => {
+      if (outcome.kind !== "saved") return;
+      move({ ...item, card: { ...item.card, status: to } }, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
+    };
+    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
+      if (settled) undo(settled);
+      else void operation.then(undo);
+    } });
+    void operation.then((outcome: StatusMoveOutcome) => {
+      settled = outcome;
       if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });

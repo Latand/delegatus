@@ -13,8 +13,8 @@ interface Props {
   panelOpen: boolean;
   filterActive: boolean;
   onTogglePanel: () => void;
-  /** Absent while no conversation waits: the filter keeps conversations lit,
-      so a queue of parked lanes alone offers no filter (#2129). */
+  /** Absent while nothing on the board waits: the filter keeps the waiting
+      cards lit, so with none it would only dim the board. */
   onToggleFilter?: () => void;
 }
 
@@ -29,7 +29,7 @@ const BAR_ICON = "h-[15px] w-[15px] shrink-0";
  * project to project. The N key still walks the project on screen.
  *
  * The funnel beside it is the "show only who waits for me" board filter (F),
- * present while a conversation waits.
+ * present while anything on the board waits, a parked lane included.
  *
  * At zero it stays, muted and without the dot, so the corner always answers
  * "what needs me?" and the onboarding walk has its anchor.
@@ -51,7 +51,7 @@ export function AttentionIsland({ count, panelOpen, filterActive, onTogglePanel,
         onClick={onTogglePanel}
       >
         {count > 0 ? <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full bg-warning" aria-hidden data-attention-dot="" /> : null}
-        <span>{t("attention.chip")}</span>
+        <span data-attention-chip-label="">{t("attention.chip")}</span>
         <span className="tabular-nums">{count}</span>
       </button>
       {onToggleFilter ? (

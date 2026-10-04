@@ -85,6 +85,41 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
+Touched tests compare one initial head sample with the merge base. Assertions
+that failed the initial head sample run three more times on each side, filtered
+by their full test name in their file. A failure on any base sample or a pass
+on any head retry produces `FLAKY`, with the file and
+suite/test name and pass/fail counts for both sides, and permits the push.
+An assertion that fails every head sample and never fails on base remains
+`NEW` and refuses the push. New tests have zero base observations. Missing,
+skipped or incomplete retry results are gate errors, never passing evidence.
+Runner and between-tests errors retain the existing comparison: matching
+base diagnostics are `PRE-EXISTING`, additional head diagnostics are `NEW`.
+Fixed and removed/skipped tests remain listed separately. Under this policy,
+assertions that consistently fail on both sides also appear under `FLAKY`,
+because an observed base failure suffices to permit the push.
+When several assertions share the same file, suite and test name, retry
+evidence and the initial base/head comparison preserve their occurrence numbers;
+a recovered occurrence is `FIXED` while a separately failing head occurrence
+remains `NEW`.
+
+Clean head samples incur no reruns. The three rounds share a five-minute
+budget across all candidate files and both sides, including baseline checkout
+and dependency setup on a cache hit. Each child command is capped by the
+remaining budget; exhausting it blocks with a gate error. This adds at most
+five minutes of subprocess execution/setup, plus ordinary report parsing and
+sandbox cleanup. After an initially passing base sample, three independent
+reruns detect a one-in-ten base failure with probability `1 - 0.9^3 = 27.1%`.
+Four independent base samples detect it with probability `34.39%` overall;
+rare or correlated failures can still evade this bounded sampling. Head
+recovery supplies a separate opportunity to identify intermittency.
+
+The baseline cache stores only complete green initial samples. A parsed
+baseline retry failure evicts its green entry immediately, even when a later
+file in that retry batch errors; any aborted baseline retry also evicts the
+entry. Neither retry verdicts nor head results are cached. Even a warm green
+baseline needs fresh base retries before a candidate failure can become `NEW`.
+
 The pre-push gate reuses the platform import closure to scope Linux tests,
 Viewer and runtime-host verification under the Dockerfile's Bun pin, and the
 supported native Codex fixtures. Bun and Codex fixtures are cached under
