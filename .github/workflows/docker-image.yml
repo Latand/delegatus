@@ -1,43 +1,26 @@
 name: Docker image
 
 on:
-  # A pull request builds the image only when something the Dockerfile copies,
-  # installs from or compiles changes. The build runs next build, whose type
-  # check covers every TypeScript file in the checkout (tsconfig.json include),
-  # and resolveJsonModule lets any of them import JSON, so those globs sit
-  # beside the directory paths. Tailwind scans every non-ignored file under the
-  # root for class names, not only src/, and .gitignore decides which files it
-  # skips. Tailwind scans text sources across extensions, so every repository
-  # path is an input; the broad glob also covers new source formats.
-  # Pushes to main and v* tags always build.
   pull_request:
     paths:
-      - Dockerfile
-      - .dockerignore
-      - "**/*"
-      - package.json
-      - bun.lock
-      - bunfig.toml
-      - patches/**
-      - next.config.ts
-      - postcss.config.mjs
-      - tsconfig.json
-      - src/**
-      - public/**
-      - bin/**
-      - vendor/**
-      - scripts/**
-      - "**/*.ts"
-      - "**/*.tsx"
-      - "**/*.mts"
-      - "**/*.json"
-      - "**/*.html"
-      - "**/*.js"
-      - "**/*.jsx"
-      - "**/*.mjs"
-      - "**/*.cjs"
-      - "**/.gitignore"
-      - .github/workflows/docker-image.yml
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - 'tsconfig.json'
+      - 'next.config.*'
+      - 'postcss.config.*'
+      - 'src/**'
+      - 'public/**'
+      - 'bin/**'
+      - 'patches/**'
+      - 'vendor/**'
+      - 'scripts/build-mcp.ts'
+      - 'scripts/whisper_transcribe.py'
+      - 'scripts/runtime-host-viewer-adapter.ts'
+      - 'scripts/runtime-host-healthcheck.ts'
+      - 'scripts/published-image-entrypoint.sh'
   push:
     branches: [main]
     tags: ["v*"]
@@ -48,12 +31,12 @@ permissions:
 
 concurrency:
   group: docker-image-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 360 }}
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 360 }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

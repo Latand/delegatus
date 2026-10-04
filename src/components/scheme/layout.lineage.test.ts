@@ -75,8 +75,10 @@ const reviewer = entry({
   durableLineage: lineage("conversation_builder", "reviewer", "review"),
 });
 
-const boardOf = (files: FileEntry[]): SchemeLayout =>
-  buildSchemeLayout(buildBranchGroups(files, "demo"), [], files);
+const boardOf = (files: FileEntry[], omitted: string[] = []): SchemeLayout =>
+  buildSchemeLayout(buildBranchGroups(files, "demo", omitted.length ? {
+    keepExpandedPaths: new Set(files.map(file => file.path).filter(path => !omitted.includes(path))),
+  } : {}), [], files);
 
 const edgePairs = (layout: SchemeLayout): Array<[string | undefined, string]> =>
   layout.edges.filter((edge) => layout.nodes.some((node) => node.file.path === edge.to)).map((edge) => [edge.from, edge.to]);
@@ -125,11 +127,11 @@ describe("scheme lineage direction", () => {
   });
 
   test("an ancestor the board does not draw is elided on the edge, not skipped in silence", () => {
-    /* The Orchestrator goes quiet and leaves the column set; the Builder keeps
-       hanging under the generation above it, and the edge reports the gap. */
+    /* Explicitly fold the intermediate column; idle children of an active root
+       otherwise remain on the board as live-relevant context. */
     const quiet = { ...orchestrator, activity: "idle" as const };
     const files = [coordinator, codexSession, quiet, builder, reviewer];
-    const layout = boardOf(files);
+    const layout = boardOf(files, [quiet.path]);
 
     expect(layout.nodes.some((node) => node.file.path === quiet.path)).toBe(false);
     expect(edgePairs(layout)).toContainEqual([codexSession.path, builder.path]);

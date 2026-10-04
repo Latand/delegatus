@@ -239,12 +239,17 @@ async function letTranscriptPoll(ms: number): Promise<void> {
 /** What is on screen in the pane, and what the overlay was handed. */
 const reading = () => {
   const pane = host!;
-  const rows = pane.querySelectorAll("[data-live-turn]");
+  const rows = pane.querySelectorAll("[data-live-turn][data-live-tool]");
+  /* A reply the pane watched arrive is a conversation row of its own, held
+     until its transcript record lands. It is never one of the tail's eight
+     rows and never part of the counted line, so it is read separately. */
+  const replies = [...pane.querySelectorAll<HTMLElement>("[data-live-turn]:not([data-live-tool])")];
   const earlier = pane.querySelector("[data-live-turn-earlier]");
   return {
     /* Transcript rows the pane's own window produced. */
     canonical: pane.querySelectorAll("[data-tool-row], [data-testid=mcp-call-card]").length,
     painted: rows.length,
+    replies: replies.map((row) => row.getAttribute("data-live-turn-item-id")),
     collapsed: earlier ? Number(earlier.getAttribute("data-live-turn-earlier")) : 0,
     requests: logRequests,
   };
@@ -304,6 +309,7 @@ test(
     expect(onScreen.requests).toBeGreaterThan(0);
     expect(onScreen.canonical).toBeGreaterThan(0);
     expect(onScreen.painted).toBe(0);
+    expect(onScreen.replies).toEqual([]);
     expect(onScreen.collapsed).toBe(0);
 
     /* (3) The pane goes away — scrolled past the observer's 256 px margin, or
@@ -327,8 +333,9 @@ test(
        calls of it, five times the tail the overlay may paint — which is a
        frame shaped like the wall the report carries. This file constructed it;
        it does not establish that the operator's own wall opened this way.
-       What is on screen now is the bound: a readable tail, one counted line,
-       and no third thing. */
+       What is on screen now is the bound: a readable tail of calls, one
+       counted line, and the two replies written while the pane was away, each
+       as its own conversation row. There is no fourth thing. */
     await reportVisible(true);
 
     const resumed = reading();
@@ -337,9 +344,13 @@ test(
     expect(resumed.painted).toBeGreaterThan(0);
     expect(resumed.painted).toBeLessThanOrEqual(LIVE_TURN_VISIBLE_ROWS);
     expect(resumed.collapsed).toBeGreaterThan(LIVE_TURN_VISIBLE_ROWS);
-    /* The rows painted plus the rows counted are the whole unclaimed gap: the
-       overlay hides nothing it does not count. */
-    expect(resumed.painted + resumed.collapsed).toBeGreaterThanOrEqual(LONG_TURN_CALLS - 20);
+    /* The calls painted plus the calls counted are the whole unclaimed gap,
+       each of the forty exactly once: the overlay hides nothing it does not
+       count and counts nothing it paints. */
+    expect(resumed.painted + resumed.collapsed).toBe(LONG_TURN_CALLS - 20);
+    /* The fixture writes a line of prose before calls 24 and 48. Both replies
+       stay readable, once each, outside the eight rows and outside the count. */
+    expect(resumed.replies).toEqual(["msg_demo_24", "msg_demo_48"]);
 
     /* (5) A moment later the tail's catch-up lands, the canonical rows claim
        the calls, and the overlay retires itself. */
@@ -349,6 +360,7 @@ test(
     expect(caughtUp.requests).toBeGreaterThan(requestsWhenAway);
     expect(caughtUp.canonical).toBeGreaterThan(onScreen.canonical);
     expect(caughtUp.painted).toBe(0);
+    expect(caughtUp.replies).toEqual([]);
     expect(caughtUp.collapsed).toBe(0);
   },
   30_000,

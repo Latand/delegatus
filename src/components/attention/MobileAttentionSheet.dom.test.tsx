@@ -251,7 +251,7 @@ test("a permission row puts its long headline on a truncated line of its own and
   const age = row.querySelector("[data-attention-age]")!;
   expect(age.textContent).toBe("3m ago");
   expect(age.parentElement!.contains(decision)).toBe(false);
-  expect(age.parentElement!.textContent).toContain("opus");
+  expect(age.parentElement!.textContent).toContain("Opus 5.5");
   expect(q(host, "[data-permission-allow]")).not.toBeNull();
   expect(q(host, "[data-permission-deny]")).not.toBeNull();
 });
@@ -299,4 +299,56 @@ test("an ask row never mounts permission buttons, even when its conversation als
   expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Fold the presets into one button?");
   expect(q(host, "[data-permission-actions]")).toBeNull();
   expect(q(host, "[data-permission-allow]")).toBeNull();
+});
+
+test("the phone Needs-you sheet names the long turn and offers both update choices", () => {
+  const decision = { id: "drain", at: new Date().toISOString(), project: PROJECT, blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+    turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: PROJECT, stage: null, seat: false }] } };
+  const host = mount(<MobileAttentionSheet entries={[{ kind: "update", id: "auto-update:drain", decision }]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} />);
+  // The turn is named by what it is; its id stays off the screen.
+  expect(host.textContent).toContain("Codex agent");
+  expect(host.textContent).not.toContain("conversation_long_turn");
+  expect(q(host, '[data-action="deploy-now"]')).not.toBeNull();
+  expect(q(host, '[data-action="keep-waiting"]')).not.toBeNull();
+  expect(q(host, '[data-needs-you-dismiss-all]')).toBeNull();
+});
+
+test("the header's funnel is drawn only when the host offers the filter, pressed state and 44 px target included", () => {
+  const bare = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
+  expect(q(bare, "[data-attention-filter]")).toBeNull();
+
+  const toggles: number[] = [];
+  const host = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} filterActive={false} onToggleFilter={() => toggles.push(1)} />);
+  const funnel = q(host, "[data-attention-filter]")!;
+  expect(funnel).not.toBeNull();
+  expect(funnel.getAttribute("aria-pressed")).toBe("false");
+  expect(funnel.getAttribute("aria-label")).toBe(translate("en", "attention.filterOnTouch"));
+  expect(funnel.className).toContain("min-h-11");
+  expect(funnel.className).toContain("w-11");
+  /* Beside «Dismiss all», not instead of it. */
+  expect(q(host, "[data-needs-you-dismiss-all]")).not.toBeNull();
+  click(funnel);
+  expect(toggles).toHaveLength(1);
+
+  const pressed = mount(<MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} filterActive onToggleFilter={() => {}} />);
+  const on = q(pressed, "[data-attention-filter]")!;
+  expect(on.getAttribute("aria-pressed")).toBe("true");
+  expect(on.getAttribute("aria-label")).toBe(translate("en", "attention.filterOffTouch"));
+  /* Pressed and unpressed take the same box: only the tone changes. */
+  expect(on.className).toContain("min-h-11");
+  expect(on.className).toContain("w-11");
+  expect(on.className).toContain("bg-accent/10");
+});
+
+test("the funnel's labels read in both languages and carry no key hint on the phone", () => {
+  for (const locale of ["en", "uk"] as const) {
+    for (const key of ["attention.filterOnTouch", "attention.filterOffTouch"] as const) {
+      const label = translate(locale, key);
+      expect(label.length).toBeGreaterThan(0);
+      expect(label).not.toContain("(F)");
+    }
+  }
+  expect(translate("en", "attention.filterOff")).toBe("Show all cards (F)");
+  expect(translate("uk", "attention.filterOff")).toBe("Показати всі картки (F)");
+  expect(translate("uk", "attention.filterOffTouch")).toBe("Показати всі картки");
 });

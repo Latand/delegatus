@@ -392,8 +392,8 @@ test("the Needs-you sheet over the Overview opens its conversation full screen o
   await until(() => host.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") === "2");
 
   await tap(host.querySelector('[data-mobile2-open="attention"]'));
-  /* Conversations first, as a project's sheet lists them. */
-  const row = dom.document.querySelector("[data-attention-row]") as unknown as HTMLElement;
+  /* Overview groups by project, so select the intended conversation explicitly. */
+  const row = dom.document.querySelector('[data-attention-row="tool-mesh"]') as unknown as HTMLElement | null;
   expect(row).not.toBeNull();
   await tap(row);
   await until(() => Boolean(conversationScreen(host, MESH_PLANNER)));

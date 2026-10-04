@@ -45,8 +45,39 @@ export class BoundedLru<Value> {
  * Either one breaks the non-decreasing bottoms the bisection below relies on.
  * Both stay reachable by key; only the reading position skips them. */
 export function readingRows(root: ParentNode): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>("[data-feed-key]"))
-    .filter((anchor) => !anchor.parentElement?.closest("[data-feed-key], [data-empty-reasoning]"));
+  const cached = readings.get(root);
+  if (cached) {
+    /* `takeRecords` hands over mutations the observer has not delivered yet,
+       so a read made right after a commit (a layout effect) sees them. */
+    const changed = cached.watch.takeRecords().length > 0 || cached.stale;
+    if (!changed) return cached.rows;
+    cached.stale = false;
+    cached.rows = scanReadingRows(root);
+    return cached.rows;
+  }
+  const rows = scanReadingRows(root);
+  const Observer = (root as Node).ownerDocument?.defaultView?.MutationObserver;
+  if (Observer) {
+    const reading: Reading = { rows, stale: false, watch: new Observer(() => { reading.stale = true; }) };
+    reading.watch.observe(root as Node, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-feed-key", "data-empty-reasoning"] });
+    readings.set(root, reading);
+  }
+  return rows;
+}
+
+/* The scan is two selector passes over every node under the feed, and the
+   second one is an ancestor walk per row: about 4 ms for two thousand rows on
+   a desktop, so about 15 ms at 4x CPU, on every scroll event. The rows only
+   change when the feed's own markup does, so the answer is kept per root and
+   rebuilt when a mutation says it may have changed. The array is shared:
+   callers read it, they do not edit it. */
+interface Reading { rows: HTMLElement[]; stale: boolean; watch: MutationObserver }
+const readings = new WeakMap<ParentNode, Reading>();
+
+function scanReadingRows(root: ParentNode): HTMLElement[] {
+  const anchors = Array.from(root.querySelectorAll<HTMLElement>("[data-feed-key]"));
+  const inside = new Set(root.querySelectorAll("[data-feed-key] [data-feed-key], [data-empty-reasoning] [data-feed-key]"));
+  return inside.size ? anchors.filter((anchor) => !inside.has(anchor)) : anchors;
 }
 
 /** The first row whose bottom edge is below `top`, the row at the top of a

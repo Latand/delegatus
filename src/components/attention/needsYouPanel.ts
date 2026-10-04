@@ -58,6 +58,7 @@ export function needsYouLaneLine(t: TFunction, pipeline: Pipeline): string {
 }
 
 export function needsYouEntrySince(entry: MobileAttentionEntry): number | null {
+  if (entry.kind === "update") return Date.parse(entry.decision.at) / 1000;
   if (entry.kind === "conversation") return entry.item.since;
   return laneNeed(entry.row.pipeline)?.need.since ?? null;
 }
@@ -86,6 +87,7 @@ export function needsYouCounts(queue: readonly MobileAttentionEntry[]): Map<stri
  * role, and a parked lane wears the role of the stage it stopped on.
  */
 export function needsYouEntryRole(entry: MobileAttentionEntry, pipelines: readonly Pipeline[]): FrameRole {
+  if (entry.kind === "update") return "orchestrator";
   if (entry.kind === "pipeline") {
     const lane = entry.row.pipeline;
     const stageId = laneStageId(lane);
@@ -111,6 +113,7 @@ function stageRole(stage: PipelineStage | null): { kind?: string; role?: { roleI
  * it was drawn at, so a lane that parked again since is not cleared.
  */
 export function needsYouSubject(entry: MobileAttentionEntry): DismissalSubjectRequest {
+  if (entry.kind === "update") throw new Error("An update decision must be answered with its own choices");
   if (entry.kind === "pipeline") {
     return { kind: "pipeline", pipelineId: entry.row.pipeline.id, laneMovedAt: drawnLaneMovement(entry.row.pipeline) };
   }
@@ -125,14 +128,20 @@ export function needsYouSubject(entry: MobileAttentionEntry): DismissalSubjectRe
   };
 }
 
+/** System update choices stay actionable until the operator answers them. */
+export function needsYouDismissibleCount(entries: readonly MobileAttentionEntry[]): number {
+  return entries.filter((entry) => entry.kind !== "update").length;
+}
+
 /** One request for several rows (a section's or the panel's «Dismiss all»). */
 export function needsYouDismissal(entries: readonly MobileAttentionEntry[]): { target: DismissalTarget; subjects: DismissalSubjectRequest[] } {
-  const subjects = entries.map(needsYouSubject);
+  const subjects = entries.filter((entry) => entry.kind !== "update").map(needsYouSubject);
   return { target: { kind: "subjects", subjects }, subjects };
 }
 
 /** The row the operator is looking at: the open conversation, or the focused lane card. */
 export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { path: string | null; laneId: string | null }): boolean {
+  if (entry.kind === "update") return false;
   if (entry.kind === "pipeline") return focus.laneId !== null && entry.row.pipeline.id === focus.laneId;
   return focus.path !== null && entry.item.file.path === focus.path;
 }

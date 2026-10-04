@@ -77,11 +77,14 @@ export class NativeQueueJournal {
   }
 
   command(command: RuntimeOperationCommand, operationId: string): NativeQueueCommand | null {
-    if (command.kind === "native-queue") return command;
-    if (command.kind !== "send") return null;
+    if (command.kind === "native-queue" && command.action !== "add") return command;
+    if (command.kind !== "send" && command.kind !== "native-queue") return null;
     const row = this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM native_queue_entries WHERE entry_id = ?").get(operationId);
-    if (!row) return null;
+    if (!row) return command.kind === "native-queue" ? command : null;
     const entry = JSON.parse(row.state_json) as NativeQueueRecord;
+    // The original request keeps its idempotency identity. An unsubmitted
+    // add may have followed a committed successor at its prepare boundary.
+    if (command.kind === "native-queue") return { ...command, binding: entry.binding };
     return { kind: "native-queue", action: "add", conversationId: command.conversationId, operationId,
       idempotencyKey: command.idempotencyKey, binding: entry.binding,
       text: command.text, images: command.images, contentDigest: command.contentDigest, runtime: command.runtime };
@@ -218,6 +221,16 @@ export class NativeQueueJournal {
     }
     if (transition.phase === "prepared") {
       if (!Array.isArray(transition.input) || transition.input.length === 0) throw new Error("native queue input is invalid");
+      if (transition.binding && !sameNativeQueueBinding(transition.binding, entry.binding)) {
+        if (command.action !== "add" || entry.state !== "admitted" || version.input || entry.nativeSubmissionId || entry.proof) {
+          throw new Error("native queue submitted input cannot change ownership");
+        }
+        if (typeof transition.binding.threadId !== "string" || !transition.binding.threadId
+          || (transition.binding.accountId !== null && typeof transition.binding.accountId !== "string")) {
+          throw new Error("native queue successor binding is invalid");
+        }
+        entry.binding = transition.binding;
+      }
       if (version.input && JSON.stringify(version.input) !== JSON.stringify(transition.input)) throw new Error("native queue prepared payload changed");
       version.input = transition.input;
     } else if (transition.phase === "withdrawn") {

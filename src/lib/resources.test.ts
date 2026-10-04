@@ -5,10 +5,15 @@ import path from "node:path";
 
 import { createTranscriptHostObserver, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
+import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
 import { allowedKillTarget, applyResourceTargets, buildResourceSnapshot, canonicalResourceEntry, conflictingResourceHost, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES } from "./resources";
+
+const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
+const NODE_SHELL = shellQuote(NODE_BIN);
 
 const SESSION_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const SECOND_SESSION_ID = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
@@ -348,7 +353,7 @@ async function withResourceWorkerChunks<T>(
   const pidFile = path.join(directory, "pid");
   const encodedChunks = JSON.stringify(chunks.map((chunk) => chunk.toString("base64")));
   writeFileSync(executable, [
-    "#!/usr/bin/env node",
+    `#!${NODE_BIN}`,
     'const { readFileSync, writeFileSync } = require("node:fs");',
     `writeFileSync(${JSON.stringify(pidFile)}, readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0]);`,
     `const chunks = ${encodedChunks}.map((chunk) => Buffer.from(chunk, "base64"));`,
@@ -432,7 +437,7 @@ describe("resource observation", () => {
         delete env.XDG_CACHE_HOME;
         delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
         delete env.LLV_RESOURCE_OBSERVATION_WORKER;
-        const child = Bun.spawn(["/usr/bin/node", path.join(directory, bundleName)], {
+        const child = Bun.spawn([NODE_BIN, path.join(directory, bundleName)], {
           cwd: process.cwd(),
           env,
           stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"identityEpoch\":null,\"files\":[],\"hosts\":[]}\n"]),
@@ -1638,19 +1643,17 @@ describe("resource recurring reads", () => {
           const escapedReady = path.join(directory, "term-escaped-ready");
           const memberReady = path.join(directory, "term-member-ready");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
-            'const [pidFile, readyFile] = process.argv.slice(2);',
+            'const [readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
             'process.on("SIGINT", () => {});',
-            'const hostPid = fs.readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0];',
-            'fs.writeFileSync(pidFile, hostPid);',
             'fs.writeFileSync(readyFile, "ready");',
             'setInterval(() => {}, 1_000);',
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedReady, memberReady, pipes] = process.argv.slice(2);',
@@ -1659,9 +1662,17 @@ describe("resource recurring reads", () => {
             '  if (handled) return;',
             '  handled = true;',
             '  const stdio = pipes === "inherited" ? ["ignore", "inherit", "inherit"] : "ignore";',
-            '  const child = spawn(process.execPath, [escapedScript, escapedPid, escapedReady], { detached: true, stdio });',
+            '  const child = spawn(process.execPath, [escapedScript, escapedReady], { detached: true, stdio });',
+            // /proc is mounted in the host PID namespace. The spawning thread
+            // has exactly one child, whose host PID is available immediately;
+            // the child's Node bootstrap must not race the cleanup deadline.
+            '  const hostPid = fs.readFileSync("/proc/thread-self/children", "utf8").trim();',
+            '  if (!/^\\d+$/.test(hostPid)) throw new Error("expected one escaped child");',
+            '  fs.writeFileSync(escapedPid, hostPid);',
             '  child.unref();',
-            '  process.exit(0);',
+            // Keep the owner present while cleanup verifies its identity. The
+            // later SIGKILL removes it and the escaped child together.
+            '  setInterval(() => {}, 1_000);',
             '});',
             'fs.writeFileSync(memberReady, "ready");',
             'setInterval(() => {}, 1_000);',
@@ -1670,7 +1681,7 @@ describe("resource recurring reads", () => {
           return [
             `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
             `trap 'exit 0' TERM INT`,
-            `/usr/bin/node "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedReady}" "${memberReady}" "${pipes}" &`,
+            `${NODE_SHELL} "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedReady}" "${memberReady}" "${pipes}" &`,
             "member_pid=$!",
             `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
             "sleep 0.08",
@@ -1679,16 +1690,22 @@ describe("resource recurring reads", () => {
               : fixture.name === "timeout"
                 ? `kill -TERM "$member_pid"; while [ ! -e "${escapedReady}" ]; do sleep 0.005; done`
               : fixture.output,
-            "while :; do sleep 0.01; done",
+            // Avoid short-lived sleep children racing namespace ownership
+            // verification; one blocking child keeps the process tree stable.
+            "tail -f /dev/null & wait",
           ];
         }, async (directory) => {
           const baseline = referencedHandles();
           const escapedPidFile = path.join(directory, "term-escaped-pid");
           const realKill = process.kill.bind(process);
+          let injectedDenial = false;
           const kill = fixture.denyEscaped
             ? spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
                 if (pid > 0 && signal !== 0 && existsSync(escapedPidFile)
-                  && pid === Number(readFileSync(escapedPidFile, "utf8"))) throw errno("EPERM");
+                  && pid === Number(readFileSync(escapedPidFile, "utf8"))) {
+                  injectedDenial = true;
+                  throw errno("EPERM");
+                }
                 return realKill(pid, signal as NodeJS.Signals | number | undefined);
               }) as typeof process.kill)
             : null;
@@ -1707,10 +1724,10 @@ describe("resource recurring reads", () => {
                 headroomMs: 250,
               },
             }).read(true);
-            for (let attempt = 0; attempt < 20 && !existsSync(escapedPidFile); attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 5));
-            }
+            // Read the completed receipt and sample liveness at settlement;
+            // waiting here would allow a late cleanup to hide a leak.
             escapedPid = Number(readFileSync(escapedPidFile, "utf8"));
+            expect(escapedPid, `${pipes} ${fixture.name} escaped PID`).toBeGreaterThan(0);
             leaked = processExists(escapedPid);
           } finally {
             kill?.mockRestore();
@@ -1719,9 +1736,10 @@ describe("resource recurring reads", () => {
           await new Promise<void>((resolve) => setImmediate(resolve));
           const label = `${pipes} ${fixture.name}`;
 
-          expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
           expect(leaked, `${label} escaped descendant`).toBe(fixture.escapedAtSettlement);
           expect(newReferencedHandleCount(baseline), `${label} referenced handles`).toBe(0);
+          if (fixture.denyEscaped) expect(injectedDenial, `${label} injected denial`).toBeTrue();
+          expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
         });
       }
     }
@@ -1773,7 +1791,7 @@ describe("resource recurring reads", () => {
           const transitionArmed = path.join(directory, "owner-transition-armed");
           const transitionOrder = path.join(directory, "owner-transition-order");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
@@ -1786,7 +1804,7 @@ describe("resource recurring reads", () => {
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedNamespace, escapedReady, memberReady, ownerMode, transitionOrder] = process.argv.slice(2);',
@@ -1812,7 +1830,7 @@ describe("resource recurring reads", () => {
             `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
             `readlink /proc/self/ns/pid > "${path.join(directory, "root-namespace")}"`,
             `trap 'printf "root\\n" >> "${transitionOrder}"; exit 0' TERM INT`,
-            `/usr/bin/node "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedNamespace}" "${escapedReady}" "${memberReady}" "${owner}" "${transitionOrder}" &`,
+            `${NODE_SHELL} "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedNamespace}" "${escapedReady}" "${memberReady}" "${owner}" "${transitionOrder}" &`,
             "member_pid=$!",
             `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
             `: > "${transitionArmed}"`,
@@ -1904,7 +1922,7 @@ describe("resource recurring reads", () => {
       const escapedScript = path.join(directory, "retained-namespace-child.cjs");
       const memberScript = path.join(directory, "retained-namespace-member.cjs");
       writeFileSync(escapedScript, [
-        '#!/usr/bin/node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
         'process.on("SIGTERM", () => {});',
@@ -1916,7 +1934,7 @@ describe("resource recurring reads", () => {
         '',
       ].join("\n"));
       writeFileSync(memberScript, [
-        '#!/usr/bin/node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [escapedScript, pidFile, namespaceFile, readyFile, memberReady] = process.argv.slice(2);',
@@ -1936,7 +1954,7 @@ describe("resource recurring reads", () => {
       return [
         `readlink /proc/self/ns/pid > "${path.join(directory, "root-namespace")}"`,
         "trap 'exit 0' TERM INT",
-        `/usr/bin/node "${memberScript}" "${escapedScript}" "${path.join(directory, "escaped-pid")}" "${path.join(directory, "escaped-namespace")}" "${path.join(directory, "escaped-ready")}" "${path.join(directory, "member-ready")}" &`,
+        `${NODE_SHELL} "${memberScript}" "${escapedScript}" "${path.join(directory, "escaped-pid")}" "${path.join(directory, "escaped-namespace")}" "${path.join(directory, "escaped-ready")}" "${path.join(directory, "member-ready")}" &`,
         `while [ ! -e "${path.join(directory, "member-ready")}" ]; do sleep 0.005; done`,
         `while [ ! -e "${path.join(directory, "release")}" ]; do sleep 0.005; done`,
         `printf '%s\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
@@ -1992,7 +2010,7 @@ describe("resource recurring reads", () => {
     await withResourceWorkerScript((directory) => {
       const memberScript = path.join(directory, "concurrent-term-member.cjs");
       writeFileSync(memberScript, [
-        '#!/usr/bin/node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [directory, key] = process.argv.slice(2);',
@@ -2023,7 +2041,7 @@ describe("resource recurring reads", () => {
         `printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
         `readlink /proc/self/ns/pid > "${directory}/$host_pid.root-namespace"`,
         "trap 'exit 0' TERM INT",
-        `/usr/bin/node "${memberScript}" "${directory}" "$host_pid" &`,
+        `${NODE_SHELL} "${memberScript}" "${directory}" "$host_pid" &`,
         `while [ ! -e "${directory}/$host_pid.member" ]; do sleep 0.005; done`,
         `while [ ! -e "${directory}/$host_pid.release" ]; do sleep 0.005; done`,
         `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
@@ -2138,6 +2156,9 @@ describe("resource recurring reads", () => {
 
   test("cleanup never adopts a recycled process group after the original leader exits", async () => {
     await withResourceWorkerScript([
+      // Consume the request before exiting so this exercises exit cleanup,
+      // rather than racing the input write and reporting EPIPE.
+      "cat > /dev/null",
       "exit 0",
     ], async () => {
       let leaderPid = 0;
@@ -2338,6 +2359,7 @@ describe("resource recurring reads", () => {
 
   test("individual cleanup revalidates identity after a verified group signal", async () => {
     await withResourceWorkerScript([
+      "read -r _",
       `printf '%s\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
       "exit 0",
     ], async () => {
@@ -2405,7 +2427,7 @@ describe("resource recurring reads", () => {
       `);
       const built = await Bun.build({ entrypoints: [entrypoint], outdir: directory, target: "node", format: "esm", naming: path.basename(bundle) });
       expect(built.success).toBeTrue();
-      const child = Bun.spawn(["node", bundle], {
+      const child = Bun.spawn([NODE_BIN, bundle], {
         cwd: process.cwd(),
         env: { ...process.env, LLV_RESOURCE_COLLECTOR_EXECUTABLE: path.join(directory, "fixture-worker"), PATH: "/usr/bin:/bin" },
         stdout: "pipe",

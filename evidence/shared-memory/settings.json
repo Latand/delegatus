@@ -1,0 +1,26 @@
+[
+  {
+    "locale": "en",
+    "width": 1440,
+    "fits": true,
+    "toggled": true
+  },
+  {
+    "locale": "en",
+    "width": 390,
+    "fits": true,
+    "toggled": true
+  },
+  {
+    "locale": "uk",
+    "width": 1440,
+    "fits": true,
+    "toggled": true
+  },
+  {
+    "locale": "uk",
+    "width": 390,
+    "fits": true,
+    "toggled": true
+  }
+]

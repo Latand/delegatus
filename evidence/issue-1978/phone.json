@@ -18,387 +18,418 @@
           "feedTop": 110,
           "cutLines": [],
           "tail": {
-            "spacer": 41,
+            "spacer": 35,
             "fromBottom": 0
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "row:19:0",
-            "top": 110.5,
-            "bottom": 198
-          }
-        },
-        "opened": {
-          "command": {
-            "x": 308,
-            "y": 175,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 231,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 0
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 4.bun test src/board30sexit 015:33:32–15",
-            "top": 114.5,
-            "bottom": 431
-          }
-        },
-        "long-2": {
-          "command": {
-            "x": 308,
-            "y": 1606,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1662,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1431
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1201.5,
-            "bottom": 1340.5
-          }
-        },
-        "long-7": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-13": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-19": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-26": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-34": {
-          "command": {
-            "x": 308,
-            "y": 1549,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1605,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1374
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1144.5,
-            "bottom": 1283.5
-          }
-        },
-        "long-43": {
-          "command": {
-            "x": 308,
-            "y": 1549,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1605,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1374
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1144.5,
-            "bottom": 1283.5
-          }
-        },
-        "long-55": {
-          "command": {
-            "x": 308,
-            "y": 1549,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1605,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1374
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1144.5,
-            "bottom": 1283.5
-          }
-        },
-        "rest-137": {
-          "command": {
-            "x": 308,
-            "y": 1693,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1749,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1518
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "div: 1.Read bands.ts · :1–6130s",
-            "top": 114,
-            "bottom": 136
-          }
-        },
-        "rest-211": {
-          "command": {
-            "x": 308,
-            "y": 1904,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1960,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1729
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "row:22:0",
-            "top": 110.5,
-            "bottom": 186.5
-          }
-        },
-        "rest-173": {
-          "command": {
-            "x": 308,
-            "y": 2067,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 2123,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1892
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "row:20:0",
+            "top": 116.5,
+            "bottom": 188.25
+          }
+        },
+        "opened": {
+          "command": {
+            "x": 314,
+            "y": 317.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 395.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 3.\"applyBand\" · src/board30sapplyBandsrc",
+            "top": 110.25,
+            "bottom": 289.25
+          }
+        },
+        "long-2": {
+          "command": {
+            "x": 314,
+            "y": 1550.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1628.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1277
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1200.25,
+            "bottom": 1339.25
+          }
+        },
+        "long-7": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-13": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-19": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-26": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-34": {
+          "command": {
+            "x": 314,
+            "y": 1494.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1572.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1221
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1144.25,
+            "bottom": 1283.25
+          }
+        },
+        "long-43": {
+          "command": {
+            "x": 314,
+            "y": 1494.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1572.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1221
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1144.25,
+            "bottom": 1283.25
+          }
+        },
+        "long-55": {
+          "command": {
+            "x": 314,
+            "y": 1494.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1572.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1221
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1144.25,
+            "bottom": 1283.25
+          }
+        },
+        "rest-137": {
+          "command": {
+            "x": 314,
+            "y": 1633.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1711.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1360
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "div: 1.Read bands.ts · :1–6130s",
             "top": 110,
-            "bottom": 186
+            "bottom": 132
+          }
+        },
+        "rest-211": {
+          "command": {
+            "x": 314,
+            "y": 1995.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 2073.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1722
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:21:0",
+            "top": 110.25,
+            "bottom": 223.75
+          }
+        },
+        "rest-173": {
+          "command": {
+            "x": 314,
+            "y": 2198.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 2276.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1925
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:19:0",
+            "top": 110,
+            "bottom": 223.5
+          }
+        },
+        "rest-control-overhang": {
+          "command": {
+            "x": 314,
+            "y": 4033.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 4111.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 3760
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         },
         "reopened": {
@@ -412,14 +443,14 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 35
+            "fromBottom": 1957
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:18:0",
-            "top": 110.5,
-            "bottom": 186.5
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         }
       },
@@ -443,387 +474,418 @@
           "feedTop": 110,
           "cutLines": [],
           "tail": {
-            "spacer": 41,
+            "spacer": 35,
             "fromBottom": 0
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "row:19:0",
-            "top": 110.5,
-            "bottom": 198
-          }
-        },
-        "opened": {
-          "command": {
-            "x": 308,
-            "y": 175,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 231,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 0
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 4.bun test src/board30sexit 015:33:52–15",
-            "top": 114.5,
-            "bottom": 431
-          }
-        },
-        "long-2": {
-          "command": {
-            "x": 308,
-            "y": 1606,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1662,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1431
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1201.5,
-            "bottom": 1340.5
-          }
-        },
-        "long-7": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-13": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-19": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-26": {
-          "command": {
-            "x": 308,
-            "y": 1602,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1658,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1427
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1197.5,
-            "bottom": 1336.5
-          }
-        },
-        "long-34": {
-          "command": {
-            "x": 308,
-            "y": 1549,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1605,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1374
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1144.5,
-            "bottom": 1283.5
-          }
-        },
-        "long-43": {
-          "command": {
-            "x": 308,
-            "y": 1549,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1605,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1374
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1144.5,
-            "bottom": 1283.5
-          }
-        },
-        "long-55": {
-          "command": {
-            "x": 308,
-            "y": 1549,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1605,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1374
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
-            "top": 1144.5,
-            "bottom": 1283.5
-          }
-        },
-        "rest-137": {
-          "command": {
-            "x": 308,
-            "y": 1693,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1749,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1518
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "div: 1.Read bands.ts · :1–6130s",
-            "top": 114,
-            "bottom": 136
-          }
-        },
-        "rest-211": {
-          "command": {
-            "x": 308,
-            "y": 1904,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 1960,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1729
-          },
-          "overhangs": [],
-          "slivers": [],
-          "firstRow": {
-            "key": "row:22:0",
-            "top": 110.5,
-            "bottom": 186.5
-          }
-        },
-        "rest-173": {
-          "command": {
-            "x": 308,
-            "y": 2067,
-            "width": 44,
-            "height": 44
-          },
-          "output": {
-            "x": 308,
-            "y": 2123,
-            "width": 44,
-            "height": 44
-          },
-          "controlsOverlap": 0,
-          "controlsGap": 12,
-          "inkUnderControls": [],
-          "stripBottom": 110,
-          "feedTop": 110,
-          "cutLines": [],
-          "tail": {
-            "spacer": 166,
-            "fromBottom": 1892
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
             "key": "row:20:0",
-            "top": 110,
-            "bottom": 186
+            "top": 116.5,
+            "bottom": 188.25
+          }
+        },
+        "opened": {
+          "command": {
+            "x": 314,
+            "y": 317.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 395.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 0
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 3.\"applyBand\" · src/board30sapplyBandsrc",
+            "top": 110.25,
+            "bottom": 289.25
+          }
+        },
+        "long-2": {
+          "command": {
+            "x": 314,
+            "y": 1550.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1628.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1277
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1200.25,
+            "bottom": 1339.25
+          }
+        },
+        "long-7": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-13": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-19": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-26": {
+          "command": {
+            "x": 314,
+            "y": 1546.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1624.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1273
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1196.25,
+            "bottom": 1335.25
+          }
+        },
+        "long-34": {
+          "command": {
+            "x": 314,
+            "y": 1494.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1572.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1221
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1144.25,
+            "bottom": 1283.25
+          }
+        },
+        "long-43": {
+          "command": {
+            "x": 314,
+            "y": 1494.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1572.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1221
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1144.25,
+            "bottom": 1283.25
+          }
+        },
+        "long-55": {
+          "command": {
+            "x": 314,
+            "y": 1494.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1572.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1221
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1144.25,
+            "bottom": 1283.25
+          }
+        },
+        "rest-137": {
+          "command": {
+            "x": 314,
+            "y": 1611.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1689.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1338
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "li: 2.Read projection.ts · :1–1330ssrc/board",
+            "top": 1261.25,
+            "bottom": 1400.25
+          }
+        },
+        "rest-211": {
+          "command": {
+            "x": 314,
+            "y": 1876.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 1954.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1603
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:22:0",
+            "top": 110.75,
+            "bottom": 182.5
+          }
+        },
+        "rest-173": {
+          "command": {
+            "x": 314,
+            "y": 2079.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 2157.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 1806
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:20:0",
+            "top": 110.5,
+            "bottom": 182.25
+          }
+        },
+        "rest-control-overhang": {
+          "command": {
+            "x": 314,
+            "y": 4033.25,
+            "width": 44,
+            "height": 44
+          },
+          "output": {
+            "x": 308,
+            "y": 4111.25,
+            "width": 44,
+            "height": 44
+          },
+          "controlsOverlap": 0,
+          "controlsGap": 34,
+          "inkUnderControls": [],
+          "stripBottom": 110,
+          "feedTop": 110,
+          "cutLines": [],
+          "tail": {
+            "spacer": 0,
+            "fromBottom": 3760
+          },
+          "overhangs": [],
+          "slivers": [],
+          "firstRow": {
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         },
         "reopened": {
@@ -837,14 +899,14 @@
           "cutLines": [],
           "tail": {
             "spacer": 0,
-            "fromBottom": 35
+            "fromBottom": 1957
           },
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:18:0",
-            "top": 110.5,
-            "bottom": 186.5
+            "key": "row:1:0",
+            "top": 115.75,
+            "bottom": 229.25
           }
         }
       },
@@ -865,17 +927,17 @@
           "controlsGap": null,
           "inkUnderControls": [],
           "stripBottom": null,
-          "feedTop": 624.9375,
+          "feedTop": 449.375,
           "cutLines": [
             {
-              "text": "Band 21 replayed from the snapshot: the projecti",
-              "top": 624.09375,
-              "bottom": 641.09375
+              "text": "Replay band 19 and say what moved.",
+              "top": 440.15625,
+              "bottom": 455.15625
             },
             {
-              "text": "Band 21 replayed from the snapshot: the projecti",
-              "top": 624.09375,
-              "bottom": 641.09375
+              "text": "<button Copy message (Markdown)>",
+              "top": 437.15625,
+              "bottom": 459.15625
             }
           ],
           "tail": {
@@ -885,21 +947,21 @@
           "overhangs": [],
           "slivers": [],
           "firstRow": {
-            "key": "row:21:0",
-            "top": 586.09375,
-            "bottom": 673.78125
+            "key": "row:18:0",
+            "top": 429.15625,
+            "bottom": 468
           }
         },
         "opened": {
           "command": {
-            "x": 931,
-            "y": 620.40625,
+            "x": 1199,
+            "y": 661.0625,
             "width": 22,
             "height": 22
           },
           "output": {
-            "x": 931,
-            "y": 647.796875,
+            "x": 1199,
+            "y": 688.453125,
             "width": 22,
             "height": 22
           },
@@ -907,22 +969,27 @@
           "controlsGap": 5.390625,
           "inkUnderControls": [],
           "stripBottom": null,
-          "feedTop": 624.9375,
+          "feedTop": 449.375,
           "cutLines": [
             {
-              "text": "$",
-              "top": 616.40625,
-              "bottom": 633.40625
+              "text": "3",
+              "top": 445.34375,
+              "bottom": 456.34375
             },
             {
-              "text": "bun test src/board",
-              "top": 616.40625,
-              "bottom": 633.40625
+              "text": ".",
+              "top": 445.34375,
+              "bottom": 456.34375
             },
             {
-              "text": "<button Copy command>",
-              "top": 620.40625,
-              "bottom": 642.40625
+              "text": "\"applyBand\" · src/board",
+              "top": 443.90625,
+              "bottom": 457.90625
+            },
+            {
+              "text": "30s",
+              "top": 445.34375,
+              "bottom": 456.34375
             }
           ],
           "tail": {
@@ -935,11 +1002,17 @@
               "by": 2.609375
             }
           ],
-          "slivers": [],
+          "slivers": [
+            {
+              "key": "div",
+              "top": 440.90625,
+              "bottom": 462.296875
+            }
+          ],
           "firstRow": {
-            "key": "row:32:0",
-            "top": 845.09375,
-            "bottom": 932.78125
+            "key": "li: 3.\"applyBand\" · src/board30sapplyBandsrc",
+            "top": 440.90625,
+            "bottom": 597.734375
           }
         }
       },

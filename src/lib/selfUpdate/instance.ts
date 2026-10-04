@@ -4,9 +4,17 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { agentRegistry } from "@/lib/agent/registry";
+import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
+import { conversationTurnLiveness } from "@/lib/runtime/liveness";
+import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
+import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { runtimeHostClient } from "@/lib/runtime/client";
+import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadFlows } from "@/lib/flows/store";
 import { listPresence } from "@/lib/view/presenceStore";
 import { requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
 import { stateDir, statePath } from "@/lib/configDir";
@@ -17,7 +25,9 @@ import { CANONICAL_REMOTE, checkForUpdate, readRevision, runGit } from "./git";
 import { requestRestart } from "./launcher";
 import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
+import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
+import { currentHostTurnIdle } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
 
@@ -82,6 +92,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     createRunner: (config, publish, onChange) => new UpdateRunner(config, realPorts(publish), onChange),
     requestRestart,
     processAlive: (pid, startIdentity) => sameProcess({ pid, startIdentity }),
+    processIdentity: (pid) => procBackend.processIdentity(pid),
     hostHealth: async () => {
       const client = runtimeHostClient();
       if (!client?.runtimeHostHealth) return null;
@@ -105,6 +116,9 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       port: Number.isInteger(port) && port > 0 ? port : null,
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     },
+    requestPipelineTick,
+    kickDeliveryQueue: kickStructuredDeliveryQueue,
+    updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
@@ -112,8 +126,19 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
         return client.snapshot(undefined, { timeoutMs: 10_000 });
       },
       pipelines: loadPipelinesForList,
-      controllerIdle: async () => (await import("@/lib/pipelines/controller")).flowPipelineController().idle()
-        && (await import("@/lib/monitor/seatTickController")).seatTickIdle(),
+      flows: () => loadFlows(),
+      turnLiveness: async (id) => {
+        const verdict = await conversationTurnLiveness(agentRegistry(), id);
+        if (!verdict) return null;
+        const host = structuredDeliveryHostForConversation(id);
+        const current = await host?.health();
+        return { ...verdict, currentTurnIdle: currentHostTurnIdle(current) };
+      },
+      seats: () => activeOrchestratorSeats().filter((seat): seat is typeof seat & { conversationId: string } => !!seat.conversationId),
+      controllerBusyReason: async () => {
+        if (!(await import("@/lib/pipelines/controller")).flowPipelineController().idle()) return "pipeline-controller";
+        return (await import("@/lib/monitor/seatTickController")).seatTickIdle() ? null : "seat-tick";
+      },
       presence: listPresence,
       memoryAvailableMb: memAvailableMb,
     },

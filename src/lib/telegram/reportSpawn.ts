@@ -1,3 +1,5 @@
+import { activeDrain } from "@/lib/selfUpdate/drain";
+import type { TelegramReportTrigger } from "./reportContracts";
 import type { NextRequest } from "next/server";
 
 import {
@@ -33,6 +35,7 @@ export interface ReportSpawnResult {
 }
 
 export interface ReportSpawnInput {
+  trigger: TelegramReportTrigger;
   body: Record<string, unknown>;
   /** Re-read of "reports enabled AND Telegram connected", called by admission. */
   grantActive(): boolean;
@@ -54,14 +57,16 @@ export function startDeferredSpawnWork(work: () => Promise<void>): void {
 }
 
 /**
- * The two dependency overrides a Viewer-timer launch replaces, as one value so
+ * Dependency overrides for a Viewer-timer launch, as one value so
  * a test can exercise them without standing up the whole spawn lane.
  */
-export function reportSpawnOverrides(grantActive: () => boolean): {
+export function reportSpawnOverrides(grantActive: () => boolean, trigger: TelegramReportTrigger = "manual"): {
+  autonomousAdmissionHeld: () => boolean;
   defer: (work: () => Promise<void>) => void;
   internalGrant: () => { sessionClass: typeof SCHEDULED_REPORT_SESSION_CLASS; mcpServers: string[] };
 } {
   return {
+    autonomousAdmissionHeld: () => trigger === "scheduled" && !!activeDrain(),
     defer: startDeferredSpawnWork,
     internalGrant: () => ({
       sessionClass: SCHEDULED_REPORT_SESSION_CLASS,
@@ -112,7 +117,7 @@ export async function launchReportConversation(input: ReportSpawnInput): Promise
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, {
     ...productionSpawnCommandDependencies,
-    ...reportSpawnOverrides(input.grantActive),
+    ...reportSpawnOverrides(input.grantActive, input.trigger),
   });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }

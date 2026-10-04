@@ -7,6 +7,7 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
@@ -32,7 +33,7 @@ import { appendSeatTickRecord } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
-import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
@@ -233,7 +234,7 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
     "",
-    `${card.detail}. Seat tick is withholding further wakes from this seat. Rotate the seat to restore its Viewer tools.`,
+    `${card.detail}. Routine wakes are withheld. A newly confirmed lane stall may send one recovery wake. Rotate the seat if its Viewer tools remain unavailable.`,
     `Project ${project}.`,
     "",
     `${MONITOR_REF_PREFIX} ${card.ref}`,
@@ -1307,14 +1308,15 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
-  const text = verdict.kind === "wake"
-    ? seatTickWakeMessage({
+  const renderedVerdict = verdict.kind === "wake" ? { ...verdict, items: withChildFinalMessages(verdict.items) } : verdict;
+  const payload = verdict.kind === "wake"
+    ? seatTickWakePayload({
       project: input.project,
       snapshotAt,
       reasons: verdict.reasons,
       /* A settled child's final message rides on its line (#1881), read from
          its transcript's tail now that the wake is going out. */
-      items: withChildFinalMessages(verdict.items),
+      items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
       deferred: verdict.deferred,
       /* Said once, as counts (#1749, #1783): the children this check declined
          to list because their outcomes are a retired seat's, not this one's,
@@ -1332,7 +1334,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
       reportLines: verdict.reportLines,
     })
-    : seatTickProposalMessage({
+    : { items: [], text: seatTickProposalMessage({
       project: input.project,
       snapshotAt,
       issues,
@@ -1343,13 +1345,16 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       monitorPrompt: input.settings.monitorPrompt,
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
-    });
-  const commit = seatTickWakeCommitPlan(verdict, {
+    }) };
+  const text = payload.text;
+  if (renderedVerdict.kind === "wake") renderedVerdict.items = [...payload.items];
+  const commit = seatTickWakeCommitPlan(renderedVerdict, {
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
     noteShown,
     bridgeReports: input.reports?.bridgeReports === true,
+    frozenText: text,
   });
   return { text, commit: commit! };
 }
@@ -1441,7 +1446,8 @@ async function check(
         || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
       return alarmPayload(input, verdict, issues, wake.preparedAt);
     },
-    mayDispatch: () => !openingSeat?.conversationId || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead",
+    mayDispatch: () => !activeDrain() && (!openingSeat?.conversationId
+      || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead"),
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
@@ -1591,9 +1597,25 @@ async function check(
        permanent refusal. A seat that cannot take a wake is not sent another
        until something that could change that has happened. */
     const refusals = seatTickActiveRefusalRun(state, refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt));
+    // A restored seat may start its MCP only when its next turn starts.
+    // A new confirmed stall gets one ordinary delivery; arrival records its
+    // token, and the existing pending-delivery fence still prevents duplicates.
     if (rotated) {
       delivery = { clientMessageId, outcome: "seat-rotated" };
-    } else if (mcpHealth?.status === "dead") {
+    } else if (activeDrain()) {
+      // Proposal preparation may have awaited the forge while admission closed.
+      // No attempt has entered transport; leave its work for the release tick.
+      delivery = { clientMessageId, outcome: "update-held" };
+      fenceDetail = "new seat work is held for the automatic update";
+    } else if (mcpHealth?.status === "dead" && !(
+      verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
+      && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
+        && (!(state.reportedStalls ?? []).includes(item.stallToken)
+          // Parking is new news even if the interrupted turn never wrote a
+          // newer record. Its own-lane announcement has independent dedupe.
+          || (item.laneAnnouncement === `${item.id}:needs_decision`
+            && !(state.announcedLanes ?? []).includes(item.laneAnnouncement))))
+    )) {
       delivery = { clientMessageId, outcome: "seat-mcp-unavailable" };
       fenceDetail = `${mcpHealth.detail}; rotate the seat`;
     } else if (withheld) {
@@ -1705,7 +1727,7 @@ async function check(
       console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
     }
   }
-  try { const detail = await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
+  try { const detail = !activeDrain() && await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const record: SeatTickRunRecord = {
     schemaVersion: 1,
@@ -1969,6 +1991,7 @@ const tickHost = globalThis as typeof globalThis & {
  */
 export function startSeatTick(ports: {
   handoffHeld?: () => boolean;
+  drainHeld?: () => boolean;
   recordSuccessions?: () => unknown[];
   scheduleInterval?: (callback: () => void, delayMs: number) => ReturnType<typeof setInterval>;
   sweep?: () => Promise<unknown>;
@@ -2011,18 +2034,22 @@ export function startSeatTick(ports: {
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileSeatTick());
   const handoffHeld = ports.handoffHeld ?? (() => !!activeRestartGate(statePath("self-update", "auto-admission.json")));
-  const timer = schedule(() => {
+  const drainHeld = ports.drainHeld ?? (() => !!activeDrain());
+  const run = () => {
     /* A check that outran its interval drops the next one rather than stacking
        it. A tick that would land behind the one before it is stale by
        construction, and staleness is the whole reason nothing is queued. */
-    if (tickHost.__llvSeatTickRunning || handoffHeld()) return;
+    if (tickHost.__llvSeatTickRunning || handoffHeld() || drainHeld()) return;
     tickHost.__llvSeatTickRunning = true;
     void Promise.resolve(sweep())
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))
       .finally(() => { tickHost.__llvSeatTickRunning = false; });
-  }, policy.checkIntervalMs);
+  };
+  const timer = schedule(run, policy.checkIntervalMs);
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
+  // Read durable stall observations immediately; a restart owes no new interval.
+  run();
   return true;
 }
 

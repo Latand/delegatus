@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
 
 import { emptyRepositoryEntry, forgeViewOf, type ForgeCacheFile, type StoredPullRequest } from "./cache";
 import {
@@ -14,7 +15,7 @@ import {
   type StoredWorkLink,
   type WorkLink,
 } from "./workLinks";
-import { carryingTaskWorkLinks } from "./resolve";
+import { carryingTaskWorkLinks, workLinksForBoard } from "./resolve";
 
 /* PR and issue links (#2059), pure: invented repositories, branches and
    numbers, an in-memory cache, no store and no forge. */
@@ -111,6 +112,13 @@ describe("input normalization", () => {
 });
 
 describe("discovery", () => {
+  test("a numbered PR hold carries its known repository even without attached links", () => {
+    const task = { id: "task-hold", project: "fixture", hold: { kind: "pr", ref: "123", note: "After merge", since: LANE_AT, by: "operator" } } as unknown as BoardTask;
+    const result = workLinksForBoard([], [task], cache([]), () => `https://github.com/${REPO}.git`);
+    expect(result.tasks[task.id]).toEqual({ links: [], repository: REPO, noPr: false });
+    expect(result.tasks[task.id]!.repository).toBe(REPO);
+  });
+
   test("a lane whose PR sits on its delivery head, not on its lane branch, finds it", () => {
     const resolved = resolvePipelineLinks(pipeline({ delivery: delivery("fix/other-head") }), REPO, cache([pr(41, { headRefName: "fix/other-head" })]));
     expect(numbers(resolved.links)).toEqual(["pr:41"]);

@@ -329,3 +329,20 @@ test("an agent that asked the operator in prose is a row with its role, the agen
   expect(rowIds(host)).not.toContain(askId);
   expect(title(host)).toBe("Waiting for you · 6");
 });
+
+test("the update decision is a counted Needs-you row with named blockers and both choices", async () => {
+  const decision = { id: "drain", at: new Date().toISOString(), project: ALPHA, blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+    turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: ALPHA, stage: null, seat: false }] } };
+  const queue = buildNeedsYouQueue([], [], NOW, [], decision);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => root!.render(<AttentionPanel queue={queue} current={ALPHA} projectNames={{}} pipelines={[]} placement="docked" canDock
+    onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />));
+  // The turn is named by what it is; its id stays off the screen.
+  expect(host.textContent).toContain("Codex agent");
+  expect(host.textContent).not.toContain("conversation_long_turn");
+  expect(host.querySelector('[data-action="deploy-now"]')).not.toBeNull();
+  expect(host.querySelector('[data-action="keep-waiting"]')).not.toBeNull();
+  expect(host.querySelector('[data-needs-you-dismiss-all]')).toBeNull();
+});

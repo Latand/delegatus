@@ -996,7 +996,17 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(freshSettings.theme).toBe("shared-dark");
     expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({}) });
     expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
-    expect(adoptedSettings).toEqual(freshSettings);
+    // Each hosted generation has its own FIFO hook receipt queue. Native
+    // settings and policy remain identical across fresh/adopted launches.
+    const omitMemoryHook = (settings: typeof adoptedSettings) => ({ ...settings,
+      hooks: { ...settings.hooks, UserPromptSubmit: undefined } });
+    expect(omitMemoryHook(adoptedSettings)).toEqual(omitMemoryHook(freshSettings));
+    const freshMemory = (freshSettings.hooks as typeof adoptedSettings.hooks).UserPromptSubmit?.[0]?.hooks?.[0];
+    const adoptedMemory = adoptedSettings.hooks.UserPromptSubmit?.[0]?.hooks?.[0];
+    if (freshMemory) {
+      expect(adoptedMemory.command).not.toBe(freshMemory.command);
+      expect(adoptedMemory.additionalContextLimit).toBe(freshMemory.additionalContextLimit);
+    }
     expect(freshCapture.args).toContain("--strict-mcp-config");
     expect(adoptedCapture.args).toContain("--strict-mcp-config");
     expect(adoptedMcp).toEqual(freshMcp);

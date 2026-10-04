@@ -1,3 +1,4 @@
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import crypto from "node:crypto";
 
 import { defaultModelFor } from "@/lib/agent/models";
@@ -254,7 +255,16 @@ export class TelegramReportRunner {
       this.reconcileDisconnected();
       await this.finalizeActiveRun();
       const file = readTelegramReports();
-      if (file.active) return;
+      if (file.active) {
+        if (file.active.admissionDeferred && !file.active.conversationId && !activeDrain()) {
+          updateTelegramReports(state => {
+            if (state.active?.runId === file.active!.runId) state.active.startedAt = new Date(this.ports.now()).toISOString();
+          });
+          await this.execute(file.active.runId);
+        }
+        return;
+      }
+      if (activeDrain()) return;
       if (await this.runOwedConnectorRetry(file)) return;
       if (!scheduledRunDue({ now: this.ports.now(), settings: file.settings, cursor: file.cursor })) return;
       const day = localDayKey(this.ports.now(), REPORT_TIME_ZONE);
@@ -532,9 +542,16 @@ export class TelegramReportRunner {
       outputPath: reportInboxPath(runId),
       instructions: effectiveReportPrompt(readTelegramReports()),
     });
+    if (active.trigger === "scheduled") {
+      updateTelegramReports((state) => {
+        if (state.active?.runId === runId) state.active.admissionDeferred = true;
+      });
+      if (activeDrain()) return;
+    }
     let spawned: ReportSpawnResult;
     try {
       spawned = await this.ports.spawn({
+        trigger: active.trigger,
         body: {
           engine: "codex",
           model: defaultModelFor("codex"),
@@ -561,6 +578,7 @@ export class TelegramReportRunner {
       this.settle(runId, "failed", "launch_failed", false);
       return;
     }
+    if (active.trigger === "scheduled" && spawned.body.code === "AUTO_UPDATE_DRAIN") return;
     const conversationId = typeof spawned.body.conversationId === "string" ? spawned.body.conversationId : null;
     const admitted = spawned.status >= 200 && spawned.status < 300 && spawned.body.ok !== false && conversationId !== null;
     if (!admitted) {
@@ -569,7 +587,10 @@ export class TelegramReportRunner {
       return;
     }
     updateTelegramReports((state) => {
-      if (state.active?.runId === runId) state.active.conversationId = conversationId;
+      if (state.active?.runId === runId) {
+        state.active.conversationId = conversationId;
+        delete state.active.admissionDeferred;
+      }
     });
   }
 
@@ -594,7 +615,10 @@ export class TelegramReportRunner {
     const conversationId = await this.ports.reportRunConversation(runId);
     if (!conversationId) return null;
     updateTelegramReports((state) => {
-      if (state.active?.runId === runId && !state.active.conversationId) state.active.conversationId = conversationId;
+      if (state.active?.runId === runId && !state.active.conversationId) {
+        state.active.conversationId = conversationId;
+        delete state.active.admissionDeferred;
+      }
     });
     return conversationId;
   }
@@ -634,6 +658,7 @@ export class TelegramReportRunner {
       /* No conversation yet: either this process is still planning the run's
          sources, or the process that was doing so is gone and the run is an
          orphan no restart would otherwise clear. */
+      if (active.admissionDeferred && active.trigger === "scheduled") return;
       if (!this.planning.has(active.runId)) this.settle(active.runId, "failed", "launch_failed", false);
       else if (expired) this.settle(active.runId, "failed", "timed_out", false);
       return;

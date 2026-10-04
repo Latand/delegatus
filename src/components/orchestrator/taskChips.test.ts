@@ -173,3 +173,15 @@ test("restoring tasks refuses atomically if later chips filled the cap", () => {
   expect(restoreTaskChips("atlas", [{ id: "old_1", title: "First" }, { id: "old_2", title: "Second" }])).toBe(false);
   expect(readTaskChips("atlas")).toBe(before);
 });
+
+
+test("a persisted delivery snapshot settles after reload and preserves identical reattachments", async () => {
+  const { captureTaskChipSnapshot, settleTaskChipSnapshot } = await import("./taskChips");
+  addTaskChip("atlas", { id: "t1", title: "First" });
+  addTaskChip("atlas", { id: "t2", title: "Second" });
+  const snapshot = JSON.parse(JSON.stringify(captureTaskChipSnapshot("atlas", readTaskChips("atlas"))));
+  reloadTaskChipsForTests();
+  addTaskChip("atlas", { id: "t2", title: "Second" });
+  settleTaskChipSnapshot("atlas", snapshot);
+  expect(readTaskChips("atlas")).toEqual([{ id: "t2", title: "Second" }]);
+});

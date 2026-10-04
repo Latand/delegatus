@@ -53,6 +53,7 @@ function task(id: string, status: TaskStatus, paths: readonly string[] = [], ext
     project: "fixture",
     text: `Task ${id}\nWhat ${id} is about`,
     status,
+    ...(status === "done" ? { doneAt: new Date(NOW * 1000).toISOString() } : {}),
     placement: "unplaced",
     assignments: paths.map((path) => ({ path, conversationId: `conversation_fixture_${path.match(/(\d+)/)![1]}`, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" })),
     createdAt: "2026-09-14T10:00:00.000Z",
@@ -91,11 +92,11 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
   } as unknown as SchemeLayout;
 }
 
-function desktop(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; seat?: SeatRefs | null; cardFilter?: typeof cardHasLiveWork } = {}) {
+function desktop(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; seat?: SeatRefs | null; cardFilter?: typeof cardHasLiveWork; overrides?: ReadonlyMap<string, TaskStatus> } = {}) {
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files], "fixture");
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, files, seat: options.seat ?? null, cardFilter: options.cardFilter, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, seat: options.seat ?? null, cardFilter: options.cardFilter, statusOverrides: options.overrides, now: NOW });
 }
 
 const keys = (items: readonly PhoneCard[]) => items.map((item) => item.card.task?.id ?? item.key);
@@ -413,4 +414,36 @@ test("the phone's Inbox tab takes high first and low last, as the desktop Inbox 
   expect(keys(phone.columns.inbox.cards)).toEqual(["high-old", "normal-new", "normal-old", "low-busy", "low-new"]);
   expect(keys(phone.columns.inbox.cards)).toEqual(model.columns.inbox.cards.map((card) => card.task!.id));
   expect(keys(phone.columns.assigned.cards)).toEqual(["assigned-low", "assigned-high"]);
+});
+
+
+test("an operator hold is pinned and counted like the desktop needs-you motion", () => {
+  const held = task("hold", "blocked", [], { hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "agent" } });
+  const model = desktop([held], []);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(model.columns.blocked.needsYou).toBe(1);
+  expect(phone.columns.blocked.needsYou).toBe(1);
+  expect(phone.columns.blocked.pinned[0]?.card.motion.key).toBe("needs-you");
+  expect(phone.columns.blocked.pinned[0]?.edge).toBe("warning");
+});
+
+test("an operator-held open step uses shared needs-you motion in the phone queue", () => {
+  const heldStep = task("held-step", "assigned", [], { steps: [
+    { id: "choose", text: "Choose a release", state: "open", hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "agent" } },
+  ] });
+  const model = desktop([heldStep], []);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(model.columns.assigned.needsYou).toBe(1);
+  expect(phone.columns.assigned.needsYou).toBe(1);
+  expect(phone.columns.assigned.pinned.map((item) => item.card.task?.id)).toEqual(["held-step"]);
+  expect(phone.columns.assigned.pinned[0]?.card.motion).toMatchObject({ key: "needs-you", reason: heldStep.steps![0]!.hold, since: heldStep.steps![0]!.hold!.since });
+});
+
+test("a pending move away from an operator hold uses the shared stopped motion", () => {
+  const held = task("optimistic-hold", "blocked", [], { hold: { kind: "operator", note: "Choose the release", since: "2026-10-02T09:00:00.000Z", by: "operator" } });
+  const model = desktop([held], [], { overrides: new Map([[held.id, "assigned"]]) });
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(model.columns.assigned.cards[0]?.motion.key).toBe("stopped");
+  expect(phone.columns.assigned.needsYou).toBe(0);
+  expect(phone.columns.assigned.cards[0]?.card.motion.key).toBe("stopped");
 });

@@ -735,7 +735,7 @@ function boardRepairPlan(conversation: RegistryConversation): BoardRepairPlan | 
     previousProject: conversation.migration.boardPlacementProject
       ?? conversation.migration.boardProject
       ?? source.launchProfile.project,
-    placementPaths: [...new Set([source.path, successor.path, ...continuityPaths])],
+    placementPaths: [...new Set([...archivedGenerationPaths, source.path, successor.path, ...continuityPaths])],
     pairs: sources.map((from) => ({ from, to: successor.path })),
     provisionalManual: continuityPaths.filter((pathname) => pathname !== successor.path),
   };

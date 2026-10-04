@@ -98,6 +98,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       /* Absent on every row written before #1783 round two, and absent is the
          safe reading: a seat remembered as having been shown nothing is
          offered its children again rather than held back from them. */
+      if (state.itemsShown !== undefined && (!Array.isArray(state.itemsShown) || !state.itemsShown.every(string))) return null;
       if (state.childrenShown !== undefined && (!Array.isArray(state.childrenShown) || !state.childrenShown.every(string))) return null;
       /* Absent on every row written before #1799, and absent is the safe
          reading for the same reason: a seat remembered as having been told
@@ -118,6 +119,12 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || typeof wake.commit.proposal !== "boolean" || !string(wake.commit.fingerprint)
           || !integer(wake.commit.eventsThrough) || !Array.isArray(wake.commit.reasons)
           || !Array.isArray(wake.commit.children) || !wake.commit.children.every(string)
+          || (wake.commit.acknowledgmentLines !== undefined
+            && (!Array.isArray(wake.commit.acknowledgmentLines) || !wake.commit.acknowledgmentLines.every(item => item && string(item.key) && string(item.line))))
+          || (wake.commit.itemLines !== undefined
+            && (!Array.isArray(wake.commit.itemLines) || !wake.commit.itemLines.every(item => item && string(item.version) && string(item.line))))
+          || (wake.commit.itemsShown !== undefined
+            && (!Array.isArray(wake.commit.itemsShown) || !wake.commit.itemsShown.every(string)))
           || (wake.commit.shownChildren !== undefined
             && (!Array.isArray(wake.commit.shownChildren) || !wake.commit.shownChildren.every(string)))
           || (wake.commit.announcedLanes !== undefined

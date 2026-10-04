@@ -55,6 +55,7 @@ function task(id: string, status: TaskStatus, text: string, extra: Partial<Board
     assignments: [],
     createdAt: "2026-09-14T10:00:00.000Z",
     updatedAt: "2026-09-14T10:00:00.000Z",
+    ...(status === "done" ? { doneAt: new Date(NOW * 1_000).toISOString() } : {}),
     revision: REV(1),
     ...extra,
   } as BoardTask;

@@ -10,6 +10,7 @@ import {
 import { isClaudeProtocolUser, isClaudeSdkDeliveredUser } from "@/lib/claudeProtocolUser";
 import { getLocale, translate } from "@/lib/i18n";
 import { inboxImageExt, MAX_INBOX_IMAGE_BYTES, rasterImagePath } from "@/lib/imagePolicy";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import type { MandateDelivery, MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -312,12 +313,24 @@ export type Item = (
      or an internal relay card. Without evidence it renders as this system row. */
   | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
-  | { kind: "raw"; text: string; err: boolean }
+  | { kind: "raw"; text: string; err: boolean; processingError?: { recordType: string; message: string } }
 ) & { structuredUserRef?: string };
 
 /* The wire text can begin with marker-shaped literal content. Keep it outside
    the public Item shape so legacy parsed rows retain their exact contracts. */
 const rawUserTexts = new WeakMap<Item, string>();
+// Correlation uses original complete segments; public cards keep redaction and caps.
+const assistantEchoTexts = new WeakMap<Item, string>();
+export function assistantEchoText(item: Item): string | null {
+  if (item.kind === "prose") return item.text;
+  if (item.kind === "blob") return assistantEchoTexts.get(item) ?? item.text;
+  if (item.kind === "review" || item.kind === "mem-citation") return assistantEchoTexts.get(item) ?? item.raw;
+  return null;
+}
+
+const nativeUserRefs = new WeakMap<Item, string>();
+/** Exact journal record identity survives Codex echo reconciliation. */
+export function nativeUserRefFor(item: Item): string | undefined { return nativeUserRefs.get(item); }
 export function rawUserTextFor(item: Item): string | undefined {
   return rawUserTexts.get(item);
 }
@@ -370,6 +383,15 @@ export interface FeedSession {
    */
   feed(lines: string[], start: number, isLive: boolean): FeedSnapshot;
 }
+
+/** Lines past the seam no join point may sit within. A record just after the
+    seam can reach back for a row the older page holds (an echo, a compaction
+    summary), and this window has no such row to match it with. */
+const JOIN_SEAM_LINES = 24;
+
+/** Characters past the seam a join may parse before it gives up and parses the
+    window whole, so a failed join costs about what the page itself does. */
+const JOIN_OVERLAP_MIN_CHARS = 512 * 1024;
 
 const BLOB_MIN = 20_000;
 const BLOB_KEEP = 200_000;
@@ -742,6 +764,17 @@ type ToolOutput = { text: string; blocks?: ToolOutputBlock[];
   rasters?: number };
 
 const BASE64_BODY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64_SAMPLE = 4096;
+
+/** Whether `body` reads as base64. A screenshot is a megabyte of it, and every
+    scan of the whole string is time the feed spends before it draws a row, so
+    a long body is judged by its head and its tail: a payload that is not an
+    image either fails the media type or breaks within the first bytes, and one
+    damaged in the middle degrades to the browser's broken-image box. */
+function looksLikeBase64(body: string): boolean {
+  if (body.length <= BASE64_SAMPLE * 4) return BASE64_BODY_RE.test(body);
+  return BASE64_BODY_RE.test(body.slice(0, BASE64_SAMPLE)) && BASE64_BODY_RE.test(body.slice(-BASE64_SAMPLE));
+}
 
 /* The raster a tool-result block carries, in either engine's shape: Claude's
    `{ source: { type: "base64", media_type, data } }` and Codex's
@@ -755,7 +788,7 @@ function toolImageBlock(block: Record<string, unknown>): ToolImageBlock | null {
   if (inline) {
     const media = textPart(source.media_type).trim().toLowerCase();
     if (!inboxImageExt(media)) return null;
-    if (!BASE64_BODY_RE.test(inline) || base64DecodedLength(inline) > MAX_INBOX_IMAGE_BYTES) return null;
+    if (base64DecodedLength(inline) > MAX_INBOX_IMAGE_BYTES || !looksLikeBase64(inline)) return null;
     return { type: "image", media, data: inline };
   }
   const url = textPart(block.image_url) || textPart(rec(block.image_url).url) || textPart(block.data);
@@ -1485,6 +1518,61 @@ interface CallRec {
   seq: number;
 }
 
+/** A line after which the session holds nothing a later line could still
+    change or read, so the rows before it do not depend on what follows. */
+interface QuietPoint {
+  line: number;
+  /** Every scalar the later lines read, so two sessions that report the same
+      signature at one line parse every following line identically. */
+  sig: string;
+  boundary: number;
+}
+
+/** What a session that parsed an older page hands over at a join point. */
+interface HeadState {
+  line: number;
+  entries: StoredEntry[];
+  quiet: QuietPoint[];
+  calls: Map<string, CallRec>;
+  wakeupCalls: CallRec[];
+  reasoningSeqs: Map<string, number>;
+  tmsgSeqs: Map<string, number>;
+  tmsgKeyBySeq: Map<number, string>;
+  agentCalls: Map<string, string>;
+  sessionOwners: Map<string, SessionOwner>;
+  viewedImagePaths: Map<string, string>;
+  copilotViewPaths: Map<string, string>;
+  representedExecs: Set<string>;
+  schemaLoaderCalls: Set<string>;
+  hiddenSvcBySrc: Map<number, number>;
+}
+
+/** What a session did with the older pages it was handed. */
+export interface FeedJoinStats {
+  /** Pages taken by parsing only the page and the seam. */
+  joined: number;
+  /** Pages that needed the whole window parsed again. */
+  rebuilt: number;
+  /** Lines parsed for the pages that joined, the page itself included. */
+  joinedLines: number;
+  /** Lines `quiet` currently holds as join points. */
+  points: number;
+}
+
+interface FeedSessionInternals {
+  stats(): FeedJoinStats;
+  /** Parses `lines` from the absolute index `start` and stops at the first of
+      the `stops` this session reaches in the same clean state, within `limit`
+      lines and `budget` characters past `from`. */
+  parseHead(lines: string[], start: number, from: number, limit: number, budget: number, stops: readonly QuietPoint[], seqBase: number): HeadState | null;
+}
+const sessionInternals = new WeakMap<FeedSession, FeedSessionInternals>();
+
+/** Counters for tests and measurements; the feed itself never reads them. */
+export function feedJoinStats(session: FeedSession): FeedJoinStats {
+  return sessionInternals.get(session)!.stats();
+}
+
 interface PendingCodexUser {
   src: number;
   ts: unknown;
@@ -1595,6 +1683,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   let hiddenServiceCount = 0;
   let pushSeq = 0;
   let curSrc = 0;
+  let nativeRecordKey: string | undefined;
   /** Absolute index just past the last consumed line; null before first feed. */
   let consumedEnd: number | null = null;
   /** Window start of the previous feed — a start that moved backwards means
@@ -1643,6 +1732,21 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const entryIndex = (seq: number): number => (entries.length ? seq - entries[0].seq : -1);
 
+  /* Join points for older history (see `feed`). A line is recorded when the
+     session ends it holding no open turn, text block, echo or call; a later
+     line that rewrites an entry born at or before a recorded line retires
+     every such point from that line on, because the entry would then differ
+     from what a parse stopped there produced. Ascending by line. */
+  const quiet: QuietPoint[] = [];
+  const retireQuietFrom = (line: number) => {
+    while (quiet.length && quiet[quiet.length - 1].line >= line) quiet.pop();
+  };
+  /** Every rewrite of an existing entry goes through here. */
+  const setEntry = (idx: number, next: StoredEntry) => {
+    if (curSrc > entries[idx].bornSrc) retireQuietFrom(entries[idx].bornSrc);
+    entries[idx] = next;
+  };
+
   /* Context tokens per tool call (docs/design/tool-call-tokens.md): the ledger
      settles each value once, when a result attaches (estimate) or when the next
      response's usage lands (measured / shared), and this patch is the only way
@@ -1660,12 +1764,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     callRec.event = event;
     const idx = entryIndex(callRec.seq);
     if (idx >= 0 && idx < entries.length && entries[idx].item.kind === "tool") {
-      entries[idx] = { ...entries[idx], item: event };
+      setEntry(idx, { ...entries[idx], item: event });
       snapshot = null;
     }
   }, (id) => calls.has(id));
 
   const push = (item: Item, submissionDedup?: string): number => {
+    if (nativeRecordKey && (item.kind === "user" || item.kind === "tmsg")) nativeUserRefs.set(item, nativeRecordKey);
     entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
       ...(submissionDedup ? { submissionDedup } : {}) });
     snapshot = null;
@@ -1679,9 +1784,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (durationMs === undefined) {
       if (entry.responseDurationMs === undefined) return;
       const { responseDurationMs: _removed, ...rest } = entry;
-      entries[idx] = rest;
+      setEntry(idx, rest);
     } else {
-      entries[idx] = { ...entry, responseDurationMs: durationMs };
+      setEntry(idx, { ...entry, responseDurationMs: durationMs });
     }
     snapshot = null;
   };
@@ -1722,12 +1827,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const pushBlobIfHuge = (text: string, sourceId?: string): boolean => {
     if (!looksLikeBlob(text)) return false;
-    push({
+    const item: Item = {
       kind: "blob",
       bytes: text.length,
       text: redactSecrets(text).slice(0, BLOB_KEEP),
       ...(sourceId ? { sourceId } : {}),
-    });
+    };
+    // Private matching metadata never becomes the blob's displayed payload.
+    if (item.text !== text) assistantEchoTexts.set(item, text);
+    push(item);
     return true;
   };
   const pushImage = (block: Record<string, unknown>, fileWrap: Record<string, unknown>) => {
@@ -1760,15 +1868,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     emit: (item: Item) => void = push,
     sourceId?: string,
   ): boolean => {
-    const emitOwned = (item: ReviewCardItem | MemCitationItem) =>
-      emit(sourceId ? { ...item, sourceId } : item);
+    const emitOwned = (item: ReviewCardItem | MemCitationItem, fullText: string) => {
+      const owned = sourceId ? { ...item, sourceId } : item;
+      if (owned.raw !== fullText) assistantEchoTexts.set(owned, fullText);
+      emit(owned);
+    };
     MEM_CITATION_RE.lastIndex = 0;
     const hasCitation = MEM_CITATION_RE.test(text);
     MEM_CITATION_RE.lastIndex = 0;
     if (!hasCitation) {
       const review = parseReview(text.trim(), ts);
       if (!review) return false;
-      emitOwned(review);
+      emitOwned(review, text.trim());
       return true;
     }
     let handled = false;
@@ -1778,7 +1889,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (!trimmed) return;
       const review = parseReview(trimmed, ts);
       if (review) {
-        emitOwned(review);
+        emitOwned(review, trimmed);
         handled = true;
       } else {
         fallback(trimmed);
@@ -1788,7 +1899,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const whole = match[0];
       const index = match.index ?? 0;
       pushTextPart(text.slice(last, index));
-      emitOwned(parseMemCitation(whole, match[1] ?? "", match[2] ?? ""));
+      emitOwned(parseMemCitation(whole, match[1] ?? "", match[2] ?? ""), whole);
       handled = true;
       last = index + whole.length;
     }
@@ -1860,7 +1971,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         if (idx < 0 || idx >= entries.length) continue;
         const entry = entries[idx];
         const item = entry.item;
-        entries[idx] = {
+        setEntry(idx, {
           ...entry,
           src: curSrc,
           item: item.kind === "prose"
@@ -1870,7 +1981,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
               : item.kind === "mem-citation" || item.kind === "blob"
                 ? { ...item, ...(sourceId ? { sourceId } : {}) }
                 : item,
-        };
+        });
+        const fullText = assistantEchoTexts.get(item);
+        if (fullText !== undefined) assistantEchoTexts.set(entries[idx].item, fullText);
       }
       /* Current envelopes can finish with the visible answer while the adjacent
          response mirror appends a structured citation block under the same id.
@@ -1964,6 +2077,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     callRec.event = event;
     const idx = entryIndex(callRec.seq);
     if (idx >= 0 && idx < entries.length && entries[idx].item.kind === "tool") {
+      /* Supersession is derived from the whole wakeup set, and a joined older
+         page recomputes it, so this write does not retire any join point. */
       entries[idx] = { ...entries[idx], item: event };
       snapshot = null;
     }
@@ -2053,7 +2168,12 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /* Attaches a result copy-on-write: the record gets a fresh ToolEvent and the
      owning entry a fresh item, so exactly one row changes identity. */
   const attach = (callRec: CallRec | undefined, output: string, errFlag?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[], measure?: { chars: number; rasters: number }) => {
-    if (!callRec) return null;
+    if (!callRec) {
+      /* A result whose call this window never saw may belong to a call in an
+         older page, so no earlier line is a join point. */
+      quiet.length = 0;
+      return null;
+    }
     const code = output.match(/exited with code (\d+)/)?.[1];
     /* Codex interactive-shell wall time, read before the preamble is stripped, so
        an empty `wait` can render a compact "waiting Ns" line (issue #141). Matches
@@ -2182,7 +2302,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (idx >= 0 && idx < entries.length) {
       const old = entries[idx].item;
       if (old.kind === "tool") {
-        entries[idx] = { ...entries[idx], item: event };
+        setEntry(idx, { ...entries[idx], item: event });
         snapshot = null;
       }
     }
@@ -2216,7 +2336,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         if (old.kind === "tmsg") {
           const delivery: "ok" | "err" = err || /"success"\s*:\s*false/.test(output) ? "err" : "ok";
           const msgId = output.match(/"msg_id"\s*:\s*"([^"]+)"/)?.[1];
-          entries[idx] = { ...entries[idx], item: { ...old, delivery, msgId } };
+          setEntry(idx, { ...entries[idx], item: { ...old, delivery, msgId } });
           snapshot = null;
         }
       }
@@ -2244,7 +2364,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     call.event = event;
     const idx = entryIndex(call.seq);
     if (idx >= 0 && entries[idx]?.item.kind === "tool") {
-      entries[idx] = { ...entries[idx], item: event };
+      setEntry(idx, { ...entries[idx], item: event });
       snapshot = null;
     }
   };
@@ -2271,11 +2391,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (previous?.item.kind === "think") {
         // Track the last echo for window eviction, while bornSrc remains the
         // stable anchor. Sliding across an echo seam reparses the new window.
-        entries[idx] = { ...previous, src: curSrc };
+        setEntry(idx, { ...previous, src: curSrc });
         // Empty completions and mirrors cannot erase exposed text. Enrichment
         // keeps the original source position and React row identity.
         if (normalized && !previous.item.text) {
-          entries[idx] = { ...previous, src: curSrc, item: { ...previous.item, text: normalized, availability: "available" } };
+          setEntry(idx, { ...previous, src: curSrc, item: { ...previous.item, text: normalized, availability: "available" } });
           snapshot = null;
         }
         return true;
@@ -2336,7 +2456,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     existing.event = next;
     const idx = entryIndex(existing.seq);
     if (idx >= 0 && entries[idx]?.item.kind === "tool") {
-      entries[idx] = { ...entries[idx], src: curSrc, item: next };
+      setEntry(idx, { ...entries[idx], src: curSrc, item: next });
       snapshot = null;
     }
   };
@@ -2740,7 +2860,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const updateCodexPendingSource = (pending: PendingCodexUser, src: number) => {
     for (const seq of pending.entrySeqs) {
       const idx = entryIndex(seq);
-      if (idx >= 0 && idx < entries.length) entries[idx] = { ...entries[idx], src };
+      if (idx >= 0 && idx < entries.length) setEntry(idx, { ...entries[idx], src });
     }
     pending.src = src;
     snapshot = null;
@@ -2761,7 +2881,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         const idx = entryIndex(seq);
         if (idx < 0 || idx >= entries.length) continue;
         if (entries[idx].item.kind === "user") {
-          entries[idx] = { ...entries[idx], item: { kind: "sysmsg", label: sysMsgLabel(pending.text), text: pending.text } };
+          setEntry(idx, { ...entries[idx], item: { kind: "sysmsg", label: sysMsgLabel(pending.text), text: pending.text } });
           snapshot = null;
           converted = true;
           break;
@@ -2803,6 +2923,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const echoItem: Item = internal
         ? internalRelayItem(ts, cleaned, decoded.origin ?? { kind: "agent", ...(previous?.kind === "tmsg" ? { role: previous.peer } : {}) })
         : { kind: "user", ts, text: cleaned };
+      const nativeRef = previous ? nativeUserRefs.get(previous) : nativeRecordKey;
+      if (nativeRef) nativeUserRefs.set(echoItem, nativeRef);
       const rawText = decoded.rawText !== echoItem.text ? decoded.rawText : previous ? rawUserTextFor(previous) : undefined;
       if (rawText) rawUserTexts.set(echoItem, rawText);
       const metadataRef = decoded.metadataRef ?? previous?.structuredUserRef;
@@ -2814,8 +2936,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       });
       if (matchSeq !== undefined) {
         const idx = entryIndex(matchSeq);
-        entries[idx] = { ...entries[idx], item: echoItem,
-          ...(decoded.deliveryDedup ? { submissionDedup: decoded.deliveryDedup } : {}) };
+        setEntry(idx, { ...entries[idx], item: echoItem,
+          ...(decoded.deliveryDedup ? { submissionDedup: decoded.deliveryDedup } : {}) });
       } else {
         pending.entrySeqs.push(push(echoItem, decoded.deliveryDedup ?? pendingDedup(pending)));
       }
@@ -2861,12 +2983,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const it = entries[i].item;
       if (it.kind === "compact") {
-        entries[i] = { ...entries[i], item: { ...it, summary } };
+        setEntry(i, { ...entries[i], item: { ...it, summary } });
         snapshot = null;
         return;
       }
       if (it.kind !== "svc" && it.kind !== "note") break;
     }
+    /* No boundary in this window: it may sit in an older page. */
+    quiet.length = 0;
     push({ kind: "compact", ts, summary });
   };
   const renderCodex = (obj: Record<string, unknown>) => {
@@ -2954,7 +3078,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           const event = { ...call.event, mcp: { ...call.event.mcp, result: boundedMcpRecord(parsed.result) } };
           call.event = event;
           const idx = entryIndex(call.seq);
-          if (idx >= 0 && entries[idx]?.item.kind === "tool") entries[idx] = { ...entries[idx], item: event };
+          if (idx >= 0 && entries[idx]?.item.kind === "tool") setEntry(idx, { ...entries[idx], item: event });
           snapshot = null;
         }
         return;
@@ -3166,7 +3290,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       for (const part of arr(message.content)) {
         if (counted && part.type === "tool_use" && textPart(part.id)) ledger.member(textPart(part.id));
         if (part.type === "text" && textPart(part.text).trim()) {
-          addProse(ts, textPart(part.text), textPart(obj.uuid) || undefined);
+          addProse(ts, textPart(part.text), textPart(obj.id) || textPart(obj.uuid) || textPart(message.id) || undefined);
         }
         else if (part.type === "thinking" && textPart(part.thinking).trim()) {
           push({ kind: "think", text: textPart(part.thinking).replace(/\s+/g, " ").trim() });
@@ -3462,30 +3586,46 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     push({ kind: "raw", text: redactSecrets(line), err: /error|failed|traceback|exception/i.test(line) });
   };
   const consume = (line: string) => {
+    nativeRecordKey = cfg.fmt === "claude" || cfg.fmt === "codex" ? `native:${messageTextDigest(line)}` : undefined;
     if (lineFilter && !line.toLowerCase().includes(lineFilter)) {
       reasoningBoundary += 1;
       return;
     }
     if (jsonl) {
+      let obj: unknown;
       try {
-        const obj = JSON.parse(line);
+        obj = JSON.parse(line);
+      } catch {
+        addRecord(null, "malformed_record", { source: line });
+        return;
+      }
+      try {
         if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          const record = obj as Record<string, unknown>;
           const tracksTurns = cfg.fmt === "claude" || cfg.fmt === "codex";
-          const facts = tracksTurns ? classifyTurnRecord(obj, cfg.fmt === "codex") : null;
+          const facts = tracksTurns ? classifyTurnRecord(record, cfg.fmt === "codex") : null;
           if (facts) {
             latestTurnTimestamp = facts.timestampMs ?? latestTurnTimestamp;
             if (facts.starts) beginTurn(facts.timestampMs);
             else if (facts.assistantRecord && !facts.fails && turnFailed) recoverFailedTurn();
           }
-          if (cfg.fmt === "claude") renderClaude(obj);
-          else if (cfg.fmt === "openclaw") renderOpenclaw(obj);
-          else if (cfg.fmt === "copilot") renderCopilot(obj);
-          else renderCodex(obj);
+          if (cfg.fmt === "claude") renderClaude(record);
+          else if (cfg.fmt === "openclaw") renderOpenclaw(record);
+          else if (cfg.fmt === "copilot") renderCopilot(record);
+          else renderCodex(record);
           if (facts?.fails) finishTurn(true);
           else if (facts?.closes) finishTurn(false);
         } else addRecord(null, "malformed_record", { value: obj });
-      } catch {
-        addRecord(null, "malformed_record", { source: line });
+      } catch (error) {
+        const recordType = redactTranscriptText(textPart(rec(obj).type)).slice(0, 120) || "unknown";
+        const message = redactTranscriptText(error instanceof Error ? error.message : String(error)).slice(0, 1000);
+        // The window index is no line of the transcript: it starts mid-file,
+        // moves as the cap trims and is negative for prepended history.
+        const processingError = { recordType, message };
+        // Do not call translation or tool-card code again in its failure path.
+        // The raw fallback also stays readable outside the conversation surface.
+        push({ kind: "raw", err: true, processingError,
+          text: `Record processing failed (${recordType}): ${message}` });
       }
     } else renderPlain(line);
   };
@@ -3493,6 +3633,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const reset = (start: number) => {
     ledger.reset(start > 0);
     entries.length = 0;
+    quiet.length = 0;
     conversationCwd = cfg.cwd ?? "";
     reasoningBoundary = 0;
     reasoningTurnId = "";
@@ -3531,6 +3672,157 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     /* pushSeq keeps counting across resets so React keys never collide. */
   };
 
+
+  /** The signature of the state this line left behind, or null while anything
+      is open that a later line could still change or read.
+
+      A Codex rollout of chained tool calls is open nearly everywhere: the
+      context ledger holds a round until the next response's usage lands, and
+      that usage rewrites rows born before this line, so a point recorded inside
+      the chain would be retired anyway. Over four real rollouts (500 to 1,300
+      lines) the ledger alone blocked 95% or more of the lines, an open turn
+      alone about 0.2%. Such a transcript parses its window whole on every older
+      page, as before the join: the incremental join applies to Claude, Copilot
+      and OpenClaw transcripts, not to Codex rollouts. Joining a Codex rollout
+      needs the ledger, exec and pending-user state handed over, a follow-up. */
+  const quietSignature = (): string | null => {
+    if (!jsonl || turnOpen || failedResponseSeq !== null || plainBlock || lastPlainCall || pendingCodexUsers.length
+      || codexAssistantRecord || codexCompacted || execWindow || pendingExecs.size || execPairingOverflow
+      || openclawModel || copilotAssets.size) return null;
+    const held = ledger.signature();
+    if (held === null) return null;
+    return [conversationCwd, reasoningTurnId, turnFailed ? 1 : 0, latestTurnTimestamp ?? "", imageResultId ?? "", held].join("\u0001");
+  };
+  const recordQuiet = () => {
+    const sig = quietSignature();
+    if (sig !== null) quiet.push({ line: curSrc, sig, boundary: reasoningBoundary });
+  };
+
+  /** True when no call or outgoing message born before `from` still waits for
+      its result: one that does would be answered by a line the older page
+      alone cannot see. */
+  const settledSince = (from: number): boolean => {
+    for (const rec of calls.values()) {
+      if (rec.event.status !== "run") continue;
+      const entry = entries[entryIndex(rec.seq)];
+      if (!entry || entry.bornSrc < from) return false;
+    }
+    for (const seq of tmsgSeqs.values()) {
+      const entry = entries[entryIndex(seq)];
+      if (entry && entry.bornSrc < from && entry.item.kind === "tmsg" && entry.item.delivery === undefined) return false;
+    }
+    return true;
+  };
+
+  const parseHead = (lines: string[], start: number, from: number, limit: number, budget: number, stops: readonly QuietPoint[], seqBase: number): HeadState | null => {
+    reset(start);
+    lastStart = start;
+    /* Row numbers also seed the ids of events a record gave none, so this
+       session counts from past every number the one it joins has used. */
+    pushSeq = seqBase;
+    let next = 0;
+    let overlap = 0;
+    for (let i = 0; i < lines.length && start + i < limit; i += 1) {
+      curSrc = start + i;
+      consume(lines[i]!);
+      recordQuiet();
+      if (curSrc >= from) {
+        overlap += lines[i]!.length;
+        if (overlap > budget) return null;
+      }
+      while (next < stops.length && stops[next]!.line < curSrc) next += 1;
+      if (next >= stops.length) return null;
+      const stop = stops[next]!;
+      const mine = quiet[quiet.length - 1];
+      if (stop.line === curSrc && mine?.line === curSrc && mine.sig === stop.sig && settledSince(from)) {
+        return { line: curSrc, entries: entries.slice(), quiet: quiet.slice(), calls, wakeupCalls: wakeupCalls.slice(), reasoningSeqs, tmsgSeqs,
+          tmsgKeyBySeq, agentCalls, sessionOwners, viewedImagePaths, copilotViewPaths, representedExecs, schemaLoaderCalls, hiddenSvcBySrc };
+      }
+    }
+    return null;
+  };
+
+  /** Replaces what lines up to `head.line` produced with the rows and lookups
+      of a session that parsed them from an earlier start. Everything this
+      session holds past that line is kept as it is, identity included. */
+  const adoptHead = (head: HeadState): boolean => {
+    const join = quiet.find((point) => point.line === head.line);
+    if (!join || !head.entries.length) return false;
+    let dropped = 0;
+    while (dropped < entries.length && entries[dropped]!.bornSrc <= head.line) {
+      if (entries[dropped]!.src > head.line) return false;
+      dropped += 1;
+    }
+    const keptSeq = entries.length ? entries[0]!.seq + dropped : pushSeq;
+    const shift = keptSeq - head.entries.length - head.entries[0]!.seq;
+    const boundaryShift = join.boundary - head.quiet[head.quiet.length - 1]!.boundary;
+    const lifted = head.entries.map((entry) => ({ ...entry, seq: entry.seq + shift, reasoningBoundary: entry.reasoningBoundary + boundaryShift }));
+    const shiftedRecs = new Set<CallRec>([...head.calls.values(), ...head.wakeupCalls]);
+    for (const rec of shiftedRecs) rec.seq += shift;
+
+    const merged = lifted.concat(entries.slice(dropped));
+    entries.length = 0;
+    for (const entry of merged) entries.push(entry);
+
+    const mergedQuiet = head.quiet.map((point) => ({ ...point, boundary: point.boundary + boundaryShift }));
+    for (const point of quiet) if (point.line > head.line) mergedQuiet.push(point);
+    quiet.length = 0;
+    for (const point of mergedQuiet) quiet.push(point);
+
+    for (const [id, rec] of calls) if (rec.seq < keptSeq && !head.calls.has(id)) calls.delete(id);
+    for (const [id, rec] of head.calls) calls.set(id, rec);
+    for (const [id, seq] of reasoningSeqs) if (seq < keptSeq && !head.reasoningSeqs.has(id)) reasoningSeqs.delete(id);
+    for (const [id, seq] of head.reasoningSeqs) reasoningSeqs.set(id, seq + shift);
+    for (const [key, seq] of tmsgSeqs) if (seq < keptSeq) { tmsgSeqs.delete(key); tmsgKeyBySeq.delete(seq); }
+    for (const [key, seq] of head.tmsgSeqs) { tmsgSeqs.set(key, seq + shift); tmsgKeyBySeq.set(seq + shift, key); }
+    for (const [agent, id] of agentCalls) if (!calls.has(id)) agentCalls.delete(agent);
+    for (const [agent, id] of head.agentCalls) if (!agentCalls.has(agent) && calls.has(id)) agentCalls.set(agent, id);
+    for (const [raw, owner] of head.sessionOwners) {
+      const held = sessionOwners.get(raw);
+      if (held === undefined) { sessionOwners.set(raw, owner); continue; }
+      /* One session, one private token: the older page's rows adopt this one. */
+      for (const rec of shiftedRecs) if (sessionOwnership.get(rec.event) === owner) sessionOwnership.set(rec.event, held);
+      for (const entry of lifted) if (entry.item.kind === "tool" && sessionOwnership.get(entry.item) === owner) sessionOwnership.set(entry.item, held);
+    }
+    for (const [id, path] of head.viewedImagePaths) if (!viewedImagePaths.has(id)) viewedImagePaths.set(id, path);
+    for (const [id, path] of head.copilotViewPaths) if (!copilotViewPaths.has(id)) copilotViewPaths.set(id, path);
+    for (const id of head.representedExecs) representedExecs.add(id);
+    for (const id of head.schemaLoaderCalls) schemaLoaderCalls.add(id);
+    for (const id of viewedImagePaths.keys()) if (!calls.has(id)) viewedImagePaths.delete(id);
+    for (const id of copilotViewPaths.keys()) if (!calls.has(id)) copilotViewPaths.delete(id);
+
+    const hidden = new Map(head.hiddenSvcBySrc);
+    for (const [src, count] of hiddenSvcBySrc) if (src > head.line) hidden.set(src, count);
+    hiddenSvcBySrc.clear();
+    hiddenServiceCount = 0;
+    for (const [src, count] of hidden) { hiddenSvcBySrc.set(src, count); hiddenServiceCount += count; }
+
+    const wakeups = head.wakeupCalls.concat(wakeupCalls.filter((rec) => rec.seq >= keptSeq));
+    wakeupCalls.length = 0;
+    for (const rec of wakeups) wakeupCalls.push(rec);
+    recomputeWakeupStates();
+    snapshot = null;
+    return true;
+  };
+
+  /** Tries to take an older page without parsing the window again: a session
+      parses the page and the lines after it up to the first clean point this
+      session also reached, and only the rows before that point are replaced. */
+  const joinStats = { joined: 0, rebuilt: 0, joinedLines: 0 };
+  const joinOlder = (lines: string[], start: number, seen: number): boolean => {
+    const from = lastStart;
+    const stops = quiet.filter((point) => point.line >= from + JOIN_SEAM_LINES);
+    if (!stops.length) return false;
+    let pageChars = 0;
+    for (let i = 0; i < from - start; i += 1) pageChars += lines[i]!.length;
+    const head = createFeedSession(cfg);
+    const found = sessionInternals.get(head)!.parseHead(lines, start, from, seen, Math.max(JOIN_OVERLAP_MIN_CHARS, pageChars), stops, pushSeq);
+    if (found === null || !adoptHead(found)) return false;
+    joinStats.joined += 1;
+    joinStats.joinedLines += found.line + 1 - start;
+    return true;
+  };
+
   /** Evicts entries and state owned by lines that left the window. Returns
       true when a pending plain block lost its opening line — sequential state
       that cannot be resumed, so the caller re-parses the window whole. */
@@ -3538,6 +3830,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const crossedEchoSeam = entries.some((entry) => entry.bornSrc < start && entry.src >= start);
     const crossedOpenTurn = turnOpen && turnStartedSrc !== null && turnStartedSrc < start;
     const orphaned: string[] = [];
+    let staleQuiet = 0;
+    while (staleQuiet < quiet.length && quiet[staleQuiet].line < start) staleQuiet += 1;
+    if (staleQuiet) quiet.splice(0, staleQuiet);
     while (entries.length && entries[0].src < start) {
       const gone = entries.shift()!;
       snapshot = null;
@@ -3627,6 +3922,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       anchorOrdinals.set(source, ordinal + 1);
       return `${source}:${ordinal}`;
     };
+    /* The React key names the transcript line that created the row, so a
+       re-parse of the same lines (an older page prepended, a reset) hands every
+       surviving row the key it had and React keeps its DOM. The internal row
+       number keeps counting across resets and cannot serve: it would remount
+       the whole feed on every prepend. */
+    const keyOrdinals = new Map<string, number>();
+    const rowKey = (entry: StoredEntry, prefix: "r" | "g") => {
+      const source = `${prefix}:${entry.bornSrc}`;
+      const ordinal = keyOrdinals.get(source) ?? 0;
+      keyOrdinals.set(source, ordinal + 1);
+      return `${source}:${ordinal}`;
+    };
     let i = 0;
     while (i < visibleEntries.length) {
       const head = visibleEntries[i];
@@ -3641,7 +3948,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           j += 1;
         }
         const text = members.map((member) => member.text).filter(Boolean).join("\n\n");
-        out.push({ anchorKey: members[0].anchorKey, key: String(head.seq),
+        out.push({ anchorKey: members[0].anchorKey, key: rowKey(head, "r"),
           item: { ...head.item, text, members, availability: text ? "available" : "unavailable" } });
         i = j;
         continue;
@@ -3649,7 +3956,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (!foldableTool(head.item)) {
         out.push({
           anchorKey: anchorKey(head, "row"),
-          key: String(head.seq),
+          key: rowKey(head, "r"),
           item: head.item,
           ...(head.responseDurationMs !== undefined ? { responseDurationMs: head.responseDurationMs } : {}),
           ...(head.submissionDedup ? { submissionDedup: head.submissionDedup } : {}),
@@ -3714,10 +4021,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           };
         }
         nextGroups.set(gkey, group);
-        out.push({ anchorKey: anchorKey(head, "group"), key: "g" + gkey, item: group });
+        out.push({ anchorKey: anchorKey(head, "group"), key: rowKey(head, "g"), item: group });
         i = groupEnd;
       } else {
-        out.push({ anchorKey: anchorKey(head, "row"), key: String(head.seq), item: head.item });
+        out.push({ anchorKey: anchorKey(head, "row"), key: rowKey(head, "r"), item: head.item });
         i += 1;
       }
     }
@@ -3728,9 +4035,16 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const feed = (lines: string[], start: number, isLive: boolean): FeedSnapshot => {
     const end = start + lines.length;
+    /* Older history prepended to the window this session already parsed: only
+       the page and the seam up to a clean point are parsed again. Anything the
+       join cannot vouch for falls through to the whole-window parse below. */
+    const seen = consumedEnd;
+    const joined = seen !== null && start < lastStart && end >= seen
+      && lines[seen - start - 1] === lastConsumedLine && joinOlder(lines, start, seen);
     /* A window that moved backwards (prepended history, truncation reset) or
        past unseen lines cannot be resumed — re-parse it whole. */
-    if (consumedEnd === null || end < consumedEnd || start > consumedEnd || start < lastStart) {
+    if (consumedEnd === null || (!joined && (end < consumedEnd || start > consumedEnd || start < lastStart))) {
+      if (consumedEnd !== null && start < lastStart && end >= consumedEnd) joinStats.rebuilt += 1;
       reset(start);
       consumedEnd = start;
     }
@@ -3750,6 +4064,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     for (let i = consumedEnd - start; i < lines.length; i += 1) {
       curSrc = start + i;
       consume(lines[i]);
+      recordQuiet();
     }
     if (lines.length) lastConsumedLine = lines[lines.length - 1]!;
     consumedEnd = end;
@@ -3760,7 +4075,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     return snapshot;
   };
 
-  return { feed };
+  const session: FeedSession = { feed };
+  sessionInternals.set(session, { parseHead, stats: () => ({ ...joinStats, points: quiet.length }) });
+  return session;
 }
 
 /** One-shot parse of a whole window — a fresh session fed once. */

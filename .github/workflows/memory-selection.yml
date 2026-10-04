@@ -1,0 +1,30 @@
+name: Memory selection replay
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/memory-selection*'
+      - 'docs/research/memory-selection*'
+      - 'src/lib/asks/jev.ts'
+      - 'src/lib/asks/settings.ts'
+      - '.github/workflows/memory-selection.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Test replay and public evidence without credentials or live state
+        env:
+          LLV_STATE_DIR: ${{ runner.temp }}/memory-replay-state
+          XDG_CONFIG_HOME: ${{ runner.temp }}/memory-replay-config
+        run: bun test scripts/memory-selection.test.ts

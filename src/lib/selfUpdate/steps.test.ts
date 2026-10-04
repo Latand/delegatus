@@ -158,6 +158,32 @@ describe("UpdateRunner", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test.each([0, 1, 128])("an automatic frozen target requires a successful ancestry check (exit %s)", async (ancestryExit) => {
+    const fetched = "f".repeat(40);
+    const ancestry: string[][] = [];
+    const { runner, published } = harness({}, {
+      revParse: async (ref) => ref === "HEAD" ? TARGET : fetched,
+      run: async (command, options) => {
+        if (command.includes("merge-base")) {
+          ancestry.push(command);
+          expect(options.cwd).toBe(CHECKOUT);
+          expect(options.lowPriority).toBe(true);
+          return ancestryExit;
+        }
+        return 0;
+      },
+    });
+    await runner.start(TARGET, { trigger: "auto" });
+    expect(ancestry).toEqual([["git", "merge-base", "--is-ancestor", TARGET, fetched]]);
+    expect(runner.state.state).toBe(ancestryExit === 0 ? "done" : "failed");
+    if (ancestryExit === 0) expect(published).toEqual([{ sha: TARGET, dir: RELEASE }]);
+    else {
+      expect(published).toEqual([]);
+      expect(runner.state.steps[0]?.failure).toEqual({ kind: "remote-moved", expected: TARGET.slice(0, 7), fetched: "fffffff" });
+      expect(runner.state.steps[1]?.state).toBe("pending");
+    }
+  });
+
   test("ready fails when the build left no BUILD_ID, and publishes nothing", async () => {
     const { runner, published } = harness({}, { buildIdReadable: (dir) => dir !== RELEASE });
     await runner.start(TARGET);

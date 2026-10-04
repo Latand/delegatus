@@ -21,6 +21,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 }
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 
+const { captureProcessIdentity } = await import("@/lib/processIdentity");
 const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { applyConversationAction } = await import("@/lib/conversation/actions");
 const { callerConversationId } = await import("@/lib/agent/operatorAuthority");
@@ -110,7 +111,7 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     key, artifactPath: transcriptPath, cwd: sandbox, accountId: null, status: "live", host: null,
     structuredHost: {
       kind: "claude-broker", endpoint: health.endpoint!,
-      process: { pid: child!.pid!, startIdentity: health.processStartIdentity },
+      process: captureProcessIdentity(child!.pid!),
       eventCursor: health.eventCursor, protocolVersion: health.protocolVersion,
       writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [],
     },
