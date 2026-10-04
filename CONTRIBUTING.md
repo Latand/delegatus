@@ -259,7 +259,13 @@ baseline needs fresh base retries before a candidate failure can become `NEW`.
 
 The pre-push gate reuses the platform import closure to scope Linux tests,
 Viewer and runtime-host verification under the Dockerfile's Bun pin, and the
-supported native Codex fixtures. Bun and Codex fixtures are cached under
+supported native Codex fixtures. Scoped Linux tests use the same merge-base
+comparison as touched tests, so a platform test `origin/main` already fails is
+`PRE-EXISTING`. A push that changes no file against the merge base (a read-only
+stage, a branch that only trails `origin/main`) runs privacy with
+`--check-commits` and nothing else; a push that changes only `.md`, `.mdx` or
+`.txt` files skips types. Any other changed file keeps every scoped check.
+Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
 

@@ -103,6 +103,16 @@ Cache versions invalidate results from earlier dependency isolation rules.
 Deleting that cache is safe. Both runs report elapsed
 time; a warm baseline needs no checkout or test rerun. Budgets are five minutes per file and fifteen minutes
 per baseline/head test run. Privacy, types and ESLint retain their own checks.
+A push with no changed file against the merge base runs privacy with
+`--check-commits` and nothing else; a prose-only push (`.md`, `.mdx`, `.txt`)
+skips types; scoped Linux tests are compared against the merge base like touched
+tests. A pipeline's publication runs this hook without the Viewer's own
+settings (`pipelinePublicationHookEnv`): on 2026-10-04 the Viewer's `LLV_LANG`
+reached a CLI test through the hook and parked five lanes that had changed
+nothing. A refused publication of an unchanged head retries after 1, 5 and 15
+minutes, then parks with the cause on its first line. A push that was
+interrupted before it reached the remote (a signal, its time limit, a stopped
+Viewer) is counted the same way, whatever the stage changed.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media
 files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.

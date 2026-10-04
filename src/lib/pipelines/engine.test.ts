@@ -13970,7 +13970,9 @@ test("a publication that cannot land parks the pass without losing the commit", 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain("publishing the passed stage: publishing the pipeline branch:");
+  // The first line names the cause and the next step; the evidence follows it.
+  expect(parked.stateDetail!.split("\n")[0]).toBe("publishing the passed stage: git push was refused (exit 1): ! [remote rejected] (shallow update not allowed). Fix it on this branch or on the base branch, then retry-stage.");
+  expect(parked.stateDetail).toContain("\npublishing the pipeline branch: exit 1");
   /* The stage's work is committed and recorded — the park is recoverable, and a
      retry resets to this commit rather than discarding the builder's output. */
   expect(parked.lastPassedCommit).toBe(box.passedSha);
